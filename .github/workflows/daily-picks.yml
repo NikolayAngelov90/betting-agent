@@ -118,6 +118,9 @@ jobs:
       - name: Run daily update
         run: python -m src.agent.betting_agent --update
 
+      - name: Settle yesterday's predictions
+        run: python -m src.agent.betting_agent --settle
+
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks
 
