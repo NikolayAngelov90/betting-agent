@@ -43,10 +43,15 @@ jobs:
           scraping:
             flashscore_leagues:
               - england/premier-league
+              - england/championship
               - spain/laliga
+              - spain/laliga2
               - germany/bundesliga
+              - germany/2-bundesliga
               - italy/serie-a
+              - italy/serie-b
               - france/ligue-1
+              - france/ligue-2
               - netherlands/eredivisie
               - portugal/primeira-liga
               - belgium/jupiler-pro-league
