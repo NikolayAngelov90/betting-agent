@@ -13,6 +13,7 @@ logger = get_logger()
 class BetRecommendation:
     """A single bet recommendation with full analysis."""
     match: str
+    match_id: int         # Database match ID for result tracking
     market: str           # '1X2', 'Over 2.5', 'BTTS', etc.
     selection: str        # 'Home Win', 'Over 2.5 Goals', 'BTTS Yes', etc.
     odds: float
@@ -46,7 +47,8 @@ class ValueBettingCalculator:
                         match_name: str = "",
                         context: Dict = None,
                         home_team_name: str = "",
-                        away_team_name: str = "") -> List[BetRecommendation]:
+                        away_team_name: str = "",
+                        match_id: int = 0) -> List[BetRecommendation]:
         """Find value bets by comparing predictions to available odds.
 
         Args:
@@ -106,6 +108,7 @@ class ValueBettingCalculator:
 
             rec = BetRecommendation(
                 match=match_name,
+                match_id=match_id,
                 market=market,
                 selection=selection,
                 odds=best_odds,

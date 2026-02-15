@@ -50,11 +50,15 @@ class AutomatedPipeline:
             logger.info("[Scheduler] Updating news...")
             await self.agent.news_aggregator.update()
 
-            # Step 2: Retrain models with latest data
+            # Step 2: Settle yesterday's predictions
+            logger.info("[Scheduler] Settling pending picks...")
+            self.agent.settle_predictions()
+
+            # Step 3: Retrain models with latest data
             logger.info("[Scheduler] Fitting models...")
             self.agent.predictor.fit()
 
-            # Step 3: Generate predictions
+            # Step 4: Generate predictions
             logger.info("[Scheduler] Generating predictions...")
             picks = await self.agent.get_daily_picks()
             logger.info(f"[Scheduler] Found {len(picks)} value picks for today")
@@ -65,9 +69,10 @@ class AutomatedPipeline:
                     f"(EV: {pick.expected_value:.1%})"
                 )
 
-            # Step 4: Send picks via Telegram
+            # Step 5: Send picks via Telegram with stats
             if self.agent.telegram.enabled and picks:
-                await self.agent.telegram.send_daily_picks(picks)
+                stats = self.agent.get_stats()
+                await self.agent.telegram.send_daily_picks(picks, stats=stats)
                 logger.info("[Scheduler] Picks sent to Telegram")
 
             logger.info("[Scheduler] Daily pipeline complete")

@@ -169,6 +169,42 @@ class News(Base):
         return f"<News({self.headline[:50]}..., {self.source})>"
 
 
+class SavedPick(Base):
+    """Saved daily pick for tracking results and statistics."""
+
+    __tablename__ = 'saved_picks'
+
+    id = Column(Integer, primary_key=True)
+    match_id = Column(Integer, ForeignKey('matches.id'), nullable=False)
+    pick_date = Column(Date, nullable=False)
+    match_name = Column(String(200))
+
+    # Bet details
+    market = Column(String(50))       # '1X2', 'Over 2.5', 'BTTS'
+    selection = Column(String(100))   # 'Home Win', 'Over 2.5 Goals', 'BTTS Yes'
+    odds = Column(Float)
+    predicted_probability = Column(Float)
+    expected_value = Column(Float)
+    confidence = Column(Float)
+    kelly_stake_percentage = Column(Float)
+    risk_level = Column(String(20))
+
+    # Result (NULL = pending)
+    result = Column(String(10))       # 'win', 'loss', 'void', or NULL
+    actual_home_goals = Column(Integer)
+    actual_away_goals = Column(Integer)
+    settled_at = Column(DateTime)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    match = relationship("Match")
+
+    def __repr__(self):
+        status = self.result or "pending"
+        return f"<SavedPick({self.match_name}: {self.selection} @ {self.odds} — {status})>"
+
+
 class Prediction(Base):
     """Prediction model."""
 

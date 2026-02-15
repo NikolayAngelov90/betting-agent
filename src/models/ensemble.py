@@ -1,5 +1,7 @@
 """Ensemble predictor that combines all prediction models."""
 
+import json
+from pathlib import Path
 from typing import Dict, Optional
 
 from src.models.poisson_model import PoissonModel
@@ -30,6 +32,16 @@ class EnsemblePredictor:
             "xgboost": weights.get("xgboost", 0.35),
             "random_forest": weights.get("random_forest", 0.20),
         }
+
+        # Load tuned weights if available (overrides config)
+        tuned_path = Path("data/models/ensemble_weights.json")
+        if tuned_path.exists():
+            try:
+                tuned = json.loads(tuned_path.read_text())
+                self.weights.update(tuned)
+                logger.info(f"Loaded tuned ensemble weights: {self.weights}")
+            except Exception as e:
+                logger.warning(f"Failed to load tuned weights: {e}")
 
         # Try to load previously trained ML models from disk
         self.ml_models.load()

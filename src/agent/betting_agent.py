@@ -1,9 +1,11 @@
 """Main Football Betting Agent orchestrator."""
 
 import asyncio
+import json
 import numpy as np
 from datetime import datetime, date, timedelta
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Dict
 
 from src.scrapers.flashscore_scraper import FlashscoreScraper
@@ -16,7 +18,7 @@ from src.models.ensemble import EnsemblePredictor
 from src.betting.value_calculator import ValueBettingCalculator, BetRecommendation
 from src.betting.bankroll_manager import BankrollManager
 from src.reporting.telegram_bot import TelegramNotifier
-from src.data.models import Match, Team, Odds
+from src.data.models import Match, Team, Odds, SavedPick
 from src.data.database import get_db, init_db
 from src.utils.config import get_config
 from src.utils.logger import get_logger, setup_logger
@@ -186,6 +188,7 @@ class FootballBettingAgent:
         recommendations = self.value_calculator.find_value_bets(
             predictions, odds_data, match_name, context,
             home_team_name=home_team_name, away_team_name=away_team_name,
+            match_id=match_id,
         )
 
         return MatchAnalysis(
@@ -247,7 +250,270 @@ class FootballBettingAgent:
         )
 
         logger.info(f"Found {len(all_recommendations)} high-confidence picks for {target}")
+
+        # Save picks to database for tracking
+        self._save_picks(all_recommendations, target)
+
         return all_recommendations
+
+    def _save_picks(self, picks: List[BetRecommendation], pick_date: date):
+        """Save picks to database for result tracking."""
+        if not picks:
+            return
+
+        with self.db.get_session() as session:
+            for pick in picks:
+                # Skip if already saved (same match + selection + date)
+                existing = session.query(SavedPick).filter(
+                    SavedPick.match_id == pick.match_id,
+                    SavedPick.selection == pick.selection,
+                    SavedPick.pick_date == pick_date,
+                ).first()
+                if existing:
+                    continue
+
+                saved = SavedPick(
+                    match_id=pick.match_id,
+                    pick_date=pick_date,
+                    match_name=pick.match,
+                    market=pick.market,
+                    selection=pick.selection,
+                    odds=pick.odds,
+                    predicted_probability=pick.predicted_probability,
+                    expected_value=pick.expected_value,
+                    confidence=pick.confidence,
+                    kelly_stake_percentage=pick.kelly_stake_percentage,
+                    risk_level=pick.risk_level,
+                )
+                session.add(saved)
+
+            session.commit()
+            logger.info(f"Saved {len(picks)} picks to database")
+
+    def settle_predictions(self):
+        """Check pending picks against actual match results and mark win/loss."""
+        settled_count = 0
+
+        with self.db.get_session() as session:
+            pending = session.query(SavedPick).filter(
+                SavedPick.result.is_(None),
+            ).all()
+
+            if not pending:
+                logger.info("No pending picks to settle")
+                return 0
+
+            for pick in pending:
+                match = session.get(Match, pick.match_id)
+                if not match or match.home_goals is None or match.away_goals is None:
+                    continue  # Match not completed yet
+
+                hg = match.home_goals
+                ag = match.away_goals
+                total = hg + ag
+                btts = hg > 0 and ag > 0
+
+                # Determine actual outcome for the selection
+                won = False
+                sel = pick.selection
+
+                if sel == "Home Win":
+                    won = hg > ag
+                elif sel == "Draw":
+                    won = hg == ag
+                elif sel == "Away Win":
+                    won = hg < ag
+                elif sel == "Over 2.5 Goals":
+                    won = total > 2.5
+                elif sel == "Under 2.5 Goals":
+                    won = total < 2.5
+                elif sel == "Over 1.5 Goals":
+                    won = total > 1.5
+                elif sel == "Over 3.5 Goals":
+                    won = total > 3.5
+                elif sel == "BTTS Yes":
+                    won = btts
+                elif sel == "BTTS No":
+                    won = not btts
+
+                pick.result = "win" if won else "loss"
+                pick.actual_home_goals = hg
+                pick.actual_away_goals = ag
+                pick.settled_at = datetime.utcnow()
+                settled_count += 1
+
+            session.commit()
+
+        logger.info(f"Settled {settled_count} picks")
+        return settled_count
+
+    def get_stats(self) -> Dict:
+        """Calculate prediction statistics over different time periods."""
+        now = date.today()
+
+        with self.db.get_session() as session:
+            all_picks = session.query(SavedPick).all()
+
+            if not all_picks:
+                return {"total": 0}
+
+            settled = [p for p in all_picks if p.result is not None]
+            pending = [p for p in all_picks if p.result is None]
+
+            def calc_stats(picks_list):
+                if not picks_list:
+                    return {"total": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "roi": 0.0}
+
+                wins = sum(1 for p in picks_list if p.result == "win")
+                losses = sum(1 for p in picks_list if p.result == "loss")
+                total = wins + losses
+                win_rate = wins / total if total > 0 else 0.0
+
+                # Simulate ROI with Kelly stakes
+                total_staked = sum(p.kelly_stake_percentage for p in picks_list)
+                total_profit = sum(
+                    p.kelly_stake_percentage * (p.odds - 1) if p.result == "win"
+                    else -p.kelly_stake_percentage
+                    for p in picks_list
+                )
+                roi = total_profit / total_staked if total_staked > 0 else 0.0
+
+                # Average odds
+                avg_odds_wins = (
+                    np.mean([p.odds for p in picks_list if p.result == "win"])
+                    if wins > 0 else 0.0
+                )
+                avg_odds_losses = (
+                    np.mean([p.odds for p in picks_list if p.result == "loss"])
+                    if losses > 0 else 0.0
+                )
+
+                return {
+                    "total": total,
+                    "wins": wins,
+                    "losses": losses,
+                    "win_rate": round(win_rate, 4),
+                    "roi": round(roi, 4),
+                    "avg_odds_wins": round(float(avg_odds_wins), 2),
+                    "avg_odds_losses": round(float(avg_odds_losses), 2),
+                }
+
+            # By time period
+            yesterday = now - timedelta(days=1)
+            week_ago = now - timedelta(days=7)
+            month_ago = now - timedelta(days=30)
+
+            yesterday_picks = [p for p in settled if p.pick_date == yesterday]
+            week_picks = [p for p in settled if p.pick_date >= week_ago]
+            month_picks = [p for p in settled if p.pick_date >= month_ago]
+
+            # By market type
+            markets = {}
+            for p in settled:
+                markets.setdefault(p.market, []).append(p)
+
+            stats = {
+                "all_time": calc_stats(settled),
+                "last_7_days": calc_stats(week_picks),
+                "last_30_days": calc_stats(month_picks),
+                "yesterday": calc_stats(yesterday_picks),
+                "pending": len(pending),
+                "by_market": {m: calc_stats(picks) for m, picks in markets.items()},
+            }
+
+            return stats
+
+    def tune_ensemble_weights(self):
+        """Adjust ensemble weights based on recent prediction accuracy."""
+        with self.db.get_session() as session:
+            month_ago = date.today() - timedelta(days=30)
+            settled = session.query(SavedPick).filter(
+                SavedPick.result.isnot(None),
+                SavedPick.pick_date >= month_ago,
+            ).all()
+
+        if len(settled) < 20:
+            logger.info(f"Not enough settled picks for tuning ({len(settled)}, need 20+)")
+            return
+
+        # Re-predict each settled match with individual models
+        model_correct = {"poisson": 0, "elo": 0, "ml": 0}
+        model_total = {"poisson": 0, "elo": 0, "ml": 0}
+
+        for pick in settled:
+            if pick.market != "1X2":
+                continue  # Only tune on 1X2 market (where all models contribute)
+
+            try:
+                with self.db.get_session() as session:
+                    match = session.get(Match, pick.match_id)
+                    if not match:
+                        continue
+                    home_id = match.home_team_id
+                    away_id = match.away_team_id
+
+                # Actual result
+                if pick.actual_home_goals > pick.actual_away_goals:
+                    actual = "home_win"
+                elif pick.actual_home_goals == pick.actual_away_goals:
+                    actual = "draw"
+                else:
+                    actual = "away_win"
+
+                # Get individual model predictions
+                poisson_pred = self.predictor.poisson.predict(home_id, away_id)
+                elo_pred = self.predictor.elo.predict(home_id, away_id)
+
+                for model_name, pred in [("poisson", poisson_pred), ("elo", elo_pred)]:
+                    best = max(["home_win", "draw", "away_win"], key=lambda k: pred.get(k, 0))
+                    model_total[model_name] += 1
+                    if best == actual:
+                        model_correct[model_name] += 1
+
+                # ML model
+                if self.predictor.ml_models.is_fitted:
+                    model_total["ml"] += 1
+                    # ML prediction would need features, approximate by checking if pick was correct
+                    # since ensemble includes ML weight
+                    if pick.result == "win":
+                        model_correct["ml"] += 1
+
+            except Exception:
+                continue
+
+        # Calculate accuracy per model
+        accuracies = {}
+        for model in ["poisson", "elo", "ml"]:
+            if model_total[model] > 0:
+                accuracies[model] = model_correct[model] / model_total[model]
+            else:
+                accuracies[model] = 0.25  # Default
+
+        if sum(accuracies.values()) == 0:
+            logger.info("No accuracy data to tune weights")
+            return
+
+        # Normalize to get new weights
+        total_acc = sum(accuracies.values())
+        new_weights = {
+            "poisson": round(accuracies["poisson"] / total_acc, 3),
+            "elo": round(accuracies["elo"] / total_acc, 3),
+            "xgboost": round((accuracies["ml"] / total_acc) * 0.6, 3),  # 60% of ML weight to XGB
+            "random_forest": round((accuracies["ml"] / total_acc) * 0.4, 3),  # 40% to RF
+        }
+
+        # Save tuned weights
+        weights_path = Path("data/models/ensemble_weights.json")
+        weights_path.parent.mkdir(parents=True, exist_ok=True)
+        weights_path.write_text(json.dumps(new_weights, indent=2))
+
+        logger.info(f"Tuned ensemble weights: {new_weights}")
+        logger.info(f"Model accuracies: {accuracies}")
+
+        # Apply immediately
+        self.predictor.weights = new_weights
+
+        return new_weights
 
     async def train_ml_models(self, max_samples: int = 2000):
         """Train ML models on historical match data.
@@ -406,7 +672,10 @@ async def main():
         print("  --init              Initialize database and collect data")
         print("  --update            Run daily data update")
         print("  --picks             Show today's value picks")
+        print("  --settle            Settle pending picks with actual results")
+        print("  --stats             Show prediction statistics")
         print("  --train             Train ML models on historical data")
+        print("  --tune              Tune ensemble weights from recent results")
         print("  --analyze <id>      Analyze a specific match")
         print("  --telegram-setup    Setup Telegram bot notifications")
         print("  --telegram-test     Send a test Telegram message")
@@ -448,8 +717,61 @@ async def main():
 
                 # Send to Telegram if enabled
                 if agent.telegram.enabled:
-                    await agent.telegram.send_daily_picks(picks)
+                    stats = agent.get_stats()
+                    await agent.telegram.send_daily_picks(picks, stats=stats)
                     print(f"\nPicks sent to Telegram!")
+
+        elif command == "--settle":
+            print("Settling pending picks against actual results...")
+            agent.settle_predictions()
+            stats = agent.get_stats()
+            settled = stats.get("all_time", {})
+            print(f"\nSettled: {settled.get('total', 0)} picks")
+            print(f"Win rate: {settled.get('win_rate', 0):.1%}")
+            print(f"Pending: {stats.get('pending', 0)} picks")
+
+        elif command == "--stats":
+            agent.settle_predictions()  # Settle any new results first
+            stats = agent.get_stats()
+
+            if stats.get("total", 0) == 0 and stats.get("all_time", {}).get("total", 0) == 0:
+                print("No prediction history yet. Run --picks first.")
+            else:
+                print(f"\n{'='*50}")
+                print("PREDICTION STATISTICS")
+                print(f"{'='*50}")
+
+                for period, label in [
+                    ("yesterday", "Yesterday"),
+                    ("last_7_days", "Last 7 Days"),
+                    ("last_30_days", "Last 30 Days"),
+                    ("all_time", "All Time"),
+                ]:
+                    s = stats.get(period, {})
+                    if s.get("total", 0) > 0:
+                        print(f"\n{label}:")
+                        print(f"  Record: {s['wins']}W - {s['losses']}L ({s['total']} total)")
+                        print(f"  Win Rate: {s['win_rate']:.1%}")
+                        print(f"  ROI: {s['roi']:.1%}")
+                        print(f"  Avg Odds (W): {s['avg_odds_wins']:.2f} | Avg Odds (L): {s['avg_odds_losses']:.2f}")
+
+                print(f"\nPending: {stats.get('pending', 0)} picks")
+
+                by_market = stats.get("by_market", {})
+                if by_market:
+                    print(f"\nBy Market:")
+                    for market, ms in by_market.items():
+                        if ms.get("total", 0) > 0:
+                            print(f"  {market}: {ms['wins']}W-{ms['losses']}L ({ms['win_rate']:.1%})")
+
+        elif command == "--tune":
+            print("Tuning ensemble weights from recent results...")
+            agent.predictor.fit()
+            weights = agent.tune_ensemble_weights()
+            if weights:
+                print(f"\nNew weights: {json.dumps(weights, indent=2)}")
+            else:
+                print("Not enough data to tune weights.")
 
         elif command == "--analyze" and len(sys.argv) > 2:
             agent.predictor.fit()

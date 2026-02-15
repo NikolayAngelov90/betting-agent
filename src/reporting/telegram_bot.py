@@ -35,7 +35,7 @@ class TelegramNotifier:
                 logger.error(f"Failed to initialize Telegram bot: {e}")
         return self._bot
 
-    async def send_daily_picks(self, picks: List[BetRecommendation]):
+    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None):
         """Send daily picks summary via Telegram with rich formatting."""
         if not self.enabled:
             return
@@ -51,6 +51,16 @@ class TelegramNotifier:
         from datetime import date
         header = f"<b>Daily Value Picks - {date.today().strftime('%d %b %Y')}</b>\n"
         header += f"<i>{len(picks)} picks found</i>\n"
+
+        # Add stats summary if available
+        if stats:
+            parts = []
+            for period, label in [("yesterday", "Yesterday"), ("last_7_days", "7d"), ("all_time", "All time")]:
+                s = stats.get(period, {})
+                if s.get("total", 0) > 0:
+                    parts.append(f"{label}: {s['wins']}/{s['total']} ({s['win_rate']:.0%})")
+            if parts:
+                header += f"\n📊 <i>{' | '.join(parts)}</i>\n"
 
         # Group picks by match
         picks_by_match: Dict[str, List[BetRecommendation]] = {}
