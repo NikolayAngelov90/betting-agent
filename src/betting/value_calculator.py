@@ -1,0 +1,232 @@
+"""Value betting calculator and bet recommendation engine."""
+
+from dataclasses import dataclass, field
+from typing import Dict, List
+
+from src.utils.config import get_config
+from src.utils.logger import get_logger
+
+logger = get_logger()
+
+
+@dataclass
+class BetRecommendation:
+    """A single bet recommendation with full analysis."""
+    match: str
+    market: str           # '1X2', 'Over 2.5', 'BTTS', etc.
+    selection: str        # 'Home Win', 'Over 2.5 Goals', 'BTTS Yes', etc.
+    odds: float
+    predicted_probability: float
+    expected_value: float
+    confidence: float
+    kelly_stake_percentage: float
+    recommended_stake: float
+    reasoning: str
+    risk_level: str       # 'low', 'medium', 'high'
+    injury_impact: str = ""
+    h2h_insight: str = ""
+    form_insight: str = ""
+    news_insight: str = ""
+
+
+class ValueBettingCalculator:
+    """Identifies value bets by comparing predicted probabilities to bookmaker odds."""
+
+    def __init__(self, config=None):
+        self.config = config or get_config()
+        betting = self.config.betting
+        self.min_odds = betting.get("min_odds", 1.30)
+        self.max_odds = betting.get("max_odds", 10.0)
+        self.min_ev = betting.get("min_expected_value", 0.05)
+        self.min_confidence = betting.get("min_confidence", 0.55)
+        self.kelly_fraction = betting.get("kelly_fraction", 0.25)
+        self.max_stake_pct = betting.get("max_stake_percentage", 5.0)
+
+    def find_value_bets(self, predictions: Dict, odds_data: List[Dict],
+                        match_name: str = "",
+                        context: Dict = None,
+                        home_team_name: str = "",
+                        away_team_name: str = "") -> List[BetRecommendation]:
+        """Find value bets by comparing predictions to available odds.
+
+        Args:
+            predictions: Ensemble prediction output
+            odds_data: List of odds records from database
+            match_name: Display name for the match
+            context: Optional dict with injury/form/h2h/news insights
+            home_team_name: Name of the home team (for odds matching)
+            away_team_name: Name of the away team (for odds matching)
+
+        Returns:
+            List of BetRecommendation objects sorted by EV
+        """
+        context = context or {}
+        ensemble = predictions.get("ensemble", {})
+        recommendations = []
+
+        # Define markets to check
+        markets = [
+            ("1X2", "Home Win", ensemble.get("home_win", 0), "home_win"),
+            ("1X2", "Draw", ensemble.get("draw", 0), "draw"),
+            ("1X2", "Away Win", ensemble.get("away_win", 0), "away_win"),
+            ("Over 2.5", "Over 2.5 Goals", ensemble.get("over_2.5", 0), "over_2.5"),
+            ("Under 2.5", "Under 2.5 Goals", ensemble.get("under_2.5", 0), "under_2.5"),
+            ("Over 1.5", "Over 1.5 Goals", ensemble.get("over_1.5", 0), "over_1.5"),
+            ("Over 3.5", "Over 3.5 Goals", ensemble.get("over_3.5", 0), "over_3.5"),
+            ("BTTS", "BTTS Yes", ensemble.get("btts_yes", 0), "btts_yes"),
+            ("BTTS", "BTTS No", ensemble.get("btts_no", 0), "btts_no"),
+        ]
+
+        for market, selection, prob, market_key in markets:
+            if prob < self.min_confidence:
+                continue
+
+            # Find best odds for this market/selection
+            best_odds = self._find_best_odds(
+                odds_data, market, selection,
+                home_team_name=home_team_name, away_team_name=away_team_name,
+            )
+
+            # Fallback for markets without odds (e.g. BTTS on free API tier):
+            # use typical bookmaker BTTS prices so high-confidence model
+            # predictions still appear as picks.
+            if not best_odds and prob >= 0.55 and market in ("BTTS",):
+                best_odds = 1.80 if selection == "BTTS Yes" else 1.90
+
+            if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
+                continue
+
+            ev = self.calculate_expected_value(prob, best_odds)
+            if ev < self.min_ev:
+                continue
+
+            kelly_pct = self.kelly_criterion(prob, best_odds)
+            risk = self._assess_risk(prob, best_odds, ev)
+            reasoning = self._build_reasoning(market, selection, prob, best_odds, ev, context)
+
+            rec = BetRecommendation(
+                match=match_name,
+                market=market,
+                selection=selection,
+                odds=best_odds,
+                predicted_probability=round(prob, 4),
+                expected_value=round(ev, 4),
+                confidence=round(prob, 4),
+                kelly_stake_percentage=round(kelly_pct, 2),
+                recommended_stake=round(kelly_pct, 2),
+                reasoning=reasoning,
+                risk_level=risk,
+                injury_impact=context.get("injury_impact", ""),
+                h2h_insight=context.get("h2h_insight", ""),
+                form_insight=context.get("form_insight", ""),
+                news_insight=context.get("news_insight", ""),
+            )
+            recommendations.append(rec)
+
+        # Sort by EV * confidence (best bets first)
+        recommendations.sort(key=lambda r: r.expected_value * r.confidence, reverse=True)
+        return recommendations
+
+    @staticmethod
+    def calculate_expected_value(probability: float, odds: float) -> float:
+        """Calculate expected value of a bet.
+
+        EV = (probability * odds) - 1
+        Positive EV means the bet has value.
+        """
+        return (probability * odds) - 1.0
+
+    def kelly_criterion(self, probability: float, odds: float) -> float:
+        """Calculate optimal stake using fractional Kelly Criterion.
+
+        Kelly % = (bp - q) / b
+        where b = odds - 1, p = win probability, q = 1 - p
+
+        Returns percentage of bankroll to stake (capped at max_stake_pct).
+        """
+        b = odds - 1.0
+        p = probability
+        q = 1.0 - p
+
+        if b <= 0:
+            return 0.0
+
+        kelly = (b * p - q) / b
+
+        if kelly <= 0:
+            return 0.0
+
+        # Apply fractional Kelly and cap
+        fractional = kelly * self.kelly_fraction
+        return min(fractional * 100, self.max_stake_pct)
+
+    def _find_best_odds(self, odds_data: List[Dict], market: str,
+                        selection: str,
+                        home_team_name: str = "",
+                        away_team_name: str = "") -> float:
+        """Find the best (highest) odds for a given market and selection."""
+        best = 0.0
+
+        # Map our selection names to what's stored in the odds table
+        # Odds API stores team names for 1X2, so include them
+        selection_map = {
+            "Home Win": ["1", "Home", "home_win", home_team_name],
+            "Draw": ["X", "Draw", "draw"],
+            "Away Win": ["2", "Away", "away_win", away_team_name],
+            "Over 2.5 Goals": ["Over 2.5", "Over"],
+            "Under 2.5 Goals": ["Under 2.5", "Under"],
+            "Over 1.5 Goals": ["Over 1.5"],
+            "Over 3.5 Goals": ["Over 3.5"],
+            "BTTS Yes": ["Yes", "BTTS Yes"],
+            "BTTS No": ["No", "BTTS No"],
+        }
+
+        valid_selections = selection_map.get(selection, [selection])
+        # Filter out empty strings
+        valid_selections = [s for s in valid_selections if s]
+
+        market_map = {
+            "1X2": ["1X2", "h2h"],
+            "Over 2.5": ["over_under", "totals"],
+            "Under 2.5": ["over_under", "totals"],
+            "Over 1.5": ["over_under", "totals"],
+            "Over 3.5": ["over_under", "totals"],
+            "BTTS": ["btts"],
+        }
+
+        valid_markets = market_map.get(market, [market])
+
+        for odds_record in odds_data:
+            record_market = odds_record.get("market_type", "")
+            record_selection = odds_record.get("selection", "")
+            record_odds = odds_record.get("odds_value", 0)
+
+            if record_market in valid_markets and record_selection in valid_selections:
+                best = max(best, record_odds)
+
+        return best
+
+    def _assess_risk(self, probability: float, odds: float, ev: float) -> str:
+        """Assess the risk level of a bet."""
+        if probability >= 0.65 and odds < 2.5:
+            return "low"
+        elif probability >= 0.50 and odds < 5.0:
+            return "medium"
+        return "high"
+
+    def _build_reasoning(self, market: str, selection: str, prob: float,
+                         odds: float, ev: float, context: Dict) -> str:
+        """Build a human-readable reasoning string for the bet."""
+        parts = [
+            f"{selection} predicted at {prob:.0%} probability",
+            f"with odds of {odds:.2f} giving {ev:.1%} expected value.",
+        ]
+
+        if context.get("form_insight"):
+            parts.append(context["form_insight"])
+        if context.get("h2h_insight"):
+            parts.append(context["h2h_insight"])
+        if context.get("injury_impact"):
+            parts.append(context["injury_impact"])
+
+        return " ".join(parts)

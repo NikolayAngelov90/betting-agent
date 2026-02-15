@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "SlashCommand(/bmad:bmb:workflows:create-workflow)",
+      "Bash(if not exist \"c:\\Users\\nikit\\Desktop\\beting-agent\\.bmad\\sports-betting\" mkdir \"c:\\Users\\nikit\\Desktop\\beting-agent\\.bmad\\sports-betting\")",
+      "Bash(python -m pytest:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m src.agent.betting_agent:*)",
+      "Bash(taskkill:*)",
+      "Bash(pkill:*)",
+      "Bash(python:*)",
+      "Bash(wc:*)",
+      "WebFetch(domain:api.telegram.org)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

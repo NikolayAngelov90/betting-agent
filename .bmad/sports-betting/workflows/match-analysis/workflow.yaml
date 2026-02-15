@@ -1,0 +1,26 @@
+# Match Analysis Workflow Configuration
+# Module: sports-betting
+# Generated: 2025-11-29
+
+name: 'match-analysis'
+description: 'Deep analysis of a specific football match with predictions, value bets, injury impact, and betting recommendations'
+author: 'Niki'
+
+# Paths
+installed_path: '{project-root}/.bmad/sports-betting/workflows/match-analysis'
+template: '{installed_path}/template.md'
+instructions: '{installed_path}/instructions.md'
+validation: '{installed_path}/checklist.md'
+
+# Critical variables from config
+config_source: '{project-root}/.bmad/sports-betting/config.yaml'
+output_folder: '{config_source}:output_folder'
+user_name: '{config_source}:user_name'
+communication_language: '{config_source}:communication_language'
+date: system-generated
+
+# Output configuration
+default_output_file: '{output_folder}/match-analysis-{home_team}-vs-{away_team}-{date}.md'
+
+# Invocation control
+standalone: true

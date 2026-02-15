@@ -1,0 +1,235 @@
+"""Team form and league position feature calculations."""
+
+from typing import List, Optional
+
+from sqlalchemy import and_, or_
+
+from src.data.models import Match, Team
+from src.data.database import get_db
+from src.utils.logger import get_logger
+
+logger = get_logger()
+
+
+class TeamFeatures:
+    """Calculates team-level features: form, league position, contextual stats."""
+
+    def __init__(self):
+        self.db = get_db()
+
+    def get_form_features(self, team_id: int, num_matches: int = 5,
+                          venue: str = "all") -> dict:
+        """Calculate form-based features for a team.
+
+        Args:
+            team_id: Team database ID
+            num_matches: Number of recent matches to consider
+            venue: 'home', 'away', or 'all'
+
+        Returns:
+            Dictionary of form features
+        """
+        with self.db.get_session() as session:
+            query = session.query(Match).filter(
+                Match.is_fixture == False,
+                Match.home_goals.isnot(None),
+            )
+
+            if venue == "home":
+                query = query.filter(Match.home_team_id == team_id)
+            elif venue == "away":
+                query = query.filter(Match.away_team_id == team_id)
+            else:
+                query = query.filter(
+                    or_(Match.home_team_id == team_id, Match.away_team_id == team_id)
+                )
+
+            matches = query.order_by(Match.match_date.desc()).limit(num_matches).all()
+
+            if not matches:
+                return self._empty_form_features()
+
+            return self._calculate_form(matches, team_id)
+
+    def _calculate_form(self, matches: List[Match], team_id: int) -> dict:
+        """Calculate form statistics from a list of matches."""
+        points = 0
+        goals_scored = 0
+        goals_conceded = 0
+        clean_sheets = 0
+        failed_to_score = 0
+        wins = 0
+        draws = 0
+        losses = 0
+        shots_total = 0
+        shots_on_target_total = 0
+        possession_total = 0.0
+        corners_total = 0
+        shots_count = 0
+        possession_count = 0
+        corners_count = 0
+
+        form_string = []
+
+        for match in matches:
+            is_home = match.home_team_id == team_id
+
+            if is_home:
+                scored = match.home_goals or 0
+                conceded = match.away_goals or 0
+                shots = match.home_shots
+                sot = match.home_shots_on_target
+                poss = match.home_possession
+                corners = match.home_corners
+            else:
+                scored = match.away_goals or 0
+                conceded = match.home_goals or 0
+                shots = match.away_shots
+                sot = match.away_shots_on_target
+                poss = match.away_possession
+                corners = match.away_corners
+
+            goals_scored += scored
+            goals_conceded += conceded
+
+            if conceded == 0:
+                clean_sheets += 1
+            if scored == 0:
+                failed_to_score += 1
+
+            if scored > conceded:
+                points += 3
+                wins += 1
+                form_string.append("W")
+            elif scored == conceded:
+                points += 1
+                draws += 1
+                form_string.append("D")
+            else:
+                losses += 1
+                form_string.append("L")
+
+            if shots is not None:
+                shots_total += shots
+                shots_count += 1
+            if sot is not None:
+                shots_on_target_total += sot
+            if poss is not None:
+                possession_total += poss
+                possession_count += 1
+            if corners is not None:
+                corners_total += corners
+                corners_count += 1
+
+        n = len(matches)
+
+        # Calculate streaks
+        win_streak = self._calculate_streak(form_string, "W")
+        losing_streak = self._calculate_streak(form_string, "L")
+        unbeaten_run = self._calculate_unbeaten_run(form_string)
+
+        return {
+            "matches_played": n,
+            "points": points,
+            "points_per_match": round(points / n, 2) if n else 0,
+            "wins": wins,
+            "draws": draws,
+            "losses": losses,
+            "goals_scored": goals_scored,
+            "goals_conceded": goals_conceded,
+            "goal_difference": goals_scored - goals_conceded,
+            "goals_scored_per_match": round(goals_scored / n, 2) if n else 0,
+            "goals_conceded_per_match": round(goals_conceded / n, 2) if n else 0,
+            "clean_sheets": clean_sheets,
+            "failed_to_score": failed_to_score,
+            "win_streak": win_streak,
+            "losing_streak": losing_streak,
+            "unbeaten_run": unbeaten_run,
+            "shots_per_game_avg": round(shots_total / shots_count, 2) if shots_count else 0,
+            "shots_on_target_per_game_avg": round(shots_on_target_total / shots_count, 2) if shots_count else 0,
+            "possession_avg": round(possession_total / possession_count, 2) if possession_count else 0,
+            "corners_per_game_avg": round(corners_total / corners_count, 2) if corners_count else 0,
+            "form_string": "-".join(form_string),
+        }
+
+    def _calculate_streak(self, form: List[str], result: str) -> int:
+        """Calculate current streak of a specific result from most recent."""
+        streak = 0
+        for r in form:
+            if r == result:
+                streak += 1
+            else:
+                break
+        return streak
+
+    def _calculate_unbeaten_run(self, form: List[str]) -> int:
+        """Calculate current unbeaten run from most recent."""
+        run = 0
+        for r in form:
+            if r in ("W", "D"):
+                run += 1
+            else:
+                break
+        return run
+
+    def _empty_form_features(self) -> dict:
+        """Return empty form features when no data available."""
+        return {
+            "matches_played": 0,
+            "points": 0,
+            "points_per_match": 0,
+            "wins": 0, "draws": 0, "losses": 0,
+            "goals_scored": 0, "goals_conceded": 0, "goal_difference": 0,
+            "goals_scored_per_match": 0, "goals_conceded_per_match": 0,
+            "clean_sheets": 0, "failed_to_score": 0,
+            "win_streak": 0, "losing_streak": 0, "unbeaten_run": 0,
+            "shots_per_game_avg": 0, "shots_on_target_per_game_avg": 0,
+            "possession_avg": 0, "corners_per_game_avg": 0,
+            "form_string": "",
+        }
+
+    def get_league_position(self, team_id: int, league: str, season: str = None) -> dict:
+        """Calculate current league position features for a team."""
+        with self.db.get_session() as session:
+            # Get all teams in the league
+            teams = session.query(Team).filter_by(league=league).all()
+            if not teams:
+                return {"league_position": 0, "points": 0, "goal_difference": 0,
+                        "points_per_game": 0, "home_points_per_game": 0, "away_points_per_game": 0}
+
+            standings = []
+            for team in teams:
+                form_all = self.get_form_features(team.id, num_matches=50, venue="all")
+                form_home = self.get_form_features(team.id, num_matches=50, venue="home")
+                form_away = self.get_form_features(team.id, num_matches=50, venue="away")
+
+                standings.append({
+                    "team_id": team.id,
+                    "team_name": team.name,
+                    "points": form_all["points"],
+                    "goal_difference": form_all["goal_difference"],
+                    "goals_scored": form_all["goals_scored"],
+                    "matches_played": form_all["matches_played"],
+                    "points_per_game": form_all["points_per_match"],
+                    "home_points_per_game": form_home["points_per_match"],
+                    "away_points_per_game": form_away["points_per_match"],
+                })
+
+            # Sort by points, then goal difference, then goals scored
+            standings.sort(key=lambda x: (x["points"], x["goal_difference"], x["goals_scored"]), reverse=True)
+
+            position = 1
+            for i, entry in enumerate(standings):
+                if entry["team_id"] == team_id:
+                    position = i + 1
+                    return {
+                        "league_position": position,
+                        "points": entry["points"],
+                        "goal_difference": entry["goal_difference"],
+                        "points_per_game": entry["points_per_game"],
+                        "home_points_per_game": entry["home_points_per_game"],
+                        "away_points_per_game": entry["away_points_per_game"],
+                    }
+
+            return {"league_position": 0, "points": 0, "goal_difference": 0,
+                    "points_per_game": 0, "home_points_per_game": 0, "away_points_per_game": 0}

@@ -1,0 +1,126 @@
+name: Daily Betting Picks
+
+on:
+  schedule:
+    # Runs at 11:00 AM UTC every day
+    - cron: '0 11 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  daily-picks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
+
+      - name: Restore database and models
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/football_betting.db
+            data/models/
+          key: betting-data-${{ github.run_number }}
+          restore-keys: |
+            betting-data-
+
+      - name: Create config from secrets
+        run: |
+          cat > config/config.yaml << 'CONF'
+          scraping:
+            flashscore_leagues:
+              - england/premier-league
+              - spain/laliga
+              - germany/bundesliga
+              - italy/serie-a
+              - france/ligue-1
+              - netherlands/eredivisie
+              - portugal/primeira-liga
+              - belgium/jupiler-pro-league
+              - turkey/super-lig
+              - scotland/premiership
+              - austria/bundesliga
+              - switzerland/super-league
+              - greece/super-league
+              - denmark/superliga
+              - champions-league
+              - europa-league
+              - europa-conference-league
+            update_interval_hours: 6
+            headless: true
+            request_delay: 3
+
+          database:
+            type: sqlite
+            sqlite_path: data/football_betting.db
+
+          models:
+            ensemble_weights:
+              poisson: 0.25
+              xgboost: 0.35
+              random_forest: 0.20
+              elo: 0.20
+            retrain_interval_days: 7
+            min_training_samples: 1000
+
+          betting:
+            min_odds: 1.30
+            max_odds: 10.0
+            min_expected_value: 0.05
+            min_confidence: 0.55
+            kelly_fraction: 0.25
+            max_stake_percentage: 5.0
+
+          notifications:
+            telegram_enabled: true
+            telegram_bot_token: "${TELEGRAM_BOT_TOKEN}"
+            telegram_chat_id: "${TELEGRAM_CHAT_ID}"
+            send_daily_picks: true
+            send_live_alerts: false
+
+          logging:
+            level: INFO
+            log_file: logs/betting_agent.log
+            log_rotation: "1 week"
+
+          data_sources:
+            odds_api_key: "${ODDS_API_KEY}"
+            odds_api_enabled: true
+          CONF
+
+          # Replace placeholders with actual secrets
+          sed -i "s|\${TELEGRAM_BOT_TOKEN}|${{ secrets.TELEGRAM_BOT_TOKEN }}|g" config/config.yaml
+          sed -i "s|\${TELEGRAM_CHAT_ID}|${{ secrets.TELEGRAM_CHAT_ID }}|g" config/config.yaml
+          sed -i "s|\${ODDS_API_KEY}|${{ secrets.ODDS_API_KEY }}|g" config/config.yaml
+
+      - name: Create directories
+        run: |
+          mkdir -p data/models logs
+
+      - name: Run daily update
+        run: python -m src.agent.betting_agent --update
+
+      - name: Generate and send picks
+        run: python -m src.agent.betting_agent --picks
+
+      - name: Save database and models
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/football_betting.db
+            data/models/
+          key: betting-data-${{ github.run_number }}

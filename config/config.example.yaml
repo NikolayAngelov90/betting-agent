@@ -1,0 +1,63 @@
+# Football Betting Agent Configuration
+# Copy this file to config.yaml and fill in your secrets
+
+scraping:
+  flashscore_leagues:
+    - england/premier-league
+    - spain/laliga
+    - germany/bundesliga
+    - italy/serie-a
+    - france/ligue-1
+    - netherlands/eredivisie
+    - portugal/primeira-liga
+    - belgium/jupiler-pro-league
+    - turkey/super-lig
+    - scotland/premiership
+    - austria/bundesliga
+    - switzerland/super-league
+    - greece/super-league
+    - denmark/superliga
+    - champions-league
+    - europa-league
+    - europa-conference-league
+
+  update_interval_hours: 6
+  headless: true
+  request_delay: 3
+
+database:
+  type: sqlite
+  sqlite_path: data/football_betting.db
+
+models:
+  ensemble_weights:
+    poisson: 0.25
+    xgboost: 0.35
+    random_forest: 0.20
+    elo: 0.20
+  retrain_interval_days: 7
+  min_training_samples: 1000
+
+betting:
+  min_odds: 1.30
+  max_odds: 10.0
+  min_expected_value: 0.05
+  min_confidence: 0.55
+  kelly_fraction: 0.25
+  max_stake_percentage: 5.0
+
+notifications:
+  telegram_enabled: false
+  telegram_bot_token: "YOUR_BOT_TOKEN"
+  telegram_chat_id: "YOUR_CHAT_ID"
+  send_daily_picks: true
+  send_live_alerts: false
+
+logging:
+  level: INFO
+  log_file: logs/betting_agent.log
+  log_rotation: "1 week"
+
+data_sources:
+  odds_api_key: "YOUR_ODDS_API_KEY"
+  odds_api_enabled: true
