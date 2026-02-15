@@ -36,7 +36,7 @@ class MLModels:
         """Initialize all model instances."""
         self.models = {
             "logistic_regression": LogisticRegression(
-                max_iter=1000, multi_class="multinomial", solver="lbfgs",
+                max_iter=1000, solver="lbfgs",
             ),
             "random_forest": RandomForestClassifier(
                 n_estimators=200, max_depth=10, min_samples_split=5,
