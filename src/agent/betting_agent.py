@@ -162,6 +162,18 @@ class FootballBettingAgent:
                 for o in odds_records
             ]
 
+        # Coverage gate — skip fixtures with insufficient historical data
+        coverage = self.predictor.check_coverage(home_id, away_id)
+        if coverage["score"] < 0.50:
+            logger.info(
+                f"Skipping {match_name}: data coverage {coverage['score']:.0%} < 50% minimum"
+            )
+            return MatchAnalysis(
+                match_id=match_id, match_name=match_name, match_date=match_date,
+                league=league, features={}, predictions={}, recommendations=[],
+                injury_report={}, news_summary={},
+            )
+
         # Generate features
         features = await self.feature_engineer.create_features(match_id)
         feature_vector = self.feature_engineer.create_feature_vector(features)
@@ -188,7 +200,7 @@ class FootballBettingAgent:
         recommendations = self.value_calculator.find_value_bets(
             predictions, odds_data, match_name, context,
             home_team_name=home_team_name, away_team_name=away_team_name,
-            match_id=match_id,
+            match_id=match_id, league=league,
         )
 
         return MatchAnalysis(
@@ -233,9 +245,13 @@ class FootballBettingAgent:
             logger.info(f"No fixtures found for {target}")
             return []
 
-        # Data coverage report — flag under-covered fixtures
+        # Data coverage report — flag under-covered fixtures and leagues
+        from src.scrapers.historical_loader import LEAGUE_CSV_MAP, EXTRA_LEAGUE_CSV_MAP
+        all_hist_leagues = set(LEAGUE_CSV_MAP.keys()) | set(EXTRA_LEAGUE_CSV_MAP.keys())
+
         with self.db.get_session() as session:
             low_coverage = []
+            uncovered_leagues = set()
             for fid in fixture_ids:
                 m = session.get(Match, fid)
                 if not m:
@@ -245,13 +261,21 @@ class FootballBettingAgent:
                     ht = session.get(Team, m.home_team_id)
                     at = session.get(Team, m.away_team_id)
                     name = f"{ht.name if ht else m.home_team_id} vs {at.name if at else m.away_team_id}"
-                    low_coverage.append((name, cov["score"]))
+                    low_coverage.append((name, cov["score"], m.league))
+                if m.league and m.league not in all_hist_leagues:
+                    uncovered_leagues.add(m.league)
             if low_coverage:
                 logger.warning(
                     f"Data coverage gaps in {len(low_coverage)}/{len(fixture_ids)} fixtures:"
                 )
-                for name, score in low_coverage:
-                    logger.warning(f"  {name}: coverage {score:.0%}")
+                for name, score, league in low_coverage:
+                    logger.warning(f"  {name}: coverage {score:.0%} [{league}]")
+            if uncovered_leagues:
+                logger.warning(
+                    f"Leagues with fixtures but NO historical data source: "
+                    f"{', '.join(sorted(uncovered_leagues))}. "
+                    f"Add them to historical_loader.py to improve predictions."
+                )
 
         all_recommendations = []
         for match_id in fixture_ids:
@@ -296,6 +320,7 @@ class FootballBettingAgent:
                     match_id=pick.match_id,
                     pick_date=pick_date,
                     match_name=pick.match,
+                    league=pick.league,
                     market=pick.market,
                     selection=pick.selection,
                     odds=pick.odds,
@@ -304,6 +329,7 @@ class FootballBettingAgent:
                     confidence=pick.confidence,
                     kelly_stake_percentage=pick.kelly_stake_percentage,
                     risk_level=pick.risk_level,
+                    used_fallback_odds=pick.used_fallback_odds,
                 )
                 session.add(saved)
 
@@ -450,6 +476,38 @@ class FootballBettingAgent:
             elo_teams = len(self.predictor.elo.ratings)
             ml_fitted = self.predictor.ml_models.is_fitted
 
+            # Fallback vs real odds breakdown
+            real_odds_settled = [p for p in settled if not getattr(p, "used_fallback_odds", False)]
+            fallback_settled = [p for p in settled if getattr(p, "used_fallback_odds", False)]
+
+            # Stale picks health check — pending picks older than 48h
+            stale_cutoff = now - timedelta(days=2)
+            stale_picks = [p for p in pending if p.pick_date and p.pick_date < stale_cutoff]
+
+            # Per-league breakdown
+            leagues = {}
+            for p in settled:
+                lg = getattr(p, "league", None) or "unknown"
+                leagues.setdefault(lg, []).append(p)
+
+            # Calibration: predicted probability vs actual win rate by bucket
+            calibration = {}
+            for bucket_lo in range(45, 95, 10):  # 45-55, 55-65, ..., 85-95
+                bucket_hi = bucket_lo + 10
+                label = f"{bucket_lo}-{bucket_hi}%"
+                bucket_picks = [
+                    p for p in settled
+                    if p.predicted_probability is not None
+                    and bucket_lo / 100 <= p.predicted_probability < bucket_hi / 100
+                ]
+                if bucket_picks:
+                    wins = sum(1 for p in bucket_picks if p.result == "win")
+                    calibration[label] = {
+                        "predicted_avg": round(np.mean([p.predicted_probability for p in bucket_picks]), 3),
+                        "actual_win_rate": round(wins / len(bucket_picks), 3),
+                        "count": len(bucket_picks),
+                    }
+
             stats = {
                 "all_time": calc_stats(settled),
                 "last_7_days": calc_stats(week_picks),
@@ -457,11 +515,18 @@ class FootballBettingAgent:
                 "yesterday": calc_stats(yesterday_picks),
                 "pending": len(pending),
                 "by_market": {m: calc_stats(picks) for m, picks in markets.items()},
+                "by_league": {lg: calc_stats(picks) for lg, picks in leagues.items()},
                 "model_coverage": {
                     "poisson_teams": poisson_teams,
                     "elo_teams": elo_teams,
                     "ml_fitted": ml_fitted,
                 },
+                "odds_source": {
+                    "real_odds": calc_stats(real_odds_settled),
+                    "fallback_odds": calc_stats(fallback_settled),
+                },
+                "stale_picks": len(stale_picks),
+                "calibration": calibration,
             }
 
             return stats
@@ -536,13 +601,37 @@ class FootballBettingAgent:
             logger.info("No accuracy data to tune weights")
             return
 
-        # Normalize to get new weights
-        total_acc = sum(accuracies.values())
+        # Ensemble accuracy (check if the ensemble's top pick matched)
+        ensemble_correct = 0
+        ensemble_total = 0
+        for pick in settled:
+            if pick.market != "1X2":
+                continue
+            if pick.actual_home_goals is None:
+                continue
+            if pick.actual_home_goals > pick.actual_away_goals:
+                actual = "home_win"
+            elif pick.actual_home_goals == pick.actual_away_goals:
+                actual = "draw"
+            else:
+                actual = "away_win"
+            # Check if the ensemble's top selection matches actual
+            sel_map = {"Home Win": "home_win", "Draw": "draw", "Away Win": "away_win"}
+            if sel_map.get(pick.selection) == actual:
+                ensemble_correct += 1
+            ensemble_total += 1
+
+        if ensemble_total > 0:
+            accuracies["ensemble"] = ensemble_correct / ensemble_total
+
+        # Normalize to get new weights (exclude ensemble from weight calc)
+        base_models = {k: v for k, v in accuracies.items() if k != "ensemble"}
+        total_acc = sum(base_models.values())
         new_weights = {
-            "poisson": round(accuracies["poisson"] / total_acc, 3),
-            "elo": round(accuracies["elo"] / total_acc, 3),
-            "xgboost": round((accuracies["ml"] / total_acc) * 0.6, 3),  # 60% of ML weight to XGB
-            "random_forest": round((accuracies["ml"] / total_acc) * 0.4, 3),  # 40% to RF
+            "poisson": round(base_models["poisson"] / total_acc, 3),
+            "elo": round(base_models["elo"] / total_acc, 3),
+            "xgboost": round((base_models["ml"] / total_acc) * 0.6, 3),
+            "random_forest": round((base_models["ml"] / total_acc) * 0.4, 3),
         }
 
         # Save tuned weights
@@ -556,7 +645,7 @@ class FootballBettingAgent:
         # Apply immediately
         self.predictor.weights = new_weights
 
-        return new_weights
+        return {"weights": new_weights, "accuracies": accuracies}
 
     async def train_ml_models(self, max_samples: int = 2000):
         """Train ML models on historical match data.
@@ -815,6 +904,13 @@ async def main():
                         if ms.get("total", 0) > 0:
                             print(f"  {market}: {ms['wins']}W-{ms['losses']}L ({ms['win_rate']:.1%})")
 
+                by_league = stats.get("by_league", {})
+                if by_league:
+                    print(f"\nBy League:")
+                    for lg, ls in sorted(by_league.items(), key=lambda x: x[1].get("total", 0), reverse=True):
+                        if ls.get("total", 0) > 0:
+                            print(f"  {lg}: {ls['wins']}W-{ls['losses']}L ({ls['win_rate']:.1%}) ROI: {ls['roi']:.1%}")
+
                 cov = stats.get("model_coverage", {})
                 if cov:
                     print(f"\nModel Coverage:")
@@ -822,12 +918,40 @@ async def main():
                     print(f"  Elo: {cov.get('elo_teams', 0)} teams with ratings")
                     print(f"  ML Models: {'Fitted' if cov.get('ml_fitted') else 'Not fitted'}")
 
+                odds_src = stats.get("odds_source", {})
+                real = odds_src.get("real_odds", {})
+                fb = odds_src.get("fallback_odds", {})
+                if real.get("total", 0) or fb.get("total", 0):
+                    print(f"\nOdds Source Breakdown:")
+                    if real.get("total", 0):
+                        print(f"  Real odds: {real['wins']}W-{real['losses']}L ({real['win_rate']:.1%}) ROI: {real['roi']:.1%}")
+                    if fb.get("total", 0):
+                        print(f"  Fallback odds: {fb['wins']}W-{fb['losses']}L ({fb['win_rate']:.1%}) ROI: {fb['roi']:.1%}")
+
+                cal = stats.get("calibration", {})
+                if cal:
+                    print(f"\nCalibration (predicted vs actual):")
+                    for bucket, data in sorted(cal.items()):
+                        pred = data["predicted_avg"]
+                        actual = data["actual_win_rate"]
+                        n = data["count"]
+                        gap = actual - pred
+                        indicator = "OK" if abs(gap) < 0.10 else ("OVER" if gap > 0 else "UNDER")
+                        print(f"  {bucket}: predicted {pred:.0%} / actual {actual:.0%} (n={n}) [{indicator}]")
+
+                stale = stats.get("stale_picks", 0)
+                if stale > 0:
+                    print(f"\n!! WARNING: {stale} picks pending >48h — check settlement logic !!")
+
         elif command == "--tune":
             print("Tuning ensemble weights from recent results...")
             agent.predictor.fit()
-            weights = agent.tune_ensemble_weights()
-            if weights:
-                print(f"\nNew weights: {json.dumps(weights, indent=2)}")
+            result = agent.tune_ensemble_weights()
+            if result:
+                print(f"\nModel Accuracy (1X2 picks, last 30d):")
+                for model, acc in sorted(result["accuracies"].items()):
+                    print(f"  {model}: {acc:.1%}")
+                print(f"\nNew weights: {json.dumps(result['weights'], indent=2)}")
             else:
                 print("Not enough data to tune weights.")
 

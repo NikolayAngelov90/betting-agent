@@ -25,6 +25,8 @@ class PoissonModel:
         self.league_avg_home_goals = 1.5
         self.league_avg_away_goals = 1.2
         self._team_strengths = {}
+        self._team_league = {}  # team_id -> league string
+        self._league_avgs = {}  # league -> {"home": float, "away": float}
 
     def fit(self, league: str = None, num_matches: int = 5000):
         """Calculate attack/defense strength ratings from historical data.
@@ -47,11 +49,25 @@ class PoissonModel:
                 logger.warning("No match data available for Poisson model fitting")
                 return
 
-            # League averages
+            # Global averages
             home_goals = [m.home_goals for m in matches]
             away_goals = [m.away_goals for m in matches]
             self.league_avg_home_goals = np.mean(home_goals)
             self.league_avg_away_goals = np.mean(away_goals)
+
+            # Per-league averages for calibration
+            league_goals = {}
+            for m in matches:
+                lg = m.league or "unknown"
+                league_goals.setdefault(lg, {"home": [], "away": []})
+                league_goals[lg]["home"].append(m.home_goals)
+                league_goals[lg]["away"].append(m.away_goals)
+            for lg, goals in league_goals.items():
+                if len(goals["home"]) >= 30:  # only calibrate with enough data
+                    self._league_avgs[lg] = {
+                        "home": np.mean(goals["home"]),
+                        "away": np.mean(goals["away"]),
+                    }
 
             # Per-team attack and defense strengths
             team_stats = {}
@@ -60,6 +76,8 @@ class PoissonModel:
                     (match.home_team_id, match.home_goals, match.away_goals, "home"),
                     (match.away_team_id, match.away_goals, match.home_goals, "away"),
                 ]:
+                    if match.league:
+                        self._team_league[team_id] = match.league
                     if team_id not in team_stats:
                         team_stats[team_id] = {
                             "home_scored": [], "home_conceded": [],
@@ -92,6 +110,7 @@ class PoissonModel:
 
             logger.info(
                 f"Poisson model fitted: {len(self._team_strengths)} teams, "
+                f"{len(self._league_avgs)} leagues calibrated, "
                 f"avg home goals={self.league_avg_home_goals:.2f}, "
                 f"avg away goals={self.league_avg_away_goals:.2f}"
             )
@@ -162,8 +181,18 @@ class PoissonModel:
             offset = ((seed % 1000) / 1000.0 - 0.5) * 0.3
             away_strength = {"attack": 1.0 + offset, "defense": 1.0 - offset * 0.5}
 
-        home_xg = self.league_avg_home_goals * home_strength["attack"] * away_strength["defense"]
-        away_xg = self.league_avg_away_goals * away_strength["attack"] * home_strength["defense"]
+        # Use per-league averages when both teams share a known league
+        home_lg = self._team_league.get(home_team_id)
+        away_lg = self._team_league.get(away_team_id)
+        if home_lg and home_lg == away_lg and home_lg in self._league_avgs:
+            avg_home = self._league_avgs[home_lg]["home"]
+            avg_away = self._league_avgs[home_lg]["away"]
+        else:
+            avg_home = self.league_avg_home_goals
+            avg_away = self.league_avg_away_goals
+
+        home_xg = avg_home * home_strength["attack"] * away_strength["defense"]
+        away_xg = avg_away * away_strength["attack"] * home_strength["defense"]
 
         return home_xg, away_xg
 

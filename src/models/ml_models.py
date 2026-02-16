@@ -65,6 +65,23 @@ class MLModels:
         """
         self.feature_names = feature_names or [f"feature_{i}" for i in range(X.shape[1])]
 
+        # Prune sparse features (>80% zeros) to reduce noise
+        n_samples = X.shape[0]
+        zero_fractions = np.mean(X == 0, axis=0)
+        sparse_mask = zero_fractions > 0.80
+        n_sparse = int(np.sum(sparse_mask))
+        if n_sparse > 0:
+            kept_mask = ~sparse_mask
+            dropped = [self.feature_names[i] for i in range(len(self.feature_names)) if sparse_mask[i]]
+            logger.info(f"Pruning {n_sparse} sparse features (>80% zeros): {dropped[:10]}{'...' if len(dropped) > 10 else ''}")
+            X = X[:, kept_mask]
+            self.feature_names = [f for f, keep in zip(self.feature_names, kept_mask) if keep]
+            self._kept_feature_mask = kept_mask
+        else:
+            self._kept_feature_mask = None
+
+        logger.info(f"Training with {X.shape[1]} features, {n_samples} samples")
+
         # Scale features
         X_scaled = self.scaler.fit_transform(X)
 
@@ -92,6 +109,13 @@ class MLModels:
         self.is_fitted = True
         logger.info("All ML models trained successfully")
 
+        # Log top 10 most important features
+        importance = self.get_feature_importance()
+        for model_name, imp_list in importance.items():
+            top_10 = imp_list[:10]
+            top_str = ", ".join(f"{name}({score:.3f})" for name, score in top_10)
+            logger.info(f"{model_name} top features: {top_str}")
+
     def predict(self, X: np.ndarray) -> Dict:
         """Get predictions from all models.
 
@@ -106,6 +130,9 @@ class MLModels:
             return self._default_prediction()
 
         X = X.reshape(1, -1) if X.ndim == 1 else X
+        # Apply same feature pruning mask used during training
+        if getattr(self, "_kept_feature_mask", None) is not None and X.shape[1] > len(self.feature_names):
+            X = X[:, self._kept_feature_mask]
         X_scaled = self.scaler.transform(X)
 
         predictions = {}
@@ -157,6 +184,7 @@ class MLModels:
             "scaler": self.scaler,
             "feature_names": self.feature_names,
             "is_fitted": self.is_fitted,
+            "_kept_feature_mask": getattr(self, "_kept_feature_mask", None),
         }
 
         filepath = save_dir / "ml_models.pkl"
@@ -181,6 +209,7 @@ class MLModels:
         self.scaler = state["scaler"]
         self.feature_names = state["feature_names"]
         self.is_fitted = state["is_fitted"]
+        self._kept_feature_mask = state.get("_kept_feature_mask")
 
         logger.info(f"Models loaded from {filepath}")
 

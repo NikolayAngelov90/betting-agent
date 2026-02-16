@@ -28,6 +28,8 @@ class BetRecommendation:
     h2h_insight: str = ""
     form_insight: str = ""
     news_insight: str = ""
+    used_fallback_odds: bool = False
+    league: str = ""
 
 
 class ValueBettingCalculator:
@@ -48,7 +50,8 @@ class ValueBettingCalculator:
                         context: Dict = None,
                         home_team_name: str = "",
                         away_team_name: str = "",
-                        match_id: int = 0) -> List[BetRecommendation]:
+                        match_id: int = 0,
+                        league: str = "") -> List[BetRecommendation]:
         """Find value bets by comparing predictions to available odds.
 
         Args:
@@ -77,9 +80,13 @@ class ValueBettingCalculator:
             ("BTTS", "BTTS Yes", ensemble.get("btts_yes", 0), "btts_yes"),
         ]
 
+        # Allow lower confidence (45%) for high-EV longshot picks;
+        # standard picks still need min_confidence (55%).
+        high_ev_min_confidence = 0.45
+
         for market, selection, prob, market_key in markets:
-            if prob < self.min_confidence:
-                continue
+            if prob < high_ev_min_confidence:
+                continue  # hard floor — never go below 45%
 
             # Find best odds for this market/selection
             best_odds = self._find_best_odds(
@@ -90,7 +97,8 @@ class ValueBettingCalculator:
             # Fallback for markets without odds (e.g. free API tier):
             # use typical bookmaker prices so high-confidence model
             # predictions still appear as picks.
-            if not best_odds and prob >= self.min_confidence:
+            is_fallback = False
+            if not best_odds and prob >= high_ev_min_confidence:
                 fallback_odds = {
                     "BTTS Yes": 1.80,
                     "Over 1.5 Goals": 1.45,
@@ -98,12 +106,18 @@ class ValueBettingCalculator:
                     "Over 3.5 Goals": 2.50,
                 }
                 best_odds = fallback_odds.get(selection, 0)
+                if best_odds:
+                    is_fallback = True
 
             if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
                 continue
 
             ev = self.calculate_expected_value(prob, best_odds)
             if ev < self.min_ev:
+                continue
+
+            # Standard picks need min_confidence; only high-EV (>10%) can use 45-55%
+            if prob < self.min_confidence and ev < 0.10:
                 continue
 
             kelly_pct = self.kelly_criterion(prob, best_odds)
@@ -127,6 +141,8 @@ class ValueBettingCalculator:
                 h2h_insight=context.get("h2h_insight", ""),
                 form_insight=context.get("form_insight", ""),
                 news_insight=context.get("news_insight", ""),
+                used_fallback_odds=is_fallback,
+                league=league,
             )
             recommendations.append(rec)
 

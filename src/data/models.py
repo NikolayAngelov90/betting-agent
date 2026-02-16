@@ -178,6 +178,7 @@ class SavedPick(Base):
     match_id = Column(Integer, ForeignKey('matches.id'), nullable=False)
     pick_date = Column(Date, nullable=False)
     match_name = Column(String(200))
+    league = Column(String(100))
 
     # Bet details
     market = Column(String(50))       # '1X2', 'Over 2.5', 'BTTS'
@@ -188,6 +189,7 @@ class SavedPick(Base):
     confidence = Column(Float)
     kelly_stake_percentage = Column(Float)
     risk_level = Column(String(20))
+    used_fallback_odds = Column(Boolean, default=False)
 
     # Result (NULL = pending)
     result = Column(String(10))       # 'win', 'loss', 'void', or NULL
