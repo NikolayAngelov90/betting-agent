@@ -14,7 +14,11 @@
       "WebFetch(domain:www.football-data.co.uk)",
       "Bash(curl:*)",
       "Bash(PYTHONIOENCODING=utf-8 python:*)",
-      "Bash(powershell -command:*)"
+      "Bash(powershell -command:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:the-odds-api.com)",
+      "WebFetch(domain:rapidapi.com)",
+      "Bash(ODDS_API_KEY=\"309170541f7bb316c7762f7e3bc81e83\" python:*)"
     ],
     "deny": [],
     "ask": []

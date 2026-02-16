@@ -69,6 +69,13 @@ class Match(Base):
     home_red_cards = Column(Integer)
     away_red_cards = Column(Integer)
 
+    # Expected Goals (from API-Football)
+    home_xg = Column(Float)
+    away_xg = Column(Float)
+
+    # API-Football fixture ID for cross-referencing
+    apifootball_id = Column(Integer)
+
     # Match status
     is_fixture = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)

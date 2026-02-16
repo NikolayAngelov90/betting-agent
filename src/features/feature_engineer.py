@@ -3,6 +3,8 @@
 import numpy as np
 from typing import Optional
 
+from sqlalchemy import or_
+
 from src.features.team_features import TeamFeatures
 from src.features.h2h_features import H2HFeatures
 from src.features.injury_features import InjuryFeatures
@@ -85,6 +87,16 @@ class FeatureEngineer:
         features["home_news_count"] = home_sentiment.get("article_count", 0)
         features["away_news_count"] = away_sentiment.get("article_count", 0)
 
+        # 6. xG-based features (from API-Football)
+        home_xg = self._get_xg_features(home_id, "home")
+        away_xg = self._get_xg_features(away_id, "away")
+        features.update(self._prefix_dict(home_xg, "home_"))
+        features.update(self._prefix_dict(away_xg, "away_"))
+
+        # xG differentials
+        features["xg_for_diff"] = home_xg.get("xg_avg", 0) - away_xg.get("xg_avg", 0)
+        features["xg_against_diff"] = home_xg.get("xg_against_avg", 0) - away_xg.get("xg_against_avg", 0)
+
         logger.debug(f"Generated {len(features)} features for match {match_id}")
         return features
 
@@ -109,6 +121,65 @@ class FeatureEngineer:
             key for key, value in features.items()
             if isinstance(value, (int, float, bool))
         ]
+
+    def _get_xg_features(self, team_id: int, venue: str = "all",
+                          num_matches: int = 10) -> dict:
+        """Calculate xG-based features for a team from recent matches.
+
+        Returns rolling averages for xG for/against and overperformance.
+        """
+        empty = {
+            "xg_avg": 0.0, "xg_against_avg": 0.0,
+            "xg_overperformance": 0.0, "xg_matches": 0,
+        }
+
+        with self.db.get_session() as session:
+            query = session.query(Match).filter(
+                Match.is_fixture == False,
+                Match.home_goals.isnot(None),
+                Match.home_xg.isnot(None),
+            )
+
+            if venue == "home":
+                query = query.filter(Match.home_team_id == team_id)
+            elif venue == "away":
+                query = query.filter(Match.away_team_id == team_id)
+            else:
+                query = query.filter(
+                    or_(Match.home_team_id == team_id, Match.away_team_id == team_id)
+                )
+
+            matches = query.order_by(Match.match_date.desc()).limit(num_matches).all()
+
+            if not matches:
+                return empty
+
+            # Extract data within session context to avoid detached instance errors
+            xg_for_list = []
+            xg_against_list = []
+            goals_for_list = []
+
+            for m in matches:
+                is_home = m.home_team_id == team_id
+                if is_home:
+                    xg_for_list.append(m.home_xg or 0)
+                    xg_against_list.append(m.away_xg or 0)
+                    goals_for_list.append(m.home_goals or 0)
+                else:
+                    xg_for_list.append(m.away_xg or 0)
+                    xg_against_list.append(m.home_xg or 0)
+                    goals_for_list.append(m.away_goals or 0)
+
+        xg_avg = sum(xg_for_list) / len(xg_for_list)
+        xg_against_avg = sum(xg_against_list) / len(xg_against_list)
+        goals_avg = sum(goals_for_list) / len(goals_for_list)
+
+        return {
+            "xg_avg": round(xg_avg, 3),
+            "xg_against_avg": round(xg_against_avg, 3),
+            "xg_overperformance": round(goals_avg - xg_avg, 3),
+            "xg_matches": len(xg_for_list),
+        }
 
     def _prefix_dict(self, d: dict, prefix: str) -> dict:
         """Add a prefix to all dictionary keys."""

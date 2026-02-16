@@ -13,6 +13,7 @@ from src.scrapers.odds_scraper import OddsScraper
 from src.scrapers.injury_scraper import InjuryScraper
 from src.scrapers.news_scraper import NewsScraper
 from src.scrapers.historical_loader import HistoricalDataLoader
+from src.scrapers.apifootball_scraper import APIFootballScraper
 from src.features.feature_engineer import FeatureEngineer
 from src.models.ensemble import EnsemblePredictor
 from src.betting.value_calculator import ValueBettingCalculator, BetRecommendation
@@ -64,6 +65,7 @@ class FootballBettingAgent:
         self.injury_tracker = InjuryScraper(self.config)
         self.news_aggregator = NewsScraper(self.config)
         self.historical_loader = HistoricalDataLoader(self.config)
+        self.apifootball = APIFootballScraper(self.config)
         self.feature_engineer = FeatureEngineer()
         self.predictor = EnsemblePredictor(self.config)
         self.value_calculator = ValueBettingCalculator(self.config)
@@ -100,6 +102,13 @@ class FootballBettingAgent:
         # except Exception as e:
         #     logger.error(f"Flashscore update failed: {e}")
         #     self.scraper.close_driver()
+
+        # 3. API-Football (fixtures, xG, advanced stats)
+        try:
+            await self.apifootball.update()
+            logger.info("API-Football update complete")
+        except Exception as e:
+            logger.error(f"API-Football update failed: {e}")
 
         # 4. Injury data
         try:
@@ -786,6 +795,7 @@ class FootballBettingAgent:
         self.scraper.close_driver()
         await self.scraper.close()
         await self.odds_collector.close()
+        await self.apifootball.close()
         await self.injury_tracker.close()
         await self.news_aggregator.close()
         await self.historical_loader.close()

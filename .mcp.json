@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "wagyu-sports": {
+      "command": "python",
+      "args": [
+        "c:/Users/nikit/Desktop/betting-agent/mcp-servers/wagyu_mcp_hackathon/wagyu_sports/mcp_server/test_server.py"
+      ],
+      "env": {
+        "ODDS_API_KEY": "309170541f7bb316c7762f7e3bc81e83"
+      },
+      "disabled": false
+    },
+    "soccer-server": {
+      "command": "python",
+      "args": [
+        "c:/Users/nikit/Desktop/betting-agent/mcp-servers/soccer-mcp-server/soccer_server.py"
+      ],
+      "env": {
+        "API_FOOTBALL_KEY": "efdc870ce5e1efb571818237d0cb3c4a"
+      },
+      "disabled": false
+    }
+  }
+}
