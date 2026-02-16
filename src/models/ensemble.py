@@ -54,6 +54,28 @@ class EnsemblePredictor:
         # ML models are fitted separately via train() with feature data
         logger.info("Ensemble models fitted")
 
+    def check_coverage(self, home_team_id: int, away_team_id: int) -> Dict:
+        """Check data coverage for a team pair.
+
+        Returns dict with per-model coverage flags and an overall score (0-1).
+        """
+        home_poisson = home_team_id in self.poisson._team_strengths
+        away_poisson = away_team_id in self.poisson._team_strengths
+        home_elo = home_team_id in self.elo.ratings
+        away_elo = away_team_id in self.elo.ratings
+
+        checks = [home_poisson, away_poisson, home_elo, away_elo]
+        score = sum(checks) / len(checks)
+
+        return {
+            "home_poisson": home_poisson,
+            "away_poisson": away_poisson,
+            "home_elo": home_elo,
+            "away_elo": away_elo,
+            "ml_fitted": self.ml_models.is_fitted,
+            "score": score,
+        }
+
     def predict(self, home_team_id: int, away_team_id: int,
                 features_vector=None) -> Dict:
         """Generate ensemble prediction for a match.
@@ -67,6 +89,10 @@ class EnsemblePredictor:
             Dictionary with ensemble and per-model predictions
         """
         results = {}
+
+        # Data coverage check — penalise confidence when teams lack history
+        coverage = self.check_coverage(home_team_id, away_team_id)
+        results["coverage"] = coverage
 
         # Poisson predictions
         poisson_pred = self.poisson.predict(home_team_id, away_team_id)
@@ -136,6 +162,16 @@ class EnsemblePredictor:
         results["ensemble"]["btts_no"] = round(adjusted_goals["btts_no"], 4)
         results["ensemble"]["most_likely_score"] = poisson_pred.get("most_likely_score", "")
         results["ensemble"]["model"] = "ensemble"
+
+        # Apply confidence penalty for low-coverage matches:
+        # Pull probabilities toward the prior (0.33) proportional to missing data.
+        penalty = (1.0 - coverage["score"]) * 0.25  # max 25% regression
+        if penalty > 0:
+            prior = 1.0 / 3.0
+            for key in ("home_win", "draw", "away_win"):
+                results["ensemble"][key] = round(
+                    results["ensemble"][key] * (1 - penalty) + prior * penalty, 4
+                )
 
         return results
 

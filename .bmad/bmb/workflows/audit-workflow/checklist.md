@@ -36,8 +36,8 @@
 - [ ] Every workflow.yaml variable (excluding standard config) is used in instructions OR template
 - [ ] No unused yaml fields present (bloat removed)
 - [ ] No duplicate fields between top-level and web_bundle section
-- [ ] All template variables ({{variable}}) have corresponding yaml definitions OR <template-output> tags
-- [ ] All <template-output> tags have corresponding template variables (if document workflow)
+- [ ] All template variables ({{variable}}) have corresponding yaml definitions OR template-output tags
+- [ ] All template-output tags have corresponding template variables (if document workflow)
 - [ ] Template variables use snake_case naming convention
 - [ ] Variable names are descriptive (not abbreviated like {{puj}} instead of {{primary_user_journey}})
 - [ ] No hardcoded values in instructions that should be yaml variables
@@ -51,16 +51,16 @@
 - [ ] template file listed in web_bundle_files (if document workflow)
 - [ ] validation/checklist file listed in web_bundle_files (if exists)
 - [ ] All data files (CSV, JSON, YAML) listed in web_bundle_files
-- [ ] All <invoke-workflow> called workflows have their .yaml files in web_bundle_files
+- [ ] All invoke-workflow called workflows have their .yaml files in web_bundle_files
 - [ ] **CRITICAL**: If workflow invokes other workflows, existing_workflows field is present
 - [ ] existing_workflows maps workflow variables to .bmad/-relative paths correctly
-- [ ] All files referenced in instructions <action> tags listed in web_bundle_files
+- [ ] All files referenced in instructions action tags listed in web_bundle_files
 - [ ] No files listed in web_bundle_files that don't exist
 - [ ] Web bundle metadata (name, description, author) matches top-level metadata
 
 ## Template Validation (if document workflow)
 
-- [ ] Template variables match <template-output> tags in instructions exactly
+- [ ] Template variables match template-output tags in instructions exactly
 - [ ] All required sections present in template structure
 - [ ] Template uses {{variable}} syntax (double curly braces)
 - [ ] Template variables use snake_case (not camelCase or PascalCase)
@@ -75,16 +75,16 @@
 - [ ] Optional steps marked with optional="true"
 - [ ] Repeating steps have appropriate repeat attribute (repeat="3", repeat="for-each-X", repeat="until-approved")
 - [ ] Conditional steps have if="condition" attribute
-- [ ] XML tags used correctly (<action>, <ask>, <check>, <goto>, <invoke-workflow>, <template-output>)
-- [ ] No nested tag references in content (use "action tags" not "<action> tags")
+- [ ] XML tags used correctly (action, ask, check, goto, invoke-workflow, template-output)
+- [ ] No nested tag references in content (use "action tags" not angle-bracket form)
 - [ ] Tag references use descriptive text without angle brackets for clarity
-- [ ] No conditional execution antipattern (no self-closing <check> tags)
-- [ ] Single conditionals use <action if="condition"> (inline)
-- [ ] Multiple conditionals use <check if="condition">...</check> (wrapper block with closing tag)
+- [ ] No conditional execution antipattern (no self-closing check tags)
+- [ ] Single conditionals use action if="condition" pattern (inline)
+- [ ] Multiple conditionals use check if="condition" wrapper block with closing tag
 - [ ] Steps are focused (single goal per step)
 - [ ] Instructions are specific with limits ("Write 1-2 paragraphs" not "Write about")
 - [ ] Examples provided where helpful
-- [ ] <template-output> tags save checkpoints for document workflows
+- [ ] template-output tags save checkpoints for document workflows
 - [ ] Flow control is logical and clear
 
 ## Bloat Detection

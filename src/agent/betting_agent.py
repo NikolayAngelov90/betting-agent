@@ -233,6 +233,26 @@ class FootballBettingAgent:
             logger.info(f"No fixtures found for {target}")
             return []
 
+        # Data coverage report — flag under-covered fixtures
+        with self.db.get_session() as session:
+            low_coverage = []
+            for fid in fixture_ids:
+                m = session.get(Match, fid)
+                if not m:
+                    continue
+                cov = self.predictor.check_coverage(m.home_team_id, m.away_team_id)
+                if cov["score"] < 1.0:
+                    ht = session.get(Team, m.home_team_id)
+                    at = session.get(Team, m.away_team_id)
+                    name = f"{ht.name if ht else m.home_team_id} vs {at.name if at else m.away_team_id}"
+                    low_coverage.append((name, cov["score"]))
+            if low_coverage:
+                logger.warning(
+                    f"Data coverage gaps in {len(low_coverage)}/{len(fixture_ids)} fixtures:"
+                )
+                for name, score in low_coverage:
+                    logger.warning(f"  {name}: coverage {score:.0%}")
+
         all_recommendations = []
         for match_id in fixture_ids:
             try:
@@ -425,6 +445,11 @@ class FootballBettingAgent:
             for p in settled:
                 markets.setdefault(p.market, []).append(p)
 
+            # Model coverage summary
+            poisson_teams = len(self.predictor.poisson._team_strengths)
+            elo_teams = len(self.predictor.elo.ratings)
+            ml_fitted = self.predictor.ml_models.is_fitted
+
             stats = {
                 "all_time": calc_stats(settled),
                 "last_7_days": calc_stats(week_picks),
@@ -432,6 +457,11 @@ class FootballBettingAgent:
                 "yesterday": calc_stats(yesterday_picks),
                 "pending": len(pending),
                 "by_market": {m: calc_stats(picks) for m, picks in markets.items()},
+                "model_coverage": {
+                    "poisson_teams": poisson_teams,
+                    "elo_teams": elo_teams,
+                    "ml_fitted": ml_fitted,
+                },
             }
 
             return stats
@@ -784,6 +814,13 @@ async def main():
                     for market, ms in by_market.items():
                         if ms.get("total", 0) > 0:
                             print(f"  {market}: {ms['wins']}W-{ms['losses']}L ({ms['win_rate']:.1%})")
+
+                cov = stats.get("model_coverage", {})
+                if cov:
+                    print(f"\nModel Coverage:")
+                    print(f"  Poisson: {cov.get('poisson_teams', 0)} teams with strength data")
+                    print(f"  Elo: {cov.get('elo_teams', 0)} teams with ratings")
+                    print(f"  ML Models: {'Fitted' if cov.get('ml_fitted') else 'Not fitted'}")
 
         elif command == "--tune":
             print("Tuning ensemble weights from recent results...")
