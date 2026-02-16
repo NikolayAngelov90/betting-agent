@@ -408,6 +408,9 @@ class FootballBettingAgent:
                     "score": f"{hg}-{ag}",
                     "stake": pick.kelly_stake_percentage,
                     "pick_date": pick.pick_date,
+                    "league": pick.league,
+                    "home_xg": match.home_xg,
+                    "away_xg": match.away_xg,
                 })
 
             session.commit()
@@ -788,6 +791,12 @@ class FootballBettingAgent:
         away_trend = news_summary.get("away", {}).get("trend", "neutral")
         context["news_insight"] = f"News sentiment: home={home_trend}, away={away_trend}."
 
+        # xG data for decision support
+        context["home_xg_avg"] = features.get("home_xg_avg", 0.0)
+        context["away_xg_avg"] = features.get("away_xg_avg", 0.0)
+        context["home_xg_overperformance"] = features.get("home_xg_overperformance", 0.0)
+        context["away_xg_overperformance"] = features.get("away_xg_overperformance", 0.0)
+
         return context
 
     async def shutdown(self):
@@ -853,18 +862,48 @@ async def main():
                     await agent.telegram.send_daily_picks(picks, stats=stats)
                     print(f"\nPicks sent to Telegram!")
 
-                for i, pick in enumerate(picks, 1):
-                    # Encode-safe printing for non-ASCII team names
-                    match_name = pick.match.encode("ascii", "replace").decode()
-                    reasoning = pick.reasoning.encode("ascii", "replace").decode()
-                    print(f"\n{'='*50}")
-                    print(f"Pick #{i}: {match_name}")
-                    print(f"  Bet: {pick.selection} @ {pick.odds}")
-                    print(f"  EV: {pick.expected_value:.1%}")
-                    print(f"  Confidence: {pick.confidence:.1%}")
-                    print(f"  Risk: {pick.risk_level}")
-                    print(f"  Stake: {pick.kelly_stake_percentage:.1f}% of bankroll")
-                    print(f"  Reasoning: {reasoning}")
+                # Group by league for organized output
+                from src.reporting.telegram_bot import LEAGUE_DISPLAY
+                picks_by_league = {}
+                for pick in picks:
+                    lg = pick.league or "Other"
+                    picks_by_league.setdefault(lg, []).append(pick)
+
+                pick_num = 0
+                for league_key in sorted(picks_by_league.keys()):
+                    league_picks = picks_by_league[league_key]
+                    league_name = LEAGUE_DISPLAY.get(league_key, league_key)
+                    print(f"\n{'='*60}")
+                    print(f"  {league_name}")
+                    print(f"{'='*60}")
+
+                    for pick in league_picks:
+                        pick_num += 1
+                        match_name = pick.match.encode("ascii", "replace").decode()
+                        reasoning = pick.reasoning.encode("ascii", "replace").decode()
+
+                        agreement_tag = ""
+                        if pick.model_agreement:
+                            agreement_tag = f" [{pick.model_agreement.upper()}]"
+
+                        print(f"\n  Pick #{pick_num}: {match_name}")
+                        if pick.predicted_xg:
+                            print(f"    xG: {pick.predicted_xg}")
+                        print(f"    Bet: {pick.selection} @ {pick.odds:.2f}")
+                        print(f"    EV: {pick.expected_value:.1%} | Conf: {pick.confidence:.1%} | Risk: {pick.risk_level}")
+                        print(f"    Stake: {pick.kelly_stake_percentage:.1f}% of bankroll")
+                        if pick.model_agreement:
+                            line = f"    Models: {pick.model_agreement}{agreement_tag}"
+                            if pick.models_for:
+                                line += f" - {pick.models_for} agree"
+                            if pick.models_against:
+                                line += f" | {pick.models_against} disagree"
+                            print(line)
+                        if pick.xg_edge:
+                            print(f"    xG edge: {pick.xg_edge}")
+                        if pick.used_fallback_odds:
+                            print(f"    !! Estimated odds (no bookmaker data)")
+                        print(f"    Reasoning: {reasoning}")
 
         elif command == "--settle":
             print("Settling pending picks against actual results...")
@@ -972,15 +1011,39 @@ async def main():
             print(f"\nMatch: {analysis.match_name}")
             print(f"Date: {analysis.match_date}")
             print(f"League: {analysis.league}")
-            print(f"\nPredictions (Ensemble):")
+
+            # Model predictions comparison
+            print(f"\nPredictions:")
             ens = analysis.predictions.get("ensemble", {})
-            print(f"  Home Win: {ens.get('home_win', 0):.1%}")
-            print(f"  Draw: {ens.get('draw', 0):.1%}")
-            print(f"  Away Win: {ens.get('away_win', 0):.1%}")
-            print(f"  xG: {ens.get('home_xg', 0):.2f} - {ens.get('away_xg', 0):.2f}")
+            poisson = analysis.predictions.get("poisson", {})
+            elo = analysis.predictions.get("elo", {})
+            print(f"  {'':15s} {'Ensemble':>10s} {'Poisson':>10s} {'Elo':>10s}")
+            for outcome in ["home_win", "draw", "away_win"]:
+                label = outcome.replace("_", " ").title()
+                print(f"  {label:15s} {ens.get(outcome, 0):>9.1%} {poisson.get(outcome, 0):>9.1%} {elo.get(outcome, 0):>9.1%}")
+
+            print(f"\n  xG: {ens.get('home_xg', 0):.2f} - {ens.get('away_xg', 0):.2f}")
+            print(f"  Most Likely Score: {ens.get('most_likely_score', 'N/A')}")
+            print(f"  Over 2.5: {ens.get('over_2.5', 0):.1%} | BTTS: {ens.get('btts_yes', 0):.1%}")
+
+            # xG features
+            f = analysis.features
+            if f.get("home_xg_matches", 0) or f.get("away_xg_matches", 0):
+                print(f"\n  xG Rolling Averages:")
+                print(f"    Home: xG {f.get('home_xg_avg', 0):.2f} for, {f.get('home_xg_against_avg', 0):.2f} against (overperf: {f.get('home_xg_overperformance', 0):+.2f})")
+                print(f"    Away: xG {f.get('away_xg_avg', 0):.2f} for, {f.get('away_xg_against_avg', 0):.2f} against (overperf: {f.get('away_xg_overperformance', 0):+.2f})")
+
             print(f"\nValue Bets: {len(analysis.recommendations)}")
             for rec in analysis.recommendations:
-                print(f"  - {rec.selection} @ {rec.odds} (EV: {rec.expected_value:.1%})")
+                agreement = f" [{rec.model_agreement}]" if rec.model_agreement else ""
+                print(f"  - {rec.selection} @ {rec.odds:.2f} (EV: {rec.expected_value:.1%}, Conf: {rec.confidence:.0%}){agreement}")
+                if rec.xg_edge:
+                    print(f"    xG: {rec.xg_edge}")
+                if rec.models_for:
+                    print(f"    For: {rec.models_for}", end="")
+                    if rec.models_against:
+                        print(f" | Against: {rec.models_against}", end="")
+                    print()
 
         elif command == "--telegram-setup":
             print("=" * 50)

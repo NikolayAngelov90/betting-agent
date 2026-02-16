@@ -24,6 +24,7 @@ class MatchReportGenerator:
         sections = [
             self._header(analysis),
             self._team_form(analysis),
+            self._xg_analysis(analysis),
             self._h2h_section(analysis),
             self._injury_report(analysis),
             self._news_sentiment(analysis),
@@ -72,6 +73,60 @@ class MatchReportGenerator:
             f"- Last 5: {away_pts} pts, {away_gs} scored, {away_gc} conceded\n"
             f"- League position: {away_pos}"
         )
+
+    def _xg_analysis(self, analysis) -> str:
+        """xG analysis section showing rolling xG and overperformance."""
+        f = analysis.features
+        if not f:
+            return ""
+
+        parts = analysis.match_name.split(" vs ")
+        home_name = parts[0] if len(parts) > 0 else "Home"
+        away_name = parts[1] if len(parts) > 1 else "Away"
+
+        home_xg = f.get("home_xg_avg", 0)
+        away_xg = f.get("away_xg_avg", 0)
+        home_xg_against = f.get("home_xg_against_avg", 0)
+        away_xg_against = f.get("away_xg_against_avg", 0)
+        home_overperf = f.get("home_xg_overperformance", 0)
+        away_overperf = f.get("away_xg_overperformance", 0)
+        home_xg_n = f.get("home_xg_matches", 0)
+        away_xg_n = f.get("away_xg_matches", 0)
+
+        if home_xg_n == 0 and away_xg_n == 0:
+            return "## xG Analysis\nNo xG data available for these teams yet."
+
+        # Predicted xG from ensemble
+        ens = analysis.predictions.get("ensemble", {})
+        pred_home_xg = ens.get("home_xg", 0)
+        pred_away_xg = ens.get("away_xg", 0)
+
+        lines = [
+            "## xG Analysis",
+            f"**Predicted xG:** {pred_home_xg:.2f} - {pred_away_xg:.2f}",
+            "",
+            "| Team | xG For | xG Against | Overperf | Sample |",
+            "|------|--------|------------|----------|--------|",
+            f"| {home_name} | {home_xg:.2f} | {home_xg_against:.2f} | {home_overperf:+.2f} | {home_xg_n} matches |",
+            f"| {away_name} | {away_xg:.2f} | {away_xg_against:.2f} | {away_overperf:+.2f} | {away_xg_n} matches |",
+        ]
+
+        # Add insight
+        insights = []
+        if home_overperf > 0.4:
+            insights.append(f"- {home_name} scoring above xG — regression risk")
+        elif home_overperf < -0.4:
+            insights.append(f"- {home_name} underperforming xG — goals due")
+        if away_overperf > 0.4:
+            insights.append(f"- {away_name} scoring above xG — regression risk")
+        elif away_overperf < -0.4:
+            insights.append(f"- {away_name} underperforming xG — goals due")
+
+        if insights:
+            lines.append("\n**Key Insight:**")
+            lines.extend(insights)
+
+        return "\n".join(lines)
 
     def _h2h_section(self, analysis) -> str:
         f = analysis.features
@@ -164,13 +219,23 @@ class MatchReportGenerator:
 
         for i, rec in enumerate(recs, 1):
             stars = stars_map.get(rec.risk_level, "*")
+            agreement = f" [{rec.model_agreement}]" if rec.model_agreement else ""
             lines.append(
-                f"\n{i}. **{rec.selection} @ {rec.odds}** {stars}\n"
+                f"\n{i}. **{rec.selection} @ {rec.odds}** {stars}{agreement}\n"
                 f"   - EV: {rec.expected_value:.1%}\n"
                 f"   - Confidence: {rec.confidence:.1%}\n"
                 f"   - Stake: {rec.kelly_stake_percentage:.1f}% of bankroll\n"
-                f"   - Risk: {rec.risk_level}\n"
-                f"   - {rec.reasoning}"
+                f"   - Risk: {rec.risk_level}"
             )
+            if rec.model_agreement:
+                models_line = f"   - Models: {rec.models_for or 'none'} agree"
+                if rec.models_against:
+                    models_line += f" | {rec.models_against} disagree"
+                lines.append(models_line)
+            if rec.xg_edge:
+                lines.append(f"   - xG: {rec.xg_edge}")
+            if rec.used_fallback_odds:
+                lines.append(f"   - *Estimated odds (no bookmaker data)*")
+            lines.append(f"   - {rec.reasoning}")
 
         return "\n".join(lines)

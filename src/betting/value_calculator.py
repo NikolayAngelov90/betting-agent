@@ -30,6 +30,14 @@ class BetRecommendation:
     news_insight: str = ""
     used_fallback_odds: bool = False
     league: str = ""
+    # Enhanced decision support fields
+    model_agreement: str = ""       # 'unanimous', 'majority', 'split'
+    models_for: str = ""            # e.g. "Poisson, Elo, ML"
+    models_against: str = ""        # e.g. "Elo"
+    home_xg_avg: float = 0.0       # Rolling xG average (home team)
+    away_xg_avg: float = 0.0       # Rolling xG average (away team)
+    xg_edge: str = ""              # xG-based insight string
+    predicted_xg: str = ""         # e.g. "1.45 - 0.92"
 
 
 class ValueBettingCalculator:
@@ -122,7 +130,19 @@ class ValueBettingCalculator:
 
             kelly_pct = self.kelly_criterion(prob, best_odds)
             risk = self._assess_risk(prob, best_odds, ev)
-            reasoning = self._build_reasoning(market, selection, prob, best_odds, ev, context)
+
+            # Model agreement analysis
+            agreement_info = self._check_model_agreement(
+                predictions, market_key, selection,
+            )
+
+            # xG insight
+            xg_info = self._build_xg_insight(context, ensemble, market, selection)
+
+            reasoning = self._build_reasoning(
+                market, selection, prob, best_odds, ev, context,
+                agreement_info, xg_info,
+            )
 
             rec = BetRecommendation(
                 match=match_name,
@@ -143,6 +163,13 @@ class ValueBettingCalculator:
                 news_insight=context.get("news_insight", ""),
                 used_fallback_odds=is_fallback,
                 league=league,
+                model_agreement=agreement_info.get("agreement", ""),
+                models_for=agreement_info.get("models_for", ""),
+                models_against=agreement_info.get("models_against", ""),
+                home_xg_avg=context.get("home_xg_avg", 0.0),
+                away_xg_avg=context.get("away_xg_avg", 0.0),
+                xg_edge=xg_info.get("insight", ""),
+                predicted_xg=xg_info.get("predicted_xg", ""),
             )
             recommendations.append(rec)
 
@@ -237,13 +264,126 @@ class ValueBettingCalculator:
             return "medium"
         return "high"
 
+    def _check_model_agreement(self, predictions: Dict, market_key: str,
+                                selection: str) -> Dict:
+        """Check how many models agree on this selection.
+
+        Returns dict with agreement level and model names.
+        """
+        poisson = predictions.get("poisson", {})
+        elo = predictions.get("elo", {})
+        ml = predictions.get("ml", {}).get("ml_average") if predictions.get("ml") else None
+
+        models_for = []
+        models_against = []
+
+        # For 1X2 markets: check if each model's top pick matches selection
+        selection_to_key = {
+            "Home Win": "home_win", "Draw": "draw", "Away Win": "away_win",
+        }
+
+        if market_key in ("home_win", "draw", "away_win"):
+            for model_name, pred in [("Poisson", poisson), ("Elo", elo), ("ML", ml)]:
+                if not pred:
+                    continue
+                top = max(["home_win", "draw", "away_win"],
+                          key=lambda k: pred.get(k, 0))
+                if top == market_key:
+                    models_for.append(model_name)
+                else:
+                    models_against.append(model_name)
+        else:
+            # Goals/BTTS markets — check if model prob > 50%
+            for model_name, pred in [("Poisson", poisson)]:
+                if not pred:
+                    continue
+                model_prob = pred.get(market_key, 0)
+                if model_prob > 0.50:
+                    models_for.append(model_name)
+                else:
+                    models_against.append(model_name)
+
+        total = len(models_for) + len(models_against)
+        if total == 0:
+            agreement = "unknown"
+        elif len(models_against) == 0:
+            agreement = "unanimous"
+        elif len(models_for) > len(models_against):
+            agreement = "majority"
+        else:
+            agreement = "split"
+
+        return {
+            "agreement": agreement,
+            "models_for": ", ".join(models_for),
+            "models_against": ", ".join(models_against),
+        }
+
+    def _build_xg_insight(self, context: Dict, ensemble: Dict,
+                           market: str, selection: str) -> Dict:
+        """Build xG-based decision insight."""
+        home_xg = ensemble.get("home_xg", 0)
+        away_xg = ensemble.get("away_xg", 0)
+        predicted_xg = f"{home_xg:.2f} - {away_xg:.2f}" if home_xg or away_xg else ""
+
+        insight_parts = []
+
+        # xG overperformance warning
+        home_overperf = context.get("home_xg_overperformance", 0)
+        away_overperf = context.get("away_xg_overperformance", 0)
+
+        if home_overperf > 0.5:
+            insight_parts.append("Home overperforming xG (regression risk)")
+        elif home_overperf < -0.5:
+            insight_parts.append("Home underperforming xG (due a bounce)")
+
+        if away_overperf > 0.5:
+            insight_parts.append("Away overperforming xG (regression risk)")
+        elif away_overperf < -0.5:
+            insight_parts.append("Away underperforming xG (due a bounce)")
+
+        # xG-based goal insight
+        total_xg = home_xg + away_xg
+        if market in ("Over 2.5", "Over 1.5", "Over 3.5", "BTTS"):
+            if total_xg > 2.8:
+                insight_parts.append(f"High xG total ({total_xg:.1f}) supports goals")
+            elif total_xg < 1.8:
+                insight_parts.append(f"Low xG total ({total_xg:.1f}) cautionary for goals")
+
+        return {
+            "predicted_xg": predicted_xg,
+            "insight": ". ".join(insight_parts) if insight_parts else "",
+        }
+
     def _build_reasoning(self, market: str, selection: str, prob: float,
-                         odds: float, ev: float, context: Dict) -> str:
+                         odds: float, ev: float, context: Dict,
+                         agreement_info: Dict = None,
+                         xg_info: Dict = None) -> str:
         """Build a human-readable reasoning string for the bet."""
         parts = [
             f"{selection} predicted at {prob:.0%} probability",
             f"with odds of {odds:.2f} giving {ev:.1%} expected value.",
         ]
+
+        # Model agreement
+        if agreement_info and agreement_info.get("agreement"):
+            agr = agreement_info["agreement"]
+            if agr == "unanimous":
+                parts.append(f"All models agree ({agreement_info['models_for']}).")
+            elif agr == "majority":
+                parts.append(
+                    f"Majority of models agree ({agreement_info['models_for']}); "
+                    f"{agreement_info['models_against']} disagrees."
+                )
+            elif agr == "split":
+                parts.append(
+                    f"Models split: {agreement_info['models_for']} for, "
+                    f"{agreement_info['models_against']} against."
+                )
+
+        # xG insight
+        if xg_info and xg_info.get("insight"):
+            parts.append(xg_info["insight"] + ".")
 
         if context.get("form_insight"):
             parts.append(context["form_insight"])
