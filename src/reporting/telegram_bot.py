@@ -109,6 +109,62 @@ class TelegramNotifier:
         else:
             await self._send_message(message)
 
+    async def send_settlement_report(self, settled_picks: list, stats: dict = None):
+        """Send settlement results for yesterday's picks via Telegram."""
+        if not self.enabled or not settled_picks:
+            return
+
+        from datetime import date, timedelta
+        yesterday = date.today() - timedelta(days=1)
+
+        # Filter to yesterday's settled picks (or show all if dates vary)
+        yesterday_picks = [p for p in settled_picks if p.get("pick_date") == yesterday]
+        picks_to_show = yesterday_picks if yesterday_picks else settled_picks
+
+        wins = sum(1 for p in picks_to_show if p["result"] == "win")
+        losses = sum(1 for p in picks_to_show if p["result"] == "loss")
+        total = wins + losses
+        win_rate = wins / total if total > 0 else 0
+
+        # Calculate profit/loss
+        profit = sum(
+            p["stake"] * (p["odds"] - 1) if p["result"] == "win" else -p["stake"]
+            for p in picks_to_show
+        )
+
+        label = yesterday.strftime('%d %b %Y') if yesterday_picks else "Recent"
+        header = f"<b>📊 Settlement Report - {label}</b>\n"
+        header += f"<b>Record: {wins}W - {losses}L ({win_rate:.0%})</b>\n"
+        profit_emoji = "📈" if profit >= 0 else "📉"
+        header += f"{profit_emoji} P/L: {profit:+.1f}% of bankroll\n"
+
+        lines = [header]
+        for pick in picks_to_show:
+            result_emoji = "✅" if pick["result"] == "win" else "❌"
+            lines.append(
+                f"\n{result_emoji} <b>{pick['match_name']}</b> ({pick['score']})\n"
+                f"    {pick['selection']} @ {pick['odds']:.2f} | Stake: {pick['stake']:.1f}%"
+            )
+
+        # Add overall stats
+        if stats:
+            lines.append("\n<b>─── Overall Stats ───</b>")
+            for period, label in [("last_7_days", "Last 7 days"), ("last_30_days", "Last 30 days"), ("all_time", "All time")]:
+                s = stats.get(period, {})
+                if s.get("total", 0) > 0:
+                    roi_emoji = "📈" if s.get("roi", 0) >= 0 else "📉"
+                    lines.append(
+                        f"{label}: {s['wins']}W-{s['losses']}L ({s['win_rate']:.0%}) "
+                        f"{roi_emoji} ROI: {s['roi']:.1%}"
+                    )
+
+            pending = stats.get("pending", 0)
+            if pending > 0:
+                lines.append(f"\n⏳ {pending} picks still pending")
+
+        message = "\n".join(lines)
+        await self._send_message(message)
+
     async def send_alert(self, text: str):
         """Send a generic alert message."""
         if not self.enabled:

@@ -11,7 +11,8 @@
       "Bash(python:*)",
       "Bash(wc:*)",
       "WebFetch(domain:api.telegram.org)",
-      "WebFetch(domain:www.football-data.co.uk)"
+      "WebFetch(domain:www.football-data.co.uk)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

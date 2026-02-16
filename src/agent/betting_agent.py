@@ -291,8 +291,12 @@ class FootballBettingAgent:
             logger.info(f"Saved {len(picks)} picks to database")
 
     def settle_predictions(self):
-        """Check pending picks against actual match results and mark win/loss."""
-        settled_count = 0
+        """Check pending picks against actual match results and mark win/loss.
+
+        Returns:
+            List of dicts with settled pick details for reporting.
+        """
+        settled = []
 
         with self.db.get_session() as session:
             pending = session.query(SavedPick).filter(
@@ -301,7 +305,7 @@ class FootballBettingAgent:
 
             if not pending:
                 logger.info("No pending picks to settle")
-                return 0
+                return settled
 
             for pick in pending:
                 match = session.get(Match, pick.match_id)
@@ -340,12 +344,21 @@ class FootballBettingAgent:
                 pick.actual_home_goals = hg
                 pick.actual_away_goals = ag
                 pick.settled_at = datetime.utcnow()
-                settled_count += 1
+
+                settled.append({
+                    "match_name": pick.match_name,
+                    "selection": pick.selection,
+                    "odds": pick.odds,
+                    "result": pick.result,
+                    "score": f"{hg}-{ag}",
+                    "stake": pick.kelly_stake_percentage,
+                    "pick_date": pick.pick_date,
+                })
 
             session.commit()
 
-        logger.info(f"Settled {settled_count} picks")
-        return settled_count
+        logger.info(f"Settled {len(settled)} picks")
+        return settled
 
     def get_stats(self) -> Dict:
         """Calculate prediction statistics over different time periods."""
@@ -723,12 +736,17 @@ async def main():
 
         elif command == "--settle":
             print("Settling pending picks against actual results...")
-            agent.settle_predictions()
+            settled_picks = agent.settle_predictions()
             stats = agent.get_stats()
-            settled = stats.get("all_time", {})
-            print(f"\nSettled: {settled.get('total', 0)} picks")
-            print(f"Win rate: {settled.get('win_rate', 0):.1%}")
+            all_time = stats.get("all_time", {})
+            print(f"\nSettled: {len(settled_picks)} picks")
+            print(f"All time: {all_time.get('total', 0)} picks, Win rate: {all_time.get('win_rate', 0):.1%}")
             print(f"Pending: {stats.get('pending', 0)} picks")
+
+            # Send settlement report to Telegram
+            if settled_picks and agent.telegram.enabled:
+                await agent.telegram.send_settlement_report(settled_picks, stats)
+                print("Settlement report sent to Telegram!")
 
         elif command == "--stats":
             agent.settle_predictions()  # Settle any new results first
