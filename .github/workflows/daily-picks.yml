@@ -2,8 +2,8 @@ name: Daily Betting Picks
 
 on:
   schedule:
-    # Runs at 13:00 UTC every day
-    - cron: '0 13 * * *'
+    # Runs at 11:00 UTC = 13:00 Kyiv/Helsinki (UTC+2)
+    - cron: '0 11 * * *'
   workflow_dispatch: # Allow manual trigger
 
 jobs:
@@ -89,7 +89,7 @@ jobs:
           betting:
             min_odds: 1.30
             max_odds: 10.0
-            min_expected_value: 0.05
+            min_expected_value: 0.03
             min_confidence: 0.55
             kelly_fraction: 0.25
             max_stake_percentage: 5.0

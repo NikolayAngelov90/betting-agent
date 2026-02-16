@@ -141,9 +141,26 @@ class PoissonModel:
         }
 
     def _expected_goals(self, home_team_id: int, away_team_id: int) -> Tuple[float, float]:
-        """Calculate expected goals for each team."""
-        home_strength = self._team_strengths.get(home_team_id, {"attack": 1.0, "defense": 1.0})
-        away_strength = self._team_strengths.get(away_team_id, {"attack": 1.0, "defense": 1.0})
+        """Calculate expected goals for each team.
+
+        For unknown teams, regress toward league average with slight randomisation
+        based on the team ID so that different unknown teams still get different
+        predictions instead of all converging to the same xG.
+        """
+        default = {"attack": 1.0, "defense": 1.0}
+        home_strength = self._team_strengths.get(home_team_id)
+        away_strength = self._team_strengths.get(away_team_id)
+
+        if home_strength is None:
+            # Small deterministic offset so different unknown teams differ
+            seed = (home_team_id * 2654435761) & 0xFFFFFFFF
+            offset = ((seed % 1000) / 1000.0 - 0.5) * 0.3  # -0.15..+0.15
+            home_strength = {"attack": 1.0 + offset, "defense": 1.0 - offset * 0.5}
+
+        if away_strength is None:
+            seed = (away_team_id * 2654435761) & 0xFFFFFFFF
+            offset = ((seed % 1000) / 1000.0 - 0.5) * 0.3
+            away_strength = {"attack": 1.0 + offset, "defense": 1.0 - offset * 0.5}
 
         home_xg = self.league_avg_home_goals * home_strength["attack"] * away_strength["defense"]
         away_xg = self.league_avg_away_goals * away_strength["attack"] * home_strength["defense"]

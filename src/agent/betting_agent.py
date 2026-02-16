@@ -718,21 +718,24 @@ async def main():
             if not picks:
                 print("No value picks found for today.")
             else:
+                # Send to Telegram first (before console print which may fail on encoding)
+                if agent.telegram.enabled:
+                    stats = agent.get_stats()
+                    await agent.telegram.send_daily_picks(picks, stats=stats)
+                    print(f"\nPicks sent to Telegram!")
+
                 for i, pick in enumerate(picks, 1):
+                    # Encode-safe printing for non-ASCII team names
+                    match_name = pick.match.encode("ascii", "replace").decode()
+                    reasoning = pick.reasoning.encode("ascii", "replace").decode()
                     print(f"\n{'='*50}")
-                    print(f"Pick #{i}: {pick.match}")
+                    print(f"Pick #{i}: {match_name}")
                     print(f"  Bet: {pick.selection} @ {pick.odds}")
                     print(f"  EV: {pick.expected_value:.1%}")
                     print(f"  Confidence: {pick.confidence:.1%}")
                     print(f"  Risk: {pick.risk_level}")
                     print(f"  Stake: {pick.kelly_stake_percentage:.1f}% of bankroll")
-                    print(f"  Reasoning: {pick.reasoning}")
-
-                # Send to Telegram if enabled
-                if agent.telegram.enabled:
-                    stats = agent.get_stats()
-                    await agent.telegram.send_daily_picks(picks, stats=stats)
-                    print(f"\nPicks sent to Telegram!")
+                    print(f"  Reasoning: {reasoning}")
 
         elif command == "--settle":
             print("Settling pending picks against actual results...")

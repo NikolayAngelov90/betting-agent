@@ -87,15 +87,53 @@ class EnsemblePredictor:
         ensemble_1x2 = self._weighted_average_1x2(poisson_pred, elo_pred, ml_pred)
         results["ensemble"] = ensemble_1x2
 
-        # Carry over Poisson-specific predictions (over/under, btts, xg)
+        # Blend goals/BTTS predictions using both Poisson and ensemble 1X2
+        # Poisson provides the base; then we adjust using ensemble 1X2 confidence
+        # to differentiate unknown teams whose Poisson predictions are generic.
+        poisson_goals = {
+            "over_1.5": poisson_pred.get("over_1.5", 0),
+            "over_2.5": poisson_pred.get("over_2.5", 0),
+            "over_3.5": poisson_pred.get("over_3.5", 0),
+            "under_2.5": poisson_pred.get("under_2.5", 0),
+            "btts_yes": poisson_pred.get("btts_yes", 0),
+            "btts_no": poisson_pred.get("btts_no", 0),
+        }
+
+        # Derive goal market adjustments from ensemble 1X2 confidence:
+        # - Strong favourite (high home/away win prob) -> more goals expected
+        # - High draw prob -> fewer goals, but BTTS more likely
+        ens_1x2 = ensemble_1x2
+        max_win_prob = max(ens_1x2.get("home_win", 0.33), ens_1x2.get("away_win", 0.33))
+        draw_prob = ens_1x2.get("draw", 0.33)
+        decisiveness = max_win_prob - 0.40  # positive when there's a clear favourite
+
+        # Adjust over/under: decisive matches tend to have more goals
+        goal_boost = decisiveness * 0.15  # up to ~6% boost for 80% favourite
+        draw_penalty = (draw_prob - 0.25) * 0.20  # draws reduce goal expectation
+
+        adjusted_goals = {}
+        for key in ["over_1.5", "over_2.5", "over_3.5"]:
+            base = poisson_goals[key]
+            adjusted = base + goal_boost - draw_penalty
+            adjusted_goals[key] = max(0.05, min(0.98, adjusted))
+
+        adjusted_goals["under_2.5"] = 1.0 - adjusted_goals["over_2.5"]
+
+        # BTTS: boosted when both teams are competitive (neither dominates)
+        competitiveness = 1.0 - abs(ens_1x2.get("home_win", 0.33) - ens_1x2.get("away_win", 0.33))
+        btts_boost = (competitiveness - 0.50) * 0.10
+        adjusted_goals["btts_yes"] = max(0.05, min(0.95,
+            poisson_goals["btts_yes"] + btts_boost))
+        adjusted_goals["btts_no"] = 1.0 - adjusted_goals["btts_yes"]
+
         results["ensemble"]["home_xg"] = poisson_pred.get("home_xg", 0)
         results["ensemble"]["away_xg"] = poisson_pred.get("away_xg", 0)
-        results["ensemble"]["over_1.5"] = poisson_pred.get("over_1.5", 0)
-        results["ensemble"]["over_2.5"] = poisson_pred.get("over_2.5", 0)
-        results["ensemble"]["over_3.5"] = poisson_pred.get("over_3.5", 0)
-        results["ensemble"]["under_2.5"] = poisson_pred.get("under_2.5", 0)
-        results["ensemble"]["btts_yes"] = poisson_pred.get("btts_yes", 0)
-        results["ensemble"]["btts_no"] = poisson_pred.get("btts_no", 0)
+        results["ensemble"]["over_1.5"] = round(adjusted_goals["over_1.5"], 4)
+        results["ensemble"]["over_2.5"] = round(adjusted_goals["over_2.5"], 4)
+        results["ensemble"]["over_3.5"] = round(adjusted_goals["over_3.5"], 4)
+        results["ensemble"]["under_2.5"] = round(adjusted_goals["under_2.5"], 4)
+        results["ensemble"]["btts_yes"] = round(adjusted_goals["btts_yes"], 4)
+        results["ensemble"]["btts_no"] = round(adjusted_goals["btts_no"], 4)
         results["ensemble"]["most_likely_score"] = poisson_pred.get("most_likely_score", "")
         results["ensemble"]["model"] = "ensemble"
 

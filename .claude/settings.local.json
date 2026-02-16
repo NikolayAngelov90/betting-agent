@@ -12,7 +12,9 @@
       "Bash(wc:*)",
       "WebFetch(domain:api.telegram.org)",
       "WebFetch(domain:www.football-data.co.uk)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(powershell -command:*)"
     ],
     "deny": [],
     "ask": []

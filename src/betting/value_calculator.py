@@ -87,11 +87,17 @@ class ValueBettingCalculator:
                 home_team_name=home_team_name, away_team_name=away_team_name,
             )
 
-            # Fallback for markets without odds (e.g. BTTS on free API tier):
-            # use typical bookmaker BTTS prices so high-confidence model
+            # Fallback for markets without odds (e.g. free API tier):
+            # use typical bookmaker prices so high-confidence model
             # predictions still appear as picks.
-            if not best_odds and prob >= 0.55 and market in ("BTTS",):
-                best_odds = 1.80 if selection == "BTTS Yes" else 1.90
+            if not best_odds and prob >= self.min_confidence:
+                fallback_odds = {
+                    "BTTS Yes": 1.80,
+                    "Over 1.5 Goals": 1.45,
+                    "Over 2.5 Goals": 1.90,
+                    "Over 3.5 Goals": 2.50,
+                }
+                best_odds = fallback_odds.get(selection, 0)
 
             if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
                 continue
