@@ -8,8 +8,6 @@ import os
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
 
-import aiohttp
-
 from src.scrapers.base_scraper import BaseScraper
 from src.data.models import Match, Team
 from src.data.database import get_db
@@ -69,7 +67,10 @@ class APIFootballScraper(BaseScraper):
         self._daily_limit = 100  # Free tier
 
     async def _api_get(self, endpoint: str, params: dict = None) -> Optional[dict]:
-        """Make an authenticated GET request to API-Football."""
+        """Make an authenticated GET request to API-Football.
+
+        Uses BaseScraper.fetch_json for retry + circuit breaker support.
+        """
         if self._requests_today >= self._daily_limit:
             logger.warning("API-Football daily request limit reached, skipping")
             return None
@@ -77,26 +78,16 @@ class APIFootballScraper(BaseScraper):
         url = f"{API_FOOTBALL_BASE}{endpoint}"
         headers = {"x-apisports-key": self.api_key}
 
-        await self._rate_limit()
-        session = await self._get_session()
-
         try:
-            async with session.get(
-                url, params=params, headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                self._requests_today += 1
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.error(f"API-Football {endpoint} returned {resp.status}: {text[:200]}")
-                    return None
-                data = await resp.json()
-                errors = data.get("errors", {})
-                if errors:
-                    logger.error(f"API-Football errors: {errors}")
-                    return None
-                return data
-        except aiohttp.ClientError as e:
+            data = await self.fetch_json(url, params=params, headers=headers)
+            self._requests_today += 1
+            errors = data.get("errors", {})
+            if errors:
+                logger.error(f"API-Football errors: {errors}")
+                return None
+            return data
+        except Exception as e:
+            self._requests_today += 1
             logger.error(f"API-Football request failed: {e}")
             return None
 

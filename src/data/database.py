@@ -3,7 +3,7 @@
 from pathlib import Path
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from src.data.models import Base
@@ -29,6 +29,24 @@ class DatabaseManager:
             db_path = Path(db_config.get("sqlite_path", "data/football_betting.db"))
             db_path.parent.mkdir(parents=True, exist_ok=True)
             url = f"sqlite:///{db_path}"
+
+            engine = create_engine(
+                url, echo=False,
+                pool_pre_ping=True,
+                connect_args={"check_same_thread": False},
+            )
+
+            # Enable WAL mode and other SQLite optimizations on every connect
+            @event.listens_for(engine, "connect")
+            def _set_sqlite_pragmas(dbapi_conn, connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.execute("PRAGMA busy_timeout=5000")
+                cursor.close()
+
+            return engine
+
         elif db_type == "postgresql":
             host = db_config.get("host", "localhost")
             port = db_config.get("port", 5432)
@@ -36,11 +54,15 @@ class DatabaseManager:
             user = db_config.get("user", "")
             password = db_config.get("password", "")
             url = f"postgresql://{user}:{password}@{host}:{port}/{name}"
+
+            return create_engine(
+                url, echo=False,
+                pool_pre_ping=True,
+                pool_size=5,
+                max_overflow=10,
+            )
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
-
-        logger.info(f"Creating database engine: {db_type}")
-        return create_engine(url, echo=False)
 
     def create_tables(self):
         """Create all tables defined in models."""
@@ -51,6 +73,16 @@ class DatabaseManager:
         """Drop all tables. Use with caution."""
         Base.metadata.drop_all(self.engine)
         logger.warning("All database tables dropped")
+
+    def health_check(self) -> bool:
+        """Verify the database connection is alive."""
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return True
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            return False
 
     @contextmanager
     def get_session(self):
