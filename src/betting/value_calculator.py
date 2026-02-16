@@ -66,17 +66,15 @@ class ValueBettingCalculator:
         ensemble = predictions.get("ensemble", {})
         recommendations = []
 
-        # Define markets to check
+        # Define markets to check (goals-oriented picks only)
         markets = [
             ("1X2", "Home Win", ensemble.get("home_win", 0), "home_win"),
             ("1X2", "Draw", ensemble.get("draw", 0), "draw"),
             ("1X2", "Away Win", ensemble.get("away_win", 0), "away_win"),
-            ("Over 2.5", "Over 2.5 Goals", ensemble.get("over_2.5", 0), "over_2.5"),
-            ("Under 2.5", "Under 2.5 Goals", ensemble.get("under_2.5", 0), "under_2.5"),
             ("Over 1.5", "Over 1.5 Goals", ensemble.get("over_1.5", 0), "over_1.5"),
+            ("Over 2.5", "Over 2.5 Goals", ensemble.get("over_2.5", 0), "over_2.5"),
             ("Over 3.5", "Over 3.5 Goals", ensemble.get("over_3.5", 0), "over_3.5"),
             ("BTTS", "BTTS Yes", ensemble.get("btts_yes", 0), "btts_yes"),
-            ("BTTS", "BTTS No", ensemble.get("btts_no", 0), "btts_no"),
         ]
 
         for market, selection, prob, market_key in markets:

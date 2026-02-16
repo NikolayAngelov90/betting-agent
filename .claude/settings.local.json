@@ -10,7 +10,8 @@
       "Bash(pkill:*)",
       "Bash(python:*)",
       "Bash(wc:*)",
-      "WebFetch(domain:api.telegram.org)"
+      "WebFetch(domain:api.telegram.org)",
+      "WebFetch(domain:www.football-data.co.uk)"
     ],
     "deny": [],
     "ask": []

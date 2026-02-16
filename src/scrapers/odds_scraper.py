@@ -16,12 +16,17 @@ ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 
 # Map league config names to Odds API sport keys
 LEAGUE_TO_SPORT_KEY = {
-    # Top 5
+    # Top 5 + second divisions
     "england/premier-league": "soccer_epl",
+    "england/championship": "soccer_efl_champ",
     "spain/laliga": "soccer_spain_la_liga",
+    "spain/laliga2": "soccer_spain_segunda_division",
     "germany/bundesliga": "soccer_germany_bundesliga",
+    "germany/2-bundesliga": "soccer_germany_bundesliga2",
     "italy/serie-a": "soccer_italy_serie_a",
+    "italy/serie-b": "soccer_italy_serie_b",
     "france/ligue-1": "soccer_france_ligue_one",
+    "france/ligue-2": "soccer_france_ligue_two",
     # Strong European
     "netherlands/eredivisie": "soccer_netherlands_eredivisie",
     "portugal/primeira-liga": "soccer_portugal_primeira_liga",
@@ -32,6 +37,12 @@ LEAGUE_TO_SPORT_KEY = {
     "switzerland/super-league": "soccer_switzerland_superleague",
     "greece/super-league": "soccer_greece_super_league",
     "denmark/superliga": "soccer_denmark_superliga",
+    # Nordic & Eastern European
+    "norway/eliteserien": "soccer_norway_eliteserien",
+    "sweden/allsvenskan": "soccer_sweden_allsvenskan",
+    "finland/veikkausliiga": "soccer_finland_veikkausliiga",
+    "poland/ekstraklasa": "soccer_poland_ekstraklasa",
+    "romania/liga-1": "soccer_romania_liga_1",
     # European Competitions
     "champions-league": "soccer_uefa_champs_league",
     "europa-league": "soccer_uefa_europa_league",
