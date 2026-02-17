@@ -11,6 +11,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import asyncio
+import concurrent.futures
 
 from src.scrapers.base_scraper import BaseScraper
 from src.data.models import Team, Match
@@ -30,22 +31,35 @@ class FlashscoreScraper(BaseScraper):
         self.leagues = self.config.get("scraping.flashscore_leagues", [])
         self.headless = self.config.get("scraping.headless", True)
         self._driver = None
+        self._chrome_failed = False
 
     def _get_driver(self):
-        """Create a Selenium Chrome driver."""
+        """Create a Selenium Chrome driver. Returns None if Chrome unavailable."""
+        if self._chrome_failed:
+            return None
         if self._driver is None:
-            options = Options()
-            if self.headless:
-                options.add_argument("--headless")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--disable-gpu")
-            options.add_argument(
-                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            self._driver = webdriver.Chrome(options=options)
-            self._driver.implicitly_wait(10)
+            try:
+                options = Options()
+                if self.headless:
+                    options.add_argument("--headless=new")
+                options.add_argument("--no-sandbox")
+                options.add_argument("--disable-dev-shm-usage")
+                options.add_argument("--disable-gpu")
+                options.add_argument("--disable-extensions")
+                options.add_argument(
+                    "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                # Use a thread with timeout to prevent hanging on Chrome startup
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(webdriver.Chrome, options=options)
+                    self._driver = future.result(timeout=15)
+                self._driver.implicitly_wait(10)
+                self._driver.set_page_load_timeout(30)
+            except Exception as e:
+                logger.warning(f"Chrome/Selenium not available: {e}")
+                self._chrome_failed = True
+                self._driver = None
         return self._driver
 
     def close_driver(self):
@@ -109,6 +123,9 @@ class FlashscoreScraper(BaseScraper):
     def _scrape_results_page(self, url: str) -> List[dict]:
         """Scrape a results page using Selenium (runs in thread executor)."""
         driver = self._get_driver()
+        if not driver:
+            logger.debug("Flashscore: Chrome not available, skipping results scrape")
+            return []
         matches = []
 
         try:

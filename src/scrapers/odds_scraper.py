@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+import aiohttp
 from sqlalchemy import and_
 
 from src.scrapers.base_scraper import BaseScraper
@@ -172,6 +173,12 @@ class OddsScraper(BaseScraper):
 
         try:
             data = await self.fetch_json(url, params=params)
+        except aiohttp.ClientResponseError as e:
+            if e.status in (401, 403):
+                logger.debug(f"Scores auth failed for {sport_key}: {e}")
+                raise  # Let caller know API is down
+            logger.debug(f"Scores endpoint not available for {sport_key}: {e}")
+            return
         except Exception as e:
             logger.debug(f"Scores endpoint not available for {sport_key}: {e}")
             return

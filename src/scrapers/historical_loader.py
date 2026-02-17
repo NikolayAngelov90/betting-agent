@@ -6,15 +6,18 @@ Poisson, Elo, and ML models have enough data for meaningful predictions.
 Supports two CSV formats:
   - mmz4281: per-season files for main leagues (columns: HomeTeam, AwayTeam, FTHG, FTAG)
   - new: single all-seasons file for extra leagues (columns: Home, Away, HG, AG, Season)
+
+Also extracts historical bookmaker odds from the CSVs (Bet365, Pinnacle, etc.)
+and stores them as Odds records for real-data backtesting and model training.
 """
 
 import csv
 import io
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from src.scrapers.base_scraper import BaseScraper
-from src.data.models import Match, Team
+from src.data.models import Match, Team, Odds
 from src.data.database import get_db
 from src.utils.logger import get_logger
 
@@ -63,9 +66,45 @@ SEASONS = ["2425", "2324", "2223"]
 # How many recent seasons to keep from /new/ format files
 EXTRA_SEASONS_LIMIT = 3
 
+# Mapping CSV column names to (bookmaker, market_type, selection)
+# These columns are available in football-data.co.uk mmz4281 CSVs
+ODDS_COLUMN_MAP = {
+    # 1X2 (match result) odds
+    "B365H": ("Bet365", "1X2", "Home"),
+    "B365D": ("Bet365", "1X2", "Draw"),
+    "B365A": ("Bet365", "1X2", "Away"),
+    "PSH":   ("Pinnacle", "1X2", "Home"),
+    "PSD":   ("Pinnacle", "1X2", "Draw"),
+    "PSA":   ("Pinnacle", "1X2", "Away"),
+    "MaxH":  ("MarketMax", "1X2", "Home"),
+    "MaxD":  ("MarketMax", "1X2", "Draw"),
+    "MaxA":  ("MarketMax", "1X2", "Away"),
+    "AvgH":  ("MarketAvg", "1X2", "Home"),
+    "AvgD":  ("MarketAvg", "1X2", "Draw"),
+    "AvgA":  ("MarketAvg", "1X2", "Away"),
+    # Over/Under 2.5 goals
+    "B365>2.5": ("Bet365", "over_under", "Over 2.5"),
+    "B365<2.5": ("Bet365", "over_under", "Under 2.5"),
+    "P>2.5":    ("Pinnacle", "over_under", "Over 2.5"),
+    "P<2.5":    ("Pinnacle", "over_under", "Under 2.5"),
+    "Max>2.5":  ("MarketMax", "over_under", "Over 2.5"),
+    "Max<2.5":  ("MarketMax", "over_under", "Under 2.5"),
+    "Avg>2.5":  ("MarketAvg", "over_under", "Over 2.5"),
+    "Avg<2.5":  ("MarketAvg", "over_under", "Under 2.5"),
+}
+
+# Extra leagues (/new/ CSVs) use different column names for odds
+EXTRA_ODDS_COLUMN_MAP = {
+    "AvgH": ("MarketAvg", "1X2", "Home"),
+    "AvgD": ("MarketAvg", "1X2", "Draw"),
+    "AvgA": ("MarketAvg", "1X2", "Away"),
+    "Avg>2.5": ("MarketAvg", "over_under", "Over 2.5"),
+    "Avg<2.5": ("MarketAvg", "over_under", "Under 2.5"),
+}
+
 
 class HistoricalDataLoader(BaseScraper):
-    """Loads historical match results from football-data.co.uk CSVs."""
+    """Loads historical match results and odds from football-data.co.uk CSVs."""
 
     def __init__(self, config=None):
         super().__init__(config)
@@ -134,10 +173,11 @@ class HistoricalDataLoader(BaseScraper):
         return self._parse_and_save_extra(csv_text, league)
 
     def _parse_and_save(self, csv_text: str, league: str, season: str) -> int:
-        """Parse mmz4281 format CSV and save matches to database."""
+        """Parse mmz4281 format CSV and save matches + odds to database."""
         db = get_db()
         reader = csv.DictReader(io.StringIO(csv_text))
         count = 0
+        odds_count = 0
 
         with db.get_session() as session:
             for row in reader:
@@ -158,18 +198,24 @@ class HistoricalDataLoader(BaseScraper):
                     if not match_date:
                         continue
 
-                    saved = self._save_match(
+                    match_id = self._save_match(
                         session, home_name, away_name, home_goals, away_goals,
                         match_date, league,
                     )
-                    if saved:
+                    if match_id:
                         count += 1
+                        odds_count += self._extract_odds_from_row(
+                            session, row, match_id, ODDS_COLUMN_MAP,
+                        )
 
                 except (ValueError, KeyError):
                     continue
 
         if count > 0:
-            logger.info(f"Loaded {count} historical matches for {league} ({season})")
+            logger.info(
+                f"Loaded {count} historical matches + {odds_count} odds "
+                f"for {league} ({season})"
+            )
         return count
 
     def _parse_and_save_extra(self, csv_text: str, league: str) -> int:
@@ -177,6 +223,7 @@ class HistoricalDataLoader(BaseScraper):
         db = get_db()
         reader = csv.DictReader(io.StringIO(csv_text))
         count = 0
+        odds_count = 0
 
         # Collect all unique seasons to determine the most recent ones
         rows = []
@@ -214,24 +261,30 @@ class HistoricalDataLoader(BaseScraper):
                     if not match_date:
                         continue
 
-                    saved = self._save_match(
+                    match_id = self._save_match(
                         session, home_name, away_name, home_goals, away_goals,
                         match_date, league,
                     )
-                    if saved:
+                    if match_id:
                         count += 1
+                        odds_count += self._extract_odds_from_row(
+                            session, row, match_id, EXTRA_ODDS_COLUMN_MAP,
+                        )
 
                 except (ValueError, KeyError):
                     continue
 
         if count > 0:
-            logger.info(f"Loaded {count} historical matches for {league} (last {EXTRA_SEASONS_LIMIT} seasons)")
+            logger.info(
+                f"Loaded {count} historical matches + {odds_count} odds "
+                f"for {league} (last {EXTRA_SEASONS_LIMIT} seasons)"
+            )
         return count
 
     def _save_match(self, session, home_name: str, away_name: str,
                     home_goals: int, away_goals: int,
-                    match_date: datetime, league: str) -> bool:
-        """Save a single match to database. Returns True if saved/updated."""
+                    match_date: datetime, league: str) -> Optional[int]:
+        """Save a single match to database. Returns match ID if saved/updated, None otherwise."""
         from sqlalchemy import and_
         from datetime import timedelta
 
@@ -265,8 +318,9 @@ class HistoricalDataLoader(BaseScraper):
                 existing.home_goals = home_goals
                 existing.away_goals = away_goals
                 existing.is_fixture = False
-                return True
-            return False
+                return existing.id
+            # Match already exists — still return ID so odds can be added
+            return existing.id
 
         match = Match(
             home_team_id=home_team.id,
@@ -278,7 +332,52 @@ class HistoricalDataLoader(BaseScraper):
             is_fixture=False,
         )
         session.add(match)
-        return True
+        session.flush()
+        return match.id
+
+    def _extract_odds_from_row(self, session, row: dict, match_id: int,
+                                column_map: dict) -> int:
+        """Extract bookmaker odds from a CSV row and create Odds records.
+
+        Returns count of odds records created.
+        """
+        count = 0
+
+        for csv_col, (bookmaker, market_type, selection) in column_map.items():
+            raw_val = row.get(csv_col, "").strip()
+            if not raw_val:
+                continue
+
+            try:
+                odds_value = float(raw_val)
+            except (ValueError, TypeError):
+                continue
+
+            if odds_value <= 1.0:
+                continue  # Invalid odds
+
+            # Check for existing odds (avoid duplicates on re-runs)
+            existing = session.query(Odds).filter_by(
+                match_id=match_id,
+                bookmaker=bookmaker,
+                market_type=market_type,
+                selection=selection,
+            ).first()
+
+            if existing:
+                continue
+
+            odds = Odds(
+                match_id=match_id,
+                bookmaker=bookmaker,
+                market_type=market_type,
+                selection=selection,
+                odds_value=odds_value,
+            )
+            session.add(odds)
+            count += 1
+
+        return count
 
     def _parse_date(self, date_str: str) -> datetime:
         """Parse date from CSV (handles multiple formats)."""

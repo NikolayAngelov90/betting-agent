@@ -18,7 +18,16 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:the-odds-api.com)",
       "WebFetch(domain:rapidapi.com)",
-      "Bash(ODDS_API_KEY=\"309170541f7bb316c7762f7e3bc81e83\" python:*)"
+      "Bash(ODDS_API_KEY=\"309170541f7bb316c7762f7e3bc81e83\" python:*)",
+      "mcp__wagyu-sports__get_sports",
+      "mcp__wagyu-sports__get_odds",
+      "mcp__soccer-server__get_league_fixtures",
+      "mcp__soccer-server__get_standings",
+      "WebFetch(domain:www.api-football.com)",
+      "WebFetch(domain:odds-api.io)",
+      "WebFetch(domain:www.football-data.org)",
+      "WebFetch(domain:oddalerts.com)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []

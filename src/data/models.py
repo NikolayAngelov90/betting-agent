@@ -3,7 +3,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, DateTime,
-    ForeignKey, Date, Text, JSON
+    ForeignKey, Date, Text, JSON, Index
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -149,6 +149,10 @@ class Odds(Base):
 
     # Relationships
     match = relationship("Match", back_populates="odds")
+
+    __table_args__ = (
+        Index('ix_odds_match_bookie_market', 'match_id', 'bookmaker', 'market_type', 'selection'),
+    )
 
     def __repr__(self):
         return f"<Odds({self.bookmaker}, {self.market_type}: {self.selection} @ {self.odds_value})>"

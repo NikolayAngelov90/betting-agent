@@ -11,6 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    env:
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,94 +43,15 @@ jobs:
           restore-keys: |
             betting-data-
 
-      - name: Create config from secrets
-        run: |
-          cat > config/config.yaml << 'CONF'
-          scraping:
-            flashscore_leagues:
-              - england/premier-league
-              - england/championship
-              - spain/laliga
-              - spain/laliga2
-              - germany/bundesliga
-              - germany/2-bundesliga
-              - italy/serie-a
-              - italy/serie-b
-              - france/ligue-1
-              - france/ligue-2
-              - netherlands/eredivisie
-              - portugal/primeira-liga
-              - belgium/jupiler-pro-league
-              - turkey/super-lig
-              - scotland/premiership
-              - austria/bundesliga
-              - switzerland/super-league
-              - greece/super-league
-              - denmark/superliga
-              - norway/eliteserien
-              - sweden/allsvenskan
-              - finland/veikkausliiga
-              - poland/ekstraklasa
-              - romania/liga-1
-              - champions-league
-              - europa-league
-              - europa-conference-league
-            update_interval_hours: 6
-            headless: true
-            request_delay: 3
-
-          database:
-            type: sqlite
-            sqlite_path: data/football_betting.db
-
-          models:
-            ensemble_weights:
-              poisson: 0.25
-              xgboost: 0.35
-              random_forest: 0.20
-              elo: 0.20
-            retrain_interval_days: 7
-            min_training_samples: 1000
-
-          betting:
-            min_odds: 1.30
-            max_odds: 10.0
-            min_expected_value: 0.03
-            min_confidence: 0.55
-            kelly_fraction: 0.25
-            max_stake_percentage: 5.0
-
-          notifications:
-            telegram_enabled: true
-            telegram_bot_token: "${TELEGRAM_BOT_TOKEN}"
-            telegram_chat_id: "${TELEGRAM_CHAT_ID}"
-            send_daily_picks: true
-            send_live_alerts: false
-
-          logging:
-            level: INFO
-            log_file: logs/betting_agent.log
-            log_rotation: "1 week"
-
-          data_sources:
-            odds_api_key: "${ODDS_API_KEY}"
-            odds_api_enabled: true
-          CONF
-
-          # Replace placeholders with actual secrets
-          sed -i "s|\${TELEGRAM_BOT_TOKEN}|${{ secrets.TELEGRAM_BOT_TOKEN }}|g" config/config.yaml
-          sed -i "s|\${TELEGRAM_CHAT_ID}|${{ secrets.TELEGRAM_CHAT_ID }}|g" config/config.yaml
-          sed -i "s|\${ODDS_API_KEY}|${{ secrets.ODDS_API_KEY }}|g" config/config.yaml
-
       - name: Create directories
-        run: |
-          mkdir -p data/models logs
+        run: mkdir -p data/models logs
 
       - name: Run daily update
         run: python -m src.agent.betting_agent --update
 
       - name: Settle yesterday's predictions
         run: python -m src.agent.betting_agent --settle
+        continue-on-error: true
 
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks

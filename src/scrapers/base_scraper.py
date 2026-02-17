@@ -161,6 +161,24 @@ class BaseScraper(ABC):
                         logger.debug(f"Fetched {url} — status {resp.status}")
                         return text
 
+            except aiohttp.ClientResponseError as e:
+                # Non-retryable HTTP errors (auth, not found, etc.) — fail immediately
+                if e.status not in self.RETRY_STATUS_CODES:
+                    self._circuit.record_failure()
+                    logger.error(f"HTTP {e.status} from {url}: {e.message}")
+                    raise
+                last_exc = e
+                if attempt < self.MAX_RETRIES:
+                    backoff = self.RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                    logger.warning(
+                        f"Request to {url} failed ({e}) — retry {attempt}/{self.MAX_RETRIES} "
+                        f"in {backoff:.1f}s"
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    self._circuit.record_failure()
+                    logger.error(f"Request to {url} failed after {self.MAX_RETRIES} retries: {e}")
+                    raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_exc = e
                 if attempt < self.MAX_RETRIES:

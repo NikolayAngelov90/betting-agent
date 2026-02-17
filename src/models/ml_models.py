@@ -116,11 +116,13 @@ class MLModels:
             top_str = ", ".join(f"{name}({score:.3f})" for name, score in top_10)
             logger.info(f"{model_name} top features: {top_str}")
 
-    def predict(self, X: np.ndarray) -> Dict:
+    def predict(self, X: np.ndarray, feature_names: List[str] = None) -> Dict:
         """Get predictions from all models.
 
         Args:
             X: Feature vector (1, n_features) or (n_features,)
+            feature_names: Feature names matching X columns. When provided and
+                the count differs from training, features are aligned by name.
 
         Returns:
             Dictionary with per-model and averaged probabilities
@@ -130,10 +132,24 @@ class MLModels:
             return self._default_prediction()
 
         X = X.reshape(1, -1) if X.ndim == 1 else X
+
+        # If feature count differs from training, align by name
+        expected_count = len(self.feature_names)
+        if feature_names and X.shape[1] != expected_count:
+            X = self._align_features(X, feature_names)
+
         # Apply same feature pruning mask used during training
-        if getattr(self, "_kept_feature_mask", None) is not None and X.shape[1] > len(self.feature_names):
+        if getattr(self, "_kept_feature_mask", None) is not None and X.shape[1] > expected_count:
             X = X[:, self._kept_feature_mask]
-        X_scaled = self.scaler.transform(X)
+
+        try:
+            X_scaled = self.scaler.transform(X)
+        except ValueError:
+            logger.warning(
+                f"ML feature mismatch ({X.shape[1]} vs {expected_count} expected), "
+                f"returning default prediction"
+            )
+            return self._default_prediction()
 
         predictions = {}
         all_probs = []
@@ -212,6 +228,25 @@ class MLModels:
         self._kept_feature_mask = state.get("_kept_feature_mask")
 
         logger.info(f"Models loaded from {filepath}")
+
+    def _align_features(self, X: np.ndarray, feature_names: List[str]) -> np.ndarray:
+        """Align X columns to match self.feature_names by name.
+
+        Missing features get 0.0; extra features are dropped.
+        """
+        name_to_idx = {n: i for i, n in enumerate(feature_names)}
+        aligned = np.zeros((X.shape[0], len(self.feature_names)))
+        matched = 0
+        for j, name in enumerate(self.feature_names):
+            src_idx = name_to_idx.get(name)
+            if src_idx is not None:
+                aligned[:, j] = X[:, src_idx]
+                matched += 1
+        logger.debug(
+            f"Feature alignment: {matched}/{len(self.feature_names)} matched "
+            f"(input had {X.shape[1]} features)"
+        )
+        return aligned
 
     def _default_prediction(self) -> Dict:
         return {

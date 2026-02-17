@@ -77,13 +77,14 @@ class EnsemblePredictor:
         }
 
     def predict(self, home_team_id: int, away_team_id: int,
-                features_vector=None) -> Dict:
+                features_vector=None, feature_names=None) -> Dict:
         """Generate ensemble prediction for a match.
 
         Args:
             home_team_id: Home team database ID
             away_team_id: Away team database ID
             features_vector: Optional numpy array of features for ML models
+            feature_names: Optional list of feature names matching features_vector
 
         Returns:
             Dictionary with ensemble and per-model predictions
@@ -105,7 +106,7 @@ class EnsemblePredictor:
         # ML predictions (if features provided and models fitted)
         ml_pred = None
         if features_vector is not None and self.ml_models.is_fitted:
-            ml_predictions = self.ml_models.predict(features_vector)
+            ml_predictions = self.ml_models.predict(features_vector, feature_names=feature_names)
             ml_pred = ml_predictions.get("ml_average")
             results["ml"] = ml_predictions
 

@@ -91,17 +91,26 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"Odds API update failed: {e}")
 
-        # 2. Flashscore scraping (disabled — Odds API provides fixtures + scores)
-        # To re-enable, uncomment below:
-        # try:
-        #     await asyncio.wait_for(self.scraper.update(), timeout=300)
-        #     logger.info("Flashscore update complete")
-        # except asyncio.TimeoutError:
-        #     logger.warning("Flashscore scraping timed out, skipping")
-        #     self.scraper.close_driver()
-        # except Exception as e:
-        #     logger.error(f"Flashscore update failed: {e}")
-        #     self.scraper.close_driver()
+        # 2b. Flashscore results (fetches finished match scores for settling)
+        try:
+            leagues = self.config.get("scraping.flashscore_leagues", [])
+            for league in leagues:
+                try:
+                    await asyncio.wait_for(
+                        self.scraper.scrape_league_results(league), timeout=60,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Flashscore timeout for {league}, continuing")
+                except Exception as e:
+                    logger.debug(f"Flashscore error for {league}: {e}")
+            logger.info("Flashscore results update complete")
+        except Exception as e:
+            logger.error(f"Flashscore update failed: {e}")
+        finally:
+            try:
+                self.scraper.close_driver()
+            except Exception:
+                pass
 
         # 3. API-Football (fixtures, xG, advanced stats)
         try:
@@ -186,9 +195,11 @@ class FootballBettingAgent:
         # Generate features
         features = await self.feature_engineer.create_features(match_id)
         feature_vector = self.feature_engineer.create_feature_vector(features)
+        feature_names = self.feature_engineer.get_feature_names(features)
 
         # Get predictions
-        predictions = self.predictor.predict(home_id, away_id, feature_vector)
+        predictions = self.predictor.predict(home_id, away_id, feature_vector,
+                                             feature_names=feature_names)
 
         # Get injury report
         from src.scrapers.injury_scraper import InjuryScraper
@@ -345,12 +356,70 @@ class FootballBettingAgent:
             session.commit()
             logger.info(f"Saved {len(picks)} picks to database")
 
-    def settle_predictions(self):
-        """Check pending picks against actual match results and mark win/loss.
+    async def settle_predictions(self):
+        """Fetch recent results and settle pending picks.
+
+        Calls API-Football to get scores for the last few days so that
+        yesterday's picks can be resolved, then marks each as win/loss.
 
         Returns:
             List of dicts with settled pick details for reporting.
         """
+        # 1. Fetch recent results from API-Football
+        try:
+            await self.apifootball.fetch_recent_results(days_back=3)
+        except Exception as e:
+            logger.warning(f"Could not fetch recent results from API-Football: {e}")
+
+        # 2. Flashscore fallback for stale unsettled matches (>24h old)
+        try:
+            with self.db.get_session() as session:
+                stale_cutoff = datetime.utcnow() - timedelta(hours=24)
+                stale = session.query(Match).filter(
+                    Match.is_fixture == True,
+                    Match.home_goals.is_(None),
+                    Match.match_date < stale_cutoff,
+                ).all()
+                stale_leagues = {m.league for m in stale if m.league}
+
+            if stale_leagues:
+                logger.info(f"Flashscore settle: fetching results for {len(stale_leagues)} stale leagues")
+                for league in stale_leagues:
+                    try:
+                        await asyncio.wait_for(
+                            self.scraper.scrape_league_results(league), timeout=60,
+                        )
+                    except Exception:
+                        continue
+                try:
+                    self.scraper.close_driver()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"Flashscore settle fetch failed: {e}")
+
+        # 3. Also try Odds API scores if enabled and key is set
+        if self.odds_collector.enabled and self.odds_collector.api_key:
+            try:
+                from src.scrapers.odds_scraper import LEAGUE_TO_SPORT_KEY
+                leagues = self.config.get("scraping.flashscore_leagues", [])
+                for league in leagues:
+                    # Stop if circuit breaker is open (API confirmed down)
+                    if not self.odds_collector._circuit.allow_request():
+                        logger.debug("Odds API circuit open, skipping scores fetch")
+                        break
+                    sport_key = LEAGUE_TO_SPORT_KEY.get(league)
+                    if not sport_key:
+                        continue
+                    try:
+                        await self.odds_collector.fetch_league_scores(
+                            sport_key, league, days_back=3,
+                        )
+                    except Exception:
+                        break  # Auth/connection failure — stop trying
+            except Exception as e:
+                logger.debug(f"Odds API scores fetch failed: {e}")
+
         settled = []
 
         with self.db.get_session() as session:
@@ -873,8 +942,9 @@ async def main():
                 for league_key in sorted(picks_by_league.keys()):
                     league_picks = picks_by_league[league_key]
                     league_name = LEAGUE_DISPLAY.get(league_key, league_key)
+                    league_display = league_name.encode("ascii", "replace").decode()
                     print(f"\n{'='*60}")
-                    print(f"  {league_name}")
+                    print(f"  {league_display}")
                     print(f"{'='*60}")
 
                     for pick in league_picks:
@@ -907,7 +977,7 @@ async def main():
 
         elif command == "--settle":
             print("Settling pending picks against actual results...")
-            settled_picks = agent.settle_predictions()
+            settled_picks = await agent.settle_predictions()
             stats = agent.get_stats()
             all_time = stats.get("all_time", {})
             print(f"\nSettled: {len(settled_picks)} picks")
@@ -920,7 +990,7 @@ async def main():
                 print("Settlement report sent to Telegram!")
 
         elif command == "--stats":
-            agent.settle_predictions()  # Settle any new results first
+            await agent.settle_predictions()  # Settle any new results first
             stats = agent.get_stats()
 
             if stats.get("total", 0) == 0 and stats.get("all_time", {}).get("total", 0) == 0:

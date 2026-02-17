@@ -108,6 +108,9 @@ class ValueBettingCalculator:
             is_fallback = False
             if not best_odds and prob >= high_ev_min_confidence:
                 fallback_odds = {
+                    "Home Win": 2.10,
+                    "Draw": 3.30,
+                    "Away Win": 3.40,
                     "BTTS Yes": 1.80,
                     "Over 1.5 Goals": 1.45,
                     "Over 2.5 Goals": 1.90,
@@ -116,6 +119,9 @@ class ValueBettingCalculator:
                 best_odds = fallback_odds.get(selection, 0)
                 if best_odds:
                     is_fallback = True
+                    logger.warning(
+                        f"No real odds for {match_name} {selection} — using fallback {best_odds}"
+                    )
 
             if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
                 continue

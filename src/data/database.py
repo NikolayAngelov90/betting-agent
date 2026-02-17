@@ -3,7 +3,7 @@
 from pathlib import Path
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, text, inspect
 from sqlalchemy.orm import sessionmaker, Session
 
 from src.data.models import Base
@@ -65,9 +65,32 @@ class DatabaseManager:
             raise ValueError(f"Unsupported database type: {db_type}")
 
     def create_tables(self):
-        """Create all tables defined in models."""
+        """Create all tables defined in models, and add any missing columns."""
         Base.metadata.create_all(self.engine)
+        self._migrate_missing_columns()
         logger.info("Database tables created successfully")
+
+    def _migrate_missing_columns(self):
+        """Auto-add columns that exist in models but not in the DB (simple migration).
+
+        Only handles adding nullable columns — safe for SQLite.
+        """
+        inspector = inspect(self.engine)
+        for table_name, table in Base.metadata.tables.items():
+            if table_name not in inspector.get_table_names():
+                continue
+
+            existing_cols = {c["name"] for c in inspector.get_columns(table_name)}
+            for col in table.columns:
+                if col.name not in existing_cols:
+                    col_type = col.type.compile(self.engine.dialect)
+                    sql = f"ALTER TABLE {table_name} ADD COLUMN {col.name} {col_type}"
+                    try:
+                        with self.engine.begin() as conn:
+                            conn.execute(text(sql))
+                        logger.info(f"Migration: added column {table_name}.{col.name} ({col_type})")
+                    except Exception as e:
+                        logger.debug(f"Column {table_name}.{col.name} migration skipped: {e}")
 
     def drop_tables(self):
         """Drop all tables. Use with caution."""
