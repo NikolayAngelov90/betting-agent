@@ -29,6 +29,8 @@ LEAGUE_CSV_MAP = {
     # Top 5 leagues + second divisions
     "england/premier-league": {"code": "E0", "country": "England"},
     "england/championship": {"code": "E1", "country": "England"},
+    "england/league-one": {"code": "E2", "country": "England"},
+    "england/league-two": {"code": "E3", "country": "England"},
     "spain/laliga": {"code": "SP1", "country": "Spain"},
     "spain/laliga2": {"code": "SP2", "country": "Spain"},
     "germany/bundesliga": {"code": "D1", "country": "Germany"},

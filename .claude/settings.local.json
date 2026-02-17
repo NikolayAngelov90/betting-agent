@@ -27,7 +27,8 @@
       "WebFetch(domain:odds-api.io)",
       "WebFetch(domain:www.football-data.org)",
       "WebFetch(domain:oddalerts.com)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "mcp__soccer-server__get_team_fixtures"
     ],
     "deny": [],
     "ask": []

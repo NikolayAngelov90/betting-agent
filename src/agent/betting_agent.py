@@ -237,28 +237,34 @@ class FootballBettingAgent:
 
     async def get_daily_picks(self, target_date: date = None,
                               min_ev: float = 0.05,
-                              min_confidence: float = 0.55) -> List[BetRecommendation]:
+                              min_confidence: float = 0.55,
+                              leagues: List[str] = None) -> List[BetRecommendation]:
         """Get high-confidence value betting picks for a specific date.
 
         Args:
             target_date: Date to get picks for (defaults to today)
             min_ev: Minimum expected value threshold
             min_confidence: Minimum confidence threshold (default 70%)
+            leagues: Optional list of league keys to restrict picks to
 
         Returns:
             List of BetRecommendation sorted by confidence
         """
         target = target_date or date.today()
-        logger.info(f"Getting daily picks for {target}")
+        league_label = f" (leagues: {', '.join(leagues)})" if leagues else ""
+        logger.info(f"Getting daily picks for {target}{league_label}")
 
         with self.db.get_session() as session:
             day_start = datetime.combine(target, datetime.min.time())
             day_end = day_start + timedelta(days=1)
-            fixtures = session.query(Match).filter(
+            query = session.query(Match).filter(
                 Match.is_fixture == True,
                 Match.match_date >= day_start,
                 Match.match_date < day_end,
-            ).all()
+            )
+            if leagues:
+                query = query.filter(Match.league.in_(leagues))
+            fixtures = query.all()
             fixture_ids = [f.id for f in fixtures]
 
         if not fixture_ids:
@@ -920,8 +926,14 @@ async def main():
             print("ML training complete.")
 
         elif command == "--picks":
+            # Parse optional --leagues filter: --picks --leagues eng1,eng2
+            league_filter = None
+            for i, arg in enumerate(sys.argv[2:], start=2):
+                if arg == "--leagues" and i + 1 < len(sys.argv):
+                    league_filter = [l.strip() for l in sys.argv[i + 1].split(",")]
+                    break
             agent.predictor.fit()
-            picks = await agent.get_daily_picks()
+            picks = await agent.get_daily_picks(leagues=league_filter)
             if not picks:
                 print("No value picks found for today.")
             else:

@@ -23,6 +23,8 @@ API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 LEAGUE_ID_MAP = {
     "england/premier-league": 39,
     "england/championship": 40,
+    "england/league-one": 41,
+    "england/league-two": 42,
     "spain/laliga": 140,
     "spain/laliga2": 141,
     "germany/bundesliga": 78,

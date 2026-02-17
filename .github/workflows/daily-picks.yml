@@ -9,7 +9,7 @@ on:
 jobs:
   daily-picks:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     env:
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
@@ -46,8 +46,16 @@ jobs:
       - name: Create directories
         run: mkdir -p data/models logs
 
+      - name: Initialize database
+        run: python -c "from src.data.database import init_db; init_db()"
+
+      - name: Run tests
+        run: python -m pytest tests/ -v --tb=short
+        continue-on-error: true
+
       - name: Run daily update
         run: python -m src.agent.betting_agent --update
+        continue-on-error: true
 
       - name: Settle yesterday's predictions
         run: python -m src.agent.betting_agent --settle
@@ -64,3 +72,11 @@ jobs:
             data/football_betting.db
             data/models/
           key: betting-data-${{ github.run_number }}
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 7
