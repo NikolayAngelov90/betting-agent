@@ -188,6 +188,50 @@ class TeamFeatures:
             "form_string": "",
         }
 
+    # Leagues classified as international competitions
+    INTERNATIONAL_LEAGUES = {
+        "champions-league", "europa-league", "europa-conference-league",
+    }
+
+    def get_international_form(self, team_id: int, num_matches: int = 10) -> dict:
+        """Calculate form features specifically from international competition matches.
+
+        This captures how a team performs in CL/EL/ECL — different from domestic form
+        due to higher quality opposition, travel, and tactical adjustments.
+        """
+        with self.db.get_session() as session:
+            query = session.query(Match).filter(
+                Match.is_fixture == False,
+                Match.home_goals.isnot(None),
+                Match.league.in_(self.INTERNATIONAL_LEAGUES),
+                or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
+            ).order_by(Match.match_date.desc()).limit(num_matches)
+
+            matches = query.all()
+
+            if not matches:
+                return {
+                    "intl_matches": 0,
+                    "intl_points_per_match": 0.0,
+                    "intl_goals_per_match": 0.0,
+                    "intl_conceded_per_match": 0.0,
+                    "intl_win_rate": 0.0,
+                    "intl_clean_sheet_rate": 0.0,
+                    "intl_active": 0,
+                }
+
+            form = self._calculate_form(matches, team_id)
+            n = form["matches_played"]
+            return {
+                "intl_matches": n,
+                "intl_points_per_match": form["points_per_match"],
+                "intl_goals_per_match": form["goals_scored_per_match"],
+                "intl_conceded_per_match": form["goals_conceded_per_match"],
+                "intl_win_rate": round(form["wins"] / n, 3) if n else 0.0,
+                "intl_clean_sheet_rate": round(form["clean_sheets"] / n, 3) if n else 0.0,
+                "intl_active": 1,  # flag: team is in European competition
+            }
+
     def get_league_position(self, team_id: int, league: str, season: str = None) -> dict:
         """Calculate current league position features for a team."""
         with self.db.get_session() as session:

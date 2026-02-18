@@ -87,7 +87,21 @@ class FeatureEngineer:
         features["home_news_count"] = home_sentiment.get("article_count", 0)
         features["away_news_count"] = away_sentiment.get("article_count", 0)
 
-        # 6. xG-based features (from API-Football)
+        # 6. International competition features (CL/EL/ECL form)
+        home_intl = self.team_features.get_international_form(home_id)
+        away_intl = self.team_features.get_international_form(away_id)
+        features.update(self._prefix_dict(home_intl, "home_"))
+        features.update(self._prefix_dict(away_intl, "away_"))
+
+        # Flag if current match is an international competition
+        is_international = league in self.team_features.INTERNATIONAL_LEAGUES
+        features["is_international_match"] = int(is_international)
+
+        # International experience differential
+        features["intl_experience_diff"] = home_intl["intl_matches"] - away_intl["intl_matches"]
+        features["intl_quality_diff"] = home_intl["intl_points_per_match"] - away_intl["intl_points_per_match"]
+
+        # 7. xG-based features (from API-Football)
         home_xg = self._get_xg_features(home_id, "home")
         away_xg = self._get_xg_features(away_id, "away")
         features.update(self._prefix_dict(home_xg, "home_"))

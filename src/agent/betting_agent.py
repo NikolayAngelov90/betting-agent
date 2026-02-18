@@ -237,14 +237,16 @@ class FootballBettingAgent:
 
     async def get_daily_picks(self, target_date: date = None,
                               min_ev: float = 0.05,
-                              min_confidence: float = 0.55,
+                              min_confidence: float = 0.60,
+                              max_picks_per_match: int = 2,
                               leagues: List[str] = None) -> List[BetRecommendation]:
         """Get high-confidence value betting picks for a specific date.
 
         Args:
             target_date: Date to get picks for (defaults to today)
             min_ev: Minimum expected value threshold
-            min_confidence: Minimum confidence threshold (default 70%)
+            min_confidence: Minimum confidence threshold (default 60%)
+            max_picks_per_match: Maximum picks allowed per single match (default 2)
             leagues: Optional list of league keys to restrict picks to
 
         Returns:
@@ -318,6 +320,22 @@ class FootballBettingAgent:
             key=lambda r: r.confidence,
             reverse=True,
         )
+
+        # Limit picks per match to avoid over-betting on a single fixture
+        if max_picks_per_match:
+            from collections import Counter
+            match_counts: dict = Counter()
+            limited = []
+            for rec in all_recommendations:
+                if match_counts[rec.match_id] < max_picks_per_match:
+                    limited.append(rec)
+                    match_counts[rec.match_id] += 1
+                else:
+                    logger.debug(
+                        f"Skipping extra pick for match {rec.match}: "
+                        f"{rec.selection} (already {max_picks_per_match} picks)"
+                    )
+            all_recommendations = limited
 
         logger.info(f"Found {len(all_recommendations)} high-confidence picks for {target}")
 
