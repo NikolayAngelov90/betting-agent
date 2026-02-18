@@ -19,6 +19,93 @@ logger = get_logger()
 
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 
+# Map API-Football team names to our historical database names.
+# API-Football often uses full official names while football-data.co.uk uses short names.
+TEAM_NAME_ALIASES: Dict[str, str] = {
+    # England
+    "Bayer Leverkusen": "Leverkusen",
+    "Borussia Dortmund": "Dortmund",
+    "Borussia Monchengladbach": "M'gladbach",
+    "VfB Stuttgart": "Stuttgart",
+    "Eintracht Frankfurt": "Ein Frankfurt",
+    "FC Augsburg": "Augsburg",
+    "1899 Hoffenheim": "Hoffenheim",
+    "SC Freiburg": "Freiburg",
+    "1. FC Heidenheim 1846": "Heidenheim",
+    "1. FC Union Berlin": "Union Berlin",
+    # Spain
+    "Atletico Madrid": "Ath Madrid",
+    "Athletic Club": "Ath Bilbao",
+    "Deportivo Alaves": "Alaves",
+    "Celta Vigo": "Celta",
+    "Celta de Vigo": "Celta",
+    "Rayo Vallecano": "Vallecano",
+    # Italy
+    "AC Milan": "Milan",
+    "Inter": "Inter",
+    "Hellas Verona": "Verona",
+    # France
+    "Paris Saint Germain": "Paris SG",
+    "Olympique Marseille": "Marseille",
+    "Olympique Lyonnais": "Lyon",
+    "AS Monaco": "Monaco",
+    "LOSC Lille": "Lille",
+    "OGC Nice": "Nice",
+    "RC Lens": "Lens",
+    "Stade Rennais": "Rennes",
+    "RC Strasbourg Alsace": "Strasbourg",
+    # Belgium
+    "Club Brugge KV": "Club Brugge",
+    "RSC Anderlecht": "Anderlecht",
+    "Standard Liege": "Standard",
+    "KAA Gent": "Gent",
+    # Netherlands
+    "Feyenoord": "Feyenoord",
+    "PSV Eindhoven": "PSV",
+    # Portugal
+    "Sporting CP": "Sporting Lisbon",
+    "FC Porto": "Porto",
+    "SL Benfica": "Benfica",
+    "SC Braga": "Sp Braga",
+    # Greece
+    "Olympiakos Piraeus": "Olympiakos",
+    "Panathinaikos": "Panathinaikos",
+    # Turkey
+    "Galatasaray": "Galatasaray",
+    "Fenerbahce": "Fenerbahce",
+    "Besiktas": "Besiktas",
+    # England (short names in football-data.co.uk)
+    "Nottingham Forest": "Nott'm Forest",
+    "Sheffield United": "Sheffield United",
+    "Wolverhampton Wanderers": "Wolves",
+    "West Ham United": "West Ham",
+    "Manchester United": "Man United",
+    "Manchester City": "Man City",
+    "Tottenham Hotspur": "Tottenham",
+    "Leicester City": "Leicester",
+    "Brighton & Hove Albion": "Brighton",
+    # Scotland
+    "Glasgow Rangers": "Rangers",
+    "Celtic": "Celtic",
+    # Eastern Europe
+    "FK Crvena Zvezda": "Crvena Zvezda",
+    "Dinamo Zagreb": "Dinamo Zagreb",
+    "Ferencvarosi TC": "Ferencvaros",
+    # Switzerland
+    "FC Winterthur": "Winterthur",
+    "FC ST. Gallen": "St. Gallen",
+    "FC Luzern": "Luzern",
+    "FC Basel 1893": "Basel",
+    "FC Zurich": "Zurich",
+    "BSC Young Boys": "Young Boys",
+    "Servette FC": "Servette",
+    "FC Lugano": "Lugano",
+    # Other
+    "FC Salzburg": "Salzburg",
+    "Sturm Graz": "Sturm Graz",
+    "Stade Brestois 29": "Brest",
+}
+
 # Map our internal league keys to API-Football league IDs
 LEAGUE_ID_MAP = {
     "england/premier-league": 39,
@@ -141,7 +228,11 @@ class APIFootballScraper(BaseScraper):
             return None
 
     async def update(self):
-        """Run the full API-Football update: recent results + today/tomorrow fixtures + xG."""
+        """Run the full API-Football update: yesterday results + today fixtures + xG + odds.
+
+        Only fetches today's fixtures and odds (the CI pipeline runs daily, so
+        tomorrow's matches will be fetched when tomorrow's run executes).
+        """
         if not self.enabled:
             logger.warning("API-Football key not set. Skipping.")
             return
@@ -149,18 +240,16 @@ class APIFootballScraper(BaseScraper):
         logger.info("Starting API-Football update")
 
         # 1. Fetch yesterday's results (so settle can work)
-        await self.fetch_recent_results(days_back=2)
+        await self.fetch_recent_results(days_back=1)
 
-        # 2. Fetch today's and tomorrow's fixtures
+        # 2. Fetch today's fixtures only (CI runs daily — tomorrow handled next run)
         today = date.today()
-        tomorrow = today + timedelta(days=1)
         await self._fetch_fixtures_by_date(today)
-        await self._fetch_fixtures_by_date(tomorrow)
 
         # 3. Backfill xG for recent completed matches that don't have it
         await self._backfill_xg(days_back=3)
 
-        # 4. Fetch real bookmaker odds for upcoming fixtures
+        # 4. Fetch real bookmaker odds for today's fixtures
         await self.fetch_upcoming_odds()
 
         logger.info(f"API-Football update complete ({self._requests_today} requests used)")
@@ -379,18 +468,49 @@ class APIFootballScraper(BaseScraper):
     def _get_or_create_team_id(self, name: str, league: str) -> int:
         """Find existing team by name or create a new one. Returns team ID."""
         with self.db.get_session() as session:
+            # 1. Exact match
             team = session.query(Team).filter_by(name=name).first()
             if team:
                 return team.id
 
-            # Try fuzzy match (common name variations)
+            # 2. Check alias map (API-Football name -> historical name)
+            alias = TEAM_NAME_ALIASES.get(name)
+            if alias:
+                team = session.query(Team).filter_by(name=alias).first()
+                if team:
+                    return team.id
+
+            # 3. Forward fuzzy: DB names that contain the API name
             team = session.query(Team).filter(
                 Team.name.ilike(f"%{name}%")
             ).first()
             if team:
                 return team.id
 
-            # Create new team
+            # 4. Reverse fuzzy: API name contains a DB team name (for short DB names)
+            #    e.g. "Bayer Leverkusen" contains "Leverkusen"
+            #    Only match if the DB name is >= 5 chars to avoid false positives
+            domestic_league = league if "/" in league else None
+            if domestic_league:
+                candidates = session.query(Team).filter_by(league=domestic_league).all()
+            else:
+                candidates = []
+            name_lower = name.lower()
+            for candidate in candidates:
+                cname = candidate.name
+                if len(cname) >= 5 and cname.lower() in name_lower:
+                    return candidate.id
+
+            # 5. Try matching without common prefixes/suffixes (FC, SK, etc.)
+            stripped = name.replace("FC ", "").replace("SK ", "").replace("SC ", "").replace("AC ", "").replace("AS ", "").replace("RC ", "").replace("KV ", "").replace("CF ", "").strip()
+            if stripped != name:
+                team = session.query(Team).filter(
+                    Team.name.ilike(f"%{stripped}%")
+                ).first()
+                if team:
+                    return team.id
+
+            # 6. Create new team
             country = league.split("/")[0].title() if "/" in league else ""
             team = Team(name=name, league=league, country=country)
             session.add(team)
@@ -422,8 +542,9 @@ class APIFootballScraper(BaseScraper):
     # ---- Odds fetching ----
 
     async def fetch_upcoming_odds(self):
-        """Fetch real bookmaker odds for upcoming fixtures from API-Football.
+        """Fetch real bookmaker odds for today's fixtures from API-Football.
 
+        Only fetches odds for today's matches (CI pipeline runs daily).
         Prioritizes top leagues and respects daily request budget.
         """
         if not self.enabled:
@@ -436,13 +557,15 @@ class APIFootballScraper(BaseScraper):
             logger.warning("No API budget remaining for odds fetching")
             return 0
 
-        # Get upcoming fixtures that have an apifootball_id
+        # Get today's fixtures that have an apifootball_id
         with self.db.get_session() as session:
-            cutoff = datetime.utcnow() + timedelta(days=2)
+            today_start = datetime.combine(date.today(), datetime.min.time())
+            today_end = today_start + timedelta(days=1)
             upcoming = session.query(Match).filter(
                 Match.is_fixture == True,
                 Match.apifootball_id.isnot(None),
-                Match.match_date <= cutoff,
+                Match.match_date >= today_start,
+                Match.match_date < today_end,
             ).all()
 
             if not upcoming:

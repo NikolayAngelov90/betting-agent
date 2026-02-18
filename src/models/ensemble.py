@@ -76,8 +76,15 @@ class EnsemblePredictor:
             "score": score,
         }
 
+    # Leagues where teams come from different domestic leagues,
+    # so Poisson league-calibrated strengths are less reliable.
+    INTERNATIONAL_LEAGUES = {
+        "champions-league", "europa-league", "europa-conference-league",
+    }
+
     def predict(self, home_team_id: int, away_team_id: int,
-                features_vector=None, feature_names=None) -> Dict:
+                features_vector=None, feature_names=None,
+                league: str = "") -> Dict:
         """Generate ensemble prediction for a match.
 
         Args:
@@ -111,7 +118,9 @@ class EnsemblePredictor:
             results["ml"] = ml_predictions
 
         # Weighted ensemble for 1X2
-        ensemble_1x2 = self._weighted_average_1x2(poisson_pred, elo_pred, ml_pred)
+        is_intl = league in self.INTERNATIONAL_LEAGUES
+        ensemble_1x2 = self._weighted_average_1x2(poisson_pred, elo_pred, ml_pred,
+                                                    international=is_intl)
         results["ensemble"] = ensemble_1x2
 
         # Blend goals/BTTS predictions using both Poisson and ensemble 1X2
@@ -177,22 +186,32 @@ class EnsemblePredictor:
         return results
 
     def _weighted_average_1x2(self, poisson: Dict, elo: Dict,
-                               ml: Optional[Dict]) -> Dict:
-        """Compute weighted average of 1X2 probabilities across models."""
+                               ml: Optional[Dict],
+                               international: bool = False) -> Dict:
+        """Compute weighted average of 1X2 probabilities across models.
+
+        For international matches (CL/EL/ECL), Poisson weight is halved and
+        redistributed to Elo because Poisson's league-calibrated attack/defence
+        strengths are misleading when teams come from different domestic leagues.
+        """
         total_weight = 0.0
         home_win = 0.0
         draw = 0.0
         away_win = 0.0
 
-        # Poisson
+        # Poisson — downweight for international matches
         w = self.weights.get("poisson", 0.25)
+        if international:
+            w *= 0.5  # halve Poisson influence
         home_win += w * poisson.get("home_win", 0.33)
         draw += w * poisson.get("draw", 0.33)
         away_win += w * poisson.get("away_win", 0.33)
         total_weight += w
 
-        # Elo
+        # Elo — upweight for international matches (captures cross-league quality)
         w = self.weights.get("elo", 0.20)
+        if international:
+            w *= 1.5  # boost Elo influence
         home_win += w * elo.get("home_win", 0.33)
         draw += w * elo.get("draw", 0.33)
         away_win += w * elo.get("away_win", 0.33)

@@ -92,17 +92,23 @@ class FootballBettingAgent:
             logger.error(f"Odds API update failed: {e}")
 
         # 2b. Flashscore results (fetches finished match scores for settling)
+        # Bail after first failure — anti-bot protection makes it unusable
         try:
             leagues = self.config.get("scraping.flashscore_leagues", [])
+            flashscore_ok = True
             for league in leagues:
+                if not flashscore_ok:
+                    break
                 try:
                     await asyncio.wait_for(
-                        self.scraper.scrape_league_results(league), timeout=60,
+                        self.scraper.scrape_league_results(league), timeout=30,
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(f"Flashscore timeout for {league}, continuing")
+                    logger.warning(f"Flashscore timeout for {league}, skipping remaining leagues")
+                    flashscore_ok = False
                 except Exception as e:
                     logger.debug(f"Flashscore error for {league}: {e}")
+                    flashscore_ok = False
             logger.info("Flashscore results update complete")
         except Exception as e:
             logger.error(f"Flashscore update failed: {e}")
@@ -199,7 +205,8 @@ class FootballBettingAgent:
 
         # Get predictions
         predictions = self.predictor.predict(home_id, away_id, feature_vector,
-                                             feature_names=feature_names)
+                                             feature_names=feature_names,
+                                             league=league)
 
         # Get injury report
         from src.scrapers.injury_scraper import InjuryScraper
@@ -237,7 +244,7 @@ class FootballBettingAgent:
 
     async def get_daily_picks(self, target_date: date = None,
                               min_ev: float = 0.05,
-                              min_confidence: float = 0.60,
+                              min_confidence: float = 0.58,
                               max_picks_per_match: int = 2,
                               leagues: List[str] = None) -> List[BetRecommendation]:
         """Get high-confidence value betting picks for a specific date.
@@ -389,9 +396,9 @@ class FootballBettingAgent:
         Returns:
             List of dicts with settled pick details for reporting.
         """
-        # 1. Fetch recent results from API-Football
+        # 1. Fetch yesterday's results from API-Football (CI runs daily)
         try:
-            await self.apifootball.fetch_recent_results(days_back=3)
+            await self.apifootball.fetch_recent_results(days_back=1)
         except Exception as e:
             logger.warning(f"Could not fetch recent results from API-Football: {e}")
 
@@ -411,10 +418,11 @@ class FootballBettingAgent:
                 for league in stale_leagues:
                     try:
                         await asyncio.wait_for(
-                            self.scraper.scrape_league_results(league), timeout=60,
+                            self.scraper.scrape_league_results(league), timeout=30,
                         )
                     except Exception:
-                        continue
+                        logger.debug(f"Flashscore settle failed for {league}, skipping rest")
+                        break
                 try:
                     self.scraper.close_driver()
                 except Exception:
