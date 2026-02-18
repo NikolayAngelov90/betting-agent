@@ -860,6 +860,79 @@ class APIFootballScraper(BaseScraper):
             + ", ".join(f"{n}({c})" for _, _, n, c in low_coverage[:5])
         )
 
+        # Resolve missing API team IDs from linked fixtures before backfilling.
+        # When a team was first created from a fixture fetch but the team ID wasn't
+        # persisted (e.g. schema added later), we can recover it by re-fetching
+        # the fixture and reading the home/away team IDs from the response.
+        missing_api_id = [
+            (tid, name, cnt) for tid, api_id, name, cnt in low_coverage if not api_id
+        ]
+        if missing_api_id:
+            resolved = {}  # team_db_id -> api_team_id
+            fixture_cache: dict = {}
+            with self.db.get_session() as session:
+                for tid, name, _ in missing_api_id:
+                    fix_row = session.query(Match).filter(
+                        _or(Match.home_team_id == tid, Match.away_team_id == tid),
+                        Match.apifootball_id.isnot(None),
+                    ).first()
+                    if not fix_row:
+                        continue
+                    fix_api_id = fix_row.apifootball_id
+                    is_home = fix_row.home_team_id == tid
+
+                    if fix_api_id not in fixture_cache:
+                        used = self._requests_today - (self._requests_today - len(fixture_cache))
+                        if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
+                            break
+                        data = await self._api_get("/fixtures", {"id": fix_api_id})
+                        fixture_cache[fix_api_id] = (
+                            data.get("response", [])[0] if data and data.get("response") else None
+                        )
+
+                    fix_data = fixture_cache.get(fix_api_id)
+                    if not fix_data:
+                        continue
+
+                    side_key = "home" if is_home else "away"
+                    api_team_id_val = fix_data.get("teams", {}).get(side_key, {}).get("id")
+                    if api_team_id_val:
+                        resolved[tid] = api_team_id_val
+
+            # Persist resolved IDs
+            if resolved:
+                with self.db.get_session() as session:
+                    for tid, api_id in resolved.items():
+                        team = session.get(Team, tid)
+                        if team and not team.apifootball_team_id:
+                            team.apifootball_team_id = api_id
+                    session.commit()
+                logger.info(f"Resolved API team IDs for {len(resolved)} teams: "
+                            + ", ".join(str(i) for i in resolved.keys()))
+
+                # Rebuild low_coverage with resolved IDs
+                low_coverage = [
+                    (tid, resolved.get(api_id if api_id else tid, api_id), name, cnt)
+                    if not api_id else (tid, api_id, name, cnt)
+                    for tid, api_id, name, cnt in low_coverage
+                ]
+                # Re-read from DB to get updated api_team_id
+                with self.db.get_session() as session:
+                    low_coverage = []
+                    for team_id in team_ids:
+                        count = session.query(Match).filter(
+                            Match.is_fixture == False,
+                            Match.home_goals.isnot(None),
+                            _or(Match.home_team_id == team_id, Match.away_team_id == team_id),
+                        ).count()
+                        if count < min_matches:
+                            team = session.get(Team, team_id)
+                            if team:
+                                low_coverage.append((
+                                    team_id, team.apifootball_team_id, team.name, count,
+                                ))
+                    low_coverage.sort(key=lambda x: x[3])
+
         requests_before = self._requests_today
 
         for team_id, api_team_id, team_name, current_count in low_coverage:
