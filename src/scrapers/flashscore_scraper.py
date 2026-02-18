@@ -144,7 +144,13 @@ class FlashscoreScraper(BaseScraper):
         logger.info("Flashscore update cycle complete")
 
     async def scrape_league_results(self, league: str, num_pages: int = 1):
-        """Scrape recent match results for a league."""
+        """Scrape recent match results for a league.
+
+        After saving basic scores, fetches extended statistics (shots, possession,
+        dangerous attacks, saves, offsides, referee, etc.) for recently completed
+        matches that are missing that data.  Limited to last 7 days and 10 matches
+        per call to avoid overloading Flashscore / triggering Cloudflare.
+        """
         url = f"{FLASHSCORE_BASE_URL}/football/{league}/results/"
         logger.info(f"Scraping results: {league}")
 
@@ -152,10 +158,48 @@ class FlashscoreScraper(BaseScraper):
         matches = await loop.run_in_executor(None, self._scrape_results_page, url)
 
         db = get_db()
+        # Save basic scores and collect (match_id, match_url, match_date) for
+        # matches that have a detail URL so we can enrich them below.
+        saved_with_urls = []
         with db.get_session() as session:
             for match_data in matches:
-                self._save_match(session, match_data, league, is_fixture=False)
+                saved = self._save_match(session, match_data, league, is_fixture=False)
+                if saved and match_data.get("match_url"):
+                    session.flush()  # ensure PK is assigned before we exit
+                    saved_with_urls.append((
+                        saved.id,
+                        match_data["match_url"],
+                        match_data.get("match_date", datetime.now()),
+                    ))
+        # session committed here
 
+        # Enrich recent matches (last 7 days) that lack extended stats.
+        cutoff = datetime.now() - timedelta(days=7)
+        stats_count = 0
+        max_detail_scrapes = 10  # cap per league run to limit Cloudflare exposure
+        for match_id, match_url, match_date in saved_with_urls:
+            if stats_count >= max_detail_scrapes:
+                break
+            if isinstance(match_date, datetime) and match_date < cutoff:
+                continue
+            # Skip if extended stats already present
+            with db.get_session() as session:
+                m = session.get(Match, match_id)
+                if m is None or m.home_shots is not None:
+                    continue
+
+            stats = await self.scrape_match_statistics(match_url)
+            if stats:
+                with db.get_session() as session:
+                    m = session.get(Match, match_id)
+                    if m:
+                        self._apply_stats_to_match(session, m, stats)
+                        stats_count += 1
+            # Small delay to reduce Cloudflare detection risk
+            await asyncio.sleep(1)
+
+        if stats_count:
+            logger.info(f"[Flashscore] Extended stats saved for {stats_count} {league} matches")
         logger.info(f"Scraped {len(matches)} results from {league}")
         return matches
 
@@ -512,6 +556,25 @@ class FlashscoreScraper(BaseScraper):
             result[away_key] = away_val
         except ValueError:
             pass
+
+    def _apply_stats_to_match(self, session, match: Match, stats: dict):
+        """Apply a stats dict returned by _scrape_match_detail to a Match record.
+
+        The stats dict uses Match column names as keys (e.g. 'home_shots',
+        'away_possession', 'referee', 'venue', 'venue_capacity',
+        'regulation_home_goals', 'regulation_away_goals').
+        Unknown keys are silently ignored.
+        """
+        direct_fields = {
+            "referee", "venue", "venue_capacity",
+            "regulation_home_goals", "regulation_away_goals",
+        }
+        for key, value in stats.items():
+            if key in direct_fields or hasattr(match, key):
+                try:
+                    setattr(match, key, value)
+                except Exception:
+                    pass
 
     def _get_or_create_team(self, session, team_name: str, league: str) -> Team:
         """Get existing team or create a new one."""
