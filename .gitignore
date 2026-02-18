@@ -20,10 +20,11 @@ logs/
 .env
 config/config.yaml
 
-# IDE
+# IDE & local tooling
 .vscode/
 .idea/
 *.swp
+.claude/
 
 # OS
 Thumbs.db
