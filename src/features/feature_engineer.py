@@ -44,6 +44,7 @@ class FeatureEngineer:
             home_id = match.home_team_id
             away_id = match.away_team_id
             league = match.league or ""
+            referee = match.referee or ""
 
         features = {}
 
@@ -110,6 +111,29 @@ class FeatureEngineer:
         # xG differentials
         features["xg_for_diff"] = home_xg.get("xg_avg", 0) - away_xg.get("xg_avg", 0)
         features["xg_against_diff"] = home_xg.get("xg_against_avg", 0) - away_xg.get("xg_against_avg", 0)
+
+        # 8. Extended statistics features (from Flashscore — rolling averages)
+        home_da = home_form_all.get("dangerous_attacks_per_game_avg", 0)
+        away_da = away_form_all.get("dangerous_attacks_per_game_avg", 0)
+        features["home_dangerous_attacks_avg"] = home_da
+        features["away_dangerous_attacks_avg"] = away_da
+        features["dangerous_attacks_diff"] = home_da - away_da
+
+        home_sv = home_form_all.get("saves_per_game_avg", 0)
+        away_sv = away_form_all.get("saves_per_game_avg", 0)
+        features["home_saves_avg"] = home_sv
+        features["away_saves_avg"] = away_sv
+        features["saves_diff"] = home_sv - away_sv  # positive = home GK faces more shots
+
+        home_off = home_form_all.get("offsides_per_game_avg", 0)
+        away_off = away_form_all.get("offsides_per_game_avg", 0)
+        features["home_offsides_avg"] = home_off
+        features["away_offsides_avg"] = away_off
+        features["offsides_diff"] = home_off - away_off  # proxy for pressing line height
+
+        # 9. Referee features (from Flashscore — if referee is known for this fixture)
+        ref_features = self._get_referee_features(referee)
+        features.update(ref_features)
 
         logger.debug(f"Generated {len(features)} features for match {match_id}")
         return features
@@ -193,6 +217,56 @@ class FeatureEngineer:
             "xg_against_avg": round(xg_against_avg, 3),
             "xg_overperformance": round(goals_avg - xg_avg, 3),
             "xg_matches": len(xg_for_list),
+        }
+
+    def _get_referee_features(self, referee: str) -> dict:
+        """Get historical statistics for a referee across their last 30 matches.
+
+        Returns metrics that inform card/goal probability (referee strictness, pace of play).
+        Returns zero-defaults when referee is unknown or has no history.
+        """
+        empty = {
+            "referee_cards_per_match_avg": 0.0,
+            "referee_fouls_per_match_avg": 0.0,
+            "referee_goals_per_match_avg": 0.0,
+            "referee_matches": 0,
+        }
+        if not referee:
+            return empty
+
+        with self.db.get_session() as session:
+            matches = session.query(Match).filter(
+                Match.referee == referee,
+                Match.is_fixture == False,
+                Match.home_goals.isnot(None),
+            ).order_by(Match.match_date.desc()).limit(30).all()
+
+            if not matches:
+                return empty
+
+            cards_list = []
+            fouls_total = 0
+            fouls_matches = 0
+            goals_list = []
+
+            for m in matches:
+                yc = (m.home_yellow_cards or 0) + (m.away_yellow_cards or 0)
+                rc = (m.home_red_cards or 0) + (m.away_red_cards or 0)
+                cards_list.append(yc + rc)
+                goals_list.append((m.home_goals or 0) + (m.away_goals or 0))
+                hf = m.home_fouls or 0
+                af = m.away_fouls or 0
+                if hf > 0 or af > 0:
+                    fouls_total += hf + af
+                    fouls_matches += 1
+
+            n = len(matches)
+
+        return {
+            "referee_cards_per_match_avg": round(sum(cards_list) / n, 2),
+            "referee_fouls_per_match_avg": round(fouls_total / fouls_matches, 2) if fouls_matches else 0.0,
+            "referee_goals_per_match_avg": round(sum(goals_list) / n, 2),
+            "referee_matches": n,
         }
 
     def _prefix_dict(self, d: dict, prefix: str) -> dict:

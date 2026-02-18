@@ -68,6 +68,15 @@ class TeamFeatures:
         shots_count = 0
         possession_count = 0
         corners_count = 0
+        # Extended Flashscore stats
+        da_total = 0
+        sv_total = 0
+        off_total = 0
+        fk_total = 0
+        da_count = 0
+        sv_count = 0
+        off_count = 0
+        fk_count = 0
 
         form_string = []
 
@@ -81,6 +90,10 @@ class TeamFeatures:
                 sot = match.home_shots_on_target
                 poss = match.home_possession
                 corners = match.home_corners
+                da = match.home_dangerous_attacks
+                sv = match.home_saves
+                off = match.home_offsides
+                fk = match.home_free_kicks
             else:
                 scored = match.away_goals or 0
                 conceded = match.home_goals or 0
@@ -88,6 +101,10 @@ class TeamFeatures:
                 sot = match.away_shots_on_target
                 poss = match.away_possession
                 corners = match.away_corners
+                da = match.away_dangerous_attacks
+                sv = match.away_saves
+                off = match.away_offsides
+                fk = match.away_free_kicks
 
             goals_scored += scored
             goals_conceded += conceded
@@ -120,6 +137,18 @@ class TeamFeatures:
             if corners is not None:
                 corners_total += corners
                 corners_count += 1
+            if da is not None:
+                da_total += da
+                da_count += 1
+            if sv is not None:
+                sv_total += sv
+                sv_count += 1
+            if off is not None:
+                off_total += off
+                off_count += 1
+            if fk is not None:
+                fk_total += fk
+                fk_count += 1
 
         n = len(matches)
 
@@ -149,6 +178,10 @@ class TeamFeatures:
             "shots_on_target_per_game_avg": round(shots_on_target_total / shots_count, 2) if shots_count else 0,
             "possession_avg": round(possession_total / possession_count, 2) if possession_count else 0,
             "corners_per_game_avg": round(corners_total / corners_count, 2) if corners_count else 0,
+            "dangerous_attacks_per_game_avg": round(da_total / da_count, 2) if da_count else 0,
+            "saves_per_game_avg": round(sv_total / sv_count, 2) if sv_count else 0,
+            "offsides_per_game_avg": round(off_total / off_count, 2) if off_count else 0,
+            "free_kicks_per_game_avg": round(fk_total / fk_count, 2) if fk_count else 0,
             "form_string": "-".join(form_string),
         }
 
@@ -185,6 +218,10 @@ class TeamFeatures:
             "win_streak": 0, "losing_streak": 0, "unbeaten_run": 0,
             "shots_per_game_avg": 0, "shots_on_target_per_game_avg": 0,
             "possession_avg": 0, "corners_per_game_avg": 0,
+            "dangerous_attacks_per_game_avg": 0,
+            "saves_per_game_avg": 0,
+            "offsides_per_game_avg": 0,
+            "free_kicks_per_game_avg": 0,
             "form_string": "",
         }
 

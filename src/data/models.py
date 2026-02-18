@@ -22,6 +22,7 @@ class Team(Base):
     league = Column(String(100))
     flashscore_id = Column(String(50))
     transfermarkt_id = Column(String(50))
+    apifootball_team_id = Column(Integer)  # API-Football team ID for history backfill
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships

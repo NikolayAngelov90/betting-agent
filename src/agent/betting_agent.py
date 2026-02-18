@@ -929,6 +929,7 @@ async def main():
         print("  --train             Train ML models on historical data")
         print("  --tune              Tune ensemble weights from recent results")
         print("  --analyze <id>      Analyze a specific match")
+        print("  --backfill-history  Fetch historical data for low-coverage teams")
         print("  --telegram-setup    Setup Telegram bot notifications")
         print("  --telegram-test     Send a test Telegram message")
         return
@@ -1152,6 +1153,11 @@ async def main():
                     if rec.models_against:
                         print(f" | Against: {rec.models_against}", end="")
                     print()
+
+        elif command == "--backfill-history":
+            print("Fetching historical match data for low-coverage teams...")
+            await agent.apifootball.backfill_team_history(min_matches=20, seasons=[2023, 2024], max_budget=80)
+            print("Historical backfill complete.")
 
         elif command == "--telegram-setup":
             print("=" * 50)

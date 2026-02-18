@@ -252,6 +252,12 @@ class APIFootballScraper(BaseScraper):
         # 4. Fetch real bookmaker odds for today's fixtures
         await self.fetch_upcoming_odds()
 
+        # 5. Backfill historical match data for low-coverage pick teams (uses leftover budget)
+        remaining = max(0, self._daily_limit - self._requests_today - self.BUDGET_RESERVE)
+        backfill_budget = min(remaining, 30)
+        if backfill_budget > 2:
+            await self.backfill_team_history(max_budget=backfill_budget)
+
         logger.info(f"API-Football update complete ({self._requests_today} requests used)")
 
     async def fetch_recent_results(self, days_back: int = 3):
@@ -293,8 +299,11 @@ class APIFootballScraper(BaseScraper):
             fixture_id = fix.get("fixture", {}).get("id")
             home_name = fix.get("teams", {}).get("home", {}).get("name", "")
             away_name = fix.get("teams", {}).get("away", {}).get("name", "")
+            home_api_id = fix.get("teams", {}).get("home", {}).get("id")
+            away_api_id = fix.get("teams", {}).get("away", {}).get("id")
             match_ts = fix.get("fixture", {}).get("timestamp")
             status_short = fix.get("fixture", {}).get("status", {}).get("short", "")
+            referee = fix.get("fixture", {}).get("referee") or ""
 
             if not home_name or not away_name:
                 continue
@@ -303,9 +312,13 @@ class APIFootballScraper(BaseScraper):
             if not match_dt:
                 continue
 
-            # Get or create teams (returns IDs)
-            home_team_id = self._get_or_create_team_id(home_name, league_key)
-            away_team_id = self._get_or_create_team_id(away_name, league_key)
+            # Get or create teams — also saves API-Football team IDs for future backfill
+            home_team_id = self._get_or_create_team_id(
+                home_name, league_key, apifootball_team_id=home_api_id
+            )
+            away_team_id = self._get_or_create_team_id(
+                away_name, league_key, apifootball_team_id=away_api_id
+            )
 
             # Check for existing match
             match_id = self._find_match_id(home_team_id, away_team_id, match_dt)
@@ -322,6 +335,8 @@ class APIFootballScraper(BaseScraper):
                     match = session.get(Match, match_id)
                     if match:
                         match.apifootball_id = fixture_id
+                        if referee and not match.referee:
+                            match.referee = referee
                         if is_finished and home_goals is not None:
                             match.home_goals = home_goals
                             match.away_goals = away_goals
@@ -339,6 +354,7 @@ class APIFootballScraper(BaseScraper):
                         season=self._get_season(match_dt),
                         is_fixture=is_fixture,
                         apifootball_id=fixture_id,
+                        referee=referee or None,
                     )
                     if is_finished and home_goals is not None:
                         match.home_goals = home_goals
@@ -465,12 +481,23 @@ class APIFootballScraper(BaseScraper):
             session.commit()
             logger.debug(f"Updated stats for match {match_id} (xG: {home.get('xg')}-{away.get('xg')})")
 
-    def _get_or_create_team_id(self, name: str, league: str) -> int:
-        """Find existing team by name or create a new one. Returns team ID."""
+    def _get_or_create_team_id(self, name: str, league: str,
+                               apifootball_team_id: int = None) -> int:
+        """Find existing team by name or create a new one. Returns team ID.
+
+        When apifootball_team_id is provided, it is stored on the team record
+        so that backfill_team_history() can fetch historical seasons later.
+        """
         with self.db.get_session() as session:
+            def _save_api_id(team):
+                if apifootball_team_id and not team.apifootball_team_id:
+                    team.apifootball_team_id = apifootball_team_id
+                    session.commit()
+
             # 1. Exact match
             team = session.query(Team).filter_by(name=name).first()
             if team:
+                _save_api_id(team)
                 return team.id
 
             # 2. Check alias map (API-Football name -> historical name)
@@ -478,6 +505,7 @@ class APIFootballScraper(BaseScraper):
             if alias:
                 team = session.query(Team).filter_by(name=alias).first()
                 if team:
+                    _save_api_id(team)
                     return team.id
 
             # 3. Forward fuzzy: DB names that contain the API name
@@ -485,6 +513,7 @@ class APIFootballScraper(BaseScraper):
                 Team.name.ilike(f"%{name}%")
             ).first()
             if team:
+                _save_api_id(team)
                 return team.id
 
             # 4. Reverse fuzzy: API name contains a DB team name (for short DB names)
@@ -499,6 +528,7 @@ class APIFootballScraper(BaseScraper):
             for candidate in candidates:
                 cname = candidate.name
                 if len(cname) >= 5 and cname.lower() in name_lower:
+                    _save_api_id(candidate)
                     return candidate.id
 
             # 5. Try matching without common prefixes/suffixes (FC, SK, etc.)
@@ -508,11 +538,13 @@ class APIFootballScraper(BaseScraper):
                     Team.name.ilike(f"%{stripped}%")
                 ).first()
                 if team:
+                    _save_api_id(team)
                     return team.id
 
             # 6. Create new team
             country = league.split("/")[0].title() if "/" in league else ""
-            team = Team(name=name, league=league, country=country)
+            team = Team(name=name, league=league, country=country,
+                        apifootball_team_id=apifootball_team_id)
             session.add(team)
             session.commit()
             logger.info(f"Created new team: {name} ({league})")
@@ -699,6 +731,160 @@ class APIFootballScraper(BaseScraper):
             session.commit()
 
         return count
+
+    # ---- Historical data backfill ----
+
+    async def backfill_team_history(self, min_matches: int = 20,
+                                    seasons: List[int] = None,
+                                    max_budget: int = 30):
+        """Fetch historical match data for teams that appear in upcoming fixtures
+        but have fewer than min_matches results in the database.
+
+        This is important for international competition teams (CL/EL/ECL) from
+        smaller leagues (e.g. Qarabag, Bodo/Glimt) that are absent from the
+        football-data.co.uk CSV files but have an API-Football team ID.
+
+        Uses at most max_budget API requests so it fits within the daily free tier.
+        Each team × season costs 1 request. Results are saved as completed matches.
+        """
+        if seasons is None:
+            seasons = [2023, 2024]
+
+        # Collect team IDs from all upcoming fixtures
+        with self.db.get_session() as session:
+            today_start = datetime.combine(date.today(), datetime.min.time())
+            upcoming = session.query(Match).filter(
+                Match.is_fixture == True,
+                Match.match_date >= today_start,
+            ).all()
+
+            if not upcoming:
+                return
+
+            team_ids = set()
+            for m in upcoming:
+                team_ids.add(m.home_team_id)
+                team_ids.add(m.away_team_id)
+
+        # Find teams with insufficient historical data
+        from sqlalchemy import or_ as _or
+        low_coverage = []
+        with self.db.get_session() as session:
+            for team_id in team_ids:
+                count = session.query(Match).filter(
+                    Match.is_fixture == False,
+                    Match.home_goals.isnot(None),
+                    _or(Match.home_team_id == team_id, Match.away_team_id == team_id),
+                ).count()
+
+                if count < min_matches:
+                    team = session.get(Team, team_id)
+                    if team:
+                        low_coverage.append((
+                            team_id,
+                            team.apifootball_team_id,
+                            team.name,
+                            count,
+                        ))
+
+        if not low_coverage:
+            logger.debug("All fixture teams have sufficient historical data (>= %d matches)", min_matches)
+            return
+
+        # Sort by least data first so we prioritise the most data-starved teams
+        low_coverage.sort(key=lambda x: x[3])
+        logger.info(
+            f"Historical backfill: {len(low_coverage)} low-coverage teams "
+            f"(< {min_matches} matches): "
+            + ", ".join(f"{n}({c})" for _, _, n, c in low_coverage[:5])
+        )
+
+        requests_before = self._requests_today
+
+        for team_id, api_team_id, team_name, current_count in low_coverage:
+            used = self._requests_today - requests_before
+            if used >= max_budget:
+                logger.info(f"Backfill budget exhausted ({used} requests used)")
+                break
+
+            if not api_team_id:
+                logger.debug(f"No API-Football team ID for {team_name} — skipping backfill")
+                continue
+
+            logger.info(f"Backfilling history for {team_name} ({current_count} matches currently)")
+
+            for season in seasons:
+                used = self._requests_today - requests_before
+                if used >= max_budget:
+                    break
+
+                data = await self._api_get("/fixtures", {
+                    "team": api_team_id,
+                    "season": season,
+                    "status": "FT",
+                })
+                if not data:
+                    continue
+
+                fixtures = data.get("response", [])
+                saved = 0
+
+                for fix in fixtures:
+                    league_id = fix.get("league", {}).get("id")
+                    league_key = ID_TO_LEAGUE.get(league_id)
+                    if not league_key:
+                        continue  # Skip leagues we don't track
+
+                    home_name = fix.get("teams", {}).get("home", {}).get("name", "")
+                    away_name = fix.get("teams", {}).get("away", {}).get("name", "")
+                    home_api_id = fix.get("teams", {}).get("home", {}).get("id")
+                    away_api_id = fix.get("teams", {}).get("away", {}).get("id")
+                    match_ts = fix.get("fixture", {}).get("timestamp")
+                    fixture_api_id = fix.get("fixture", {}).get("id")
+                    ref = fix.get("fixture", {}).get("referee") or ""
+
+                    if not home_name or not away_name or not match_ts:
+                        continue
+
+                    goals = fix.get("goals", {})
+                    home_goals = goals.get("home")
+                    away_goals = goals.get("away")
+                    if home_goals is None or away_goals is None:
+                        continue
+
+                    match_dt = datetime.utcfromtimestamp(match_ts)
+                    h_id = self._get_or_create_team_id(
+                        home_name, league_key, apifootball_team_id=home_api_id
+                    )
+                    a_id = self._get_or_create_team_id(
+                        away_name, league_key, apifootball_team_id=away_api_id
+                    )
+
+                    if self._find_match_id(h_id, a_id, match_dt):
+                        continue  # Already in DB
+
+                    with self.db.get_session() as session:
+                        match = Match(
+                            home_team_id=h_id,
+                            away_team_id=a_id,
+                            match_date=match_dt,
+                            league=league_key,
+                            season=str(season),
+                            is_fixture=False,
+                            apifootball_id=fixture_api_id,
+                            home_goals=home_goals,
+                            away_goals=away_goals,
+                            referee=ref or None,
+                        )
+                        session.add(match)
+                        session.commit()
+                        saved += 1
+
+                if saved > 0:
+                    logger.info(f"Saved {saved} historical matches for {team_name} (season {season})")
+
+        total_used = self._requests_today - requests_before
+        logger.info(f"Historical backfill complete ({total_used} API requests used)")
 
     # ---- League xG backfill ----
 
