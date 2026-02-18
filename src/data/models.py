@@ -69,9 +69,30 @@ class Match(Base):
     home_red_cards = Column(Integer)
     away_red_cards = Column(Integer)
 
-    # Expected Goals (from API-Football)
+    # Expected Goals (from API-Football or Flashscore)
     home_xg = Column(Float)
     away_xg = Column(Float)
+
+    # Extended statistics (from Flashscore)
+    home_dangerous_attacks = Column(Integer)
+    away_dangerous_attacks = Column(Integer)
+    home_saves = Column(Integer)          # Goalkeeper saves
+    away_saves = Column(Integer)
+    home_offsides = Column(Integer)
+    away_offsides = Column(Integer)
+    home_free_kicks = Column(Integer)
+    away_free_kicks = Column(Integer)
+
+    # Match context (from Flashscore match detail page)
+    referee = Column(String(100))
+    venue = Column(String(150))
+    venue_capacity = Column(Integer)
+
+    # Score detail (for cup/playoff matches)
+    regulation_home_goals = Column(Integer)  # Score at 90 min (excl. extra time)
+    regulation_away_goals = Column(Integer)
+    penalty_home_score = Column(Integer)
+    penalty_away_score = Column(Integer)
 
     # API-Football fixture ID for cross-referencing
     apifootball_id = Column(Integer)

@@ -1,4 +1,41 @@
-"""Flashscore scraper for match results, fixtures, and statistics."""
+"""Flashscore scraper for match results, fixtures, and statistics.
+
+Selector reference (current Flashscore layout as of 2025-2026):
+  Listing page  (flashscore.com/football/{league}/results/):
+    Match rows:   .event__match.event__match--static.event__match--twoLine
+    Match URL:    a.eventRowLink  (href = match detail URL)
+    Team names:   .event__participant--home / .event__participant--away
+    Scores:       .event__score  (index 0=home, index 1=away)
+    Date/time:    .event__time
+    Load more:    [data-testid="wcl-buttonLink"]
+
+  Match detail page  (flashscore.com/match/{id}/#/match-summary):
+    Home team:    .duelParticipant__home .participant__participantName
+    Away team:    .duelParticipant__away .participant__participantName
+    Start time:   .duelParticipant__startTime
+    Scores:       .detailScore__wrapper span:not(.detailScore__divider)
+    Reg. time:    .detailScore__fullTime
+    Penalties:    [data-testid="wcl-scores-overline-02"] with text "penalties"
+
+  Match info box  (referee, venue, capacity):
+    Container:    div[data-testid='wcl-summaryMatchInformation'] > div
+    Key/value:    even-indexed divs = labels, odd-indexed divs = values
+
+  Statistics sub-page  (match detail URL + /summary/stats/0/):
+    Stat row:     div[data-testid='wcl-statistics']
+    Stat name:    div[data-testid='wcl-statistics-category']
+    Home value:   div[data-testid='wcl-statistics-value'] > strong  (index 0)
+    Away value:   div[data-testid='wcl-statistics-value'] > strong  (index 1)
+
+  Useful statistics for betting:
+    Ball Possession, Total Shots, Shots on Target, Blocked Shots,
+    Corner Kicks, Yellow Cards, Red Cards, Free Kicks, Offsides,
+    Goalkeeper Saves, Dangerous Attacks, Expected Goals (xG)
+
+Note: Flashscore uses Cloudflare anti-bot. Selenium is often blocked.
+      The scraper is kept as a best-effort fallback; primary data comes
+      from API-Football (apifootball_scraper.py).
+"""
 
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -21,6 +58,30 @@ from src.utils.logger import get_logger
 logger = get_logger()
 
 FLASHSCORE_BASE_URL = "https://www.flashscore.com"
+
+# Statistics that are useful for our betting models, mapped from the
+# Flashscore label (lowercased) to Match model column names.
+STAT_MAP = {
+    # Possession & shots
+    "ball possession":        ("home_possession",        "away_possession"),
+    "total shots":            ("home_shots",             "away_shots"),
+    "shots on target":        ("home_shots_on_target",   "away_shots_on_target"),
+    "shots on goal":          ("home_shots_on_target",   "away_shots_on_target"),
+    "corner kicks":           ("home_corners",           "away_corners"),
+    "corners":                ("home_corners",           "away_corners"),
+    "fouls":                  ("home_fouls",             "away_fouls"),
+    "yellow cards":           ("home_yellow_cards",      "away_yellow_cards"),
+    "red cards":              ("home_red_cards",         "away_red_cards"),
+    # Extended stats (added 2025)
+    "goalkeeper saves":       ("home_saves",             "away_saves"),
+    "saves":                  ("home_saves",             "away_saves"),
+    "offsides":               ("home_offsides",          "away_offsides"),
+    "free kicks":             ("home_free_kicks",        "away_free_kicks"),
+    "dangerous attacks":      ("home_dangerous_attacks", "away_dangerous_attacks"),
+    "expected goals":         ("home_xg",                "away_xg"),
+    "xg":                     ("home_xg",                "away_xg"),
+    "expected goals (xg)":    ("home_xg",                "away_xg"),
+}
 
 
 class FlashscoreScraper(BaseScraper):
@@ -50,7 +111,6 @@ class FlashscoreScraper(BaseScraper):
                     "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 )
-                # Use a thread with timeout to prevent hanging on Chrome startup
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     future = pool.submit(webdriver.Chrome, options=options)
                     self._driver = future.result(timeout=15)
@@ -84,12 +144,7 @@ class FlashscoreScraper(BaseScraper):
         logger.info("Flashscore update cycle complete")
 
     async def scrape_league_results(self, league: str, num_pages: int = 1):
-        """Scrape recent match results for a league.
-
-        Args:
-            league: League path (e.g. 'england/premier-league')
-            num_pages: Number of result pages to scrape
-        """
+        """Scrape recent match results for a league."""
         url = f"{FLASHSCORE_BASE_URL}/football/{league}/results/"
         logger.info(f"Scraping results: {league}")
 
@@ -120,8 +175,33 @@ class FlashscoreScraper(BaseScraper):
         logger.info(f"Scraped {len(matches)} fixtures from {league}")
         return matches
 
+    def _click_load_more(self, driver):
+        """Click 'Load more' until all matches are visible on the listing page."""
+        LOAD_MORE_SELECTOR = '[data-testid="wcl-buttonLink"]'
+        MATCH_SELECTOR = ".event__match.event__match--static.event__match--twoLine"
+        MAX_EMPTY_CYCLES = 4
+        empty_cycles = 0
+
+        while True:
+            try:
+                count_before = len(driver.find_elements(By.CSS_SELECTOR, MATCH_SELECTOR))
+                btn = driver.find_elements(By.CSS_SELECTOR, LOAD_MORE_SELECTOR)
+                if not btn:
+                    break
+                btn[0].click()
+                import time; time.sleep(0.7)
+                count_after = len(driver.find_elements(By.CSS_SELECTOR, MATCH_SELECTOR))
+                if count_after == count_before:
+                    empty_cycles += 1
+                    if empty_cycles >= MAX_EMPTY_CYCLES:
+                        break
+                else:
+                    empty_cycles = 0
+            except Exception:
+                break
+
     def _scrape_results_page(self, url: str) -> List[dict]:
-        """Scrape a results page using Selenium (runs in thread executor)."""
+        """Scrape a results page using Selenium."""
         driver = self._get_driver()
         if not driver:
             logger.debug("Flashscore: Chrome not available, skipping results scrape")
@@ -130,11 +210,19 @@ class FlashscoreScraper(BaseScraper):
 
         try:
             driver.get(url)
+            # Wait for first match row
             WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
             )
+            self._click_load_more(driver)
 
-            match_elements = driver.find_elements(By.CLASS_NAME, "event__match")
+            match_elements = driver.find_elements(
+                By.CSS_SELECTOR,
+                ".event__match.event__match--static.event__match--twoLine"
+            )
+            if not match_elements:
+                # Fall back to generic selector if the specific one returns nothing
+                match_elements = driver.find_elements(By.CLASS_NAME, "event__match")
 
             for el in match_elements:
                 try:
@@ -150,8 +238,10 @@ class FlashscoreScraper(BaseScraper):
         return matches
 
     def _scrape_fixtures_page(self, url: str) -> List[dict]:
-        """Scrape a fixtures page using Selenium (runs in thread executor)."""
+        """Scrape a fixtures page using Selenium."""
         driver = self._get_driver()
+        if not driver:
+            return []
         matches = []
 
         try:
@@ -159,8 +249,14 @@ class FlashscoreScraper(BaseScraper):
             WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
             )
+            self._click_load_more(driver)
 
-            match_elements = driver.find_elements(By.CLASS_NAME, "event__match")
+            match_elements = driver.find_elements(
+                By.CSS_SELECTOR,
+                ".event__match.event__match--static.event__match--twoLine"
+            )
+            if not match_elements:
+                match_elements = driver.find_elements(By.CLASS_NAME, "event__match")
 
             for el in match_elements:
                 try:
@@ -176,11 +272,27 @@ class FlashscoreScraper(BaseScraper):
         return matches
 
     def _parse_match_element(self, element) -> Optional[dict]:
-        """Parse a completed match element into a data dictionary."""
+        """Parse a completed match row from the listing page."""
         try:
-            home_team = element.find_element(By.CLASS_NAME, "event__participant--home").text.strip()
-            away_team = element.find_element(By.CLASS_NAME, "event__participant--away").text.strip()
+            # Team names — try new selectors first, fall back to old
+            try:
+                home_team = element.find_element(
+                    By.CSS_SELECTOR,
+                    ".duelParticipant__home .participant__participantName"
+                ).text.strip()
+                away_team = element.find_element(
+                    By.CSS_SELECTOR,
+                    ".duelParticipant__away .participant__participantName"
+                ).text.strip()
+            except Exception:
+                home_team = element.find_element(
+                    By.CLASS_NAME, "event__participant--home"
+                ).text.strip()
+                away_team = element.find_element(
+                    By.CLASS_NAME, "event__participant--away"
+                ).text.strip()
 
+            # Scores
             scores = element.find_elements(By.CLASS_NAME, "event__score")
             if len(scores) >= 2:
                 home_goals = int(scores[0].text.strip())
@@ -188,15 +300,29 @@ class FlashscoreScraper(BaseScraper):
             else:
                 return None
 
-            # Try to get match time/date
-            time_el = element.find_elements(By.CLASS_NAME, "event__time")
+            # Date/time — try new selector, fall back to old
             match_date = datetime.now()
-            if time_el:
-                date_text = time_el[0].text.strip()
+            for time_selector in [".duelParticipant__startTime", "event__time"]:
                 try:
-                    match_date = datetime.strptime(date_text, "%d.%m.%Y %H:%M")
-                except ValueError:
-                    pass
+                    by = By.CSS_SELECTOR if time_selector.startswith(".") else By.CLASS_NAME
+                    time_el = element.find_elements(by, time_selector)
+                    if time_el:
+                        date_text = time_el[0].text.strip()
+                        try:
+                            match_date = datetime.strptime(date_text, "%d.%m.%Y %H:%M")
+                        except ValueError:
+                            pass
+                        break
+                except Exception:
+                    continue
+
+            # Match detail URL (for fetching extended stats later)
+            match_url = None
+            try:
+                link = element.find_element(By.CSS_SELECTOR, "a.eventRowLink")
+                match_url = link.get_attribute("href")
+            except Exception:
+                pass
 
             return {
                 "home_team": home_team,
@@ -204,89 +330,188 @@ class FlashscoreScraper(BaseScraper):
                 "home_goals": home_goals,
                 "away_goals": away_goals,
                 "match_date": match_date,
+                "match_url": match_url,
             }
         except Exception:
             return None
 
     def _parse_fixture_element(self, element) -> Optional[dict]:
-        """Parse an upcoming fixture element into a data dictionary."""
+        """Parse an upcoming fixture row from the listing page."""
         try:
-            home_team = element.find_element(By.CLASS_NAME, "event__participant--home").text.strip()
-            away_team = element.find_element(By.CLASS_NAME, "event__participant--away").text.strip()
+            try:
+                home_team = element.find_element(
+                    By.CSS_SELECTOR,
+                    ".duelParticipant__home .participant__participantName"
+                ).text.strip()
+                away_team = element.find_element(
+                    By.CSS_SELECTOR,
+                    ".duelParticipant__away .participant__participantName"
+                ).text.strip()
+            except Exception:
+                home_team = element.find_element(
+                    By.CLASS_NAME, "event__participant--home"
+                ).text.strip()
+                away_team = element.find_element(
+                    By.CLASS_NAME, "event__participant--away"
+                ).text.strip()
 
-            time_el = element.find_elements(By.CLASS_NAME, "event__time")
             match_date = datetime.now() + timedelta(days=1)
-            if time_el:
-                date_text = time_el[0].text.strip()
+            for time_selector in [".duelParticipant__startTime", "event__time"]:
                 try:
-                    match_date = datetime.strptime(date_text, "%d.%m.%Y %H:%M")
-                except ValueError:
-                    pass
+                    by = By.CSS_SELECTOR if time_selector.startswith(".") else By.CLASS_NAME
+                    time_el = element.find_elements(by, time_selector)
+                    if time_el:
+                        date_text = time_el[0].text.strip()
+                        try:
+                            match_date = datetime.strptime(date_text, "%d.%m.%Y %H:%M")
+                        except ValueError:
+                            pass
+                        break
+                except Exception:
+                    continue
+
+            match_url = None
+            try:
+                link = element.find_element(By.CSS_SELECTOR, "a.eventRowLink")
+                match_url = link.get_attribute("href")
+            except Exception:
+                pass
 
             return {
                 "home_team": home_team,
                 "away_team": away_team,
                 "match_date": match_date,
+                "match_url": match_url,
             }
         except Exception:
             return None
 
     async def scrape_match_statistics(self, match_url: str) -> Optional[dict]:
-        """Scrape detailed statistics for a specific match."""
-        logger.info(f"Scraping match stats: {match_url}")
-
+        """Scrape detailed statistics + match info for a specific match URL."""
         loop = asyncio.get_event_loop()
-        stats = await loop.run_in_executor(None, self._scrape_stats_page, match_url)
-        return stats
+        return await loop.run_in_executor(None, self._scrape_match_detail, match_url)
 
-    def _scrape_stats_page(self, url: str) -> Optional[dict]:
-        """Scrape match statistics page (runs in thread executor)."""
+    def _scrape_match_detail(self, url: str) -> Optional[dict]:
+        """Scrape match detail page for stats, referee, venue (runs in executor)."""
         driver = self._get_driver()
-        stats = {}
+        if not driver:
+            return None
+        result = {}
 
         try:
-            stats_url = url if url.endswith("/match-statistics/") else url.rstrip("/") + "/#/match-summary/match-statistics"
+            # --- Statistics sub-page ---
+            stats_url = url.rstrip("/") + "/summary/stats/0/"
             driver.get(stats_url)
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CLASS_NAME, "stat__row"))
-            )
 
-            stat_rows = driver.find_elements(By.CLASS_NAME, "stat__row")
-            for row in stat_rows:
+            # Try new data-testid selectors first
+            try:
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located(
+                        (By.CSS_SELECTOR, "div[data-testid='wcl-statistics']")
+                    )
+                )
+                stat_rows = driver.find_elements(
+                    By.CSS_SELECTOR, "div[data-testid='wcl-statistics']"
+                )
+                for row in stat_rows:
+                    try:
+                        label = row.find_element(
+                            By.CSS_SELECTOR, "div[data-testid='wcl-statistics-category']"
+                        ).text.strip().lower()
+                        values = row.find_elements(
+                            By.CSS_SELECTOR, "div[data-testid='wcl-statistics-value'] > strong"
+                        )
+                        if len(values) >= 2:
+                            self._apply_stat(result, label,
+                                             values[0].text.strip(),
+                                             values[1].text.strip())
+                    except Exception:
+                        continue
+
+            except Exception:
+                # Fall back to old class-based selectors
                 try:
-                    label = row.find_element(By.CLASS_NAME, "stat__categoryName").text.strip().lower()
-                    values = row.find_elements(By.CLASS_NAME, "stat__homeValue") + \
-                             row.find_elements(By.CLASS_NAME, "stat__awayValue")
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.CLASS_NAME, "stat__row"))
+                    )
+                    stat_rows = driver.find_elements(By.CLASS_NAME, "stat__row")
+                    for row in stat_rows:
+                        try:
+                            label = row.find_element(
+                                By.CLASS_NAME, "stat__categoryName"
+                            ).text.strip().lower()
+                            home_els = row.find_elements(By.CLASS_NAME, "stat__homeValue")
+                            away_els = row.find_elements(By.CLASS_NAME, "stat__awayValue")
+                            if home_els and away_els:
+                                self._apply_stat(result, label,
+                                                 home_els[0].text.strip(),
+                                                 away_els[0].text.strip())
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
 
-                    if len(values) >= 2:
-                        home_val = values[0].text.strip().replace("%", "")
-                        away_val = values[1].text.strip().replace("%", "")
-
-                        stat_map = {
-                            "ball possession": ("home_possession", "away_possession"),
-                            "shots on target": ("home_shots_on_target", "away_shots_on_target"),
-                            "shots": ("home_shots", "away_shots"),
-                            "corner kicks": ("home_corners", "away_corners"),
-                            "fouls": ("home_fouls", "away_fouls"),
-                            "yellow cards": ("home_yellow_cards", "away_yellow_cards"),
-                            "red cards": ("home_red_cards", "away_red_cards"),
-                        }
-
-                        if label in stat_map:
-                            home_key, away_key = stat_map[label]
+            # --- Match information (referee, venue, capacity) ---
+            try:
+                driver.get(url.rstrip("/") + "/")
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located(
+                        (By.CSS_SELECTOR, "div[data-testid='wcl-summaryMatchInformation']")
+                    )
+                )
+                info_container = driver.find_element(
+                    By.CSS_SELECTOR, "div[data-testid='wcl-summaryMatchInformation']"
+                )
+                info_divs = info_container.find_elements(By.XPATH, "./div")
+                # Even-indexed = labels, odd-indexed = values
+                for i in range(0, len(info_divs) - 1, 2):
+                    try:
+                        key = info_divs[i].text.strip().lower()
+                        val = info_divs[i + 1].text.strip()
+                        if "referee" in key:
+                            result["referee"] = val
+                        elif "venue" in key or "stadium" in key or "ground" in key:
+                            result["venue"] = val
+                        elif "capacity" in key:
                             try:
-                                stats[home_key] = float(home_val)
-                                stats[away_key] = float(away_val)
+                                result["venue_capacity"] = int(val.replace(",", "").replace(".", ""))
                             except ValueError:
                                 pass
-                except Exception:
-                    continue
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # --- Regulation time / penalty score ---
+            try:
+                reg_el = driver.find_elements(By.CLASS_NAME, "detailScore__fullTime")
+                if reg_el:
+                    reg_text = reg_el[0].text.strip().replace("(", "").replace(")", "")
+                    parts = reg_text.split(":")
+                    if len(parts) == 2:
+                        result["regulation_home_goals"] = int(parts[0].strip())
+                        result["regulation_away_goals"] = int(parts[1].strip())
+            except Exception:
+                pass
 
         except Exception as e:
-            logger.error(f"Error scraping stats from {url}: {e}")
+            logger.error(f"Error scraping match detail {url}: {e}")
             return None
 
-        return stats if stats else None
+        return result if result else None
+
+    def _apply_stat(self, result: dict, label: str, home_raw: str, away_raw: str):
+        """Parse a stat label/value pair and store in result dict."""
+        if label not in STAT_MAP:
+            return
+        home_key, away_key = STAT_MAP[label]
+        try:
+            home_val = float(home_raw.replace("%", "").strip())
+            away_val = float(away_raw.replace("%", "").strip())
+            result[home_key] = home_val
+            result[away_key] = away_val
+        except ValueError:
+            pass
 
     def _get_or_create_team(self, session, team_name: str, league: str) -> Team:
         """Get existing team or create a new one."""
@@ -302,7 +527,6 @@ class FlashscoreScraper(BaseScraper):
         home_team = self._get_or_create_team(session, match_data["home_team"], league)
         away_team = self._get_or_create_team(session, match_data["away_team"], league)
 
-        # Check for existing match
         existing = session.query(Match).filter_by(
             home_team_id=home_team.id,
             away_team_id=away_team.id,
@@ -310,7 +534,6 @@ class FlashscoreScraper(BaseScraper):
         ).first()
 
         if existing:
-            # Update result if it was a fixture and now has results
             if existing.is_fixture and not is_fixture and "home_goals" in match_data:
                 existing.home_goals = match_data.get("home_goals")
                 existing.away_goals = match_data.get("away_goals")
