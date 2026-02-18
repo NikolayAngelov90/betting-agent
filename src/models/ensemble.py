@@ -170,6 +170,9 @@ class EnsemblePredictor:
         results["ensemble"]["under_2.5"] = round(adjusted_goals["under_2.5"], 4)
         results["ensemble"]["btts_yes"] = round(adjusted_goals["btts_yes"], 4)
         results["ensemble"]["btts_no"] = round(adjusted_goals["btts_no"], 4)
+        # Team goal line: taken directly from Poisson (team-specific, not blended)
+        results["ensemble"]["home_over_1.5"] = poisson_pred.get("home_over_1.5", 0)
+        results["ensemble"]["away_over_1.5"] = poisson_pred.get("away_over_1.5", 0)
         results["ensemble"]["most_likely_score"] = poisson_pred.get("most_likely_score", "")
         results["ensemble"]["model"] = "ensemble"
 

@@ -495,6 +495,10 @@ class FootballBettingAgent:
                     won = btts
                 elif sel == "BTTS No":
                     won = not btts
+                elif sel == "Home Over 1.5":
+                    won = hg >= 2
+                elif sel == "Away Over 1.5":
+                    won = ag >= 2
 
                 pick.result = "win" if won else "loss"
                 pick.actual_home_goals = hg

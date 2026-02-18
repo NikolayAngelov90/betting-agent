@@ -143,6 +143,10 @@ class PoissonModel:
         # BTTS
         btts_prob = self._btts_prob(score_matrix)
 
+        # Team goal line: P(team scores 2+ goals)
+        home_over_15 = self._team_over_prob(score_matrix, 1.5, side="home")
+        away_over_15 = self._team_over_prob(score_matrix, 1.5, side="away")
+
         return {
             "home_xg": round(home_xg, 3),
             "away_xg": round(away_xg, 3),
@@ -155,6 +159,8 @@ class PoissonModel:
             "under_2.5": round(1 - over_25_prob, 4),
             "btts_yes": round(btts_prob, 4),
             "btts_no": round(1 - btts_prob, 4),
+            "home_over_1.5": round(home_over_15, 4),
+            "away_over_1.5": round(away_over_15, 4),
             "most_likely_score": self._most_likely_score(score_matrix),
             "model": "poisson",
         }
@@ -209,6 +215,26 @@ class PoissonModel:
             for j in range(matrix.shape[1]):
                 if i + j > threshold:
                     prob += matrix[i][j]
+        return prob
+
+    def _team_over_prob(self, matrix: np.ndarray, threshold: float,
+                        side: str = "home") -> float:
+        """Calculate probability that a specific team scores more than threshold goals.
+
+        Args:
+            matrix: Score probability matrix (home goals × away goals)
+            threshold: Goal threshold (e.g. 1.5 means the team scores 2+)
+            side: 'home' or 'away'
+        """
+        prob = 0.0
+        if side == "home":
+            for i in range(matrix.shape[0]):
+                if i > threshold:
+                    prob += float(np.sum(matrix[i, :]))
+        else:
+            for j in range(matrix.shape[1]):
+                if j > threshold:
+                    prob += float(np.sum(matrix[:, j]))
         return prob
 
     def _btts_prob(self, matrix: np.ndarray) -> float:

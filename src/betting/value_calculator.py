@@ -86,6 +86,9 @@ class ValueBettingCalculator:
             ("Over 2.5", "Over 2.5 Goals", ensemble.get("over_2.5", 0), "over_2.5"),
             ("Over 3.5", "Over 3.5 Goals", ensemble.get("over_3.5", 0), "over_3.5"),
             ("BTTS", "BTTS Yes", ensemble.get("btts_yes", 0), "btts_yes"),
+            # Team goal line markets
+            ("Team Goals", "Home Over 1.5", ensemble.get("home_over_1.5", 0), "home_over_1.5"),
+            ("Team Goals", "Away Over 1.5", ensemble.get("away_over_1.5", 0), "away_over_1.5"),
         ]
 
         # Allow lower confidence (45%) for high-EV longshot picks;
@@ -115,6 +118,8 @@ class ValueBettingCalculator:
                     "Over 1.5 Goals": 1.45,
                     "Over 2.5 Goals": 1.90,
                     "Over 3.5 Goals": 2.50,
+                    "Home Over 1.5": 2.10,
+                    "Away Over 1.5": 2.30,
                 }
                 best_odds = fallback_odds.get(selection, 0)
                 if best_odds:
@@ -235,6 +240,10 @@ class ValueBettingCalculator:
             "Over 3.5 Goals": ["Over 3.5"],
             "BTTS Yes": ["Yes", "BTTS Yes"],
             "BTTS No": ["No", "BTTS No"],
+            # Team goal line: bookmakers may label these differently;
+            # we rely on fallback odds when real odds are unavailable.
+            "Home Over 1.5": ["Home Over 1.5", "Home Team Over 1.5"],
+            "Away Over 1.5": ["Away Over 1.5", "Away Team Over 1.5"],
         }
 
         valid_selections = selection_map.get(selection, [selection])
@@ -248,6 +257,7 @@ class ValueBettingCalculator:
             "Over 1.5": ["over_under", "totals"],
             "Over 3.5": ["over_under", "totals"],
             "BTTS": ["btts"],
+            "Team Goals": ["team_goals", "team_over_under"],
         }
 
         valid_markets = market_map.get(market, [market])
@@ -299,7 +309,7 @@ class ValueBettingCalculator:
                 else:
                     models_against.append(model_name)
         else:
-            # Goals/BTTS markets — check if model prob > 50%
+            # Goals/BTTS/team goal line markets — check if model prob > 50%
             for model_name, pred in [("Poisson", poisson)]:
                 if not pred:
                     continue
