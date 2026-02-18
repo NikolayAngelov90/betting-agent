@@ -1,10 +1,14 @@
 # Football Betting Agent Configuration
-# Copy this file to config.yaml and fill in your secrets
+# Copy this file to config.yaml and fill in your secrets.
+# In CI environments this file is used directly; secrets are injected via env vars.
 
 scraping:
   flashscore_leagues:
+    # Top 5 Leagues + Second Divisions
     - england/premier-league
     - england/championship
+    - england/league-one
+    - england/league-two
     - spain/laliga
     - spain/laliga2
     - germany/bundesliga
@@ -13,6 +17,7 @@ scraping:
     - italy/serie-b
     - france/ligue-1
     - france/ligue-2
+    # Strong European Leagues
     - netherlands/eredivisie
     - portugal/primeira-liga
     - belgium/jupiler-pro-league
@@ -22,13 +27,20 @@ scraping:
     - switzerland/super-league
     - greece/super-league
     - denmark/superliga
+    # Nordic & Eastern European
+    - norway/eliteserien
+    - sweden/allsvenskan
+    - finland/veikkausliiga
+    - poland/ekstraklasa
+    - romania/liga-1
+    # European Competitions
     - champions-league
     - europa-league
     - europa-conference-league
 
   update_interval_hours: 6
   headless: true
-  request_delay: 3
+  request_delay: 3  # seconds between requests
 
 database:
   type: sqlite
@@ -46,23 +58,24 @@ models:
 betting:
   min_odds: 1.30
   max_odds: 10.0
-  min_expected_value: 0.05
-  min_confidence: 0.55
-  kelly_fraction: 0.25
-  max_stake_percentage: 5.0
+  min_expected_value: 0.03  # 3% minimum edge
+  min_confidence: 0.58      # 58% minimum confidence
+  kelly_fraction: 0.25      # Fractional Kelly for risk management
+  max_stake_percentage: 5.0 # Maximum 5% of bankroll per bet
 
 notifications:
-  telegram_enabled: false
-  telegram_bot_token: "YOUR_BOT_TOKEN"
-  telegram_chat_id: "YOUR_CHAT_ID"
+  telegram_enabled: true
+  telegram_bot_token: "YOUR_BOT_TOKEN"   # Override via TELEGRAM_BOT_TOKEN env var
+  telegram_chat_id: "YOUR_CHAT_ID"       # Override via TELEGRAM_CHAT_ID env var
   send_daily_picks: true
   send_live_alerts: false
 
 logging:
-  level: INFO
+  level: DEBUG
   log_file: logs/betting_agent.log
   log_rotation: "1 week"
 
 data_sources:
-  odds_api_key: "YOUR_ODDS_API_KEY"
+  odds_api_key: "YOUR_ODDS_API_KEY"         # Override via ODDS_API_KEY env var
   odds_api_enabled: true
+  apifootball_key: "YOUR_APIFOOTBALL_KEY"   # Override via API_FOOTBALL_KEY env var

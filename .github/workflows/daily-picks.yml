@@ -46,6 +46,9 @@ jobs:
       - name: Create directories
         run: mkdir -p data/models logs
 
+      - name: Create config from example
+        run: cp config/config.example.yaml config/config.yaml
+
       - name: Initialize database
         run: python -c "from src.data.database import init_db; init_db()"
 

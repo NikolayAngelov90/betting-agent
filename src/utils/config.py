@@ -32,7 +32,19 @@ class Config:
 
     def _load_config(self) -> Dict[str, Any]:
         if not self.config_path.exists():
-            raise FileNotFoundError(f"Config file not found: {self.config_path}")
+            # Fall back to example config (CI environment or fresh checkout)
+            example = self.config_path.parent / "config.example.yaml"
+            if example.exists():
+                logger.warning(
+                    f"Config file not found at {self.config_path}, "
+                    f"using {example} (secrets will be injected from env)"
+                )
+                with open(example, 'r') as f:
+                    return yaml.safe_load(f)
+            raise FileNotFoundError(
+                f"Config file not found: {self.config_path}. "
+                f"Copy config/config.example.yaml to config/config.yaml and fill in your secrets."
+            )
 
         with open(self.config_path, 'r') as f:
             return yaml.safe_load(f)
