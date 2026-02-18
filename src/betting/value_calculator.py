@@ -240,10 +240,9 @@ class ValueBettingCalculator:
             "Over 3.5 Goals": ["Over 3.5"],
             "BTTS Yes": ["Yes", "BTTS Yes"],
             "BTTS No": ["No", "BTTS No"],
-            # Team goal line: bookmakers may label these differently;
-            # we rely on fallback odds when real odds are unavailable.
-            "Home Over 1.5": ["Home Over 1.5", "Home Team Over 1.5"],
-            "Away Over 1.5": ["Away Over 1.5", "Away Team Over 1.5"],
+            # Team goal line markets (stored via API-Football team_goals market)
+            "Home Over 1.5": ["Home Over 1.5", "Home Team Over 1.5", "Home - Over 1.5"],
+            "Away Over 1.5": ["Away Over 1.5", "Away Team Over 1.5", "Away - Over 1.5"],
         }
 
         valid_selections = selection_map.get(selection, [selection])

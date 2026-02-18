@@ -228,6 +228,55 @@ BET_TYPE_MAP = {
         "market_type": "btts",
         "selections": {"Yes": "Yes", "No": "No"},
     },
+    # Team goal line markets (API-Football bet name variants)
+    "Home Team - Goals": {
+        "market_type": "team_goals",
+        "selections": {
+            "Over 0.5": "Home Over 0.5", "Under 0.5": "Home Under 0.5",
+            "Over 1.5": "Home Over 1.5", "Under 1.5": "Home Under 1.5",
+            "Over 2.5": "Home Over 2.5", "Under 2.5": "Home Under 2.5",
+        },
+    },
+    "Away Team - Goals": {
+        "market_type": "team_goals",
+        "selections": {
+            "Over 0.5": "Away Over 0.5", "Under 0.5": "Away Under 0.5",
+            "Over 1.5": "Away Over 1.5", "Under 1.5": "Away Under 1.5",
+            "Over 2.5": "Away Over 2.5", "Under 2.5": "Away Under 2.5",
+        },
+    },
+    "Home Team - Total Goals": {
+        "market_type": "team_goals",
+        "selections": {
+            "Over 0.5": "Home Over 0.5", "Under 0.5": "Home Under 0.5",
+            "Over 1.5": "Home Over 1.5", "Under 1.5": "Home Under 1.5",
+            "Over 2.5": "Home Over 2.5", "Under 2.5": "Home Under 2.5",
+        },
+    },
+    "Away Team - Total Goals": {
+        "market_type": "team_goals",
+        "selections": {
+            "Over 0.5": "Away Over 0.5", "Under 0.5": "Away Under 0.5",
+            "Over 1.5": "Away Over 1.5", "Under 1.5": "Away Under 1.5",
+            "Over 2.5": "Away Over 2.5", "Under 2.5": "Away Under 2.5",
+        },
+    },
+    "Goals Home Team": {
+        "market_type": "team_goals",
+        "selections": {
+            "Over 0.5": "Home Over 0.5", "Under 0.5": "Home Under 0.5",
+            "Over 1.5": "Home Over 1.5", "Under 1.5": "Home Under 1.5",
+            "Over 2.5": "Home Over 2.5", "Under 2.5": "Home Under 2.5",
+        },
+    },
+    "Goals Away Team": {
+        "market_type": "team_goals",
+        "selections": {
+            "Over 0.5": "Away Over 0.5", "Under 0.5": "Away Under 0.5",
+            "Over 1.5": "Away Over 1.5", "Under 1.5": "Away Under 1.5",
+            "Over 2.5": "Away Over 2.5", "Under 2.5": "Away Under 2.5",
+        },
+    },
 }
 
 
@@ -738,6 +787,7 @@ class APIFootballScraper(BaseScraper):
                         bet_name = bet.get("name", "")
                         bet_mapping = BET_TYPE_MAP.get(bet_name)
                         if not bet_mapping:
+                            logger.debug(f"[Odds] Unrecognised bet type: '{bet_name}'")
                             continue
 
                         market_type = bet_mapping["market_type"]

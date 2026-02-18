@@ -67,6 +67,7 @@ class OddsScraper(BaseScraper):
         self.api_key = self.config.get("data_sources.odds_api_key", "")
         self.enabled = self.config.get("data_sources.odds_api_enabled", False)
         self.leagues = self.config.get("scraping.flashscore_leagues", [])
+        self._auth_failed = False  # set True on 401/403 to skip remaining leagues
 
     async def update(self):
         """Fetch latest odds AND scores for all configured leagues."""
@@ -79,6 +80,9 @@ class OddsScraper(BaseScraper):
         failed = 0
 
         for league in self.leagues:
+            if self._auth_failed:
+                break  # Key expired — stop hammering the API
+
             sport_key = LEAGUE_TO_SPORT_KEY.get(league)
             if not sport_key:
                 logger.debug(f"No Odds API mapping for league: {league}")
@@ -90,11 +94,24 @@ class OddsScraper(BaseScraper):
                 # Fetch recent scores/results
                 await self.fetch_league_scores(sport_key, league)
                 successful += 1
+            except aiohttp.ClientResponseError as e:
+                if e.status in (401, 403):
+                    logger.warning(
+                        "Odds API key rejected (401/403) — key may be expired or quota exhausted. "
+                        "Disabling Odds API for this session. Get a new key at https://the-odds-api.com"
+                    )
+                    self._auth_failed = True
+                    break
+                logger.error(f"Error fetching data for {league}: {e}")
+                failed += 1
             except Exception as e:
                 logger.error(f"Error fetching data for {league}: {e}")
                 failed += 1
 
-        logger.info(f"Odds API update complete: {successful} leagues OK, {failed} failed")
+        if self._auth_failed:
+            logger.info("Odds API skipped (auth failure) — API-Football odds will be used instead")
+        else:
+            logger.info(f"Odds API update complete: {successful} leagues OK, {failed} failed")
 
     async def fetch_league_odds(self, sport_key: str, league: str, markets: str = "h2h,totals"):
         """Fetch odds for a specific league/sport."""
