@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import List, Optional, Dict
 
 from src.scrapers.flashscore_scraper import FlashscoreScraper
-from src.scrapers.odds_scraper import OddsScraper
 from src.scrapers.injury_scraper import InjuryScraper
 from src.scrapers.news_scraper import NewsScraper
 from src.scrapers.historical_loader import HistoricalDataLoader
@@ -61,7 +60,6 @@ class FootballBettingAgent:
         # Initialize components
         self.db = init_db()
         self.scraper = FlashscoreScraper(self.config)
-        self.odds_collector = OddsScraper(self.config)
         self.injury_tracker = InjuryScraper(self.config)
         self.news_aggregator = NewsScraper(self.config)
         self.historical_loader = HistoricalDataLoader(self.config)
@@ -84,14 +82,7 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"Historical data loading failed: {e}")
 
-        # 2. Odds API (reliable, fast, provides fixtures + odds + recent scores)
-        try:
-            await self.odds_collector.update()
-            logger.info("Odds API update complete")
-        except Exception as e:
-            logger.error(f"Odds API update failed: {e}")
-
-        # 2b. Flashscore results (fetches finished match scores for settling)
+        # 2. Flashscore results (fetches finished match scores for settling)
         # Bail after first failure — anti-bot protection makes it unusable
         try:
             leagues = self.config.get("scraping.flashscore_leagues", [])
@@ -429,28 +420,6 @@ class FootballBettingAgent:
                     pass
         except Exception as e:
             logger.debug(f"Flashscore settle fetch failed: {e}")
-
-        # 3. Also try Odds API scores if enabled and key is set
-        if self.odds_collector.enabled and self.odds_collector.api_key:
-            try:
-                from src.scrapers.odds_scraper import LEAGUE_TO_SPORT_KEY
-                leagues = self.config.get("scraping.flashscore_leagues", [])
-                for league in leagues:
-                    # Stop if circuit breaker is open (API confirmed down)
-                    if not self.odds_collector._circuit.allow_request():
-                        logger.debug("Odds API circuit open, skipping scores fetch")
-                        break
-                    sport_key = LEAGUE_TO_SPORT_KEY.get(league)
-                    if not sport_key:
-                        continue
-                    try:
-                        await self.odds_collector.fetch_league_scores(
-                            sport_key, league, days_back=3,
-                        )
-                    except Exception:
-                        break  # Auth/connection failure — stop trying
-            except Exception as e:
-                logger.debug(f"Odds API scores fetch failed: {e}")
 
         settled = []
 
@@ -908,7 +877,6 @@ class FootballBettingAgent:
         """Clean up resources."""
         self.scraper.close_driver()
         await self.scraper.close()
-        await self.odds_collector.close()
         await self.apifootball.close()
         await self.injury_tracker.close()
         await self.news_aggregator.close()

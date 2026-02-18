@@ -4,21 +4,6 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
-class TestOddsScraper:
-    """Tests for the Odds API scraper."""
-
-    def test_league_mapping_coverage(self):
-        from src.scrapers.odds_scraper import LEAGUE_TO_SPORT_KEY
-        # Verify key leagues are mapped
-        assert "england/premier-league" in LEAGUE_TO_SPORT_KEY
-        assert "spain/laliga" in LEAGUE_TO_SPORT_KEY
-        assert "champions-league" in LEAGUE_TO_SPORT_KEY
-
-    def test_market_mapping(self):
-        from src.scrapers.odds_scraper import MARKET_MAP
-        assert MARKET_MAP["h2h"] == "1X2"
-        assert MARKET_MAP["totals"] == "over_under"
-
 
 class TestNewsScraper:
     """Tests for the news scraper."""

@@ -41,9 +41,6 @@ class AutomatedPipeline:
             logger.info("[Scheduler] Updating results...")
             await self.agent.scraper.update()
 
-            logger.info("[Scheduler] Updating odds...")
-            await self.agent.odds_collector.update()
-
             logger.info("[Scheduler] Updating injuries...")
             await self.agent.injury_tracker.update()
 

@@ -12,7 +12,6 @@ logger = get_logger()
 # Environment variable overrides for sensitive / deployment-specific settings.
 # Keys are dot-notation config paths, values are env var names.
 _ENV_OVERRIDES = {
-    "data_sources.odds_api_key": "ODDS_API_KEY",
     "data_sources.apifootball_key": "API_FOOTBALL_KEY",
     "notifications.telegram_bot_token": "TELEGRAM_BOT_TOKEN",
     "notifications.telegram_chat_id": "TELEGRAM_CHAT_ID",
@@ -68,8 +67,6 @@ class Config:
     def _validate(self):
         """Warn about missing critical configuration."""
         warnings = []
-        if not self.get("data_sources.odds_api_key"):
-            warnings.append("data_sources.odds_api_key not set (Odds API disabled)")
         if not self.get("data_sources.apifootball_key"):
             warnings.append("data_sources.apifootball_key not set (API-Football disabled)")
         if not self.get("scraping.flashscore_leagues"):

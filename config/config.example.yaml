@@ -76,6 +76,4 @@ logging:
   log_rotation: "1 week"
 
 data_sources:
-  odds_api_key: "YOUR_ODDS_API_KEY"         # Override via ODDS_API_KEY env var
-  odds_api_enabled: true
   apifootball_key: "YOUR_APIFOOTBALL_KEY"   # Override via API_FOOTBALL_KEY env var
