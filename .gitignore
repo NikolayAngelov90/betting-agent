@@ -26,6 +26,9 @@ config/config.yaml
 *.swp
 .claude/
 
+# Separate MCP server projects (not part of betting agent)
+mcp-servers/
+
 # OS
 Thumbs.db
 .DS_Store
