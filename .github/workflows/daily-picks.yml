@@ -12,7 +12,6 @@ jobs:
     timeout-minutes: 45
 
     env:
-      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
