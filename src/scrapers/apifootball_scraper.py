@@ -725,23 +725,9 @@ class APIFootballScraper(BaseScraper):
 
         fixture_list.sort(key=league_priority)
 
-        # Check which fixtures already have odds
-        with self.db.get_session() as session:
-            fixtures_with_odds = set()
-            for match_id, _, _ in fixture_list:
-                has_odds = session.query(Odds).filter_by(match_id=match_id).first()
-                if has_odds:
-                    fixtures_with_odds.add(match_id)
-
-        # Filter to fixtures without odds
-        need_odds = [
-            (mid, fid, lg) for mid, fid, lg in fixture_list
-            if mid not in fixtures_with_odds
-        ]
-
-        if not need_odds:
-            logger.debug("All upcoming fixtures already have odds")
-            return 0
+        # Always fetch odds for all today's fixtures so newly added bet types
+        # (e.g. team goal markets) are picked up even if 1X2 odds already exist.
+        need_odds = fixture_list
 
         fetched = 0
         for match_id, fixture_id, league in need_odds:
