@@ -67,6 +67,21 @@ jobs:
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks
 
+      - name: Checkpoint SQLite WAL before save
+        if: always()
+        run: |
+          python -c "
+          import sqlite3, os
+          db = 'data/football_betting.db'
+          if os.path.exists(db):
+              conn = sqlite3.connect(db)
+              conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+              conn.close()
+              print('WAL checkpoint complete')
+          else:
+              print('No DB file found, skipping checkpoint')
+          "
+
       - name: Save database and models
         if: always()
         uses: actions/cache/save@v4
