@@ -13,7 +13,9 @@ and stores them as Odds records for real-data backtesting and model training.
 
 import csv
 import io
-from datetime import datetime
+import json
+from datetime import datetime, date
+from pathlib import Path
 from typing import List, Optional
 
 from src.scrapers.base_scraper import BaseScraper
@@ -68,6 +70,14 @@ SEASONS = ["2425", "2324", "2223"]
 # How many recent seasons to keep from /new/ format files
 EXTRA_SEASONS_LIMIT = 3
 
+# Cache file tracking when each league/season was last loaded
+CACHE_FILE = Path("data/historical_load_cache.json")
+
+# Past seasons (2324, 2223) are nearly immutable — refresh once every 60 days
+PAST_SEASON_REFRESH_DAYS = 60
+# Current season and extra leagues get new rows weekly — refresh every 7 days
+CURRENT_SEASON_REFRESH_DAYS = 7
+
 # Mapping CSV column names to (bookmaker, market_type, selection)
 # These columns are available in football-data.co.uk mmz4281 CSVs
 ODDS_COLUMN_MAP = {
@@ -111,32 +121,102 @@ class HistoricalDataLoader(BaseScraper):
     def __init__(self, config=None):
         super().__init__(config)
 
+    # ------------------------------------------------------------------
+    # Load cache helpers
+    # ------------------------------------------------------------------
+
+    def _load_cache(self) -> dict:
+        """Return {cache_key: iso_date_string} from disk, or {} on any error."""
+        if CACHE_FILE.exists():
+            try:
+                return json.loads(CACHE_FILE.read_text())
+            except Exception:
+                pass
+        return {}
+
+    def _save_cache(self, cache: dict):
+        """Persist the cache dict to disk."""
+        try:
+            CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            CACHE_FILE.write_text(json.dumps(cache, indent=2))
+        except Exception as e:
+            logger.debug(f"Could not save historical load cache: {e}")
+
+    def _is_fresh(self, cache: dict, key: str, days: int) -> bool:
+        """Return True if *key* was loaded within *days* days (i.e. safe to skip)."""
+        last_loaded = cache.get(key)
+        if not last_loaded:
+            return False
+        try:
+            last_dt = datetime.strptime(last_loaded, "%Y-%m-%d").date()
+            return (date.today() - last_dt).days < days
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     async def update(self):
         """Load historical data for all configured leagues."""
         await self.load_all_leagues()
 
     async def load_all_leagues(self, seasons: List[str] = None):
-        """Load historical results for all mapped leagues."""
+        """Load historical results for all mapped leagues.
+
+        Uses a file-based cache (data/historical_load_cache.json) to skip
+        CSVs that were already fetched recently:
+          - Past seasons (2324, 2223): re-fetch at most every 60 days
+          - Current season + extra leagues: re-fetch at most every 7 days
+        """
         seasons = seasons or SEASONS
+        current_season = seasons[0]  # Most recent season code (e.g. "2425")
         total_loaded = 0
+        cache = self._load_cache()
+        skipped = 0
 
         # Main leagues (mmz4281 per-season format)
         for league, info in LEAGUE_CSV_MAP.items():
             for season in seasons:
+                refresh_days = (
+                    CURRENT_SEASON_REFRESH_DAYS
+                    if season == current_season
+                    else PAST_SEASON_REFRESH_DAYS
+                )
+                cache_key = f"{league}/{season}"
+                if self._is_fresh(cache, cache_key, refresh_days):
+                    skipped += 1
+                    logger.debug(
+                        f"Skipping {league} {season}: loaded within {refresh_days}d"
+                    )
+                    continue
                 try:
                     count = await self.load_league_season(league, info["code"], season)
                     total_loaded += count
+                    cache[cache_key] = date.today().isoformat()
+                    self._save_cache(cache)
                 except Exception as e:
                     logger.debug(f"No data for {league} season {season}: {e}")
 
         # Extra leagues (/new/ all-seasons format)
         for league, info in EXTRA_LEAGUE_CSV_MAP.items():
+            cache_key = f"extra/{league}"
+            if self._is_fresh(cache, cache_key, CURRENT_SEASON_REFRESH_DAYS):
+                skipped += 1
+                logger.debug(
+                    f"Skipping extra league {league}: loaded within {CURRENT_SEASON_REFRESH_DAYS}d"
+                )
+                continue
             try:
                 count = await self.load_extra_league(league, info["code"])
                 total_loaded += count
+                cache[cache_key] = date.today().isoformat()
+                self._save_cache(cache)
             except Exception as e:
                 logger.debug(f"No data for extra league {league}: {e}")
 
+        if skipped:
+            logger.info(f"Historical loader: skipped {skipped} already-fresh CSV(s)")
         logger.info(f"Historical data loading complete: {total_loaded} matches loaded")
         return total_loaded
 

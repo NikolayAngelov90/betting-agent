@@ -9,7 +9,7 @@ on:
 jobs:
   daily-picks:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     env:
       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
@@ -38,6 +38,7 @@ jobs:
           path: |
             data/football_betting.db
             data/models/
+            data/historical_load_cache.json
           key: betting-data-${{ github.run_number }}
           restore-keys: |
             betting-data-
@@ -73,6 +74,7 @@ jobs:
           path: |
             data/football_betting.db
             data/models/
+            data/historical_load_cache.json
           key: betting-data-${{ github.run_number }}
 
       - name: Upload logs on failure
