@@ -83,13 +83,24 @@ class TelegramNotifier:
         header = f"<b>Daily Value Picks - {date.today().strftime('%d %b %Y')}</b>\n"
         header += f"<i>{len(picks)} picks found</i>\n"
 
-        # Add stats summary if available
+        # Add stats summary if available — always show all-time, add shorter periods
+        # only when they differ (avoids showing the same number three times when the
+        # agent is new and all data fits within a single day).
         if stats:
             parts = []
-            for period, label in [("yesterday", "Yesterday"), ("last_7_days", "7d"), ("all_time", "All time")]:
+            all_time = stats.get("all_time", {})
+            at_total = all_time.get("total", 0)
+            if at_total > 0:
+                parts.append(
+                    f"All time ({at_total}): {all_time['wins']}W-{all_time['losses']}L "
+                    f"({all_time['win_rate']:.0%})"
+                )
+            for period, label in [("last_7_days", "7d"), ("yesterday", "Yesterday")]:
                 s = stats.get(period, {})
-                if s.get("total", 0) > 0:
-                    parts.append(f"{label}: {s['wins']}/{s['total']} ({s['win_rate']:.0%})")
+                s_total = s.get("total", 0)
+                # Only add if this period has fewer picks than all_time (i.e. adds info)
+                if s_total > 0 and s_total < at_total:
+                    parts.append(f"{label}: {s['wins']}/{s_total} ({s['win_rate']:.0%})")
             if parts:
                 header += f"\n📊 <i>{' | '.join(parts)}</i>\n"
 
@@ -169,7 +180,7 @@ class TelegramNotifier:
         total = wins + losses
         win_rate = wins / total if total > 0 else 0
 
-        # Calculate profit/loss
+        # Calculate profit/loss for the settled batch
         profit = sum(
             p["stake"] * (p["odds"] - 1) if p["result"] == "win" else -p["stake"]
             for p in picks_to_show
@@ -177,9 +188,20 @@ class TelegramNotifier:
 
         label = yesterday.strftime('%d %b %Y') if yesterday_picks else "Recent"
         header = f"<b>📊 Settlement Report - {label}</b>\n"
-        header += f"<b>Record: {wins}W - {losses}L ({win_rate:.0%})</b>\n"
+        # Batch result (just settled)
         profit_emoji = "📈" if profit >= 0 else "📉"
-        header += f"{profit_emoji} P/L: {profit:+.1f}% of bankroll\n"
+        header += f"Batch: {wins}W-{losses}L ({win_rate:.0%}) {profit_emoji} {profit:+.1f}%\n"
+        # Running all-time totals from DB
+        if stats:
+            at = stats.get("all_time", {})
+            at_total = at.get("total", 0)
+            if at_total > 0:
+                at_roi = at.get("roi", 0)
+                at_emoji = "📈" if at_roi >= 0 else "📉"
+                header += (
+                    f"<b>All time ({at_total}): {at['wins']}W-{at['losses']}L "
+                    f"({at['win_rate']:.0%}) {at_emoji} ROI: {at_roi:.1%}</b>\n"
+                )
 
         lines = [header]
 
@@ -208,17 +230,23 @@ class TelegramNotifier:
                     f"      {pick['selection']} @ {pick['odds']:.2f} | Stake: {pick['stake']:.1f}%"
                 )
 
-        # Add overall stats
+        # Add period breakdown (all-time already shown in header)
         if stats:
-            lines.append("\n<b>─── Overall Stats ───</b>")
-            for period, slabel in [("last_7_days", "Last 7 days"), ("last_30_days", "Last 30 days"), ("all_time", "All time")]:
+            at_total = stats.get("all_time", {}).get("total", 0)
+            period_lines = []
+            for period, slabel in [("last_30_days", "Last 30 days"), ("last_7_days", "Last 7 days")]:
                 s = stats.get(period, {})
-                if s.get("total", 0) > 0:
+                s_total = s.get("total", 0)
+                # Only show if period has fewer picks than all-time (adds meaningful info)
+                if s_total > 0 and s_total < at_total:
                     roi_emoji = "📈" if s.get("roi", 0) >= 0 else "📉"
-                    lines.append(
+                    period_lines.append(
                         f"{slabel}: {s['wins']}W-{s['losses']}L ({s['win_rate']:.0%}) "
                         f"{roi_emoji} ROI: {s['roi']:.1%}"
                     )
+            if period_lines:
+                lines.append("\n<b>─── Period Breakdown ───</b>")
+                lines.extend(period_lines)
 
             # Odds source breakdown
             odds_src = stats.get("odds_source", {})

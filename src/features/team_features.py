@@ -352,60 +352,79 @@ class TeamFeatures:
             "momentum_matches": n,
         }
 
-    def get_league_position(self, team_id: int, league: str, season: str = None) -> dict:
-        """Calculate current league position features for a team."""
+    def clear_standings_cache(self):
+        """Invalidate the standings cache (call between training runs if needed)."""
+        self._standings_cache: dict = {}
+
+    def _get_league_standings(self, league: str) -> list:
+        """Build (or return cached) sorted standings for a league.
+
+        Standings are cached per-instance so the expensive multi-team form
+        computation only runs once per league per TeamFeatures lifetime
+        (one training run / prediction session).
+        """
+        if not hasattr(self, "_standings_cache"):
+            self._standings_cache: dict = {}
+
+        if league in self._standings_cache:
+            return self._standings_cache[league]
+
         with self.db.get_session() as session:
-            # Get all teams in the league
             teams = session.query(Team).filter_by(league=league).all()
             if not teams:
-                return {"league_position": 0, "points": 0, "goal_difference": 0,
-                        "points_per_game": 0, "home_points_per_game": 0, "away_points_per_game": 0}
+                self._standings_cache[league] = []
+                return []
+            team_ids = [(t.id, t.name) for t in teams]
 
-            standings = []
-            for team in teams:
-                form_all = self.get_form_features(team.id, num_matches=50, venue="all")
-                form_home = self.get_form_features(team.id, num_matches=50, venue="home")
-                form_away = self.get_form_features(team.id, num_matches=50, venue="away")
+        standings = []
+        for team_id, team_name in team_ids:
+            form_all = self.get_form_features(team_id, num_matches=50, venue="all")
+            form_home = self.get_form_features(team_id, num_matches=50, venue="home")
+            form_away = self.get_form_features(team_id, num_matches=50, venue="away")
 
-                standings.append({
-                    "team_id": team.id,
-                    "team_name": team.name,
-                    "points": form_all["points"],
-                    "goal_difference": form_all["goal_difference"],
-                    "goals_scored": form_all["goals_scored"],
-                    "matches_played": form_all["matches_played"],
-                    "points_per_game": form_all["points_per_match"],
-                    "home_points_per_game": form_home["points_per_match"],
-                    "away_points_per_game": form_away["points_per_match"],
-                })
+            standings.append({
+                "team_id": team_id,
+                "team_name": team_name,
+                "points": form_all["points"],
+                "goal_difference": form_all["goal_difference"],
+                "goals_scored": form_all["goals_scored"],
+                "matches_played": form_all["matches_played"],
+                "points_per_game": form_all["points_per_match"],
+                "home_points_per_game": form_home["points_per_match"],
+                "away_points_per_game": form_away["points_per_match"],
+            })
 
-            # Sort by points, then goal difference, then goals scored
-            standings.sort(key=lambda x: (x["points"], x["goal_difference"], x["goals_scored"]), reverse=True)
+        standings.sort(key=lambda x: (x["points"], x["goal_difference"], x["goals_scored"]), reverse=True)
+        self._standings_cache[league] = standings
+        return standings
 
-            total_teams = len(standings)
-            # Relegation zone starts at position (total_teams - 2), i.e. bottom 3
-            relegation_cutoff = total_teams - 2
+    def get_league_position(self, team_id: int, league: str, season: str = None) -> dict:
+        """Calculate current league position features for a team."""
+        not_found = {"league_position": 0, "points": 0, "goal_difference": 0,
+                     "points_per_game": 0, "home_points_per_game": 0, "away_points_per_game": 0,
+                     "total_teams": 0, "title_gap": 0, "relegation_gap": 0, "in_relegation_zone": 0}
 
-            position = 1
-            for i, entry in enumerate(standings):
-                if entry["team_id"] == team_id:
-                    position = i + 1
-                    # positive = safe places above relegation; negative = places into zone
-                    relegation_gap = relegation_cutoff - position
-                    title_gap = position - 1
-                    return {
-                        "league_position": position,
-                        "points": entry["points"],
-                        "goal_difference": entry["goal_difference"],
-                        "points_per_game": entry["points_per_game"],
-                        "home_points_per_game": entry["home_points_per_game"],
-                        "away_points_per_game": entry["away_points_per_game"],
-                        "total_teams": total_teams,
-                        "title_gap": title_gap,
-                        "relegation_gap": relegation_gap,
-                        "in_relegation_zone": int(position > relegation_cutoff),
-                    }
+        standings = self._get_league_standings(league)
+        if not standings:
+            return not_found
 
-            return {"league_position": 0, "points": 0, "goal_difference": 0,
-                    "points_per_game": 0, "home_points_per_game": 0, "away_points_per_game": 0,
-                    "total_teams": 0, "title_gap": 0, "relegation_gap": 0, "in_relegation_zone": 0}
+        total_teams = len(standings)
+        relegation_cutoff = total_teams - 2
+
+        for i, entry in enumerate(standings):
+            if entry["team_id"] == team_id:
+                position = i + 1
+                return {
+                    "league_position": position,
+                    "points": entry["points"],
+                    "goal_difference": entry["goal_difference"],
+                    "points_per_game": entry["points_per_game"],
+                    "home_points_per_game": entry["home_points_per_game"],
+                    "away_points_per_game": entry["away_points_per_game"],
+                    "total_teams": total_teams,
+                    "title_gap": position - 1,
+                    "relegation_gap": relegation_cutoff - position,
+                    "in_relegation_zone": int(position > relegation_cutoff),
+                }
+
+        return not_found
