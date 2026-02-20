@@ -81,6 +81,14 @@ class FeatureEngineer:
             home_pos.get("league_position", 0) - away_pos.get("league_position", 0)
         )
 
+        # Stakes differentials (relegation pressure, title race distance)
+        features["relegation_gap_diff"] = (
+            home_pos.get("relegation_gap", 0) - away_pos.get("relegation_gap", 0)
+        )
+        features["title_gap_diff"] = (
+            home_pos.get("title_gap", 0) - away_pos.get("title_gap", 0)
+        )
+
         # 5. News sentiment features
         home_sentiment = await self.news_scraper.get_team_sentiment(home_id)
         away_sentiment = await self.news_scraper.get_team_sentiment(away_id)
@@ -136,11 +144,19 @@ class FeatureEngineer:
         ref_features = self._get_referee_features(referee)
         features.update(ref_features)
 
-        # 10. Bookmaker implied probability (Bet365/Pinnacle 1X2 odds already in DB)
+        # 10. RSI + MACD momentum indicators
+        home_mom = self.team_features.get_momentum_indicators(home_id)
+        away_mom = self.team_features.get_momentum_indicators(away_id)
+        features.update(self._prefix_dict(home_mom, "home_"))
+        features.update(self._prefix_dict(away_mom, "away_"))
+        features["rsi_diff"] = home_mom["rsi"] - away_mom["rsi"]
+        features["macd_diff"] = home_mom["macd"] - away_mom["macd"]
+
+        # 11. Bookmaker implied probability (Bet365/Pinnacle 1X2 odds already in DB)
         bk_features = self._get_bookmaker_features(match_id)
         features.update(bk_features)
 
-        # 11. Situational context: rest days + midweek flag
+        # 12. Situational context: rest days + midweek flag
         with self.db.get_session() as session:
             match_obj = session.get(Match, match_id)
             if match_obj:

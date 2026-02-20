@@ -80,6 +80,33 @@ class MLModels:
         else:
             self._kept_feature_mask = None
 
+        # Correlation pruning — drop one of any pair with |corr| > 0.8
+        if X.shape[1] > 1:
+            corr_matrix = np.corrcoef(X.T)
+            upper = np.abs(np.triu(corr_matrix, k=1))
+            corr_drop = np.zeros(X.shape[1], dtype=bool)
+            for i in range(upper.shape[0]):
+                if corr_drop[i]:
+                    continue
+                for j in range(i + 1, upper.shape[1]):
+                    if upper[i, j] > 0.8:
+                        corr_drop[j] = True
+            n_corr = int(np.sum(corr_drop))
+            if n_corr > 0:
+                dropped_corr = [self.feature_names[i] for i in range(len(self.feature_names)) if corr_drop[i]]
+                logger.info(
+                    f"Pruning {n_corr} highly-correlated features (|corr|>0.8): "
+                    f"{dropped_corr[:10]}{'...' if len(dropped_corr) > 10 else ''}"
+                )
+                keep_corr = ~corr_drop
+                X = X[:, keep_corr]
+                self.feature_names = [f for f, keep in zip(self.feature_names, keep_corr) if keep]
+                self._corr_drop_mask = keep_corr
+            else:
+                self._corr_drop_mask = None
+        else:
+            self._corr_drop_mask = None
+
         logger.info(f"Training with {X.shape[1]} features, {n_samples} samples")
 
         # Scale features
@@ -201,6 +228,7 @@ class MLModels:
             "feature_names": self.feature_names,
             "is_fitted": self.is_fitted,
             "_kept_feature_mask": getattr(self, "_kept_feature_mask", None),
+            "_corr_drop_mask": getattr(self, "_corr_drop_mask", None),
         }
 
         filepath = save_dir / "ml_models.pkl"
@@ -226,6 +254,7 @@ class MLModels:
         self.feature_names = state["feature_names"]
         self.is_fitted = state["is_fitted"]
         self._kept_feature_mask = state.get("_kept_feature_mask")
+        self._corr_drop_mask = state.get("_corr_drop_mask")
 
         logger.info(f"Models loaded from {filepath}")
 

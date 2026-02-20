@@ -284,6 +284,74 @@ class TeamFeatures:
                 "intl_active": 1,  # flag: team is in European competition
             }
 
+    def get_momentum_indicators(self, team_id: int, num_matches: int = 14) -> dict:
+        """Calculate RSI and MACD momentum indicators from recent match points.
+
+        RSI > 70 → hot streak likely to cool; RSI < 30 → cold streak likely to bounce.
+        MACD > 0 → short-term form accelerating vs longer-term baseline.
+        """
+        empty = {
+            "rsi": 50.0,
+            "macd": 0.0,
+            "macd_hist": 0.0,
+            "momentum_matches": 0,
+        }
+
+        with self.db.get_session() as session:
+            matches = session.query(Match).filter(
+                Match.is_fixture == False,
+                Match.home_goals.isnot(None),
+                or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
+            ).order_by(Match.match_date.desc()).limit(num_matches).all()
+
+            if len(matches) < 5:
+                return empty
+
+            pts = []
+            for m in matches:
+                is_home = m.home_team_id == team_id
+                scored = (m.home_goals or 0) if is_home else (m.away_goals or 0)
+                conceded = (m.away_goals or 0) if is_home else (m.home_goals or 0)
+                if scored > conceded:
+                    pts.append(3)
+                elif scored == conceded:
+                    pts.append(1)
+                else:
+                    pts.append(0)
+
+        # --- RSI (gains = pts earned, losses = max pts - pts earned) ---
+        n = len(pts)
+        avg_gain = sum(pts) / n
+        avg_loss = sum(3 - p for p in pts) / n
+        if avg_loss == 0:
+            rsi = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            rsi = round(100 - (100 / (1 + rs)), 2)
+
+        # --- MACD: EMA(5) - EMA(14) of points, chronological order ---
+        pts_chron = list(reversed(pts))  # oldest first
+
+        def _ema(series, period):
+            if len(series) < period:
+                return sum(series) / len(series)
+            k = 2.0 / (period + 1)
+            val = sum(series[:period]) / period  # SMA seed
+            for p in series[period:]:
+                val = p * k + val * (1 - k)
+            return val
+
+        fast_ema = _ema(pts_chron, 5)
+        slow_ema = _ema(pts_chron, min(14, len(pts_chron)))
+        macd = round(fast_ema - slow_ema, 3)
+
+        return {
+            "rsi": rsi,
+            "macd": macd,
+            "macd_hist": macd,   # simplified: no separate signal line
+            "momentum_matches": n,
+        }
+
     def get_league_position(self, team_id: int, league: str, season: str = None) -> dict:
         """Calculate current league position features for a team."""
         with self.db.get_session() as session:
@@ -314,10 +382,17 @@ class TeamFeatures:
             # Sort by points, then goal difference, then goals scored
             standings.sort(key=lambda x: (x["points"], x["goal_difference"], x["goals_scored"]), reverse=True)
 
+            total_teams = len(standings)
+            # Relegation zone starts at position (total_teams - 2), i.e. bottom 3
+            relegation_cutoff = total_teams - 2
+
             position = 1
             for i, entry in enumerate(standings):
                 if entry["team_id"] == team_id:
                     position = i + 1
+                    # positive = safe places above relegation; negative = places into zone
+                    relegation_gap = relegation_cutoff - position
+                    title_gap = position - 1
                     return {
                         "league_position": position,
                         "points": entry["points"],
@@ -325,7 +400,12 @@ class TeamFeatures:
                         "points_per_game": entry["points_per_game"],
                         "home_points_per_game": entry["home_points_per_game"],
                         "away_points_per_game": entry["away_points_per_game"],
+                        "total_teams": total_teams,
+                        "title_gap": title_gap,
+                        "relegation_gap": relegation_gap,
+                        "in_relegation_zone": int(position > relegation_cutoff),
                     }
 
             return {"league_position": 0, "points": 0, "goal_difference": 0,
-                    "points_per_game": 0, "home_points_per_game": 0, "away_points_per_game": 0}
+                    "points_per_game": 0, "home_points_per_game": 0, "away_points_per_game": 0,
+                    "total_teams": 0, "title_gap": 0, "relegation_gap": 0, "in_relegation_zone": 0}
