@@ -1,6 +1,7 @@
 """Main feature engineering pipeline that combines all feature sources."""
 
 import numpy as np
+from datetime import timedelta
 from typing import Optional
 
 from sqlalchemy import or_
@@ -9,7 +10,7 @@ from src.features.team_features import TeamFeatures
 from src.features.h2h_features import H2HFeatures
 from src.features.injury_features import InjuryFeatures
 from src.scrapers.news_scraper import NewsScraper
-from src.data.models import Match
+from src.data.models import Match, Odds
 from src.data.database import get_db
 from src.utils.logger import get_logger
 
@@ -134,6 +135,30 @@ class FeatureEngineer:
         # 9. Referee features (from Flashscore — if referee is known for this fixture)
         ref_features = self._get_referee_features(referee)
         features.update(ref_features)
+
+        # 10. Bookmaker implied probability (Bet365/Pinnacle 1X2 odds already in DB)
+        bk_features = self._get_bookmaker_features(match_id)
+        features.update(bk_features)
+
+        # 11. Situational context: rest days + midweek flag
+        with self.db.get_session() as session:
+            match_obj = session.get(Match, match_id)
+            if match_obj:
+                _match_date = match_obj.match_date
+                _home_id = match_obj.home_team_id
+                _away_id = match_obj.away_team_id
+            else:
+                _match_date = None
+                _home_id = home_id
+                _away_id = away_id
+        if _match_date:
+            home_sit = self._get_situational_features(_home_id, _match_date)
+            away_sit = self._get_situational_features(_away_id, _match_date)
+            features["home_rest_days"] = home_sit["rest_days"]
+            features["away_rest_days"] = away_sit["rest_days"]
+            features["home_midweek_flag"] = home_sit["midweek_flag"]
+            features["away_midweek_flag"] = away_sit["midweek_flag"]
+            features["rest_days_diff"] = home_sit["rest_days"] - away_sit["rest_days"]
 
         logger.debug(f"Generated {len(features)} features for match {match_id}")
         return features
@@ -268,6 +293,87 @@ class FeatureEngineer:
             "referee_goals_per_match_avg": round(sum(goals_list) / n, 2),
             "referee_matches": n,
         }
+
+    def _get_bookmaker_features(self, match_id: int) -> dict:
+        """Return margin-adjusted implied probabilities from Bet365/Pinnacle 1X2 odds."""
+        defaults = {
+            "home_implied_prob": 1/3,
+            "draw_implied_prob": 1/3,
+            "away_implied_prob": 1/3,
+            "bookmaker_available": 0,
+        }
+        try:
+            with self.db.get_session() as session:
+                rows = session.query(Odds).filter(
+                    Odds.match_id == match_id,
+                    Odds.market_type == "1X2",
+                ).all()
+
+                if not rows:
+                    return defaults
+
+                # Priority: Bet365 first, then Pinnacle, then any
+                bk_map: dict[str, dict[str, float]] = {}
+                for row in rows:
+                    bk = row.bookmaker
+                    if bk not in bk_map:
+                        bk_map[bk] = {}
+                    bk_map[bk][row.selection] = row.odds_value
+
+                odds_dict = None
+                for preferred in ("Bet365", "Pinnacle"):
+                    if preferred in bk_map:
+                        odds_dict = bk_map[preferred]
+                        break
+                if odds_dict is None:
+                    odds_dict = next(iter(bk_map.values()))
+
+                h_odds = odds_dict.get("Home")
+                d_odds = odds_dict.get("Draw")
+                a_odds = odds_dict.get("Away")
+
+                if not all([h_odds, d_odds, a_odds]):
+                    return defaults
+
+                raw_h = 1 / h_odds
+                raw_d = 1 / d_odds
+                raw_a = 1 / a_odds
+                margin = raw_h + raw_d + raw_a
+
+                return {
+                    "home_implied_prob": round(raw_h / margin, 4),
+                    "draw_implied_prob": round(raw_d / margin, 4),
+                    "away_implied_prob": round(raw_a / margin, 4),
+                    "bookmaker_available": 1,
+                }
+        except Exception as e:
+            logger.warning(f"Bookmaker features failed for match {match_id}: {e}")
+            return defaults
+
+    def _get_situational_features(self, team_id: int, match_date) -> dict:
+        """Return rest days and midweek flag based on team's previous match date."""
+        defaults = {"rest_days": 7, "midweek_flag": 0}
+        try:
+            with self.db.get_session() as session:
+                prev = session.query(Match).filter(
+                    Match.is_fixture == False,
+                    Match.home_goals.isnot(None),
+                    Match.match_date < match_date,
+                    or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
+                ).order_by(Match.match_date.desc()).limit(1).first()
+
+                if not prev:
+                    return defaults
+
+                delta = (match_date - prev.match_date).days
+                rest_days = min(delta, 21)
+                # Midweek = previous match was Tue(1), Wed(2), or Thu(3)
+                midweek_flag = 1 if prev.match_date.weekday() in (1, 2, 3) else 0
+
+                return {"rest_days": rest_days, "midweek_flag": midweek_flag}
+        except Exception as e:
+            logger.warning(f"Situational features failed for team {team_id}: {e}")
+            return defaults
 
     def _prefix_dict(self, d: dict, prefix: str) -> dict:
         """Add a prefix to all dictionary keys."""

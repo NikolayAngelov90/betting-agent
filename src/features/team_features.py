@@ -79,6 +79,7 @@ class TeamFeatures:
         fk_count = 0
 
         form_string = []
+        per_match_pts = []  # for decay form score (index 0 = most recent)
 
         for match in matches:
             is_home = match.home_team_id == team_id
@@ -118,13 +119,16 @@ class TeamFeatures:
                 points += 3
                 wins += 1
                 form_string.append("W")
+                per_match_pts.append(3)
             elif scored == conceded:
                 points += 1
                 draws += 1
                 form_string.append("D")
+                per_match_pts.append(1)
             else:
                 losses += 1
                 form_string.append("L")
+                per_match_pts.append(0)
 
             if shots is not None:
                 shots_total += shots
@@ -151,6 +155,15 @@ class TeamFeatures:
                 fk_count += 1
 
         n = len(matches)
+
+        # Exponential decay form score (index 0 = most recent game, weight = 1.0)
+        _decay = 0.85
+        _decay_weights = [_decay ** i for i in range(len(per_match_pts))]
+        _total_weight = sum(_decay_weights)
+        decay_form_score = (
+            round(sum(w * p for w, p in zip(_decay_weights, per_match_pts)) / _total_weight, 3)
+            if _total_weight else 0.0
+        )
 
         # Calculate streaks
         win_streak = self._calculate_streak(form_string, "W")
@@ -183,6 +196,7 @@ class TeamFeatures:
             "offsides_per_game_avg": round(off_total / off_count, 2) if off_count else 0,
             "free_kicks_per_game_avg": round(fk_total / fk_count, 2) if fk_count else 0,
             "form_string": "-".join(form_string),
+            "decay_form_score": decay_form_score,
         }
 
     def _calculate_streak(self, form: List[str], result: str) -> int:
@@ -223,6 +237,7 @@ class TeamFeatures:
             "offsides_per_game_avg": 0,
             "free_kicks_per_game_avg": 0,
             "form_string": "",
+            "decay_form_score": 0.0,
         }
 
     # Leagues classified as international competitions

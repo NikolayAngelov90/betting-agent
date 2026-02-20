@@ -64,6 +64,10 @@ jobs:
         run: python -m src.agent.betting_agent --settle
         continue-on-error: true
 
+      - name: Train ML models on settled data
+        run: python -m src.agent.betting_agent --train
+        continue-on-error: true
+
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks
 
