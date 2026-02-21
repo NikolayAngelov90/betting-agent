@@ -102,6 +102,18 @@ class Match(Base):
     is_fixture = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Indexes on the columns hit by every form/xG/momentum query:
+    #  · (home_team_id, is_fixture, match_date) — home form queries
+    #  · (away_team_id, is_fixture, match_date) — away form queries
+    #  · (is_fixture, match_date)               — upcoming fixtures scan
+    #  · (league, is_fixture)                   — standings cache build
+    __table_args__ = (
+        Index("ix_match_home_team_fixture_date", "home_team_id", "is_fixture", "match_date"),
+        Index("ix_match_away_team_fixture_date", "away_team_id", "is_fixture", "match_date"),
+        Index("ix_match_fixture_date", "is_fixture", "match_date"),
+        Index("ix_match_league_fixture", "league", "is_fixture"),
+    )
+
     # Relationships
     home_team = relationship("Team", foreign_keys=[home_team_id], back_populates="home_matches")
     away_team = relationship("Team", foreign_keys=[away_team_id], back_populates="away_matches")

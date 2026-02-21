@@ -65,9 +65,10 @@ class DatabaseManager:
             raise ValueError(f"Unsupported database type: {db_type}")
 
     def create_tables(self):
-        """Create all tables defined in models, and add any missing columns."""
+        """Create all tables defined in models, and add any missing columns/indexes."""
         Base.metadata.create_all(self.engine)
         self._migrate_missing_columns()
+        self._migrate_missing_indexes()
         logger.info("Database tables created successfully")
 
     def _migrate_missing_columns(self):
@@ -91,6 +92,21 @@ class DatabaseManager:
                         logger.info(f"Migration: added column {table_name}.{col.name} ({col_type})")
                     except Exception as e:
                         logger.debug(f"Column {table_name}.{col.name} migration skipped: {e}")
+
+    def _migrate_missing_indexes(self):
+        """Create any indexes defined in models that don't yet exist in the DB."""
+        inspector = inspect(self.engine)
+        for table_name, table in Base.metadata.tables.items():
+            if table_name not in inspector.get_table_names():
+                continue
+            existing_indexes = {idx["name"] for idx in inspector.get_indexes(table_name)}
+            for idx in table.indexes:
+                if idx.name and idx.name not in existing_indexes:
+                    try:
+                        idx.create(self.engine)
+                        logger.info(f"Migration: created index {idx.name} on {table_name}")
+                    except Exception as e:
+                        logger.debug(f"Index {idx.name} creation skipped: {e}")
 
     def drop_tables(self):
         """Drop all tables. Use with caution."""

@@ -335,6 +335,42 @@ class FootballBettingAgent:
                     )
             all_recommendations = limited
 
+        # Portfolio risk management: cap per-league and total Kelly exposure
+        # Prevents over-concentration in one league and oversized single-day bankroll risk.
+        MAX_PICKS_PER_LEAGUE = self.config.get("betting.max_picks_per_league", 3)
+        MAX_TOTAL_KELLY_PCT = self.config.get("betting.max_total_kelly_pct", 20.0)
+
+        from collections import Counter as _Counter
+        league_counts: dict = _Counter()
+        total_kelly = 0.0
+        portfolio = []
+        for rec in all_recommendations:
+            lg = rec.league or "unknown"
+            if league_counts[lg] >= MAX_PICKS_PER_LEAGUE:
+                logger.debug(
+                    f"Portfolio: skipping {rec.match} ({rec.selection}) — "
+                    f"league cap ({MAX_PICKS_PER_LEAGUE}) reached for {lg}"
+                )
+                continue
+            if total_kelly + rec.kelly_stake_percentage > MAX_TOTAL_KELLY_PCT:
+                logger.debug(
+                    f"Portfolio: skipping {rec.match} ({rec.selection}) — "
+                    f"total Kelly cap ({MAX_TOTAL_KELLY_PCT}%) would be exceeded"
+                )
+                continue
+            portfolio.append(rec)
+            league_counts[lg] += 1
+            total_kelly += rec.kelly_stake_percentage
+
+        if len(portfolio) < len(all_recommendations):
+            skipped_n = len(all_recommendations) - len(portfolio)
+            logger.info(
+                f"Portfolio filter: kept {len(portfolio)} picks "
+                f"(dropped {skipped_n} — league/Kelly caps). "
+                f"Total exposure: {total_kelly:.1f}% of bankroll"
+            )
+        all_recommendations = portfolio
+
         logger.info(f"Found {len(all_recommendations)} high-confidence picks for {target}")
 
         # Save picks to database for tracking
@@ -772,28 +808,34 @@ class FootballBettingAgent:
             logger.warning("Not enough matches for ML training (need 100+)")
             return
 
-        # Build feature matrix and labels
+        # Build feature matrix and labels — process in parallel batches
         X_list = []
         y_list = []
         feature_names = None
         skipped = 0
+        BATCH_SIZE = 50  # concurrent DB sessions; WAL mode supports parallel reads
 
-        for i, md in enumerate(match_data):
-            try:
-                features = await self.feature_engineer.create_features(md["id"])
-                if not features:
+        for batch_start in range(0, len(match_data), BATCH_SIZE):
+            batch = match_data[batch_start:batch_start + BATCH_SIZE]
+
+            # Fan out: compute features for all matches in the batch concurrently
+            batch_results = await asyncio.gather(
+                *(self.feature_engineer.create_features(md["id"]) for md in batch),
+                return_exceptions=True,
+            )
+
+            for md, result in zip(batch, batch_results):
+                if isinstance(result, Exception) or not result:
                     skipped += 1
                     continue
 
+                features = result
                 vec = self.feature_engineer.create_feature_vector(features)
                 if feature_names is None:
                     feature_names = self.feature_engineer.get_feature_names(features)
 
-                # Only include if vector length matches (consistent features)
                 if feature_names and len(vec) == len(feature_names):
                     X_list.append(vec)
-
-                    # Label: 2=home_win, 1=draw, 0=away_win
                     if md["home_goals"] > md["away_goals"]:
                         y_list.append(2)
                     elif md["home_goals"] == md["away_goals"]:
@@ -803,13 +845,9 @@ class FootballBettingAgent:
                 else:
                     skipped += 1
 
-            except Exception as e:
-                skipped += 1
-                continue
-
-            # Progress logging
-            if (i + 1) % 200 == 0:
-                logger.info(f"Processed {i + 1}/{len(match_data)} matches ({len(X_list)} valid)...")
+            processed = min(batch_start + BATCH_SIZE, len(match_data))
+            if processed % 200 == 0 or processed == len(match_data):
+                logger.info(f"Processed {processed}/{len(match_data)} matches ({len(X_list)} valid)...")
 
         if len(X_list) < 100:
             logger.warning(f"Only {len(X_list)} valid samples (skipped {skipped}), need 100+")

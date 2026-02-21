@@ -62,6 +62,8 @@ betting:
   min_confidence: 0.58      # 58% minimum confidence
   kelly_fraction: 0.25      # Fractional Kelly for risk management
   max_stake_percentage: 5.0 # Maximum 5% of bankroll per bet
+  max_picks_per_league: 3   # Portfolio: cap exposure per league per day
+  max_total_kelly_pct: 20.0 # Portfolio: cap total bankroll exposure per day (%)
 
 notifications:
   telegram_enabled: true
