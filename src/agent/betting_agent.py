@@ -526,8 +526,15 @@ class FootballBettingAgent:
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Flashscore settle timeout for {league}, skipping")
+                    # Close the driver so the still-running background thread's
+                    # session is terminated before the next league starts.
+                    try:
+                        self.scraper.close_driver()
+                    except Exception:
+                        pass
                 except Exception as e:
                     logger.debug(f"Flashscore settle error for {league}: {e}")
+            # Final close after the full loop (no-op if already closed above).
             try:
                 self.scraper.close_driver()
             except Exception:
