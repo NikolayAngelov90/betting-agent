@@ -92,8 +92,12 @@ class FootballBettingAgent:
                 if not results_ok:
                     break
                 try:
+                    # skip_stats=True: only save scores, skip per-match detail pages.
+                    # Detail pages take 50-100s for large leagues; scores are enough
+                    # for settlement. The full update() method handles stat enrichment.
                     await asyncio.wait_for(
-                        self.scraper.scrape_league_results(league), timeout=30,
+                        self.scraper.scrape_league_results(league, skip_stats=True),
+                        timeout=60,
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Flashscore results timeout for {league}, skipping remaining leagues")

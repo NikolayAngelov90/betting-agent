@@ -143,13 +143,19 @@ class FlashscoreScraper(BaseScraper):
                 logger.error(f"[Flashscore] Error scraping {league}: {e}")
         logger.info("Flashscore update cycle complete")
 
-    async def scrape_league_results(self, league: str, num_pages: int = 1):
+    async def scrape_league_results(self, league: str, num_pages: int = 1,
+                                    skip_stats: bool = False):
         """Scrape recent match results for a league.
 
         After saving basic scores, fetches extended statistics (shots, possession,
         dangerous attacks, saves, offsides, referee, etc.) for recently completed
         matches that are missing that data.  Limited to last 7 days and 10 matches
         per call to avoid overloading Flashscore / triggering Cloudflare.
+
+        Args:
+            skip_stats: When True, skip the per-match detail page enrichment.
+                        Scores are still saved; only extended stats are omitted.
+                        Use in time-sensitive contexts (e.g. daily_update).
         """
         url = f"{FLASHSCORE_BASE_URL}/football/{league}/results/"
         logger.info(f"Scraping results: {league}")
@@ -172,6 +178,10 @@ class FlashscoreScraper(BaseScraper):
                         match_data.get("match_date", datetime.now()),
                     ))
         # session committed here
+
+        if skip_stats:
+            logger.info(f"Scraped {len(matches)} results from {league} (stats skipped)")
+            return matches
 
         # Enrich recent matches (last 7 days) that lack extended stats.
         cutoff = datetime.now() - timedelta(days=7)
