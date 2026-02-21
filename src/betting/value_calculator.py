@@ -108,28 +108,22 @@ class ValueBettingCalculator:
                 home_team_name=home_team_name, away_team_name=away_team_name,
             )
 
-            # Fallback for markets without odds (e.g. free API tier):
-            # use typical bookmaker prices so high-confidence model
-            # predictions still appear as picks.
+            # When no bookmaker odds are available, generate a probability-aware
+            # estimate using a standard 6% bookmaker overround. This means the
+            # implied odds roughly equal the fair price, so EV ≈ −6% and no
+            # artificial value bets are generated without real market data.
             is_fallback = False
             if not best_odds and prob >= high_ev_min_confidence:
-                fallback_odds = {
-                    "Home Win": 2.10,
-                    "Draw": 3.30,
-                    "Away Win": 3.40,
-                    "BTTS Yes": 1.80,
-                    "Over 1.5 Goals": 1.45,
-                    "Over 2.5 Goals": 1.90,
-                    "Over 3.5 Goals": 2.50,
-                    "Home Over 1.5": 2.10,
-                    "Away Over 1.5": 2.30,
-                }
-                best_odds = fallback_odds.get(selection, 0)
-                if best_odds:
-                    is_fallback = True
-                    logger.warning(
-                        f"No real odds for {match_name} {selection} — using fallback {best_odds}"
-                    )
+                overround = 0.06  # 6% typical bookmaker margin
+                estimated = round(1.0 / (prob * (1.0 + overround)), 2)
+                # Clamp to plausible bookmaker range
+                estimated = max(self.min_odds, min(estimated, self.max_odds))
+                best_odds = estimated
+                is_fallback = True
+                logger.debug(
+                    f"No real odds for {match_name} {selection} "
+                    f"(prob={prob:.0%}) — estimated {best_odds:.2f}"
+                )
 
             if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
                 continue
@@ -249,13 +243,16 @@ class ValueBettingCalculator:
         # Map our selection names to what's stored in the odds table
         # Odds API stores team names for 1X2, so include them
         selection_map = {
-            "Home Win": ["1", "Home", "home_win", home_team_name],
-            "Draw": ["X", "Draw", "draw"],
-            "Away Win": ["2", "Away", "away_win", away_team_name],
-            "Over 2.5 Goals": ["Over 2.5", "Over"],
-            "Under 2.5 Goals": ["Under 2.5", "Under"],
-            "Over 1.5 Goals": ["Over 1.5"],
-            "Over 3.5 Goals": ["Over 3.5"],
+            # "Home Win" / "Away Win" are stored by Flashscore scraper;
+            # legacy Odds-API records use "1"/"2" or team names.
+            "Home Win": ["1", "Home", "home_win", "Home Win", home_team_name],
+            "Draw": ["X", "Draw", "draw", "Draw"],
+            "Away Win": ["2", "Away", "away_win", "Away Win", away_team_name],
+            # Flashscore O/U stored without " Goals" suffix ("Over 2.5", etc.)
+            "Over 2.5 Goals": ["Over 2.5", "Over", "Over 2.5 Goals"],
+            "Under 2.5 Goals": ["Under 2.5", "Under", "Under 2.5 Goals"],
+            "Over 1.5 Goals": ["Over 1.5", "Over 1.5 Goals"],
+            "Over 3.5 Goals": ["Over 3.5", "Over 3.5 Goals"],
             "BTTS Yes": ["Yes", "BTTS Yes"],
             "BTTS No": ["No", "BTTS No"],
             # Team goal line markets (stored via API-Football team_goals market)

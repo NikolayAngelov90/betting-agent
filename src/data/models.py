@@ -98,6 +98,9 @@ class Match(Base):
     # API-Football fixture ID for cross-referencing
     apifootball_id = Column(Integer)
 
+    # Flashscore short match ID (e.g. "G8MZEpbl") — used to scrape odds page
+    flashscore_id = Column(String(20))
+
     # Match status
     is_fixture = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)

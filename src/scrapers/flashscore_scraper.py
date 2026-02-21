@@ -37,8 +37,11 @@ Note: Flashscore uses Cloudflare anti-bot. Selenium is often blocked.
       from API-Football (apifootball_scraper.py).
 """
 
+import re
+import time
 from datetime import datetime, timedelta
 from typing import List, Optional
+from urllib.parse import urlparse, parse_qs
 
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
@@ -135,14 +138,18 @@ class FlashscoreScraper(BaseScraper):
                 options.page_load_strategy = "none"
 
                 if _UC_AVAILABLE:
+                    import platform as _platform
                     # headless= passed directly to uc.Chrome is stealthier than
                     # the --headless flag in options (uc uses a different code path).
-                    # use_subprocess=True avoids zombie processes in CI.
+                    # use_subprocess=True avoids zombie processes in CI (Linux only —
+                    # on Windows it causes Chrome to exit immediately).
+                    _use_subprocess = _platform.system() != "Windows"
+
                     def _create_uc():
                         return uc.Chrome(
                             options=options,
                             headless=self.headless,
-                            use_subprocess=True,
+                            use_subprocess=_use_subprocess,
                         )
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                         future = pool.submit(_create_uc)
@@ -164,7 +171,10 @@ class FlashscoreScraper(BaseScraper):
     def close_driver(self):
         """Close the Selenium driver."""
         if self._driver:
-            self._driver.quit()
+            try:
+                self._driver.quit()
+            except Exception:
+                pass
             self._driver = None
 
     async def update(self):
@@ -339,6 +349,10 @@ class FlashscoreScraper(BaseScraper):
                     logger.debug(f"Failed to parse match element: {e}")
 
         except Exception as e:
+            # If the driver window is gone (e.g. Chrome crashed or use_subprocess
+            # caused an early exit), reset _driver so the next call creates a fresh one.
+            if "no such window" in str(e).lower() or "target window already closed" in str(e).lower():
+                self._driver = None
             logger.error(f"Error loading results page {url}: {e}")
 
         return matches
@@ -373,54 +387,85 @@ class FlashscoreScraper(BaseScraper):
                     logger.debug(f"Failed to parse fixture element: {e}")
 
         except Exception as e:
+            if "no such window" in str(e).lower() or "target window already closed" in str(e).lower():
+                self._driver = None
             logger.error(f"Error loading fixtures page {url}: {e}")
 
         return matches
 
+    @staticmethod
+    def _parse_team_names(element):
+        """Extract home/away team names from a match row element.
+
+        Flashscore has iterated through several DOM layouts; this method tries
+        selectors in preference order (newest → oldest) so we survive future
+        minor CSS-class renames without a full rewrite.
+        """
+        # 2026 layout: event__homeParticipant / event__awayParticipant
+        try:
+            home = element.find_element(By.CLASS_NAME, "event__homeParticipant").text.strip()
+            away = element.find_element(By.CLASS_NAME, "event__awayParticipant").text.strip()
+            if home and away:
+                return home, away
+        except Exception:
+            pass
+        # 2024-2025 layout: duelParticipant
+        try:
+            home = element.find_element(
+                By.CSS_SELECTOR, ".duelParticipant__home .participant__participantName"
+            ).text.strip()
+            away = element.find_element(
+                By.CSS_SELECTOR, ".duelParticipant__away .participant__participantName"
+            ).text.strip()
+            if home and away:
+                return home, away
+        except Exception:
+            pass
+        # Oldest layout: event__participant--home/away
+        home = element.find_element(By.CLASS_NAME, "event__participant--home").text.strip()
+        away = element.find_element(By.CLASS_NAME, "event__participant--away").text.strip()
+        return home, away
+
+    @staticmethod
+    def _parse_match_date(element, default: datetime) -> datetime:
+        """Extract match date/time from a row element, returning *default* on failure."""
+        # Try each selector (class name without dot, then CSS selector with dot)
+        for selector, by in [
+            ("event__time", By.CLASS_NAME),
+            (".duelParticipant__startTime", By.CSS_SELECTOR),
+        ]:
+            try:
+                time_el = element.find_elements(by, selector)
+                if not time_el:
+                    continue
+                date_text = time_el[0].text.strip()
+                # "18.02.2026 22:00" (full) or "18.02. 22:00" (no year)
+                for fmt in ("%d.%m.%Y %H:%M", "%d.%m. %H:%M"):
+                    try:
+                        dt = datetime.strptime(date_text, fmt)
+                        if fmt == "%d.%m. %H:%M":
+                            dt = dt.replace(year=datetime.now().year)
+                        return dt
+                    except ValueError:
+                        continue
+            except Exception:
+                continue
+        return default
+
     def _parse_match_element(self, element) -> Optional[dict]:
         """Parse a completed match row from the listing page."""
         try:
-            # Team names — try new selectors first, fall back to old
-            try:
-                home_team = element.find_element(
-                    By.CSS_SELECTOR,
-                    ".duelParticipant__home .participant__participantName"
-                ).text.strip()
-                away_team = element.find_element(
-                    By.CSS_SELECTOR,
-                    ".duelParticipant__away .participant__participantName"
-                ).text.strip()
-            except Exception:
-                home_team = element.find_element(
-                    By.CLASS_NAME, "event__participant--home"
-                ).text.strip()
-                away_team = element.find_element(
-                    By.CLASS_NAME, "event__participant--away"
-                ).text.strip()
+            home_team, away_team = self._parse_team_names(element)
 
-            # Scores
+            # Scores — event__score class still present in 2026 layout
             scores = element.find_elements(By.CLASS_NAME, "event__score")
             if len(scores) >= 2:
                 home_goals = int(scores[0].text.strip())
                 away_goals = int(scores[1].text.strip())
             else:
-                return None
+                return None  # not a completed result (e.g. header row)
 
-            # Date/time — try new selector, fall back to old
-            match_date = datetime.now()
-            for time_selector in [".duelParticipant__startTime", "event__time"]:
-                try:
-                    by = By.CSS_SELECTOR if time_selector.startswith(".") else By.CLASS_NAME
-                    time_el = element.find_elements(by, time_selector)
-                    if time_el:
-                        date_text = time_el[0].text.strip()
-                        try:
-                            match_date = datetime.strptime(date_text, "%d.%m.%Y %H:%M")
-                        except ValueError:
-                            pass
-                        break
-                except Exception:
-                    continue
+            match_date = self._parse_match_date(element, default=datetime.now())
 
             # Match detail URL (for fetching extended stats later)
             match_url = None
@@ -444,42 +489,28 @@ class FlashscoreScraper(BaseScraper):
     def _parse_fixture_element(self, element) -> Optional[dict]:
         """Parse an upcoming fixture row from the listing page."""
         try:
-            try:
-                home_team = element.find_element(
-                    By.CSS_SELECTOR,
-                    ".duelParticipant__home .participant__participantName"
-                ).text.strip()
-                away_team = element.find_element(
-                    By.CSS_SELECTOR,
-                    ".duelParticipant__away .participant__participantName"
-                ).text.strip()
-            except Exception:
-                home_team = element.find_element(
-                    By.CLASS_NAME, "event__participant--home"
-                ).text.strip()
-                away_team = element.find_element(
-                    By.CLASS_NAME, "event__participant--away"
-                ).text.strip()
+            home_team, away_team = self._parse_team_names(element)
 
-            match_date = datetime.now() + timedelta(days=1)
-            for time_selector in [".duelParticipant__startTime", "event__time"]:
-                try:
-                    by = By.CSS_SELECTOR if time_selector.startswith(".") else By.CLASS_NAME
-                    time_el = element.find_elements(by, time_selector)
-                    if time_el:
-                        date_text = time_el[0].text.strip()
-                        try:
-                            match_date = datetime.strptime(date_text, "%d.%m.%Y %H:%M")
-                        except ValueError:
-                            pass
-                        break
-                except Exception:
-                    continue
+            match_date = self._parse_match_date(
+                element, default=datetime.now() + timedelta(days=1)
+            )
 
             match_url = None
+            flashscore_id = None
             try:
                 link = element.find_element(By.CSS_SELECTOR, "a.eventRowLink")
                 match_url = link.get_attribute("href")
+                # Extract short Flashscore match ID from ?mid=XXXXXXXX or event element id g_1_XXXXXXXX
+                if match_url:
+                    qs = parse_qs(urlparse(match_url).query)
+                    if "mid" in qs:
+                        flashscore_id = qs["mid"][0]
+                if not flashscore_id:
+                    # Try the event element's id attribute: "g_1_G8MZEpbl"
+                    el_id = element.get_attribute("id") or ""
+                    m = re.search(r'g_\d+_([A-Za-z0-9]+)', el_id)
+                    if m:
+                        flashscore_id = m.group(1)
             except Exception:
                 pass
 
@@ -488,6 +519,7 @@ class FlashscoreScraper(BaseScraper):
                 "away_team": away_team,
                 "match_date": match_date,
                 "match_url": match_url,
+                "flashscore_id": flashscore_id,
             }
         except Exception:
             return None
@@ -638,6 +670,186 @@ class FlashscoreScraper(BaseScraper):
                 except Exception:
                     pass
 
+    # ------------------------------------------------------------------
+    # Odds scraping
+    # ------------------------------------------------------------------
+
+    def _scrape_odds_page(self, flashscore_id: str, market: str = "home-draw-away") -> dict:
+        """Scrape bookmaker odds from the Flashscore odds-comparison page.
+
+        Args:
+            flashscore_id: 8-char Flashscore match ID (e.g. "G8MZEpbl")
+            market: URL segment — "home-draw-away", "over-under", "both-teams-to-score"
+
+        Returns:
+            Dict mapping selection names to best available odds (float).
+            Empty dict if scraping fails.
+        """
+        driver = self._get_driver()
+        if not driver:
+            return {}
+
+        market_path = {
+            "home-draw-away": "home-draw-away/full-time",
+            "over-under": "over-under/full-time",
+            "btts": "both-teams-to-score/full-time",
+        }.get(market, market)
+
+        url = f"https://www.flashscore.com/match/{flashscore_id}/#/odds-comparison/{market_path}"
+        result = {}
+        try:
+            driver.get(url)
+            # Wait for odds values to appear
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "[data-testid='wcl-oddsValue']")
+                )
+            )
+            time.sleep(1)
+
+            spans = driver.find_elements(By.CSS_SELECTOR, "[data-testid='wcl-oddsValue']")
+            values = []
+            for span in spans:
+                try:
+                    val = float(span.text.strip())
+                    values.append(val)
+                except ValueError:
+                    pass
+
+            if market == "home-draw-away":
+                # Values arrive in groups of 3: Home, Draw, Away per bookmaker row.
+                # Take the max across all bookmakers for each position.
+                if len(values) >= 3:
+                    home_vals, draw_vals, away_vals = [], [], []
+                    for i in range(0, len(values) - 2, 3):
+                        home_vals.append(values[i])
+                        draw_vals.append(values[i + 1])
+                        away_vals.append(values[i + 2])
+                    result["Home Win"] = max(home_vals)
+                    result["Draw"] = max(draw_vals)
+                    result["Away Win"] = max(away_vals)
+
+            elif market == "over-under":
+                # Over/Under page lists lines like "Over 0.5 / Under 0.5 / Over 1.5 / ..."
+                # The row header text tells us the line.  Values come in pairs: Over, Under.
+                # We collect labeled rows by looking at the wcl-oddsRow structure.
+                result = self._parse_ou_odds(driver)
+
+            elif market == "btts":
+                # Values come in pairs: Yes, No per bookmaker
+                if len(values) >= 2:
+                    yes_vals, no_vals = [], []
+                    for i in range(0, len(values) - 1, 2):
+                        yes_vals.append(values[i])
+                        no_vals.append(values[i + 1])
+                    result["BTTS Yes"] = max(yes_vals)
+                    result["BTTS No"] = max(no_vals)
+
+        except Exception as e:
+            if "no such window" in str(e).lower() or "target window already closed" in str(e).lower():
+                self._driver = None
+            logger.debug(f"Odds scrape failed for {flashscore_id} {market}: {e}")
+
+        return result
+
+    def _parse_ou_odds(self, driver) -> dict:
+        """Parse Over/Under odds from the loaded odds-comparison page."""
+        result = {}
+        try:
+            # Each odds section has a label row followed by bookmaker rows.
+            # Find the line headers (e.g. "2.5") and the corresponding odds.
+            # Strategy: find all elements that look like "X.5" labels,
+            # then get the next set of odds spans.
+            # Simpler: look for the wclOddsRow/wclOddsContent structure.
+            rows = driver.find_elements(By.CSS_SELECTOR, ".wclOddsRow, .wclOddsContent")
+            current_line = None
+            for row in rows:
+                text = row.text.strip()
+                # Line header row — e.g. "Over 1.5\nUnder 1.5" or just "1.5"
+                line_match = re.search(r'(\d+\.5)', text)
+                if line_match and len(text.split()) <= 4:
+                    current_line = line_match.group(1)
+                    continue
+                if current_line:
+                    vals = re.findall(r'\d+\.\d{2}', text)
+                    if len(vals) >= 2:
+                        try:
+                            over_val = float(vals[0])
+                            under_val = float(vals[1])
+                            # Store without " Goals" suffix so _find_best_odds can match them
+                            key_over = f"Over {current_line}"
+                            key_under = f"Under {current_line}"
+                            result[key_over] = max(result.get(key_over, 0), over_val)
+                            result[key_under] = max(result.get(key_under, 0), under_val)
+                        except ValueError:
+                            pass
+        except Exception as e:
+            logger.debug(f"O/U parsing error: {e}")
+        return result
+
+    async def scrape_and_save_odds(self, match_id: int, flashscore_id: str,
+                                     markets: tuple = ("home-draw-away", "over-under", "btts")):
+        """Scrape Flashscore odds for the specified markets and save to the Odds table.
+
+        Args:
+            match_id: Database match ID.
+            flashscore_id: 8-char Flashscore match ID.
+            markets: Tuple of market slugs to scrape. Defaults to all three.
+                     Pass ("home-draw-away",) to only scrape 1X2 (faster).
+        """
+        from src.data.database import get_db
+        from src.data.models import Odds
+
+        db = get_db()
+
+        loop = asyncio.get_event_loop()
+
+        def _scrape_all():
+            combined = {}
+            for mkt in markets:
+                try:
+                    combined.update(self._scrape_odds_page(flashscore_id, mkt))
+                except Exception as exc:
+                    logger.debug(f"Market {mkt} scrape error for {flashscore_id}: {exc}")
+            return combined
+
+        all_odds = await loop.run_in_executor(None, _scrape_all)
+
+        if not all_odds:
+            logger.warning(f"No odds found for flashscore_id={flashscore_id}")
+            return
+
+        # Market type mapping for storage
+        market_for_selection = {
+            "Home Win": "1X2", "Draw": "1X2", "Away Win": "1X2",
+            "BTTS Yes": "btts", "BTTS No": "btts",
+        }
+        # Over/Under selections
+        for key in all_odds:
+            if key.startswith("Over ") or key.startswith("Under "):
+                market_for_selection[key] = "over_under"
+
+        with db.get_session() as session:
+            # Remove stale Flashscore odds for this match first
+            session.query(Odds).filter_by(match_id=match_id, bookmaker="Flashscore").delete()
+            for selection, odds_value in all_odds.items():
+                if odds_value <= 1.0:
+                    continue
+                market_type = market_for_selection.get(selection, "other")
+                session.add(Odds(
+                    match_id=match_id,
+                    bookmaker="Flashscore",
+                    market_type=market_type,
+                    selection=selection,
+                    odds_value=odds_value,
+                ))
+            session.commit()
+
+        logger.info(
+            f"Saved {len(all_odds)} odds for match {match_id} "
+            f"(flashscore_id={flashscore_id}): {list(all_odds.keys())}"
+        )
+
     def _get_or_create_team(self, session, team_name: str, league: str) -> Team:
         """Get existing team or create a new one."""
         team = session.query(Team).filter_by(name=team_name).first()
@@ -663,6 +875,9 @@ class FlashscoreScraper(BaseScraper):
                 existing.home_goals = match_data.get("home_goals")
                 existing.away_goals = match_data.get("away_goals")
                 existing.is_fixture = False
+            # Update flashscore_id if we now have it
+            if not existing.flashscore_id and match_data.get("flashscore_id"):
+                existing.flashscore_id = match_data["flashscore_id"]
             return existing
 
         match = Match(
@@ -673,6 +888,7 @@ class FlashscoreScraper(BaseScraper):
             home_goals=match_data.get("home_goals"),
             away_goals=match_data.get("away_goals"),
             is_fixture=is_fixture,
+            flashscore_id=match_data.get("flashscore_id"),
         )
         session.add(match)
         return match

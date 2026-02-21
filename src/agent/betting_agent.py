@@ -143,6 +143,47 @@ class FootballBettingAgent:
             except Exception:
                 pass
 
+        # 2b. Scrape Flashscore odds for upcoming fixtures (1X2 + O/U + BTTS).
+        # Runs after fixtures are saved so all flashscore_ids are populated.
+        try:
+            from datetime import date, timedelta as _td
+            from src.data.models import Odds as _Odds
+            _today = date.today()
+            _start = datetime.combine(_today, datetime.min.time())
+            _end = _start + _td(days=2)  # today + tomorrow
+            with self.db.get_session() as _sess:
+                _upcoming = _sess.query(Match).filter(
+                    Match.is_fixture == True,
+                    Match.match_date >= _start,
+                    Match.match_date < _end,
+                    Match.flashscore_id.isnot(None),
+                ).all()
+                _to_scrape = [
+                    (m.id, m.flashscore_id) for m in _upcoming
+                    if _sess.query(_Odds).filter_by(
+                        match_id=m.id, bookmaker="Flashscore"
+                    ).count() == 0
+                ]
+            if _to_scrape:
+                logger.info(
+                    f"Pre-caching Flashscore odds for {len(_to_scrape)} upcoming fixtures..."
+                )
+                _odds_scraper = FlashscoreScraper()
+                try:
+                    for _mid, _fsid in _to_scrape:
+                        try:
+                            await _odds_scraper.scrape_and_save_odds(
+                                _mid, _fsid,
+                                markets=("home-draw-away", "over-under", "btts"),
+                            )
+                        except Exception as _exc:
+                            logger.warning(f"Odds pre-cache failed for {_mid}: {_exc}")
+                finally:
+                    _odds_scraper.close_driver()
+                logger.info("Flashscore odds pre-caching complete.")
+        except Exception as e:
+            logger.error(f"Flashscore odds pre-cache failed: {e}")
+
         # 3. API-Football (fixtures, xG, advanced stats)
         try:
             await self.apifootball.update()
@@ -291,10 +332,14 @@ class FootballBettingAgent:
         with self.db.get_session() as session:
             day_start = datetime.combine(target, datetime.min.time())
             day_end = day_start + timedelta(days=1)
+            # Only include matches that haven't kicked off yet — skip finished
+            # matches and those already in progress (match_date is kickoff time).
+            now = datetime.now()
             query = session.query(Match).filter(
                 Match.is_fixture == True,
                 Match.match_date >= day_start,
                 Match.match_date < day_end,
+                Match.match_date > now,
             )
             if leagues:
                 query = query.filter(Match.league.in_(leagues))
@@ -304,6 +349,41 @@ class FootballBettingAgent:
         if not fixture_ids:
             logger.info(f"No fixtures found for {target}")
             return []
+
+        # ── Scrape live Flashscore odds for today's fixtures ──────────────────
+        # Collect matches that have a flashscore_id but no Flashscore odds yet.
+        with self.db.get_session() as session:
+            to_scrape = []
+            for fid in fixture_ids:
+                m = session.get(Match, fid)
+                if m and m.flashscore_id:
+                    existing_odds = session.query(Odds).filter_by(
+                        match_id=fid, bookmaker="Flashscore"
+                    ).count()
+                    if existing_odds == 0:
+                        to_scrape.append((fid, m.flashscore_id))
+
+        if to_scrape:
+            logger.info(f"Scraping Flashscore odds for {len(to_scrape)} fixtures...")
+            scraper = FlashscoreScraper()
+            try:
+                # Scrape all three markets sequentially to avoid Chrome window conflicts.
+                # 1X2 + Over/Under + BTTS gives us complete value-bet coverage.
+                for match_id, fs_id in to_scrape:
+                    try:
+                        # During picks: only scrape 1X2 odds (fastest, most impactful).
+                        # Over/Under + BTTS are scraped during --update for pre-caching.
+                        await scraper.scrape_and_save_odds(
+                            match_id, fs_id,
+                            markets=("home-draw-away",),
+                        )
+                    except Exception as exc:
+                        logger.warning(f"Odds scrape failed for match {match_id}: {exc}")
+            finally:
+                scraper.close_driver()
+            logger.info("Flashscore odds scraping complete.")
+        else:
+            logger.info("All fixtures already have odds or no flashscore_id available.")
 
         # Data coverage report — flag under-covered fixtures and leagues
         from src.scrapers.historical_loader import LEAGUE_CSV_MAP, EXTRA_LEAGUE_CSV_MAP
@@ -363,21 +443,30 @@ class FootballBettingAgent:
             reverse=True,
         )
 
-        # Limit picks per match to avoid over-betting on a single fixture
+        # Limit picks per match and deduplicate identical (match, selection) pairs.
+        # Use (match string, selection) as key to also catch the case where the
+        # same physical game has two DB rows with different IDs (e.g. scraped twice).
+        seen_pick_keys: set = set()
+        limited = []
         if max_picks_per_match:
             from collections import Counter
             match_counts: dict = Counter()
-            limited = []
-            for rec in all_recommendations:
-                if match_counts[rec.match_id] < max_picks_per_match:
-                    limited.append(rec)
-                    match_counts[rec.match_id] += 1
-                else:
-                    logger.debug(
-                        f"Skipping extra pick for match {rec.match}: "
-                        f"{rec.selection} (already {max_picks_per_match} picks)"
-                    )
-            all_recommendations = limited
+        for rec in all_recommendations:
+            key = (rec.match, rec.selection)
+            if key in seen_pick_keys:
+                logger.debug(f"Skipping duplicate pick for {rec.match}: {rec.selection}")
+                continue
+            if max_picks_per_match and match_counts[rec.match_id] >= max_picks_per_match:
+                logger.debug(
+                    f"Skipping extra pick for match {rec.match}: "
+                    f"{rec.selection} (already {max_picks_per_match} picks)"
+                )
+                continue
+            seen_pick_keys.add(key)
+            limited.append(rec)
+            if max_picks_per_match:
+                match_counts[rec.match_id] += 1
+        all_recommendations = limited
 
         # Portfolio risk management: cap per-league and total Kelly exposure
         # Prevents over-concentration in one league and oversized single-day bankroll risk.
