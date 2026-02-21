@@ -873,31 +873,113 @@ class FlashscoreScraper(BaseScraper):
             session.flush()
         return team
 
+    @staticmethod
+    def _team_names_similar(name_a: str, name_b: str) -> bool:
+        """Return True if two team names likely refer to the same team.
+
+        Handles common differences between data sources:
+        - Abbreviations:  "Man City" vs "Manchester City"
+        - Short names:    "Oxford" vs "Oxford Utd" / "Oxford United"
+        - Prefixes:       "SK Rapid" vs "Rapid Vienna"
+        - Suffixes:       "Bradford" vs "Bradford City"
+        Uses token overlap: if >60 % of the tokens of the shorter name appear
+        (as prefix matches) in the longer name's tokens, they are considered
+        the same.  Exact match fast-paths are tried first.
+        """
+        if name_a == name_b:
+            return True
+        a, b = name_a.lower().strip(), name_b.lower().strip()
+        if a == b:
+            return True
+
+        # Strip common prefix/suffix club tags that differ between sources
+        _STRIP = {"fc", "sc", "sk", "afc", "sfc", "cf", "bk", "fk", "ac", "as"}
+        def _tokens(n):
+            return [t for t in n.split() if t not in _STRIP]
+
+        ta, tb = _tokens(a), _tokens(b)
+        if not ta or not tb:
+            return False
+
+        # Each token in the shorter list must be a prefix of some token in the longer list.
+        shorter, longer = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+        matches = sum(
+            1 for tok in shorter
+            if any(long_tok.startswith(tok) or tok.startswith(long_tok) for long_tok in longer)
+        )
+        return matches / len(shorter) >= 0.7
+
     def _save_match(self, session, match_data: dict, league: str, is_fixture: bool):
-        """Save a match to the database, avoiding duplicates."""
+        """Save a match to the database, avoiding duplicates.
+
+        Deduplication strategy (in order of priority):
+        1. Exact match: same home/away team IDs + exact timestamp.
+        2. Flashscore-ID match: any existing record with the same flashscore_id.
+        3. Fuzzy match: same league, same is_fixture flag, match time within
+           ±4 hours, and home/away team names pass _team_names_similar().
+           This catches UTC-vs-local-time duplicates (±2 h) and abbreviated
+           team names from different data sources.
+        """
         home_team = self._get_or_create_team(session, match_data["home_team"], league)
         away_team = self._get_or_create_team(session, match_data["away_team"], league)
+        match_date = match_data["match_date"]
 
-        existing = session.query(Match).filter_by(
-            home_team_id=home_team.id,
-            away_team_id=away_team.id,
-            match_date=match_data["match_date"],
-        ).first()
-
-        if existing:
+        def _apply_update(existing):
+            """Sync mutable fields onto an existing Match record."""
             if existing.is_fixture and not is_fixture and "home_goals" in match_data:
                 existing.home_goals = match_data.get("home_goals")
                 existing.away_goals = match_data.get("away_goals")
                 existing.is_fixture = False
-            # Update flashscore_id if we now have it
             if not existing.flashscore_id and match_data.get("flashscore_id"):
                 existing.flashscore_id = match_data["flashscore_id"]
             return existing
 
+        # 1. Exact match
+        existing = session.query(Match).filter_by(
+            home_team_id=home_team.id,
+            away_team_id=away_team.id,
+            match_date=match_date,
+        ).first()
+        if existing:
+            return _apply_update(existing)
+
+        # 2. Flashscore-ID match (data came from Flashscore with a known ID)
+        if match_data.get("flashscore_id"):
+            existing = session.query(Match).filter_by(
+                flashscore_id=match_data["flashscore_id"]
+            ).first()
+            if existing:
+                return _apply_update(existing)
+
+        # 3. Fuzzy match: ±4 h window + similar team names.
+        #    ±4 h catches UTC vs UTC+2 local-time discrepancies (2 h) with margin.
+        window = timedelta(hours=4)
+        candidates = session.query(Match).filter(
+            Match.league == league,
+            Match.is_fixture == is_fixture,
+            Match.match_date >= match_date - window,
+            Match.match_date <= match_date + window,
+        ).all()
+
+        for candidate in candidates:
+            c_home = session.get(Team, candidate.home_team_id)
+            c_away = session.get(Team, candidate.away_team_id)
+            if c_home and c_away:
+                if (self._team_names_similar(c_home.name, match_data["home_team"]) and
+                        self._team_names_similar(c_away.name, match_data["away_team"])):
+                    logger.debug(
+                        f"Fuzzy-merged '{match_data['home_team']} vs {match_data['away_team']}'"
+                        f" into existing id={candidate.id}"
+                        f" ('{c_home.name} vs {c_away.name}', Δt="
+                        f"{abs((match_date - candidate.match_date).total_seconds()/3600):.1f}h)"
+                    )
+                    return _apply_update(candidate)
+
+        # 4. No match found — create a new record
         match = Match(
             home_team_id=home_team.id,
             away_team_id=away_team.id,
-            match_date=match_data["match_date"],
+            match_date=match_date,
             league=league,
             home_goals=match_data.get("home_goals"),
             away_goals=match_data.get("away_goals"),
