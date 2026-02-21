@@ -433,9 +433,30 @@ class FootballBettingAgent:
         Returns:
             List of dicts with settled pick details for reporting.
         """
-        # 1. Fetch yesterday's results from API-Football (CI runs daily)
+        # 1. Fetch results covering all pending picks — look back to oldest unsettled pick date
+        days_back = 2  # default: cover yesterday + day before
         try:
-            await self.apifootball.fetch_recent_results(days_back=1)
+            with self.db.get_session() as session:
+                oldest = (
+                    session.query(SavedPick)
+                    .filter(SavedPick.result.is_(None))
+                    .order_by(SavedPick.pick_date.asc())
+                    .first()
+                )
+                if oldest and oldest.pick_date:
+                    oldest_date = (
+                        oldest.pick_date
+                        if isinstance(oldest.pick_date, date)
+                        else date.fromisoformat(str(oldest.pick_date))
+                    )
+                    delta = (date.today() - oldest_date).days
+                    days_back = max(days_back, delta + 1)
+                    days_back = min(days_back, 7)  # cap at 7 to avoid excessive API usage
+        except Exception:
+            pass
+        logger.info(f"Fetching results {days_back} days back to cover pending picks")
+        try:
+            await self.apifootball.fetch_recent_results(days_back=days_back)
         except Exception as e:
             logger.warning(f"Could not fetch recent results from API-Football: {e}")
 

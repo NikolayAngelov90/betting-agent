@@ -56,12 +56,12 @@ jobs:
         run: python -m pytest tests/ -v --tb=short
         continue-on-error: true
 
-      - name: Run daily update
-        run: python -m src.agent.betting_agent --update
-        continue-on-error: true
-
       - name: Settle yesterday's predictions
         run: python -m src.agent.betting_agent --settle
+        continue-on-error: true
+
+      - name: Run daily update
+        run: python -m src.agent.betting_agent --update
         continue-on-error: true
 
       - name: Train ML models on settled data
@@ -95,6 +95,15 @@ jobs:
             data/models/
             data/historical_load_cache.json
           key: betting-data-${{ github.run_number }}
+
+      - name: Export database snapshot for local sync
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: betting-db-latest
+          path: data/football_betting.db
+          retention-days: 7
+          overwrite: true
 
       - name: Upload logs on failure
         if: failure()
