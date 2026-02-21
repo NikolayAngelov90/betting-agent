@@ -452,23 +452,39 @@ class FootballBettingAgent:
     async def settle_predictions(self):
         """Fetch recent results and settle pending picks.
 
-        Calls API-Football to get scores for the last few days so that
-        yesterday's picks can be resolved, then marks each as win/loss.
+        Uses Flashscore as the PRIMARY results source (no API quota) so that
+        settlement works even when the API-Football daily limit is exhausted.
+        API-Football is attempted afterwards as a secondary enrichment only.
 
         Returns:
             List of dicts with settled pick details for reporting.
         """
-        # 1. Fetch results covering all pending picks — look back to oldest unsettled pick date
-        days_back = 2  # default: cover yesterday + day before
+        # 1. Find all leagues with pending picks and how far back to look.
+        days_back = 2
+        leagues_with_pending: list = []
         try:
             with self.db.get_session() as session:
-                oldest = (
+                pending_all = (
                     session.query(SavedPick)
                     .filter(SavedPick.result.is_(None))
-                    .order_by(SavedPick.pick_date.asc())
-                    .first()
+                    .all()
                 )
-                if oldest and oldest.pick_date:
+                if not pending_all:
+                    logger.info("No pending picks to settle")
+                    return []
+
+                seen_leagues: set = set()
+                for pick in pending_all:
+                    match = session.get(Match, pick.match_id)
+                    if match and match.league and match.league not in seen_leagues:
+                        leagues_with_pending.append(match.league)
+                        seen_leagues.add(match.league)
+
+                oldest = min(
+                    pending_all,
+                    key=lambda p: p.pick_date if p.pick_date else date.today(),
+                )
+                if oldest.pick_date:
                     oldest_date = (
                         oldest.pick_date
                         if isinstance(oldest.pick_date, date)
@@ -476,42 +492,43 @@ class FootballBettingAgent:
                     )
                     delta = (date.today() - oldest_date).days
                     days_back = max(days_back, delta + 1)
-                    days_back = min(days_back, 7)  # cap at 7 to avoid excessive API usage
+                    days_back = min(days_back, 7)
         except Exception:
             pass
-        logger.info(f"Fetching results {days_back} days back to cover pending picks")
+
+        logger.info(
+            f"Settling picks: {days_back} days back, "
+            f"{len(leagues_with_pending)} leagues with pending picks"
+        )
+
+        # 2. PRIMARY: Flashscore — first-page results only, no quota needed.
+        # skip_stats=True means no load_more clicks and no detail page scraping,
+        # so the first page (~10-20 latest results) loads in ~10-15s per league.
+        if leagues_with_pending:
+            logger.info(
+                f"Flashscore settle: fetching results for "
+                f"{len(leagues_with_pending)} leagues"
+            )
+            for league in leagues_with_pending:
+                try:
+                    await asyncio.wait_for(
+                        self.scraper.scrape_league_results(league, skip_stats=True),
+                        timeout=60,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Flashscore settle timeout for {league}, skipping")
+                except Exception as e:
+                    logger.debug(f"Flashscore settle error for {league}: {e}")
+            try:
+                self.scraper.close_driver()
+            except Exception:
+                pass
+
+        # 3. SECONDARY: API-Football (degrades gracefully when quota is exhausted).
         try:
             await self.apifootball.fetch_recent_results(days_back=days_back)
         except Exception as e:
             logger.warning(f"Could not fetch recent results from API-Football: {e}")
-
-        # 2. Flashscore fallback for stale unsettled matches (>24h old)
-        try:
-            with self.db.get_session() as session:
-                stale_cutoff = datetime.utcnow() - timedelta(hours=24)
-                stale = session.query(Match).filter(
-                    Match.is_fixture == True,
-                    Match.home_goals.is_(None),
-                    Match.match_date < stale_cutoff,
-                ).all()
-                stale_leagues = {m.league for m in stale if m.league}
-
-            if stale_leagues:
-                logger.info(f"Flashscore settle: fetching results for {len(stale_leagues)} stale leagues")
-                for league in stale_leagues:
-                    try:
-                        await asyncio.wait_for(
-                            self.scraper.scrape_league_results(league), timeout=30,
-                        )
-                    except Exception:
-                        logger.debug(f"Flashscore settle failed for {league}, skipping rest")
-                        break
-                try:
-                    self.scraper.close_driver()
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.debug(f"Flashscore settle fetch failed: {e}")
 
         settled = []
 

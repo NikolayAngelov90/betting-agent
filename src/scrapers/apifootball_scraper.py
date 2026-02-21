@@ -269,14 +269,18 @@ class APIFootballScraper(BaseScraper):
         self.db = get_db()
         self._requests_today = 0
         self._daily_limit = 100  # Free tier
+        self._quota_exhausted = False  # Set True on first quota error; skips all further calls
 
     async def _api_get(self, endpoint: str, params: dict = None) -> Optional[dict]:
         """Make an authenticated GET request to API-Football.
 
         Uses BaseScraper.fetch_json for retry + circuit breaker support.
         """
+        if self._quota_exhausted:
+            return None
         if self._requests_today >= self._daily_limit:
             logger.warning("API-Football daily request limit reached, skipping")
+            self._quota_exhausted = True
             return None
 
         url = f"{API_FOOTBALL_BASE}{endpoint}"
@@ -290,6 +294,9 @@ class APIFootballScraper(BaseScraper):
                 if "rateLimit" in errors:
                     logger.debug("API-Football rate limited, waiting 12s")
                     await asyncio.sleep(12)
+                elif "requests" in errors:
+                    logger.warning("API-Football daily quota exhausted — skipping all further API calls")
+                    self._quota_exhausted = True
                 else:
                     logger.error(f"API-Football errors: {errors}")
                 return None
