@@ -96,12 +96,14 @@ jobs:
             data/historical_load_cache.json
           key: betting-data-${{ github.run_number }}
 
-      - name: Export database snapshot for local sync
+      - name: Export database and models for local sync
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: betting-db-latest
-          path: data/football_betting.db
+          path: |
+            data/football_betting.db
+            data/models/
           retention-days: 7
           overwrite: true
 

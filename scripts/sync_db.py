@@ -118,7 +118,7 @@ def cmd_pull(token: str):
             print("ERROR: DB file not found inside artifact zip.")
             sys.exit(1)
 
-        # Backup existing local DB
+        # Backup and replace DB
         if LOCAL_DB.exists():
             backup = LOCAL_DB.with_suffix(f".backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
             shutil.copy2(LOCAL_DB, backup)
@@ -126,6 +126,17 @@ def cmd_pull(token: str):
 
         LOCAL_DB.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(extracted_db, LOCAL_DB)
+
+        # Copy models if present in artifact
+        extracted_models = Path(tmp) / "models"
+        if extracted_models.exists():
+            local_models = Path("data/models")
+            if local_models.exists():
+                shutil.rmtree(local_models)
+            shutil.copytree(extracted_models, local_models)
+            print("ML models synced from CI.")
+        else:
+            print("No models in artifact (will be included after next CI run).")
 
     print("\nSync complete!")
     print("=== PULLED DB ===")
