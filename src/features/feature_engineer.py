@@ -344,9 +344,10 @@ class FeatureEngineer:
                 if odds_dict is None:
                     odds_dict = next(iter(bk_map.values()))
 
-                h_odds = odds_dict.get("Home")
+                # Support both API-Football ("Home"/"Away") and Flashscore ("Home Win"/"Away Win")
+                h_odds = odds_dict.get("Home") or odds_dict.get("Home Win")
                 d_odds = odds_dict.get("Draw")
-                a_odds = odds_dict.get("Away")
+                a_odds = odds_dict.get("Away") or odds_dict.get("Away Win")
 
                 if not all([h_odds, d_odds, a_odds]):
                     return defaults

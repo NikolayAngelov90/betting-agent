@@ -136,6 +136,21 @@ class ValueBettingCalculator:
             if prob < self.min_confidence and ev < 0.10:
                 continue
 
+            # Model-market divergence guard: reject when our model probability
+            # is more than 2.5× the bookmaker's implied probability.
+            # Such extreme gaps almost always mean the model is miscalibrated
+            # (e.g. limited data for a team, date-corrupted historical results)
+            # rather than a genuine market inefficiency.
+            if not is_fallback:
+                implied_prob = 1.0 / best_odds
+                divergence = prob / implied_prob if implied_prob > 0 else 0
+                if divergence > 2.5:
+                    logger.debug(
+                        f"Rejecting {match_name} {selection}: model {prob:.0%} vs "
+                        f"market {implied_prob:.0%} ({divergence:.1f}x divergence > 2.5x)"
+                    )
+                    continue
+
             kelly_pct = self.kelly_criterion(prob, best_odds)
             # Skip bets where Kelly recommends a trivially small stake —
             # these are on the edge of profitability and not worth the variance

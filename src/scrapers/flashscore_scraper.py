@@ -427,9 +427,17 @@ class FlashscoreScraper(BaseScraper):
         return home, away
 
     @staticmethod
-    def _parse_match_date(element, default: datetime) -> datetime:
-        """Extract match date/time from a row element, returning *default* on failure."""
-        # Try each selector (class name without dot, then CSS selector with dot)
+    def _parse_match_date(element, default: datetime, is_result: bool = False) -> datetime:
+        """Extract match date/time from a row element, returning *default* on failure.
+
+        Args:
+            element: Selenium WebElement for the match row.
+            default: Fallback datetime if parsing fails.
+            is_result: True when parsing a completed match (results page).
+                       In that case, if the parsed date falls more than 60 days
+                       in the future it is almost certainly a year-parse error
+                       (e.g. Dec 2025 stored as Dec 2026) and we subtract one year.
+        """
         for selector, by in [
             ("event__time", By.CLASS_NAME),
             (".duelParticipant__startTime", By.CSS_SELECTOR),
@@ -445,6 +453,10 @@ class FlashscoreScraper(BaseScraper):
                         dt = datetime.strptime(date_text, fmt)
                         if fmt == "%d.%m. %H:%M":
                             dt = dt.replace(year=datetime.now().year)
+                            # For results: if parsed date is >60 days in the future
+                            # it's a year-off error (e.g. Dec 2025 → wrongly Dec 2026).
+                            if is_result and dt > datetime.now() + timedelta(days=60):
+                                dt = dt.replace(year=dt.year - 1)
                         return dt
                     except ValueError:
                         continue
@@ -465,7 +477,9 @@ class FlashscoreScraper(BaseScraper):
             else:
                 return None  # not a completed result (e.g. header row)
 
-            match_date = self._parse_match_date(element, default=datetime.now())
+            match_date = self._parse_match_date(
+                element, default=datetime.now(), is_result=True
+            )
 
             # Match detail URL (for fetching extended stats later)
             match_url = None
