@@ -82,8 +82,8 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"Historical data loading failed: {e}")
 
-        # 2. Flashscore results (fetches finished match scores for settling)
-        # Bail after first failure — anti-bot protection makes it unusable
+        # 2. Flashscore results + fixtures (no API quota — primary fixture source)
+        # Bail after first failure — anti-bot protection makes it unusable on some hosts
         try:
             leagues = self.config.get("scraping.flashscore_leagues", [])
             flashscore_ok = True
@@ -101,6 +101,22 @@ class FootballBettingAgent:
                     logger.debug(f"Flashscore error for {league}: {e}")
                     flashscore_ok = False
             logger.info("Flashscore results update complete")
+
+            # Fixtures (today's upcoming matches) — also from Flashscore so picks work
+            # even when API-Football quota is exhausted
+            if flashscore_ok:
+                for league in leagues:
+                    try:
+                        await asyncio.wait_for(
+                            self.scraper.scrape_league_fixtures(league), timeout=30,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Flashscore fixture timeout for {league}, stopping")
+                        break
+                    except Exception as e:
+                        logger.debug(f"Flashscore fixture error for {league}: {e}")
+                        break
+                logger.info("Flashscore fixtures update complete")
         except Exception as e:
             logger.error(f"Flashscore update failed: {e}")
         finally:
