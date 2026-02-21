@@ -111,11 +111,16 @@ class FlashscoreScraper(BaseScraper):
                     "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 )
+                # page_load_strategy='none': driver.get() returns immediately
+                # without waiting for the browser load event. Flashscore is a
+                # Cloudflare-protected SPA whose load event sometimes never fires,
+                # causing driver.get() to hang for the full timeout. With 'none'
+                # we rely entirely on explicit WebDriverWait for specific elements.
+                options.page_load_strategy = "none"
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     future = pool.submit(webdriver.Chrome, options=options)
                     self._driver = future.result(timeout=15)
-                self._driver.implicitly_wait(10)
-                self._driver.set_page_load_timeout(30)
+                self._driver.implicitly_wait(0)  # explicit waits only; no implicit wait
             except Exception as e:
                 logger.warning(f"Chrome/Selenium not available: {e}")
                 self._chrome_failed = True
@@ -275,8 +280,9 @@ class FlashscoreScraper(BaseScraper):
 
         try:
             driver.get(url)
-            # Wait for first match row
-            WebDriverWait(driver, 15).until(
+            # With page_load_strategy='none', driver.get() returns immediately.
+            # Wait up to 20s for the first match row to be rendered by JS.
+            WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
             )
             if load_more:
@@ -312,7 +318,7 @@ class FlashscoreScraper(BaseScraper):
 
         try:
             driver.get(url)
-            WebDriverWait(driver, 15).until(
+            WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
             )
             self._click_load_more(driver)

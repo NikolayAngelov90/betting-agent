@@ -108,8 +108,17 @@ class FootballBettingAgent:
             logger.info("Flashscore results update complete")
         except Exception as e:
             logger.error(f"Flashscore results update failed: {e}")
+        finally:
+            # Always close the driver after results so any still-running
+            # background thread's session is terminated before fixtures starts.
+            # This prevents two threads sharing one WebDriver instance.
+            try:
+                self.scraper.close_driver()
+            except Exception:
+                pass
 
         # Fixtures (today's upcoming matches) — always attempted independently
+        # Driver is freshly created here (results session was closed above).
         try:
             fixtures_ok = True
             for league in leagues:
@@ -117,7 +126,7 @@ class FootballBettingAgent:
                     break
                 try:
                     await asyncio.wait_for(
-                        self.scraper.scrape_league_fixtures(league), timeout=30,
+                        self.scraper.scrape_league_fixtures(league), timeout=45,
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Flashscore fixture timeout for {league}, skipping remaining leagues")
