@@ -5,6 +5,7 @@ import pickle
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -25,9 +26,14 @@ class MLModels:
     Targets: 0 = away_win, 1 = draw, 2 = home_win
     """
 
+    # Models that need isotonic calibration (RF and XGBoost are overconfident;
+    # Logistic Regression is already calibrated by its loss function)
+    _CALIBRATE_MODELS = {"random_forest", "xgboost"}
+
     def __init__(self):
         self.scaler = StandardScaler()
         self.models = {}
+        self.calibrated_models = {}   # post-calibration wrappers (used at predict time)
         self.feature_names = []
         self.is_fitted = False
         self._init_models()
@@ -127,11 +133,33 @@ class MLModels:
                 val_pred = model.predict(X_val)
                 cv_scores.append(accuracy_score(y_val, val_pred))
 
-            # Final fit on all data
-            model.fit(X_scaled, y)
-
             avg_cv = np.mean(cv_scores)
             logger.info(f"{name} CV accuracy: {avg_cv:.4f}")
+
+        # ── Calibrated final fit ─────────────────────────────────────────────
+        # Reserve the last 25% of samples (most recent matches, time-ordered)
+        # as a calibration holdout — the base models never see this data so
+        # the calibration mapping is unbiased.
+        # LR is already calibrated by its loss function; RF/XGBoost are not.
+        cal_split = int(len(X_scaled) * 0.75)
+        X_train_final, X_cal = X_scaled[:cal_split], X_scaled[cal_split:]
+        y_train_final, y_cal = y[:cal_split], y[cal_split:]
+
+        self.calibrated_models = {}
+        for name, model in self.models.items():
+            if name in self._CALIBRATE_MODELS and len(X_cal) >= 100:
+                # Train on 75%, calibrate probability map on 25%
+                model.fit(X_train_final, y_train_final)
+                cal = CalibratedClassifierCV(model, cv="prefit", method="isotonic")
+                cal.fit(X_cal, y_cal)
+                self.calibrated_models[name] = cal
+                logger.info(
+                    f"{name}: isotonic calibration fitted on {len(X_cal)} holdout samples"
+                )
+            else:
+                # LR: train on all data (already probability-calibrated)
+                model.fit(X_scaled, y)
+                self.calibrated_models[name] = model
 
         self.is_fitted = True
         logger.info("All ML models trained successfully")
@@ -182,7 +210,9 @@ class MLModels:
         all_probs = []
 
         for name, model in self.models.items():
-            probs = model.predict_proba(X_scaled)[0]
+            # Use calibrated model if available (RF/XGBoost); otherwise raw (LR)
+            cal_model = self.calibrated_models.get(name, model)
+            probs = cal_model.predict_proba(X_scaled)[0]
 
             # Ensure we have 3 classes (away=0, draw=1, home=2)
             if len(probs) == 3:
@@ -224,6 +254,7 @@ class MLModels:
 
         state = {
             "models": self.models,
+            "calibrated_models": getattr(self, "calibrated_models", {}),
             "scaler": self.scaler,
             "feature_names": self.feature_names,
             "is_fitted": self.is_fitted,
@@ -250,6 +281,7 @@ class MLModels:
             state = pickle.load(f)
 
         self.models = state["models"]
+        self.calibrated_models = state.get("calibrated_models", {})
         self.scaler = state["scaler"]
         self.feature_names = state["feature_names"]
         self.is_fitted = state["is_fitted"]

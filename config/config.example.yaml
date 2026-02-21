@@ -58,10 +58,11 @@ models:
 betting:
   min_odds: 1.30
   max_odds: 10.0
-  min_expected_value: 0.03  # 3% minimum edge
-  min_confidence: 0.58      # 58% minimum confidence
-  kelly_fraction: 0.25      # Fractional Kelly for risk management
-  max_stake_percentage: 5.0 # Maximum 5% of bankroll per bet
+  min_expected_value: 0.03  # 3% minimum edge (professional standard is 2-3%)
+  min_confidence: 0.58      # 58% minimum model probability (after isotonic calibration)
+  kelly_fraction: 0.25      # Fractional Kelly — 25% of full Kelly (professional standard)
+  max_stake_percentage: 5.0 # Hard cap: maximum 5% of bankroll per bet
+  min_kelly_stake: 0.5      # Skip picks where Kelly < 0.5% of bankroll (too marginal)
   max_picks_per_league: 3   # Portfolio: cap exposure per league per day
   max_total_kelly_pct: 20.0 # Portfolio: cap total bankroll exposure per day (%)
 

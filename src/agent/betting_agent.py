@@ -199,16 +199,17 @@ class FootballBettingAgent:
                                              feature_names=feature_names,
                                              league=league)
 
-        # Get injury report
-        from src.scrapers.injury_scraper import InjuryScraper
-        injury_scraper = InjuryScraper()
-        home_injuries = await injury_scraper.get_injury_summary(home_id)
-        away_injuries = await injury_scraper.get_injury_summary(away_id)
+        # Fetch injury and news data in parallel — all four are local-DB reads
+        (
+            home_injuries, away_injuries,
+            home_sentiment, away_sentiment,
+        ) = await asyncio.gather(
+            self.injury_tracker.get_injury_summary(home_id),
+            self.injury_tracker.get_injury_summary(away_id),
+            self.news_aggregator.get_team_sentiment(home_id),
+            self.news_aggregator.get_team_sentiment(away_id),
+        )
         injury_report = {"home": home_injuries, "away": away_injuries}
-
-        # Get news summary
-        home_sentiment = await self.news_aggregator.get_team_sentiment(home_id)
-        away_sentiment = await self.news_aggregator.get_team_sentiment(away_id)
         news_summary = {"home": home_sentiment, "away": away_sentiment}
 
         # Build context for reasoning
@@ -234,21 +235,20 @@ class FootballBettingAgent:
         )
 
     async def get_daily_picks(self, target_date: date = None,
-                              min_ev: float = 0.05,
-                              min_confidence: float = 0.58,
                               max_picks_per_match: int = 2,
                               leagues: List[str] = None) -> List[BetRecommendation]:
         """Get high-confidence value betting picks for a specific date.
 
+        EV and confidence thresholds are read from config (betting.min_expected_value /
+        betting.min_confidence) by the ValueBettingCalculator — no need to pass them here.
+
         Args:
             target_date: Date to get picks for (defaults to today)
-            min_ev: Minimum expected value threshold
-            min_confidence: Minimum confidence threshold (default 60%)
             max_picks_per_match: Maximum picks allowed per single match (default 2)
             leagues: Optional list of league keys to restrict picks to
 
         Returns:
-            List of BetRecommendation sorted by confidence
+            List of BetRecommendation sorted by EV × confidence × model-agreement bonus
         """
         target = target_date or date.today()
         league_label = f" (leagues: {', '.join(leagues)})" if leagues else ""
@@ -303,19 +303,29 @@ class FootballBettingAgent:
                     f"Add them to historical_loader.py to improve predictions."
                 )
 
-        all_recommendations = []
-        for match_id in fixture_ids:
-            try:
-                analysis = await self.analyze_fixture(match_id)
-                for rec in analysis.recommendations:
-                    if rec.expected_value >= min_ev and rec.confidence >= min_confidence:
-                        all_recommendations.append(rec)
-            except Exception as e:
-                logger.error(f"Error analyzing match {match_id}: {e}")
+        # Analyze all fixtures concurrently — injury and news lookups are local-DB
+        # queries, so running them in parallel is safe with SQLite WAL mode.
+        logger.info(f"Analyzing {len(fixture_ids)} fixtures concurrently...")
+        analyses = await asyncio.gather(
+            *(self.analyze_fixture(mid) for mid in fixture_ids),
+            return_exceptions=True,
+        )
 
-        # Sort by confidence (highest first)
+        all_recommendations = []
+        for mid, result in zip(fixture_ids, analyses):
+            if isinstance(result, Exception):
+                logger.error(f"Error analyzing match {mid}: {result}")
+                continue
+            # value_calculator.find_value_bets() already applied EV/confidence
+            # filters from config — no secondary filter needed here.
+            all_recommendations.extend(result.recommendations)
+
+        # Sort order mirrors value_calculator: EV × confidence × agreement bonus.
+        # This ensures the portfolio cap (below) takes the best-conviction picks first.
+        _agreement_bonus = {"unanimous": 1.15, "majority": 1.0, "split": 0.85, "unknown": 0.95}
         all_recommendations.sort(
-            key=lambda r: r.confidence,
+            key=lambda r: r.expected_value * r.confidence
+            * _agreement_bonus.get(r.model_agreement, 1.0),
             reverse=True,
         )
 

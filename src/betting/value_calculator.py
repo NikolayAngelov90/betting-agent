@@ -48,10 +48,13 @@ class ValueBettingCalculator:
         betting = self.config.betting
         self.min_odds = betting.get("min_odds", 1.30)
         self.max_odds = betting.get("max_odds", 10.0)
-        self.min_ev = betting.get("min_expected_value", 0.05)
-        self.min_confidence = betting.get("min_confidence", 0.55)
+        self.min_ev = betting.get("min_expected_value", 0.03)       # 3% — professional standard
+        self.min_confidence = betting.get("min_confidence", 0.58)   # 58% minimum model probability
         self.kelly_fraction = betting.get("kelly_fraction", 0.25)
         self.max_stake_pct = betting.get("max_stake_percentage", 5.0)
+        # Reject picks where Kelly recommends less than this % of bankroll
+        # (too marginal to justify the variance — usually <0.5% means near-zero edge)
+        self.min_kelly_stake = betting.get("min_kelly_stake", 0.5)
 
     def find_value_bets(self, predictions: Dict, odds_data: List[Dict],
                         match_name: str = "",
@@ -140,6 +143,14 @@ class ValueBettingCalculator:
                 continue
 
             kelly_pct = self.kelly_criterion(prob, best_odds)
+            # Skip bets where Kelly recommends a trivially small stake —
+            # these are on the edge of profitability and not worth the variance
+            if kelly_pct < self.min_kelly_stake:
+                logger.debug(
+                    f"Skipping {match_name} {selection}: "
+                    f"Kelly {kelly_pct:.2f}% < min {self.min_kelly_stake}%"
+                )
+                continue
             risk = self._assess_risk(prob, best_odds, ev)
 
             # Model agreement analysis
@@ -184,8 +195,15 @@ class ValueBettingCalculator:
             )
             recommendations.append(rec)
 
-        # Sort by EV * confidence (best bets first)
-        recommendations.sort(key=lambda r: r.expected_value * r.confidence, reverse=True)
+        # Sort by EV * confidence * agreement bonus (best bets first).
+        # Unanimous picks are promoted; split-model picks are demoted.
+        # This ensures portfolio caps consume slots on the highest-conviction bets first.
+        _agreement_bonus = {"unanimous": 1.15, "majority": 1.0, "split": 0.85, "unknown": 0.95}
+        recommendations.sort(
+            key=lambda r: r.expected_value * r.confidence
+            * _agreement_bonus.get(r.model_agreement, 1.0),
+            reverse=True,
+        )
         return recommendations
 
     @staticmethod
