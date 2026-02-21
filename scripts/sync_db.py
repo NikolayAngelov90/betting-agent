@@ -28,7 +28,7 @@ except ImportError:
     print("Install requests first:  pip install requests")
     sys.exit(1)
 
-REPO = "NikolayAngelov90/beting-agent"
+REPO = "NikolayAngelov90/betting-agent"
 ARTIFACT_NAME = "betting-db-latest"
 LOCAL_DB = Path("data/football_betting.db")
 API_BASE = f"https://api.github.com/repos/{REPO}"
