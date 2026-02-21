@@ -161,7 +161,12 @@ class FlashscoreScraper(BaseScraper):
         logger.info(f"Scraping results: {league}")
 
         loop = asyncio.get_event_loop()
-        matches = await loop.run_in_executor(None, self._scrape_results_page, url)
+        # When skip_stats=True we only need today's/yesterday's results for
+        # settlement — skip load_more to avoid the indefinite click loop that
+        # causes Premier League to always exceed the timeout.
+        matches = await loop.run_in_executor(
+            None, self._scrape_results_page, url, not skip_stats
+        )
 
         db = get_db()
         # Save basic scores and collect (match_id, match_url, match_date) for
@@ -254,8 +259,14 @@ class FlashscoreScraper(BaseScraper):
             except Exception:
                 break
 
-    def _scrape_results_page(self, url: str) -> List[dict]:
-        """Scrape a results page using Selenium."""
+    def _scrape_results_page(self, url: str, load_more: bool = True) -> List[dict]:
+        """Scrape a results page using Selenium.
+
+        Args:
+            load_more: When False, skip clicking 'Load more' and only parse the
+                       matches already visible on the first page (~10-20 most recent).
+                       Use when only the latest results are needed (e.g. settlement).
+        """
         driver = self._get_driver()
         if not driver:
             logger.debug("Flashscore: Chrome not available, skipping results scrape")
@@ -268,7 +279,8 @@ class FlashscoreScraper(BaseScraper):
             WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
             )
-            self._click_load_more(driver)
+            if load_more:
+                self._click_load_more(driver)
 
             match_elements = driver.find_elements(
                 By.CSS_SELECTOR,
