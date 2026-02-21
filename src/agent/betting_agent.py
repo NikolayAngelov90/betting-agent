@@ -83,42 +83,47 @@ class FootballBettingAgent:
             logger.error(f"Historical data loading failed: {e}")
 
         # 2. Flashscore results + fixtures (no API quota — primary fixture source)
-        # Bail after first failure — anti-bot protection makes it unusable on some hosts
+        # Results and fixtures are scraped independently so a results timeout does
+        # not prevent today's fixtures from being loaded.
+        leagues = self.config.get("scraping.flashscore_leagues", [])
         try:
-            leagues = self.config.get("scraping.flashscore_leagues", [])
-            flashscore_ok = True
+            results_ok = True
             for league in leagues:
-                if not flashscore_ok:
+                if not results_ok:
                     break
                 try:
                     await asyncio.wait_for(
                         self.scraper.scrape_league_results(league), timeout=30,
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(f"Flashscore timeout for {league}, skipping remaining leagues")
-                    flashscore_ok = False
+                    logger.warning(f"Flashscore results timeout for {league}, skipping remaining leagues")
+                    results_ok = False
                 except Exception as e:
-                    logger.debug(f"Flashscore error for {league}: {e}")
-                    flashscore_ok = False
+                    logger.debug(f"Flashscore results error for {league}: {e}")
+                    results_ok = False
             logger.info("Flashscore results update complete")
-
-            # Fixtures (today's upcoming matches) — also from Flashscore so picks work
-            # even when API-Football quota is exhausted
-            if flashscore_ok:
-                for league in leagues:
-                    try:
-                        await asyncio.wait_for(
-                            self.scraper.scrape_league_fixtures(league), timeout=30,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Flashscore fixture timeout for {league}, stopping")
-                        break
-                    except Exception as e:
-                        logger.debug(f"Flashscore fixture error for {league}: {e}")
-                        break
-                logger.info("Flashscore fixtures update complete")
         except Exception as e:
-            logger.error(f"Flashscore update failed: {e}")
+            logger.error(f"Flashscore results update failed: {e}")
+
+        # Fixtures (today's upcoming matches) — always attempted independently
+        try:
+            fixtures_ok = True
+            for league in leagues:
+                if not fixtures_ok:
+                    break
+                try:
+                    await asyncio.wait_for(
+                        self.scraper.scrape_league_fixtures(league), timeout=30,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Flashscore fixture timeout for {league}, skipping remaining leagues")
+                    fixtures_ok = False
+                except Exception as e:
+                    logger.debug(f"Flashscore fixture error for {league}: {e}")
+                    fixtures_ok = False
+            logger.info("Flashscore fixtures update complete")
+        except Exception as e:
+            logger.error(f"Flashscore fixtures update failed: {e}")
         finally:
             try:
                 self.scraper.close_driver()
