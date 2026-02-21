@@ -2,8 +2,9 @@ name: Daily Betting Picks
 
 on:
   schedule:
-    # Runs at 09:00 UTC = 11:00 Kyiv/Helsinki (UTC+2)
-    - cron: '0 09 * * *'
+    # Scheduled at 08:30 UTC to account for GitHub Actions queue delay (~30 min).
+    # Target execution time: ~11:00 Kyiv/Helsinki (UTC+2)
+    - cron: '30 08 * * *'
   workflow_dispatch: # Allow manual trigger
 
 jobs:
