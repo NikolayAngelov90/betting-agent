@@ -41,14 +41,20 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import asyncio
 import concurrent.futures
+
+try:
+    import undetected_chromedriver as uc
+    _UC_AVAILABLE = True
+except ImportError:
+    # Fallback to standard selenium if undetected-chromedriver not installed
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    _UC_AVAILABLE = False
 
 from src.scrapers.base_scraper import BaseScraper
 from src.data.models import Team, Match
@@ -95,21 +101,31 @@ class FlashscoreScraper(BaseScraper):
         self._chrome_failed = False
 
     def _get_driver(self):
-        """Create a Selenium Chrome driver. Returns None if Chrome unavailable."""
+        """Create a Chrome driver. Returns None if Chrome unavailable.
+
+        Uses undetected-chromedriver when available to bypass Cloudflare's
+        bot detection (removes navigator.webdriver flag and other signals).
+        Falls back to standard Selenium if the package is not installed.
+        """
         if self._chrome_failed:
             return None
         if self._driver is None:
             try:
-                options = Options()
-                if self.headless:
-                    options.add_argument("--headless=new")
+                if _UC_AVAILABLE:
+                    options = uc.ChromeOptions()
+                else:
+                    options = Options()  # type: ignore[assignment]
+
                 options.add_argument("--no-sandbox")
                 options.add_argument("--disable-dev-shm-usage")
                 options.add_argument("--disable-gpu")
                 options.add_argument("--disable-extensions")
+                # Realistic 1080p viewport — headless default (640×480) is a
+                # known Cloudflare fingerprint signal.
+                options.add_argument("--window-size=1920,1080")
                 options.add_argument(
                     "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                 )
                 # page_load_strategy='none': driver.get() returns immediately
                 # without waiting for the browser load event. Flashscore is a
@@ -117,10 +133,28 @@ class FlashscoreScraper(BaseScraper):
                 # causing driver.get() to hang for the full timeout. With 'none'
                 # we rely entirely on explicit WebDriverWait for specific elements.
                 options.page_load_strategy = "none"
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(webdriver.Chrome, options=options)
-                    self._driver = future.result(timeout=15)
-                self._driver.implicitly_wait(0)  # explicit waits only; no implicit wait
+
+                if _UC_AVAILABLE:
+                    # headless= passed directly to uc.Chrome is stealthier than
+                    # the --headless flag in options (uc uses a different code path).
+                    # use_subprocess=True avoids zombie processes in CI.
+                    def _create_uc():
+                        return uc.Chrome(
+                            options=options,
+                            headless=self.headless,
+                            use_subprocess=True,
+                        )
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(_create_uc)
+                        self._driver = future.result(timeout=30)
+                else:
+                    if self.headless:
+                        options.add_argument("--headless=new")
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(webdriver.Chrome, options=options)  # type: ignore[attr-defined]
+                        self._driver = future.result(timeout=15)
+
+                self._driver.implicitly_wait(0)  # explicit waits only
             except Exception as e:
                 logger.warning(f"Chrome/Selenium not available: {e}")
                 self._chrome_failed = True
