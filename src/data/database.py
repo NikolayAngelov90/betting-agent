@@ -180,8 +180,31 @@ def get_db() -> DatabaseManager:
 
 
 def init_db():
-    """Initialize database: create engine and all tables."""
+    """Initialize database: create engine and all tables.
+
+    If the cached DB file is malformed (e.g. incomplete WAL from a crashed
+    previous run), it is deleted and a fresh empty database is created so
+    the rest of the pipeline can continue normally.
+    """
+    global _db_manager
     db = get_db()
-    db.create_tables()
+    try:
+        db.create_tables()
+    except Exception as e:
+        if "malformed" in str(e).lower() or "corrupt" in str(e).lower():
+            logger.warning(f"Cached database is corrupt ({e}). Deleting and recreating.")
+            from pathlib import Path
+            db_path = Path(db.config.database.get("sqlite_path", "data/football_betting.db"))
+            for suffix in ("", "-wal", "-shm"):
+                p = Path(str(db_path) + suffix)
+                if p.exists():
+                    p.unlink()
+                    logger.warning(f"Removed: {p}")
+            # Reset global singleton so engine is recreated against fresh file
+            _db_manager = None
+            db = get_db()
+            db.create_tables()
+        else:
+            raise
     logger.info("Database initialized")
     return db

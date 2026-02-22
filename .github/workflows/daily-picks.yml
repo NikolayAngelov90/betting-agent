@@ -50,6 +50,34 @@ jobs:
       - name: Create config from example
         run: cp config/config.example.yaml config/config.yaml
 
+      - name: Verify and recover database
+        run: |
+          python << 'PYEOF'
+          import sqlite3, os
+          db = 'data/football_betting.db'
+          if os.path.exists(db):
+              try:
+                  conn = sqlite3.connect(db)
+                  result = conn.execute('PRAGMA integrity_check').fetchone()
+                  conn.close()
+                  if result[0] != 'ok':
+                      for ext in ('', '-wal', '-shm'):
+                          p = db + ext
+                          if os.path.exists(p):
+                              os.remove(p)
+                      print(f'Removed corrupt database (integrity_check={result[0]})')
+                  else:
+                      print('Database integrity OK')
+              except Exception as e:
+                  for ext in ('', '-wal', '-shm'):
+                      p = db + ext
+                      if os.path.exists(p):
+                          os.remove(p)
+                  print(f'Removed corrupt database: {e}')
+          else:
+              print('No database file — fresh start')
+          PYEOF
+
       - name: Initialize database
         run: python -c "from src.data.database import init_db; init_db()"
 
