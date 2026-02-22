@@ -87,31 +87,24 @@ class FootballBettingAgent:
         # not prevent today's fixtures from being loaded.
         leagues = self.config.get("scraping.flashscore_leagues", [])
         try:
-            results_ok = True
             for league in leagues:
-                if not results_ok:
-                    break
                 try:
-                    # skip_stats=True: only save scores, skip per-match detail pages.
-                    # Detail pages take 50-100s for large leagues; scores are enough
-                    # for settlement. The full update() method handles stat enrichment.
                     await asyncio.wait_for(
                         self.scraper.scrape_league_results(league, skip_stats=True),
                         timeout=60,
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(f"Flashscore results timeout for {league}, skipping remaining leagues")
-                    results_ok = False
+                    logger.warning(f"Flashscore results timeout for {league}, continuing")
+                    try:
+                        self.scraper.close_driver()  # reset Chrome for next league
+                    except Exception:
+                        pass
                 except Exception as e:
                     logger.debug(f"Flashscore results error for {league}: {e}")
-                    results_ok = False
             logger.info("Flashscore results update complete")
         except Exception as e:
             logger.error(f"Flashscore results update failed: {e}")
         finally:
-            # Always close the driver after results so any still-running
-            # background thread's session is terminated before fixtures starts.
-            # This prevents two threads sharing one WebDriver instance.
             try:
                 self.scraper.close_driver()
             except Exception:
@@ -120,20 +113,19 @@ class FootballBettingAgent:
         # Fixtures (today's upcoming matches) — always attempted independently
         # Driver is freshly created here (results session was closed above).
         try:
-            fixtures_ok = True
             for league in leagues:
-                if not fixtures_ok:
-                    break
                 try:
                     await asyncio.wait_for(
                         self.scraper.scrape_league_fixtures(league), timeout=45,
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(f"Flashscore fixture timeout for {league}, skipping remaining leagues")
-                    fixtures_ok = False
+                    logger.warning(f"Flashscore fixture timeout for {league}, continuing")
+                    try:
+                        self.scraper.close_driver()  # reset Chrome for next league
+                    except Exception:
+                        pass
                 except Exception as e:
                     logger.debug(f"Flashscore fixture error for {league}: {e}")
-                    fixtures_ok = False
             logger.info("Flashscore fixtures update complete")
         except Exception as e:
             logger.error(f"Flashscore fixtures update failed: {e}")

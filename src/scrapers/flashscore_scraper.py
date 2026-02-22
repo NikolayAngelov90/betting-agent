@@ -195,13 +195,15 @@ class FlashscoreScraper(BaseScraper):
         return self._driver
 
     def close_driver(self):
-        """Close the Selenium driver."""
+        """Close the Selenium driver and reset failure flag for next use."""
         if self._driver:
             try:
                 self._driver.quit()
             except Exception:
                 pass
             self._driver = None
+        # Reset so next league can attempt a fresh Chrome session
+        self._chrome_failed = False
 
     async def update(self):
         """Run full update: results + fixtures for all configured leagues."""
@@ -423,8 +425,13 @@ class FlashscoreScraper(BaseScraper):
 
         return matches
 
-    def _scrape_fixtures_page(self, url: str) -> List[dict]:
-        """Scrape a fixtures page using Selenium."""
+    def _scrape_fixtures_page(self, url: str, max_days_ahead: int = 7) -> List[dict]:
+        """Scrape a fixtures page using Selenium.
+
+        Only loads and saves fixtures within `max_days_ahead` days to avoid
+        clicking through the entire season (which causes timeouts and stores
+        hundreds of irrelevant far-future matches).
+        """
         driver = self._get_driver()
         if not driver:
             return []
@@ -444,10 +451,13 @@ class FlashscoreScraper(BaseScraper):
             if not match_elements:
                 match_elements = driver.find_elements(By.CLASS_NAME, "event__match")
 
+            cutoff = datetime.now() + timedelta(days=max_days_ahead)
             for el in match_elements:
                 try:
                     match_data = self._parse_fixture_element(el)
                     if match_data:
+                        if match_data.get("match_date") and match_data["match_date"] > cutoff:
+                            continue  # skip far-future fixtures
                         matches.append(match_data)
                 except Exception as e:
                     logger.debug(f"Failed to parse fixture element: {e}")
