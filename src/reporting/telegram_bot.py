@@ -36,9 +36,9 @@ LEAGUE_DISPLAY = {
     "finland/veikkausliiga": "🇫🇮 Veikkausliiga",
     "poland/ekstraklasa": "🇵🇱 Ekstraklasa",
     "romania/liga-1": "🇷🇴 Liga I",
-    "champions-league": "🏆 Champions League",
-    "europa-league": "🏆 Europa League",
-    "europa-conference-league": "🏆 Conference League",
+    "europe/champions-league": "🏆 Champions League",
+    "europe/europa-league": "🏆 Europa League",
+    "europe/europa-conference-league": "🏆 Conference League",
 }
 
 

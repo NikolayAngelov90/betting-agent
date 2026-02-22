@@ -190,9 +190,9 @@ LEAGUE_ID_MAP = {
     "finland/veikkausliiga": 244,
     "poland/ekstraklasa": 106,
     "romania/liga-1": 283,
-    "champions-league": 2,
-    "europa-league": 3,
-    "europa-conference-league": 848,
+    "europe/champions-league": 2,
+    "europe/europa-league": 3,
+    "europe/europa-conference-league": 848,
 }
 
 # Reverse map: API-Football league ID -> our internal league key
@@ -201,8 +201,8 @@ ID_TO_LEAGUE = {v: k for k, v in LEAGUE_ID_MAP.items()}
 # Leagues to fetch odds for first (highest priority)
 PRIORITY_LEAGUES = [
     "england/premier-league", "spain/laliga", "germany/bundesliga",
-    "italy/serie-a", "france/ligue-1", "champions-league",
-    "europa-league", "netherlands/eredivisie", "portugal/primeira-liga",
+    "italy/serie-a", "france/ligue-1", "europe/champions-league",
+    "europe/europa-league", "netherlands/eredivisie", "portugal/primeira-liga",
     "belgium/jupiler-pro-league", "turkey/super-lig", "scotland/premiership",
 ]
 

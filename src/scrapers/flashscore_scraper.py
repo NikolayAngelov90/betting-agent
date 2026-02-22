@@ -417,10 +417,11 @@ class FlashscoreScraper(BaseScraper):
                     logger.debug(f"Failed to parse match element: {e}")
 
         except Exception as e:
-            # If the driver window is gone (e.g. Chrome crashed or use_subprocess
-            # caused an early exit), reset _driver so the next call creates a fresh one.
-            if "no such window" in str(e).lower() or "target window already closed" in str(e).lower():
-                self._driver = None
+            # Always reset the driver on any page-load failure: Chrome may have
+            # crashed (empty Message:), timed out, or lost its window. Resetting
+            # ensures the next league starts with a fresh Chrome instance instead
+            # of inheriting a broken session that causes cascading failures.
+            self._driver = None
             logger.error(f"Error loading results page {url}: {e}")
 
         return matches
@@ -463,8 +464,7 @@ class FlashscoreScraper(BaseScraper):
                     logger.debug(f"Failed to parse fixture element: {e}")
 
         except Exception as e:
-            if "no such window" in str(e).lower() or "target window already closed" in str(e).lower():
-                self._driver = None
+            self._driver = None
             logger.error(f"Error loading fixtures page {url}: {e}")
 
         return matches

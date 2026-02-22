@@ -79,7 +79,7 @@ class EnsemblePredictor:
     # Leagues where teams come from different domestic leagues,
     # so Poisson league-calibrated strengths are less reliable.
     INTERNATIONAL_LEAGUES = {
-        "champions-league", "europa-league", "europa-conference-league",
+        "europe/champions-league", "europe/europa-league", "europe/europa-conference-league",
     }
 
     def predict(self, home_team_id: int, away_team_id: int,

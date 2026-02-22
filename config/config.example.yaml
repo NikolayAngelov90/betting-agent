@@ -33,10 +33,10 @@ scraping:
     - finland/veikkausliiga
     - poland/ekstraklasa
     - romania/liga-1
-    # European Competitions
-    - champions-league
-    - europa-league
-    - europa-conference-league
+    # European Competitions (Flashscore path: /football/europe/{league}/)
+    - europe/champions-league
+    - europe/europa-league
+    - europe/europa-conference-league
 
   update_interval_hours: 6
   headless: true

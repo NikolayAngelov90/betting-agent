@@ -242,7 +242,7 @@ class TeamFeatures:
 
     # Leagues classified as international competitions
     INTERNATIONAL_LEAGUES = {
-        "champions-league", "europa-league", "europa-conference-league",
+        "europe/champions-league", "europe/europa-league", "europe/europa-conference-league",
     }
 
     def get_international_form(self, team_id: int, num_matches: int = 10) -> dict:
