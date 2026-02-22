@@ -822,6 +822,7 @@ class FlashscoreScraper(BaseScraper):
                 else:
                     return result  # all attempts failed
 
+        try:
             spans = driver.find_elements(By.CSS_SELECTOR, "[data-testid='wcl-oddsValue']")
             values = []
             for span in spans:
