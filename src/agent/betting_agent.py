@@ -524,6 +524,13 @@ class FootballBettingAgent:
                     SavedPick.selection == pick.selection,
                     SavedPick.pick_date == pick_date,
                 ).first()
+                if not existing:
+                    # Secondary guard: same match name (catches duplicate match rows)
+                    existing = session.query(SavedPick).filter(
+                        SavedPick.match_name == pick.match,
+                        SavedPick.selection == pick.selection,
+                        SavedPick.pick_date == pick_date,
+                    ).first()
                 if existing:
                     continue
 
@@ -648,6 +655,35 @@ class FootballBettingAgent:
 
             for pick in pending:
                 match = session.get(Match, pick.match_id)
+                # Fallback: if the primary match_id has no result, scan same league+date
+                # by team-name similarity (handles cross-source name mismatches)
+                if (not match or match.home_goals is None or match.away_goals is None) and pick.match_name:
+                    parts = pick.match_name.split(" vs ", 1)
+                    if len(parts) == 2 and pick.match_id:
+                        ref_match = session.get(Match, pick.match_id)
+                        ref_date = ref_match.match_date if ref_match else None
+                        if ref_date:
+                            from datetime import timedelta as _td
+                            window_start = ref_date - _td(hours=24)
+                            window_end = ref_date + _td(hours=24)
+                            candidates = (
+                                session.query(Match)
+                                .filter(
+                                    Match.is_fixture == False,
+                                    Match.home_goals.isnot(None),
+                                    Match.match_date >= window_start,
+                                    Match.match_date <= window_end,
+                                )
+                                .all()
+                            )
+                            from src.scrapers.flashscore_scraper import FlashscoreScraper as _FS
+                            h_name, a_name = parts[0].strip(), parts[1].strip()
+                            for cand in candidates:
+                                ch = session.get(Team, cand.home_team_id)
+                                ca = session.get(Team, cand.away_team_id)
+                                if ch and ca and _FS._team_names_similar(ch.name, h_name) and _FS._team_names_similar(ca.name, a_name):
+                                    match = cand
+                                    break
                 if not match or match.home_goals is None or match.away_goals is None:
                     continue  # Match not completed yet
 
