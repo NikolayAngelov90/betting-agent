@@ -27,6 +27,12 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      - name: Install Chrome (stable)
+        run: |
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          google-chrome --version
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip

@@ -139,18 +139,44 @@ class FlashscoreScraper(BaseScraper):
 
                 if _UC_AVAILABLE:
                     import platform as _platform
+                    import subprocess as _subprocess
+                    import re as _re
                     # headless= passed directly to uc.Chrome is stealthier than
                     # the --headless flag in options (uc uses a different code path).
                     # use_subprocess=True avoids zombie processes in CI (Linux only —
                     # on Windows it causes Chrome to exit immediately).
                     _use_subprocess = _platform.system() != "Windows"
 
+                    # Detect installed Chrome major version so uc downloads the
+                    # matching ChromeDriver instead of using the system one
+                    # (prevents "ChromeDriver X supports Chrome Y" version mismatch).
+                    _chrome_version = None
+                    for _cmd in (
+                        ["google-chrome", "--version"],
+                        ["google-chrome-stable", "--version"],
+                        ["chromium-browser", "--version"],
+                        ["chromium", "--version"],
+                    ):
+                        try:
+                            _out = _subprocess.run(
+                                _cmd, capture_output=True, text=True, timeout=5
+                            ).stdout
+                            _m = _re.search(r"(\d+)\.", _out)
+                            if _m:
+                                _chrome_version = int(_m.group(1))
+                                break
+                        except Exception:
+                            continue
+
                     def _create_uc():
-                        return uc.Chrome(
+                        kwargs = dict(
                             options=options,
                             headless=self.headless,
                             use_subprocess=_use_subprocess,
                         )
+                        if _chrome_version:
+                            kwargs["version_main"] = _chrome_version
+                        return uc.Chrome(**kwargs)
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                         future = pool.submit(_create_uc)
                         self._driver = future.result(timeout=30)
