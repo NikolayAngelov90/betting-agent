@@ -252,11 +252,13 @@ BET_TYPE_MAP = {
 class APIFootballScraper(BaseScraper):
     """Fetches xG, match statistics, fixtures, and odds from API-Football."""
 
-    # Request budget allocation (out of 100/day)
+    # Request budget allocation (out of 100/day free tier).
+    # Odds are fully covered by Flashscore (Selenium, no quota), so BUDGET_ODDS=0
+    # frees up the full budget for xG backfill which directly improves model quality.
     BUDGET_RESULTS = 4
     BUDGET_FIXTURES = 2
-    BUDGET_XG = 15
-    BUDGET_ODDS = 70
+    BUDGET_XG = 85   # was 15 — covers ~85 recent matches per day
+    BUDGET_ODDS = 0   # was 70 — Flashscore scrapes 1X2/O/U/BTTS for free
     BUDGET_RESERVE = 9
 
     def __init__(self, config=None):
@@ -327,8 +329,8 @@ class APIFootballScraper(BaseScraper):
         today = date.today()
         await self._fetch_fixtures_by_date(today)
 
-        # 3. Backfill xG for recent completed matches that don't have it
-        await self._backfill_xg(days_back=3)
+        # 3. Backfill xG for recent completed matches that don't have it (7 days back)
+        await self._backfill_xg()
 
         # 4. Fetch real bookmaker odds for today's fixtures
         await self.fetch_upcoming_odds()
@@ -447,7 +449,7 @@ class APIFootballScraper(BaseScraper):
 
         logger.info(f"API-Football fixtures {date_str}: {created} created, {updated} updated")
 
-    async def _backfill_xg(self, days_back: int = 3):
+    async def _backfill_xg(self, days_back: int = 7):
         """Fetch xG and stats for recent matches that don't have xG data yet."""
         with self.db.get_session() as session:
             cutoff = datetime.utcnow() - timedelta(days=days_back)
@@ -457,7 +459,7 @@ class APIFootballScraper(BaseScraper):
                 Match.home_xg.is_(None),
                 Match.match_date >= cutoff,
                 Match.apifootball_id.isnot(None),
-            ).limit(20).all()
+            ).limit(self.BUDGET_XG).all()
 
             if not matches:
                 logger.debug("No matches need xG backfill")
@@ -467,7 +469,7 @@ class APIFootballScraper(BaseScraper):
             match_data = [(m.id, m.apifootball_id) for m in matches]
 
         for match_id, fixture_id in match_data:
-            if self._requests_today >= self._daily_limit - 5:
+            if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
                 logger.warning("Approaching API limit, stopping xG backfill")
                 break
 
