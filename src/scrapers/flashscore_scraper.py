@@ -785,17 +785,42 @@ class FlashscoreScraper(BaseScraper):
             "btts": "both-teams-to-score/full-time",
         }.get(market, market)
 
-        url = f"https://www.flashscore.com/match/{flashscore_id}/#/odds-comparison/{market_path}"
+        # Try hash-based URL first (standard Flashscore SPA routing),
+        # then fall back to the non-hash path in case of a frontend update.
+        urls_to_try = [
+            f"https://www.flashscore.com/match/{flashscore_id}/#/odds-comparison/{market_path}",
+            f"https://www.flashscore.com/match/{flashscore_id}/odds-comparison/{market_path}/",
+        ]
         result = {}
-        try:
-            driver.get(url)
-            # Wait for odds values to appear
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, "[data-testid='wcl-oddsValue']")
+        tried_reset = False
+        for attempt, url in enumerate(urls_to_try):
+            try:
+                driver.get(url)
+                # Wait for odds values to appear (longer timeout to handle slow JS routing)
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located(
+                        (By.CSS_SELECTOR, "[data-testid='wcl-oddsValue']")
+                    )
                 )
-            )
-            time.sleep(1)
+                time.sleep(1)
+                break  # success — stop trying alternative URLs
+            except Exception:
+                if attempt == 0 and not tried_reset:
+                    # First URL failed — reset Chrome session (Cloudflare may have
+                    # flagged the long-running session) and retry with fresh driver.
+                    tried_reset = True
+                    try:
+                        self.close_driver()
+                    except Exception:
+                        pass
+                    driver = self._get_driver()
+                    if not driver:
+                        return {}
+                    continue
+                elif attempt < len(urls_to_try) - 1:
+                    continue  # try next URL format
+                else:
+                    return result  # all attempts failed
 
             spans = driver.find_elements(By.CSS_SELECTOR, "[data-testid='wcl-oddsValue']")
             values = []
