@@ -861,14 +861,26 @@ class FlashscoreScraper(BaseScraper):
                 result = self._parse_ou_odds(driver)
 
             elif market == "btts":
-                # Values come in pairs: Yes, No per bookmaker
+                # The BTTS page shows FT, 1H and 2H sections; values arrive as
+                # interleaved pairs (Yes, No) across ALL sections.
+                # FT BTTS Yes is always < 2.5 (typical 1.65–2.10).
+                # 1H BTTS Yes is always >= 2.5 (typical 3.50–5.00).
+                # FT BTTS No is the highest No value across all sections.
+                # Strategy: filter Yes candidates to < 2.5 to exclude 1H/2H
+                # contamination; take max of No directly (FT No is always highest).
                 if len(values) >= 2:
                     yes_vals, no_vals = [], []
                     for i in range(0, len(values) - 1, 2):
                         yes_vals.append(values[i])
                         no_vals.append(values[i + 1])
-                    result["BTTS Yes"] = max(yes_vals)
-                    result["BTTS No"] = max(no_vals)
+                    ft_yes = [v for v in yes_vals if v < 2.5]
+                    if ft_yes:
+                        result["BTTS Yes"] = max(ft_yes)
+                    elif yes_vals:
+                        # Fallback: defensive/low-scoring match where FT Yes > 2.5
+                        result["BTTS Yes"] = min(yes_vals)
+                    if no_vals:
+                        result["BTTS No"] = max(no_vals)
 
         except Exception as e:
             if "no such window" in str(e).lower() or "target window already closed" in str(e).lower():
