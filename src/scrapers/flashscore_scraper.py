@@ -293,6 +293,46 @@ class FlashscoreScraper(BaseScraper):
         logger.info(f"Scraped {len(matches)} results from {league}")
         return matches
 
+    async def enrich_recent_match_stats(self, days_back: int = 7, max_matches: int = 50):
+        """Backfill per-match stats (shots, possession, corners, etc.) for recent
+        completed matches that are missing extended stats.
+
+        Runs a single cross-league pass capped at `max_matches` total so the
+        per-league timeout in the results loop doesn't prevent stat collection.
+        Matches are processed most-recent-first so today's games get stats first.
+        """
+        db = get_db()
+        cutoff = datetime.now() - timedelta(days=days_back)
+        with db.get_session() as session:
+            matches_needing_stats = session.query(Match).filter(
+                Match.is_fixture == False,
+                Match.home_goals.isnot(None),
+                Match.home_shots.is_(None),
+                Match.flashscore_id.isnot(None),
+                Match.match_date >= cutoff,
+            ).order_by(Match.match_date.desc()).limit(max_matches).all()
+            pending = [(m.id, m.flashscore_id) for m in matches_needing_stats]
+
+        if not pending:
+            logger.debug("No matches need Flashscore stats enrichment")
+            return 0
+
+        logger.info(f"Enriching stats for {len(pending)} recent matches (cross-league pass)")
+        enriched = 0
+        for match_id, fs_id in pending:
+            match_url = f"{FLASHSCORE_BASE_URL}/match/{fs_id}/"
+            stats = await self.scrape_match_statistics(match_url)
+            if stats:
+                with db.get_session() as session:
+                    m = session.get(Match, match_id)
+                    if m:
+                        self._apply_stats_to_match(session, m, stats)
+                        enriched += 1
+            await asyncio.sleep(1)
+
+        logger.info(f"Flashscore stats enriched: {enriched}/{len(pending)} matches")
+        return enriched
+
     async def scrape_league_fixtures(self, league: str):
         """Scrape upcoming fixtures for a league."""
         url = f"{FLASHSCORE_BASE_URL}/football/{league}/fixtures/"

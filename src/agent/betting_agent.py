@@ -184,6 +184,24 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"Flashscore odds pre-cache failed: {e}")
 
+        # 2c. Flashscore per-match stats enrichment (shots, possession, corners, etc.)
+        # Single cross-league pass capped at 50 matches so it doesn't timeout.
+        # Runs after results loop so scores are already saved.
+        try:
+            await asyncio.wait_for(
+                self.scraper.enrich_recent_match_stats(days_back=7, max_matches=50),
+                timeout=300,  # 5-minute cap for the whole pass
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Flashscore stats enrichment timed out (partial results saved)")
+        except Exception as e:
+            logger.error(f"Flashscore stats enrichment failed: {e}")
+        finally:
+            try:
+                self.scraper.close_driver()
+            except Exception:
+                pass
+
         # 3. API-Football (fixtures, xG, advanced stats)
         try:
             await self.apifootball.update()
