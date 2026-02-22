@@ -137,24 +137,20 @@ class MLModels:
             logger.info(f"{name} CV accuracy: {avg_cv:.4f}")
 
         # ── Calibrated final fit ─────────────────────────────────────────────
-        # Reserve the last 25% of samples (most recent matches, time-ordered)
-        # as a calibration holdout — the base models never see this data so
-        # the calibration mapping is unbiased.
-        # LR is already calibrated by its loss function; RF/XGBoost are not.
-        cal_split = int(len(X_scaled) * 0.75)
-        X_train_final, X_cal = X_scaled[:cal_split], X_scaled[cal_split:]
-        y_train_final, y_cal = y[:cal_split], y[cal_split:]
-
+        # Use 5-fold cross-calibration (sklearn >= 1.4 removed cv='prefit').
+        # CalibratedClassifierCV with cv=5 fits the base estimator on 4 folds
+        # and the isotonic calibrator on the held-out fold, then averages all
+        # five calibrated models at prediction time — more robust than a single
+        # holdout split and compatible with all sklearn versions.
+        # LR is already probability-calibrated by its log-loss objective.
         self.calibrated_models = {}
         for name, model in self.models.items():
-            if name in self._CALIBRATE_MODELS and len(X_cal) >= 100:
-                # Train on 75%, calibrate probability map on 25%
-                model.fit(X_train_final, y_train_final)
-                cal = CalibratedClassifierCV(model, cv="prefit", method="isotonic")
-                cal.fit(X_cal, y_cal)
+            if name in self._CALIBRATE_MODELS:
+                cal = CalibratedClassifierCV(model, cv=5, method="isotonic")
+                cal.fit(X_scaled, y)
                 self.calibrated_models[name] = cal
                 logger.info(
-                    f"{name}: isotonic calibration fitted on {len(X_cal)} holdout samples"
+                    f"{name}: isotonic calibration with 5-fold CV on {len(X_scaled)} samples"
                 )
             else:
                 # LR: train on all data (already probability-calibrated)

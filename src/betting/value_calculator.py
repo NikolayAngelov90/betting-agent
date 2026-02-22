@@ -144,10 +144,10 @@ class ValueBettingCalculator:
             if not is_fallback:
                 implied_prob = 1.0 / best_odds
                 divergence = prob / implied_prob if implied_prob > 0 else 0
-                if divergence > 2.5:
+                if divergence > 2.0:
                     logger.debug(
                         f"Rejecting {match_name} {selection}: model {prob:.0%} vs "
-                        f"market {implied_prob:.0%} ({divergence:.1f}x divergence > 2.5x)"
+                        f"market {implied_prob:.0%} ({divergence:.1f}x divergence > 2.0x)"
                     )
                     continue
 
