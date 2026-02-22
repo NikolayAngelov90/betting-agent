@@ -147,10 +147,13 @@ class FlashscoreScraper(BaseScraper):
                     # on Windows it causes Chrome to exit immediately).
                     _use_subprocess = _platform.system() != "Windows"
 
-                    # Detect installed Chrome major version so uc downloads the
-                    # matching ChromeDriver instead of using the system one
-                    # (prevents "ChromeDriver X supports Chrome Y" version mismatch).
+                    # Detect installed Chrome binary path and major version so uc
+                    # downloads the matching ChromeDriver AND launches the exact
+                    # same binary (prevents "ChromeDriver X supports Chrome Y"
+                    # when multiple Chrome versions exist on the runner).
+                    import shutil as _shutil
                     _chrome_version = None
+                    _chrome_binary = None
                     for _cmd in (
                         ["google-chrome", "--version"],
                         ["google-chrome-stable", "--version"],
@@ -164,9 +167,15 @@ class FlashscoreScraper(BaseScraper):
                             _m = _re.search(r"(\d+)\.", _out)
                             if _m:
                                 _chrome_version = int(_m.group(1))
+                                _chrome_binary = _shutil.which(_cmd[0])
                                 break
                         except Exception:
                             continue
+
+                    # Pin binary_location so ChromeDriver uses the exact same
+                    # Chrome build that version_main was detected from.
+                    if _chrome_binary:
+                        options.binary_location = _chrome_binary
 
                     def _create_uc():
                         kwargs = dict(
