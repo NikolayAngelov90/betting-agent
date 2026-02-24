@@ -334,6 +334,8 @@ class FootballBettingAgent:
             home_team_name=home_team_name, away_team_name=away_team_name,
             match_id=match_id, league=league,
         )
+        for rec in recommendations:
+            rec.match_date = match_date
 
         return MatchAnalysis(
             match_id=match_id,
@@ -425,7 +427,14 @@ class FootballBettingAgent:
 
         # Data coverage report — flag under-covered fixtures and leagues
         from src.scrapers.historical_loader import LEAGUE_CSV_MAP, EXTRA_LEAGUE_CSV_MAP
-        all_hist_leagues = set(LEAGUE_CSV_MAP.keys()) | set(EXTRA_LEAGUE_CSV_MAP.keys())
+        # Flashscore-scraped leagues count as "covered" (results come from live scraping,
+        # not from football-data.co.uk CSVs).  CL/EL/ECL are covered this way.
+        _flashscore_leagues = set(self.config.get("scraping.flashscore_leagues", []))
+        all_hist_leagues = (
+            set(LEAGUE_CSV_MAP.keys())
+            | set(EXTRA_LEAGUE_CSV_MAP.keys())
+            | _flashscore_leagues
+        )
 
         with self.db.get_session() as session:
             low_coverage = []

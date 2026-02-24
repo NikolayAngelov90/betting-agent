@@ -1,7 +1,8 @@
 """Value betting calculator and bet recommendation engine."""
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from datetime import datetime
+from typing import Dict, List, Optional
 
 from src.utils.config import get_config
 from src.utils.logger import get_logger
@@ -38,6 +39,7 @@ class BetRecommendation:
     away_xg_avg: float = 0.0       # Rolling xG average (away team)
     xg_edge: str = ""              # xG-based insight string
     predicted_xg: str = ""         # e.g. "1.45 - 0.92"
+    match_date: Optional[datetime] = None  # Kickoff time (UTC)
 
 
 class ValueBettingCalculator:
@@ -166,6 +168,17 @@ class ValueBettingCalculator:
             agreement_info = self._check_model_agreement(
                 predictions, market_key, selection,
             )
+
+            # Reject split-model picks that are also below minimum confidence.
+            # High EV alone is not sufficient when models disagree AND confidence
+            # is weak — this combination typically indicates miscalibration or
+            # insufficient historical data rather than a genuine edge.
+            if agreement_info.get("agreement") == "split" and prob < self.min_confidence:
+                logger.debug(
+                    f"Rejecting {match_name} {selection}: split models + "
+                    f"confidence {prob:.0%} < {self.min_confidence:.0%}"
+                )
+                continue
 
             # xG insight
             xg_info = self._build_xg_insight(context, ensemble, market, selection)

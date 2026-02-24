@@ -87,10 +87,10 @@ jobs:
                   else:
                       # Check if DB has enough historical data to be useful
                       count = conn.execute(
-                          "SELECT COUNT(*) FROM match WHERE home_goals IS NOT NULL"
+                          "SELECT COUNT(*) FROM matches WHERE home_goals IS NOT NULL"
                       ).fetchone()[0]
                       picks = conn.execute(
-                          "SELECT COUNT(*) FROM saved_pick"
+                          "SELECT COUNT(*) FROM saved_picks"
                       ).fetchone()[0]
                       conn.close()
                       print(f'Database OK: {count} completed matches, {picks} saved picks')
@@ -126,10 +126,10 @@ jobs:
           db = 'data/football_betting.db'
           try:
               conn = sqlite3.connect(db)
-              completed = conn.execute("SELECT COUNT(*) FROM match WHERE home_goals IS NOT NULL").fetchone()[0]
-              fixtures  = conn.execute("SELECT COUNT(*) FROM match WHERE is_fixture = 1").fetchone()[0]
-              picks     = conn.execute("SELECT COUNT(*) FROM saved_pick").fetchone()[0]
-              pending   = conn.execute("SELECT COUNT(*) FROM saved_pick WHERE result IS NULL").fetchone()[0]
+              completed = conn.execute("SELECT COUNT(*) FROM matches WHERE home_goals IS NOT NULL").fetchone()[0]
+              fixtures  = conn.execute("SELECT COUNT(*) FROM matches WHERE is_fixture = 1").fetchone()[0]
+              picks     = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
+              pending   = conn.execute("SELECT COUNT(*) FROM saved_picks WHERE result IS NULL").fetchone()[0]
               conn.close()
               print(f'DB health: {completed} completed matches | {fixtures} fixtures | {picks} total picks ({pending} pending settlement)')
               if completed < 100:
@@ -158,8 +158,8 @@ jobs:
                   conn.execute('PRAGMA wal_checkpoint(FULL)')
                   conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
                   # Count what we're saving for visibility
-                  completed = conn.execute("SELECT COUNT(*) FROM match WHERE home_goals IS NOT NULL").fetchone()[0]
-                  picks     = conn.execute("SELECT COUNT(*) FROM saved_pick").fetchone()[0]
+                  completed = conn.execute("SELECT COUNT(*) FROM matches WHERE home_goals IS NOT NULL").fetchone()[0]
+                  picks     = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
                   conn.close()
                   print(f'WAL checkpoint OK — saving DB with {completed} completed matches, {picks} picks')
               except Exception as e:

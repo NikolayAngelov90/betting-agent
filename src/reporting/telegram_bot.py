@@ -1,6 +1,7 @@
 """Telegram notification bot for betting picks."""
 
 import asyncio
+from datetime import timezone, timedelta
 from typing import List, Dict
 from itertools import groupby
 
@@ -124,38 +125,58 @@ class TelegramNotifier:
                 picks_by_match.setdefault(pick.match, []).append(pick)
 
             for match_name, match_picks in picks_by_match.items():
-                lines.append(f"  <b>{match_name}</b>")
-
-                # Show xG line if available (from first pick)
-                first = match_picks[0]
-                if first.predicted_xg:
-                    lines.append(f"  <i>xG: {first.predicted_xg}</i>")
-
                 for pick in match_picks:
                     pick_num += 1
                     risk_emoji = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(pick.risk_level, "⚪")
                     agreement_icon = _agreement_icon(pick.model_agreement)
 
-                    line = (
-                        f"    {risk_emoji} <b>{pick.selection}</b> @ {pick.odds:.2f}\n"
-                        f"        EV: {pick.expected_value:.1%} | "
+                    # Kickoff time in Kyiv local time (UTC+2 winter / UTC+3 summer)
+                    kickoff_str = ""
+                    if pick.match_date:
+                        try:
+                            from zoneinfo import ZoneInfo
+                            local_tz = ZoneInfo("Europe/Kiev")
+                        except Exception:
+                            local_tz = timezone(timedelta(hours=2))
+                        local_dt = pick.match_date.replace(tzinfo=timezone.utc).astimezone(local_tz)
+                        kickoff_str = f" ⏰ {local_dt.strftime('%H:%M')}"
+
+                    # Pick header: number + match name + kickoff
+                    line = f"\n  {risk_emoji} <b>Pick #{pick_num}: {match_name}</b>{kickoff_str}"
+
+                    # xG
+                    if pick.predicted_xg:
+                        line += f"\n      xG: {pick.predicted_xg}"
+
+                    # Bet
+                    line += f"\n      Bet: <b>{pick.selection}</b> @ {pick.odds:.2f}"
+
+                    # EV / Conf / Risk / Stake
+                    line += (
+                        f"\n      EV: {pick.expected_value:.1%} | "
                         f"Conf: {pick.confidence:.0%} | "
-                        f"Stake: {pick.kelly_stake_percentage:.1f}%"
+                        f"Risk: {pick.risk_level}"
+                        f"\n      Stake: {pick.kelly_stake_percentage:.1f}% of bankroll"
                     )
 
-                    # Add model agreement indicator
+                    # Model agreement
                     if pick.model_agreement:
-                        line += f"\n        {agreement_icon} Models: {pick.model_agreement}"
+                        agr_label = pick.model_agreement.upper()
+                        line += f"\n      {agreement_icon} Models: {pick.model_agreement} [{agr_label}]"
                         if pick.models_for:
-                            line += f" ({pick.models_for})"
+                            line += f" - {pick.models_for} agree"
 
-                    # Add xG edge if present
+                    # xG edge
                     if pick.xg_edge:
-                        line += f"\n        📈 {pick.xg_edge}"
+                        line += f"\n      📈 {pick.xg_edge}"
 
                     # Fallback odds warning
                     if pick.used_fallback_odds:
-                        line += "\n        ⚠️ Estimated odds (no bookmaker data)"
+                        line += "\n      ⚠️ Estimated odds (no bookmaker data)"
+
+                    # Reasoning (includes form strings, H2H, model rationale)
+                    if pick.reasoning:
+                        line += f"\n      <i>{pick.reasoning}</i>"
 
                     lines.append(line)
 

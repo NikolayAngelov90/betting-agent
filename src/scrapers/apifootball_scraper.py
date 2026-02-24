@@ -278,6 +278,7 @@ class APIFootballScraper(BaseScraper):
         self._requests_today = 0
         self._daily_limit = 100  # Free tier
         self._quota_exhausted = False  # Set True on first quota error; skips all further calls
+        self._logged_unknown_bets: set = set()  # Suppress repeated unknown bet type logs
 
     async def _api_get(self, endpoint: str, params: dict = None) -> Optional[dict]:
         """Make an authenticated GET request to API-Football.
@@ -841,7 +842,9 @@ class APIFootballScraper(BaseScraper):
                         bet_name = bet.get("name", "")
                         bet_mapping = BET_TYPE_MAP.get(bet_name)
                         if not bet_mapping:
-                            logger.debug(f"[Odds] Unrecognised bet type: '{bet_name}'")
+                            if bet_name not in self._logged_unknown_bets:
+                                logger.debug(f"[Odds] Skipping unsupported bet type: '{bet_name}'")
+                                self._logged_unknown_bets.add(bet_name)
                             continue
 
                         market_type = bet_mapping["market_type"]
