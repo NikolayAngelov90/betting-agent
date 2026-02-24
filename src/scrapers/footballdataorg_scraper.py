@@ -281,7 +281,7 @@ class FootballDataOrgScraper:
             else:
                 logger.debug(f"football-data.org {path}: HTTP {resp.status_code}")
         except Exception as e:
-            logger.debug(f"football-data.org request error: {e}")
+            logger.debug(f"football-data.org request error: {type(e).__name__}: {e}")
         return None
 
     # ------------------------------------------------------------------
