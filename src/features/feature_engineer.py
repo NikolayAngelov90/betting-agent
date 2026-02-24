@@ -49,13 +49,10 @@ class FeatureEngineer:
 
         features = {}
 
-        # 1. Team form features (overall, home, away)
-        # Overall: last 5 games (capture very recent momentum)
-        # Home/Away: last 10 games — 5 is too few (a team plays ~1 home game per 10 days,
-        # so 5 home games ≈ 50 days and is statistically noisy)
-        home_form_all = self.team_features.get_form_features(home_id, 5, "all")
+        # 1. Team form features (overall, home, away) — all windows at 10 games
+        home_form_all = self.team_features.get_form_features(home_id, 10, "all")
         home_form_home = self.team_features.get_form_features(home_id, 10, "home")
-        away_form_all = self.team_features.get_form_features(away_id, 5, "all")
+        away_form_all = self.team_features.get_form_features(away_id, 10, "all")
         away_form_away = self.team_features.get_form_features(away_id, 10, "away")
 
         features.update(self._prefix_dict(home_form_all, "home_overall_"))
