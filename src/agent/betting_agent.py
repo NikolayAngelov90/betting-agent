@@ -1164,6 +1164,12 @@ class FootballBettingAgent:
 async def main():
     """CLI entry point."""
     import sys
+    from pathlib import Path
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+    except Exception:
+        pass
 
     agent = FootballBettingAgent()
 
