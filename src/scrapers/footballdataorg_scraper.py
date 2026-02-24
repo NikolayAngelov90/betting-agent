@@ -247,7 +247,7 @@ class FootballDataOrgScraper:
 
     def __init__(self, config=None):
         self.api_key = (
-            os.environ.get("FOOTBALL_DATA_ORG_KEY", "")
+            os.environ.get("FOOTBALL_DATA_ORG_KEY", "").strip()
             or (config or {}).get("data_sources", {}).get("footballdataorg_key", "")
         )
         self.enabled = bool(self.api_key)
