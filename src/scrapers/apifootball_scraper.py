@@ -409,8 +409,21 @@ class APIFootballScraper(BaseScraper):
                 away_name, league_key, apifootball_team_id=away_api_id
             )
 
-            # Check for existing match
+            # Check for existing match — primary: by team DB IDs
             match_id = self._find_match_id(home_team_id, away_team_id, match_dt)
+
+            # Fallback: team-ID match failed (name mismatch created a different team
+            # record, or fixture came from Flashscore/FDO under a slightly different name).
+            # Search by league + date + fuzzy team name to avoid creating a duplicate.
+            if match_id is None:
+                match_id = self._find_match_by_date_league(
+                    league_key, match_dt, home_name, away_name
+                )
+                if match_id:
+                    logger.debug(
+                        f"API-Football fuzzy-linked {home_name} vs {away_name} "
+                        f"({league_key}) to existing fixture {match_id}"
+                    )
 
             goals = fix.get("goals", {})
             home_goals = goals.get("home")
@@ -570,6 +583,31 @@ class APIFootballScraper(BaseScraper):
             session.commit()
             logger.debug(f"Updated stats for match {match_id} (xG: {home.get('xg')}-{away.get('xg')})")
 
+    # Leagues where teams are stored under their domestic league, not the competition.
+    # Searching by league="europe/champions-league" would return nothing.
+    _INTERNATIONAL_LEAGUES = frozenset({
+        "europe/champions-league",
+        "europe/europa-league",
+        "europe/europa-conference-league",
+    })
+
+    @staticmethod
+    def _names_similar(a: str, b: str) -> bool:
+        """Return True when two team names plausibly refer to the same club.
+
+        Used to link fixtures from different sources (API-Football vs Flashscore/CSV).
+        Checks exact, substring, and first-word equality (ignores FC/City suffixes).
+        """
+        if not a or not b:
+            return False
+        na, nb = a.lower().strip(), b.lower().strip()
+        if na == nb or na in nb or nb in na:
+            return True
+        # First significant word match: "Bayern" ≈ "Bayern Munich" ≈ "FC Bayern München"
+        wa = [w for w in na.split() if len(w) >= 4 and w not in ("city", "united", "town")]
+        wb = [w for w in nb.split() if len(w) >= 4 and w not in ("city", "united", "town")]
+        return bool(wa and wb and wa[0] == wb[0])
+
     def _get_or_create_team_id(self, name: str, league: str,
                                apifootball_team_id: int = None) -> int:
         """Find existing team by name or create a new one. Returns team ID.
@@ -607,16 +645,25 @@ class APIFootballScraper(BaseScraper):
 
             # 4. Reverse fuzzy: API name contains a DB team name (for short DB names)
             #    e.g. "Bayer Leverkusen" contains "Leverkusen"
-            #    Only match if the DB name is >= 5 chars to avoid false positives
-            domestic_league = league if "/" in league else None
-            if domestic_league:
-                candidates = session.query(Team).filter_by(league=domestic_league).all()
-            else:
-                candidates = []
+            #    For CL/EL/ECL, teams are stored under domestic leagues — search all teams.
             name_lower = name.lower()
+            if league in self._INTERNATIONAL_LEAGUES:
+                # Search all teams (CL teams stored under domestic league keys)
+                candidates = session.query(Team).filter(
+                    Team.league.notin_(self._INTERNATIONAL_LEAGUES)
+                ).all()
+            else:
+                candidates = session.query(Team).filter_by(league=league).all()
+
             for candidate in candidates:
                 cname = candidate.name
                 if len(cname) >= 5 and cname.lower() in name_lower:
+                    _save_api_id(candidate)
+                    return candidate.id
+
+            # 4b. _names_similar fallback for same candidate pool
+            for candidate in candidates:
+                if self._names_similar(name, candidate.name):
                     _save_api_id(candidate)
                     return candidate.id
 
@@ -650,6 +697,43 @@ class APIFootballScraper(BaseScraper):
                 Match.match_date <= match_dt + window,
             ).first()
             return match.id if match else None
+
+    def _find_match_by_date_league(
+        self,
+        league: str,
+        match_dt: datetime,
+        home_name_api: str,
+        away_name_api: str,
+    ) -> Optional[int]:
+        """Fallback fixture lookup by league + date + team name similarity.
+
+        Used when team-ID matching fails (e.g. name mismatch created a different team
+        record, or the fixture was created by Flashscore/FDO under a slightly different
+        name). Only considers fixtures that don't already have an apifootball_id so we
+        never hijack an already-linked row.
+        """
+        window = timedelta(hours=26)
+        with self.db.get_session() as session:
+            candidates = (
+                session.query(Match)
+                .filter(
+                    Match.league == league,
+                    Match.match_date >= match_dt - window,
+                    Match.match_date <= match_dt + window,
+                    Match.apifootball_id.is_(None),
+                )
+                .all()
+            )
+            for m in candidates:
+                ht = session.get(Team, m.home_team_id)
+                at = session.get(Team, m.away_team_id)
+                if not ht or not at:
+                    continue
+                if self._names_similar(home_name_api, ht.name) and self._names_similar(
+                    away_name_api, at.name
+                ):
+                    return m.id
+        return None
 
     def _get_season(self, dt: datetime) -> str:
         """Determine the season string from a match date."""
