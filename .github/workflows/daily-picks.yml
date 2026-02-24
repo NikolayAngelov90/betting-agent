@@ -61,27 +61,46 @@ jobs:
           python << 'PYEOF'
           import sqlite3, os
           db = 'data/football_betting.db'
+          cache_file = 'data/historical_load_cache.json'
+
+          def reset_cache(reason):
+              if os.path.exists(cache_file):
+                  os.remove(cache_file)
+                  print(f'Reset historical_load_cache.json ({reason}) — CSVs will be reloaded')
+
+          def wipe_db(reason):
+              for ext in ('', '-wal', '-shm'):
+                  p = db + ext
+                  if os.path.exists(p):
+                      os.remove(p)
+              print(f'Removed database: {reason}')
+              reset_cache('DB wiped')
+
           if os.path.exists(db):
               try:
-                  conn = sqlite3.connect(db)
+                  conn = sqlite3.connect(db, timeout=10)
                   result = conn.execute('PRAGMA integrity_check').fetchone()
-                  conn.close()
                   if result[0] != 'ok':
-                      for ext in ('', '-wal', '-shm'):
-                          p = db + ext
-                          if os.path.exists(p):
-                              os.remove(p)
-                      print(f'Removed corrupt database (integrity_check={result[0]})')
+                      conn.close()
+                      wipe_db(f'integrity_check={result[0]}')
                   else:
-                      print('Database integrity OK')
+                      # Check if DB has enough historical data to be useful
+                      count = conn.execute(
+                          "SELECT COUNT(*) FROM match WHERE home_goals IS NOT NULL"
+                      ).fetchone()[0]
+                      picks = conn.execute(
+                          "SELECT COUNT(*) FROM saved_pick"
+                      ).fetchone()[0]
+                      conn.close()
+                      print(f'Database OK: {count} completed matches, {picks} saved picks')
+                      if count < 500:
+                          print(f'WARNING: only {count} completed matches — resetting CSV cache to force reload')
+                          reset_cache(f'only {count} matches in DB')
               except Exception as e:
-                  for ext in ('', '-wal', '-shm'):
-                      p = db + ext
-                      if os.path.exists(p):
-                          os.remove(p)
-                  print(f'Removed corrupt database: {e}')
+                  wipe_db(str(e))
           else:
               print('No database file — fresh start')
+              reset_cache('fresh start')
           PYEOF
 
       - name: Initialize database
@@ -99,6 +118,25 @@ jobs:
         run: python -m src.agent.betting_agent --update
         continue-on-error: true
 
+      - name: Check DB health before training
+        run: |
+          python << 'PYEOF'
+          import sqlite3
+          db = 'data/football_betting.db'
+          try:
+              conn = sqlite3.connect(db)
+              completed = conn.execute("SELECT COUNT(*) FROM match WHERE home_goals IS NOT NULL").fetchone()[0]
+              fixtures  = conn.execute("SELECT COUNT(*) FROM match WHERE is_fixture = 1").fetchone()[0]
+              picks     = conn.execute("SELECT COUNT(*) FROM saved_pick").fetchone()[0]
+              pending   = conn.execute("SELECT COUNT(*) FROM saved_pick WHERE result IS NULL").fetchone()[0]
+              conn.close()
+              print(f'DB health: {completed} completed matches | {fixtures} fixtures | {picks} total picks ({pending} pending settlement)')
+              if completed < 100:
+                  print('WARNING: fewer than 100 completed matches — ML training will be skipped')
+          except Exception as e:
+              print(f'DB health check failed: {e}')
+          PYEOF
+
       - name: Train ML models on settled data
         run: python -m src.agent.betting_agent --train
         continue-on-error: true
@@ -109,17 +147,25 @@ jobs:
       - name: Checkpoint SQLite WAL before save
         if: always()
         run: |
-          python -c "
+          python << 'PYEOF'
           import sqlite3, os
           db = 'data/football_betting.db'
           if os.path.exists(db):
-              conn = sqlite3.connect(db)
-              conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-              conn.close()
-              print('WAL checkpoint complete')
+              try:
+                  # isolation_level=None = autocommit; needed for PRAGMA wal_checkpoint
+                  conn = sqlite3.connect(db, timeout=30, isolation_level=None)
+                  conn.execute('PRAGMA wal_checkpoint(FULL)')
+                  conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                  # Count what we're saving for visibility
+                  completed = conn.execute("SELECT COUNT(*) FROM match WHERE home_goals IS NOT NULL").fetchone()[0]
+                  picks     = conn.execute("SELECT COUNT(*) FROM saved_pick").fetchone()[0]
+                  conn.close()
+                  print(f'WAL checkpoint OK — saving DB with {completed} completed matches, {picks} picks')
+              except Exception as e:
+                  print(f'WAL checkpoint error: {e}')
           else:
               print('No DB file found, skipping checkpoint')
-          "
+          PYEOF
 
       - name: Save database and models
         if: always()
