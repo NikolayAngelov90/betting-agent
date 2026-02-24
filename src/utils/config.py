@@ -13,6 +13,7 @@ logger = get_logger()
 # Keys are dot-notation config paths, values are env var names.
 _ENV_OVERRIDES = {
     "data_sources.apifootball_key": "API_FOOTBALL_KEY",
+    "data_sources.footballdataorg_key": "FOOTBALL_DATA_ORG_KEY",
     "notifications.telegram_bot_token": "TELEGRAM_BOT_TOKEN",
     "notifications.telegram_chat_id": "TELEGRAM_CHAT_ID",
     "database.sqlite_path": "DB_PATH",
