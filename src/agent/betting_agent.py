@@ -165,23 +165,36 @@ class FootballBettingAgent:
                     Match.match_date < _end,
                     Match.flashscore_id.isnot(None),
                 ).all()
-                _to_scrape = [
-                    (m.id, m.flashscore_id) for m in _upcoming
+                # Check per market type so O/U + BTTS get scraped even when
+                # a previous run already stored 1X2 odds for this fixture.
+                _to_scrape = []
+                for _m in _upcoming:
+                    _missing = []
                     if _sess.query(_Odds).filter_by(
-                        match_id=m.id, bookmaker="Flashscore"
-                    ).count() == 0
-                ]
+                        match_id=_m.id, bookmaker="Flashscore", market_type="1X2"
+                    ).count() == 0:
+                        _missing.append("home-draw-away")
+                    if _sess.query(_Odds).filter_by(
+                        match_id=_m.id, bookmaker="Flashscore", market_type="over_under"
+                    ).count() == 0:
+                        _missing.append("over-under")
+                    if _sess.query(_Odds).filter_by(
+                        match_id=_m.id, bookmaker="Flashscore", market_type="btts"
+                    ).count() == 0:
+                        _missing.append("btts")
+                    if _missing:
+                        _to_scrape.append((_m.id, _m.flashscore_id, tuple(_missing)))
             if _to_scrape:
                 logger.info(
                     f"Pre-caching Flashscore odds for {len(_to_scrape)} upcoming fixtures..."
                 )
                 _odds_scraper = FlashscoreScraper()
                 try:
-                    for _mid, _fsid in _to_scrape:
+                    for _mid, _fsid, _markets in _to_scrape:
                         try:
                             await _odds_scraper.scrape_and_save_odds(
                                 _mid, _fsid,
-                                markets=("home-draw-away", "over-under", "btts"),
+                                markets=_markets,
                             )
                         except Exception as _exc:
                             logger.warning(f"Odds pre-cache failed for {_mid}: {_exc}")
