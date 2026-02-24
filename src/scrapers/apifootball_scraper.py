@@ -253,12 +253,18 @@ class APIFootballScraper(BaseScraper):
     """Fetches xG, match statistics, fixtures, and odds from API-Football."""
 
     # Request budget allocation (out of 100/day free tier).
-    # Odds are fully covered by Flashscore (Selenium, no quota), so BUDGET_ODDS=0
-    # frees up the full budget for xG backfill which directly improves model quality.
-    BUDGET_RESULTS = 4
-    BUDGET_FIXTURES = 2
-    BUDGET_XG = 85   # was 15 — covers ~85 recent matches per day
-    BUDGET_ODDS = 0   # was 70 — Flashscore scrapes 1X2/O/U/BTTS for free
+    #
+    # Strategy: redirect the bulk of the budget from xG backfill (which the
+    # Poisson model ignores entirely — it computes its own expected goals from
+    # attack/defense ratings) to rich odds markets that the value calculator
+    # can directly use (Over/Under 1.5, Team Goals Home/Away, etc.).
+    #
+    # football-data.org (free, no daily limit) now covers fixtures + results
+    # for 9 top leagues, so API-Football results/fixture calls are secondary.
+    BUDGET_RESULTS = 4    # keep: settlement for leagues not in football-data.org
+    BUDGET_FIXTURES = 2   # keep: fixture ids needed for odds lookup
+    BUDGET_XG = 5         # was 85 — Poisson ignores DB xG; keep tiny backfill
+    BUDGET_ODDS = 80      # was 0  — re-enabled: Over/Under 1.5, Team Goals, BTTS
     BUDGET_RESERVE = 9
 
     def __init__(self, config=None):

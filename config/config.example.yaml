@@ -78,4 +78,8 @@ logging:
   log_rotation: "1 week"
 
 data_sources:
-  apifootball_key: "YOUR_APIFOOTBALL_KEY"   # Override via API_FOOTBALL_KEY env var
+  apifootball_key: "YOUR_APIFOOTBALL_KEY"        # Override via API_FOOTBALL_KEY env var
+  # football-data.org free API key (register at https://www.football-data.org/client/register)
+  # Free tier: 9 top leagues, no daily limit, 10 calls/minute.
+  # Used for fixtures + results (supplements Flashscore, frees API-Football quota for odds).
+  footballdataorg_key: "YOUR_FOOTBALLDATAORG_KEY"  # Override via FOOTBALL_DATA_ORG_KEY env var

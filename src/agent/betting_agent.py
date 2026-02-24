@@ -13,6 +13,7 @@ from src.scrapers.injury_scraper import InjuryScraper
 from src.scrapers.news_scraper import NewsScraper
 from src.scrapers.historical_loader import HistoricalDataLoader
 from src.scrapers.apifootball_scraper import APIFootballScraper
+from src.scrapers.footballdataorg_scraper import FootballDataOrgScraper
 from src.features.feature_engineer import FeatureEngineer
 from src.models.ensemble import EnsemblePredictor
 from src.betting.value_calculator import ValueBettingCalculator, BetRecommendation
@@ -64,6 +65,7 @@ class FootballBettingAgent:
         self.news_aggregator = NewsScraper(self.config)
         self.historical_loader = HistoricalDataLoader(self.config)
         self.apifootball = APIFootballScraper(self.config)
+        self.footballdataorg = FootballDataOrgScraper(self.config)
         self.feature_engineer = FeatureEngineer()
         self.predictor = EnsemblePredictor(self.config)
         self.value_calculator = ValueBettingCalculator(self.config)
@@ -81,6 +83,19 @@ class FootballBettingAgent:
             await self.historical_loader.update()
         except Exception as e:
             logger.error(f"Historical data loading failed: {e}")
+
+        # 1b. football-data.org: fixtures + results for 9 top leagues (free, no quota).
+        # Runs before Flashscore so it can fill gaps when Chrome scraping fails.
+        # Covers: PL, BL1, La Liga, Serie A, Ligue 1, CL, Eredivisie, Primeira Liga, ELC.
+        try:
+            fdo_results = await self.footballdataorg.update_results(days_back=2)
+            fdo_fixtures = await self.footballdataorg.sync_fixtures(days_ahead=1)
+            logger.info(
+                f"football-data.org: {fdo_results} scores updated, "
+                f"{fdo_fixtures} new fixtures added"
+            )
+        except Exception as e:
+            logger.warning(f"football-data.org update failed (non-critical): {e}")
 
         # 2. Flashscore results + fixtures (no API quota — primary fixture source)
         # Results and fixtures are scraped independently so a results timeout does
