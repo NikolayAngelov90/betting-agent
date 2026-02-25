@@ -69,6 +69,9 @@ class MLModels:
             y: Target labels (0=away, 1=draw, 2=home)
             feature_names: Optional list of feature names
         """
+        # Always reinitialize fresh model instances before training to avoid
+        # version-incompatibility issues when loading older pickled models.
+        self._init_models()
         self.feature_names = feature_names or [f"feature_{i}" for i in range(X.shape[1])]
 
         # Prune sparse features (>80% zeros) to reduce noise
@@ -362,6 +365,7 @@ class GoalsMLModel:
             y: Binary labels — 1 if total goals > 2.5, else 0
             feature_names: Optional list of feature names
         """
+        self._init_models()
         self.feature_names = feature_names or [f"feature_{i}" for i in range(X.shape[1])]
 
         # Prune sparse features (>80% zeros)

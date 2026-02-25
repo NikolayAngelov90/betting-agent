@@ -356,6 +356,9 @@ class FeatureEngineer:
             "team_goals_bookmaker_available": 0,
         }
         try:
+            # Group: {(market_type, bookmaker): {selection: odds_value}}
+            # Extract all data inside the session to avoid detached-instance errors.
+            bk_data: dict = defaultdict(dict)
             with self.db.get_session() as session:
                 rows = session.query(Odds).filter(
                     Odds.match_id == match_id,
@@ -365,10 +368,8 @@ class FeatureEngineer:
                 if not rows:
                     return defaults
 
-            # Group: {(market_type, bookmaker): {selection: odds_value}}
-            bk_data: dict = defaultdict(dict)
-            for row in rows:
-                bk_data[(row.market_type, row.bookmaker)][row.selection] = row.odds_value
+                for row in rows:
+                    bk_data[(row.market_type, row.bookmaker)][row.selection] = row.odds_value
 
             result = dict(defaults)
 
