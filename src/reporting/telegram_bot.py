@@ -174,10 +174,6 @@ class TelegramNotifier:
                     if pick.used_fallback_odds:
                         line += "\n      ⚠️ Estimated odds (no bookmaker data)"
 
-                    # Reasoning (includes form strings, H2H, model rationale)
-                    if pick.reasoning:
-                        line += f"\n      <i>{pick.reasoning}</i>"
-
                     lines.append(line)
 
         # Send (split if needed)

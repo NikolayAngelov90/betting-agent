@@ -374,7 +374,8 @@ class FootballBettingAgent:
             day_end = day_start + timedelta(days=1)
             # Only include matches that haven't kicked off yet — skip finished
             # matches and those already in progress (match_date is kickoff time).
-            now = datetime.now()
+            # DB stores UTC datetimes so compare against UTC, not local time.
+            now = datetime.utcnow()
             query = session.query(Match).filter(
                 Match.is_fixture == True,
                 Match.match_date >= day_start,
@@ -561,16 +562,17 @@ class FootballBettingAgent:
 
         logger.info(f"Found {len(all_recommendations)} high-confidence picks for {target}")
 
-        # Save picks to database for tracking
-        self._save_picks(all_recommendations, target)
+        # Save picks to database for tracking; track how many are new this run
+        newly_saved = self._save_picks(all_recommendations, target)
 
-        return all_recommendations
+        return all_recommendations, newly_saved
 
-    def _save_picks(self, picks: List[BetRecommendation], pick_date: date):
-        """Save picks to database for result tracking."""
+    def _save_picks(self, picks: List[BetRecommendation], pick_date: date) -> int:
+        """Save picks to database for result tracking. Returns count of newly saved picks."""
         if not picks:
-            return
+            return 0
 
+        newly_saved = 0
         with self.db.get_session() as session:
             for pick in picks:
                 # Skip if already saved (same match + selection + date)
@@ -605,9 +607,11 @@ class FootballBettingAgent:
                     used_fallback_odds=pick.used_fallback_odds,
                 )
                 session.add(saved)
+                newly_saved += 1
 
             session.commit()
-            logger.info(f"Saved {len(picks)} picks to database")
+            logger.info(f"Saved {newly_saved} new picks to database (skipped {len(picks) - newly_saved} duplicates)")
+        return newly_saved
 
     async def settle_predictions(self):
         """Fetch recent results and settle pending picks.
@@ -1287,15 +1291,18 @@ async def main():
                     league_filter = [l.strip() for l in sys.argv[i + 1].split(",")]
                     break
             agent.predictor.fit()
-            picks = await agent.get_daily_picks(leagues=league_filter)
+            picks, newly_saved = await agent.get_daily_picks(leagues=league_filter)
             if not picks:
                 print("No value picks found for today.")
             else:
-                # Send to Telegram first (before console print which may fail on encoding)
+                # Send to Telegram only when new picks were saved this run
                 if agent.telegram.enabled:
-                    stats = agent.get_stats()
-                    await agent.telegram.send_daily_picks(picks, stats=stats)
-                    print(f"\nPicks sent to Telegram!")
+                    if newly_saved > 0:
+                        stats = agent.get_stats()
+                        await agent.telegram.send_daily_picks(picks, stats=stats)
+                        print(f"\nPicks sent to Telegram! ({newly_saved} new)")
+                    else:
+                        print(f"\nNo new picks — Telegram not re-notified (all {len(picks)} already saved).")
 
                 # Group by league for organized output
                 from src.reporting.telegram_bot import LEAGUE_DISPLAY
