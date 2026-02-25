@@ -1,6 +1,7 @@
 """Main feature engineering pipeline that combines all feature sources."""
 
 import numpy as np
+from collections import defaultdict
 from datetime import timedelta
 from typing import Optional
 
@@ -176,6 +177,10 @@ class FeatureEngineer:
             features["away_midweek_flag"] = away_sit["midweek_flag"]
             features["rest_days_diff"] = home_sit["rest_days"] - away_sit["rest_days"]
 
+        # 13. League-specific baseline rates (home advantage, avg goals, BTTS rate, etc.)
+        league_feat = self._get_league_features(league)
+        features.update(league_feat)
+
         logger.debug(f"Generated {len(features)} features for match {match_id}")
         return features
 
@@ -311,60 +316,210 @@ class FeatureEngineer:
         }
 
     def _get_bookmaker_features(self, match_id: int) -> dict:
-        """Return margin-adjusted implied probabilities from Bet365/Pinnacle 1X2 odds."""
+        """Return margin-adjusted implied probabilities from bookmaker odds.
+
+        Covers four markets stored in the Odds table:
+          • 1X2          → home/draw/away win probabilities
+          • over_under   → Over/Under 1.5 and Over/Under 2.5 probabilities
+          • btts         → BTTS Yes/No probabilities
+          • team_goals   → Home Over 1.5 and Away Over 1.5 probabilities
+
+        For each market the preferred bookmaker order is: Bet365 → Pinnacle → any.
+        Bookmaker overround is removed via the standard margin-normalisation formula.
+        """
         defaults = {
+            # 1X2
             "home_implied_prob": 1/3,
             "draw_implied_prob": 1/3,
             "away_implied_prob": 1/3,
             "bookmaker_available": 0,
+            # Over/Under totals
+            "over25_implied_prob": 0.0,
+            "under25_implied_prob": 0.0,
+            "over15_implied_prob": 0.0,
+            "under15_implied_prob": 0.0,
+            "goals_bookmaker_available": 0,
+            # BTTS
+            "btts_yes_implied_prob": 0.0,
+            "btts_no_implied_prob": 0.0,
+            "btts_bookmaker_available": 0,
+            # Team goal lines (home / away score ≥ 2)
+            "home_over15_implied_prob": 0.0,
+            "away_over15_implied_prob": 0.0,
+            "team_goals_bookmaker_available": 0,
         }
         try:
             with self.db.get_session() as session:
                 rows = session.query(Odds).filter(
                     Odds.match_id == match_id,
-                    Odds.market_type == "1X2",
+                    Odds.market_type.in_(["1X2", "over_under", "btts", "team_goals"]),
                 ).all()
 
                 if not rows:
                     return defaults
 
-                # Priority: Bet365 first, then Pinnacle, then any
-                bk_map: dict[str, dict[str, float]] = {}
-                for row in rows:
-                    bk = row.bookmaker
-                    if bk not in bk_map:
-                        bk_map[bk] = {}
-                    bk_map[bk][row.selection] = row.odds_value
+            # Group: {(market_type, bookmaker): {selection: odds_value}}
+            bk_data: dict = defaultdict(dict)
+            for row in rows:
+                bk_data[(row.market_type, row.bookmaker)][row.selection] = row.odds_value
 
-                odds_dict = None
-                for preferred in ("Bet365", "Pinnacle"):
-                    if preferred in bk_map:
-                        odds_dict = bk_map[preferred]
-                        break
-                if odds_dict is None:
-                    odds_dict = next(iter(bk_map.values()))
+            result = dict(defaults)
 
-                # Support both API-Football ("Home"/"Away") and Flashscore ("Home Win"/"Away Win")
-                h_odds = odds_dict.get("Home") or odds_dict.get("Home Win")
-                d_odds = odds_dict.get("Draw")
-                a_odds = odds_dict.get("Away") or odds_dict.get("Away Win")
+            # Helper: margin-remove a 3-way market
+            def _3way(od):
+                h = od.get("Home") or od.get("Home Win")
+                d = od.get("Draw")
+                a = od.get("Away") or od.get("Away Win")
+                if not (h and d and a):
+                    return None
+                rh, rd, ra = 1/h, 1/d, 1/a
+                m = rh + rd + ra
+                return round(rh/m, 4), round(rd/m, 4), round(ra/m, 4)
 
-                if not all([h_odds, d_odds, a_odds]):
-                    return defaults
+            # Helper: margin-remove a 2-way market (over/under style)
+            def _2way(od, over_key, under_key):
+                o = od.get(over_key)
+                u = od.get(under_key)
+                if not (o and u):
+                    return None
+                ro, ru = 1/o, 1/u
+                m = ro + ru
+                return round(ro/m, 4), round(ru/m, 4)
 
-                raw_h = 1 / h_odds
-                raw_d = 1 / d_odds
-                raw_a = 1 / a_odds
-                margin = raw_h + raw_d + raw_a
+            # Bookmaker priority order
+            _priority = ("Bet365", "Pinnacle")
 
-                return {
-                    "home_implied_prob": round(raw_h / margin, 4),
-                    "draw_implied_prob": round(raw_d / margin, 4),
-                    "away_implied_prob": round(raw_a / margin, 4),
-                    "bookmaker_available": 1,
-                }
+            def _best_bk(market_type):
+                """Return the odds dict for the preferred available bookmaker."""
+                for pref in _priority:
+                    if (market_type, pref) in bk_data:
+                        return bk_data[(market_type, pref)]
+                # Fall back to any bookmaker for this market
+                for (mt, _bk), od in bk_data.items():
+                    if mt == market_type:
+                        return od
+                return None
+
+            # ── 1X2 ──────────────────────────────────────────────────────────
+            od = _best_bk("1X2")
+            if od:
+                r = _3way(od)
+                if r:
+                    result["home_implied_prob"] = r[0]
+                    result["draw_implied_prob"] = r[1]
+                    result["away_implied_prob"] = r[2]
+                    result["bookmaker_available"] = 1
+
+            # ── Over/Under ────────────────────────────────────────────────────
+            od = _best_bk("over_under")
+            if od:
+                r25 = _2way(od, "Over 2.5", "Under 2.5")
+                if r25:
+                    result["over25_implied_prob"] = r25[0]
+                    result["under25_implied_prob"] = r25[1]
+                    result["goals_bookmaker_available"] = 1
+                r15 = _2way(od, "Over 1.5", "Under 1.5")
+                if r15:
+                    result["over15_implied_prob"] = r15[0]
+                    result["under15_implied_prob"] = r15[1]
+                    result["goals_bookmaker_available"] = 1
+
+            # ── BTTS ─────────────────────────────────────────────────────────
+            od = _best_bk("btts")
+            if od:
+                yes_odds = od.get("Yes") or od.get("BTTS Yes")
+                no_odds = od.get("No") or od.get("BTTS No")
+                if yes_odds and no_odds:
+                    ry, rn = 1/yes_odds, 1/no_odds
+                    m = ry + rn
+                    result["btts_yes_implied_prob"] = round(ry/m, 4)
+                    result["btts_no_implied_prob"] = round(rn/m, 4)
+                    result["btts_bookmaker_available"] = 1
+
+            # ── Team goal lines ───────────────────────────────────────────────
+            od = _best_bk("team_goals")
+            if od:
+                rh = _2way(od, "Home Over 1.5", "Home Under 1.5")
+                if rh:
+                    result["home_over15_implied_prob"] = rh[0]
+                    result["team_goals_bookmaker_available"] = 1
+                ra = _2way(od, "Away Over 1.5", "Away Under 1.5")
+                if ra:
+                    result["away_over15_implied_prob"] = ra[0]
+                    result["team_goals_bookmaker_available"] = 1
+
+            return result
+
         except Exception as e:
             logger.warning(f"Bookmaker features failed for match {match_id}: {e}")
+            return defaults
+
+    def _get_league_features(self, league: str) -> dict:
+        """Compute league-specific baseline rates from the last 200 completed matches.
+
+        These give the ML model a league-aware prior so it can learn that, e.g.,
+        the Bundesliga has more goals per game than Serie A, or that the Championship
+        has a higher draw rate than the Premier League.
+
+        Results are cached per-instance so the query only runs once per league
+        per prediction/training session.
+        """
+        defaults = {
+            "league_home_win_rate": 0.45,
+            "league_draw_rate": 0.25,
+            "league_away_win_rate": 0.30,
+            "league_avg_goals": 2.60,
+            "league_over25_rate": 0.52,
+            "league_btts_rate": 0.50,
+            "league_matches_count": 0,
+        }
+        if not league:
+            return defaults
+
+        if not hasattr(self, "_league_features_cache"):
+            self._league_features_cache: dict = {}
+        if league in self._league_features_cache:
+            return self._league_features_cache[league]
+
+        try:
+            with self.db.get_session() as session:
+                matches = session.query(Match).filter(
+                    Match.league == league,
+                    Match.is_fixture == False,
+                    Match.home_goals.isnot(None),
+                    Match.away_goals.isnot(None),
+                ).order_by(Match.match_date.desc()).limit(200).all()
+
+                if len(matches) < 10:
+                    self._league_features_cache[league] = defaults
+                    return defaults
+
+                n = len(matches)
+                home_wins = sum(1 for m in matches if (m.home_goals or 0) > (m.away_goals or 0))
+                draws = sum(1 for m in matches if (m.home_goals or 0) == (m.away_goals or 0))
+                away_wins = n - home_wins - draws
+                total_goals = sum((m.home_goals or 0) + (m.away_goals or 0) for m in matches)
+                over25 = sum(
+                    1 for m in matches if (m.home_goals or 0) + (m.away_goals or 0) > 2
+                )
+                btts = sum(
+                    1 for m in matches if (m.home_goals or 0) > 0 and (m.away_goals or 0) > 0
+                )
+
+                result = {
+                    "league_home_win_rate": round(home_wins / n, 4),
+                    "league_draw_rate": round(draws / n, 4),
+                    "league_away_win_rate": round(away_wins / n, 4),
+                    "league_avg_goals": round(total_goals / n, 4),
+                    "league_over25_rate": round(over25 / n, 4),
+                    "league_btts_rate": round(btts / n, 4),
+                    "league_matches_count": n,
+                }
+                self._league_features_cache[league] = result
+                return result
+
+        except Exception as e:
+            logger.warning(f"League features failed for {league}: {e}")
             return defaults
 
     def _get_situational_features(self, team_id: int, match_date) -> dict:

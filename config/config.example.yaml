@@ -52,6 +52,10 @@ models:
     xgboost: 0.35
     random_forest: 0.20
     elo: 0.20
+  # Weight for blending bookmaker over/under and BTTS implied probabilities
+  # with Poisson-derived goal predictions. 0.40 = 40% bookmaker, 60% Poisson.
+  # Set to 0.0 to disable blending (pure Poisson for goals markets).
+  bookmaker_blend_weight: 0.40
   retrain_interval_days: 7
   min_training_samples: 1000
 

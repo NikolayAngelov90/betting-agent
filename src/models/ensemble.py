@@ -162,6 +162,50 @@ class EnsemblePredictor:
             poisson_goals["btts_yes"] + btts_boost))
         adjusted_goals["btts_no"] = 1.0 - adjusted_goals["btts_yes"]
 
+        # Bookmaker blend for goals markets — when real bookmaker over/under / BTTS
+        # implied probabilities are available as features, blend them with the
+        # Poisson-derived predictions.  The bookmaker encodes information (team news,
+        # weather, sharp money) that our model doesn't see.  A 40 % weight is used
+        # so Poisson still dominates but the market's signal is respected.
+        bk_blend = self.config.get("models.bookmaker_blend_weight", 0.40)
+        home_over15 = poisson_pred.get("home_over_1.5", 0)
+        away_over15 = poisson_pred.get("away_over_1.5", 0)
+        if features_vector is not None and feature_names is not None:
+            _fd = dict(zip(feature_names, map(float, features_vector)))
+
+            if _fd.get("goals_bookmaker_available", 0):
+                bk_o25 = _fd.get("over25_implied_prob", 0.0)
+                if bk_o25 > 0:
+                    adjusted_goals["over_2.5"] = round(
+                        adjusted_goals["over_2.5"] * (1 - bk_blend) + bk_o25 * bk_blend, 4
+                    )
+                    adjusted_goals["under_2.5"] = round(1.0 - adjusted_goals["over_2.5"], 4)
+                bk_o15 = _fd.get("over15_implied_prob", 0.0)
+                if bk_o15 > 0:
+                    adjusted_goals["over_1.5"] = round(
+                        adjusted_goals["over_1.5"] * (1 - bk_blend) + bk_o15 * bk_blend, 4
+                    )
+
+            if _fd.get("btts_bookmaker_available", 0):
+                bk_btts = _fd.get("btts_yes_implied_prob", 0.0)
+                if bk_btts > 0:
+                    adjusted_goals["btts_yes"] = round(
+                        adjusted_goals["btts_yes"] * (1 - bk_blend) + bk_btts * bk_blend, 4
+                    )
+                    adjusted_goals["btts_no"] = round(1.0 - adjusted_goals["btts_yes"], 4)
+
+            if _fd.get("team_goals_bookmaker_available", 0):
+                bk_h15 = _fd.get("home_over15_implied_prob", 0.0)
+                if bk_h15 > 0:
+                    home_over15 = round(
+                        home_over15 * (1 - bk_blend) + bk_h15 * bk_blend, 4
+                    )
+                bk_a15 = _fd.get("away_over15_implied_prob", 0.0)
+                if bk_a15 > 0:
+                    away_over15 = round(
+                        away_over15 * (1 - bk_blend) + bk_a15 * bk_blend, 4
+                    )
+
         results["ensemble"]["home_xg"] = poisson_pred.get("home_xg", 0)
         results["ensemble"]["away_xg"] = poisson_pred.get("away_xg", 0)
         results["ensemble"]["over_1.5"] = round(adjusted_goals["over_1.5"], 4)
@@ -170,9 +214,9 @@ class EnsemblePredictor:
         results["ensemble"]["under_2.5"] = round(adjusted_goals["under_2.5"], 4)
         results["ensemble"]["btts_yes"] = round(adjusted_goals["btts_yes"], 4)
         results["ensemble"]["btts_no"] = round(adjusted_goals["btts_no"], 4)
-        # Team goal line: taken directly from Poisson (team-specific, not blended)
-        results["ensemble"]["home_over_1.5"] = poisson_pred.get("home_over_1.5", 0)
-        results["ensemble"]["away_over_1.5"] = poisson_pred.get("away_over_1.5", 0)
+        # Team goal lines: blended with bookmaker when available
+        results["ensemble"]["home_over_1.5"] = home_over15
+        results["ensemble"]["away_over_1.5"] = away_over15
         results["ensemble"]["most_likely_score"] = poisson_pred.get("most_likely_score", "")
         results["ensemble"]["model"] = "ensemble"
 
