@@ -41,7 +41,7 @@ jobs:
           python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
 
       - name: Restore database and models
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             data/football_betting.db

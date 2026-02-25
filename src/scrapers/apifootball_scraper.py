@@ -87,6 +87,15 @@ TEAM_NAME_ALIASES: Dict[str, str] = {
     # Scotland
     "Glasgow Rangers": "Rangers",
     "Celtic": "Celtic",
+    # England — Championship abbreviations
+    "Sheffield Wednesday": "Sheff Wed",
+    "Sheffield United": "Sheffield Utd",
+    "Queens Park Rangers": "QPR",
+    "West Bromwich Albion": "West Brom",
+    "Middlesbrough": "Middlesbrough",
+    "Swansea City": "Swansea",
+    "Coventry City": "Coventry",
+    "Norwich City": "Norwich",
     # Eastern Europe
     "FK Crvena Zvezda": "Crvena Zvezda",
     "Dinamo Zagreb": "Dinamo Zagreb",
@@ -596,18 +605,40 @@ class APIFootballScraper(BaseScraper):
     def _names_similar(a: str, b: str) -> bool:
         """Return True when two team names plausibly refer to the same club.
 
-        Used to link fixtures from different sources (API-Football vs Flashscore/CSV).
-        Checks exact, substring, and first-word equality (ignores FC/City suffixes).
+        Uses multi-token prefix matching so abbreviations like "Sheff Wed" match
+        "Sheffield Wednesday", while "Manchester City" does NOT match "Manchester United".
+
+        Algorithm:
+        1. Exact / substring match (fast path).
+        2. Tokenise both names (min 3 chars, strip club-type tokens like fc/sc/afc).
+        3. For each token in the shorter list, check if any token in the longer list
+           starts with it OR it starts with that token (prefix match).
+        4. Require ≥ 70 % of the shorter list's tokens to match.
         """
         if not a or not b:
             return False
         na, nb = a.lower().strip(), b.lower().strip()
         if na == nb or na in nb or nb in na:
             return True
-        # First significant word match: "Bayern" ≈ "Bayern Munich" ≈ "FC Bayern München"
-        wa = [w for w in na.split() if len(w) >= 4 and w not in ("city", "united", "town")]
-        wb = [w for w in nb.split() if len(w) >= 4 and w not in ("city", "united", "town")]
-        return bool(wa and wb and wa[0] == wb[0])
+
+        # Tokens that indicate club type only — ignore them
+        _type = {"fc", "sc", "sk", "afc", "sfc", "cf", "bk", "fk",
+                 "ac", "as", "cd", "ad", "sv", "rc", "kv", "rsc", "bsc"}
+
+        def tok(s):
+            return [w.rstrip(".") for w in s.split()
+                    if len(w.rstrip(".")) >= 3 and w.rstrip(".") not in _type]
+
+        wa, wb = tok(na), tok(nb)
+        if not wa or not wb:
+            return False
+
+        # Compare against the shorter token list to handle abbreviated names
+        sh, lo = (wa, wb) if len(wa) <= len(wb) else (wb, wa)
+        matches = sum(
+            1 for t in sh if any(l.startswith(t) or t.startswith(l) for l in lo)
+        )
+        return matches / len(sh) >= 0.7
 
     def _get_or_create_team_id(self, name: str, league: str,
                                apifootball_team_id: int = None) -> int:

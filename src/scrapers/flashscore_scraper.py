@@ -953,7 +953,7 @@ class FlashscoreScraper(BaseScraper):
         all_odds = await loop.run_in_executor(None, _scrape_all)
 
         if not all_odds:
-            logger.warning(f"No odds found for flashscore_id={flashscore_id}")
+            logger.debug(f"No odds found for flashscore_id={flashscore_id} (Cloudflare block or no market data)")
             return
 
         # Market type mapping for storage
