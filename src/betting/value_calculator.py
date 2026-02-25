@@ -304,7 +304,13 @@ class ValueBettingCalculator:
 
         valid_markets = market_map.get(market, [market])
 
+        # Bookmakers excluded from EV odds: Flashscore stores display/fair odds,
+        # not real betting lines — using them inflates EV calculations.
+        _EXCLUDED_BOOKMAKERS = {"Flashscore"}
+
         for odds_record in odds_data:
+            if odds_record.get("bookmaker", "") in _EXCLUDED_BOOKMAKERS:
+                continue
             record_market = odds_record.get("market_type", "")
             record_selection = odds_record.get("selection", "")
             record_odds = odds_record.get("odds_value", 0)
