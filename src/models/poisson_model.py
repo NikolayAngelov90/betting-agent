@@ -1,11 +1,13 @@
 """Poisson distribution model for goal prediction."""
 
 import numpy as np
+from datetime import date
 from scipy.stats import poisson
 from typing import Dict, Tuple
 
 from src.data.models import Match
 from src.data.database import get_db
+from src.utils.config import get_config
 from src.utils.logger import get_logger
 
 logger = get_logger()
@@ -14,14 +16,22 @@ MAX_GOALS = 10  # Maximum goals to consider in probability calculations
 
 
 class PoissonModel:
-    """Poisson-based goal prediction model.
+    """Poisson-based goal prediction model with Dixon-Coles correction and time decay.
 
-    Calculates attack/defense strength for each team and uses Poisson
-    distribution to predict expected goals and match outcome probabilities.
+    Calculates attack/defense strength for each team (with exponential time decay
+    on older matches) and uses a Dixon-Coles corrected Poisson distribution to
+    predict expected goals and match outcome probabilities.
+
+    Key enhancements vs. plain independent Poisson:
+    - **Time decay**: recent matches weighted more heavily (configurable half-life).
+    - **Dixon-Coles correction**: adjusts joint probability of low-scoring outcomes
+      (0-0, 1-0, 0-1, 1-1) using correction factor τ with parameter ρ ≈ -0.13,
+      boosting 0-0 and 1-1 while slightly reducing 1-0 and 0-1 probability.
     """
 
     def __init__(self):
         self.db = get_db()
+        self.config = get_config()
         self.league_avg_home_goals = 1.5
         self.league_avg_away_goals = 1.2
         self._team_strengths = {}
@@ -29,12 +39,19 @@ class PoissonModel:
         self._league_avgs = {}  # league -> {"home": float, "away": float}
 
     def fit(self, league: str = None, num_matches: int = 5000):
-        """Calculate attack/defense strength ratings from historical data.
+        """Calculate time-decayed attack/defense strength ratings from historical data.
+
+        Applies exponential decay so recent matches count more than older ones.
+        Half-life is configurable via models.strength_half_life_days (default: 180 days).
 
         Args:
             league: Optional league filter
             num_matches: Number of recent matches to use
         """
+        half_life = self.config.get("models.strength_half_life_days", 180)
+        decay_rate = np.log(2) / max(half_life, 1)
+        today = date.today()
+
         with self.db.get_session() as session:
             query = session.query(Match).filter(
                 Match.is_fixture == False,
@@ -49,29 +66,49 @@ class PoissonModel:
                 logger.warning("No match data available for Poisson model fitting")
                 return
 
-            # Global averages
-            home_goals = [m.home_goals for m in matches]
-            away_goals = [m.away_goals for m in matches]
-            self.league_avg_home_goals = np.mean(home_goals)
-            self.league_avg_away_goals = np.mean(away_goals)
+            # Compute time-decay weight per match
+            def match_weight(m):
+                if m.match_date is None:
+                    return 0.1
+                m_date = m.match_date.date() if hasattr(m.match_date, "date") else m.match_date
+                days = max(0, (today - m_date).days)
+                return float(np.exp(-decay_rate * days))
 
-            # Per-league averages for calibration
-            league_goals = {}
-            for m in matches:
+            weights = [match_weight(m) for m in matches]
+
+            # Weighted global averages
+            home_goals_arr = np.array([m.home_goals for m in matches], dtype=float)
+            away_goals_arr = np.array([m.away_goals for m in matches], dtype=float)
+            w = np.array(weights)
+            w_sum = w.sum()
+            if w_sum > 0:
+                self.league_avg_home_goals = float(np.dot(w, home_goals_arr) / w_sum)
+                self.league_avg_away_goals = float(np.dot(w, away_goals_arr) / w_sum)
+            else:
+                self.league_avg_home_goals = float(np.mean(home_goals_arr))
+                self.league_avg_away_goals = float(np.mean(away_goals_arr))
+
+            # Weighted per-league averages for calibration
+            league_goals: dict = {}
+            for m, wt in zip(matches, weights):
                 lg = m.league or "unknown"
-                league_goals.setdefault(lg, {"home": [], "away": []})
+                league_goals.setdefault(lg, {"home": [], "away": [], "w": []})
                 league_goals[lg]["home"].append(m.home_goals)
                 league_goals[lg]["away"].append(m.away_goals)
-            for lg, goals in league_goals.items():
-                if len(goals["home"]) >= 30:  # only calibrate with enough data
-                    self._league_avgs[lg] = {
-                        "home": np.mean(goals["home"]),
-                        "away": np.mean(goals["away"]),
-                    }
+                league_goals[lg]["w"].append(wt)
+            for lg, gdata in league_goals.items():
+                if len(gdata["home"]) >= 30:
+                    lw = np.array(gdata["w"])
+                    lw_sum = lw.sum()
+                    if lw_sum > 0:
+                        self._league_avgs[lg] = {
+                            "home": float(np.dot(lw, gdata["home"]) / lw_sum),
+                            "away": float(np.dot(lw, gdata["away"]) / lw_sum),
+                        }
 
-            # Per-team attack and defense strengths
-            team_stats = {}
-            for match in matches:
+            # Per-team attack and defense strengths (time-weighted)
+            team_stats: dict = {}
+            for match, wt in zip(matches, weights):
                 for team_id, scored, conceded, venue in [
                     (match.home_team_id, match.home_goals, match.away_goals, "home"),
                     (match.away_team_id, match.away_goals, match.home_goals, "away"),
@@ -82,15 +119,26 @@ class PoissonModel:
                         team_stats[team_id] = {
                             "home_scored": [], "home_conceded": [],
                             "away_scored": [], "away_conceded": [],
+                            "home_w": [], "away_w": [],
                         }
                     team_stats[team_id][f"{venue}_scored"].append(scored)
                     team_stats[team_id][f"{venue}_conceded"].append(conceded)
+                    team_stats[team_id][f"{venue}_w"].append(wt)
+
+            def _wavg(vals, wts, fallback):
+                if not vals:
+                    return fallback
+                wts_arr = np.array(wts)
+                ws = wts_arr.sum()
+                if ws <= 0:
+                    return float(np.mean(vals))
+                return float(np.dot(wts_arr, vals) / ws)
 
             for team_id, stats in team_stats.items():
-                home_scored_avg = np.mean(stats["home_scored"]) if stats["home_scored"] else self.league_avg_home_goals
-                away_scored_avg = np.mean(stats["away_scored"]) if stats["away_scored"] else self.league_avg_away_goals
-                home_conceded_avg = np.mean(stats["home_conceded"]) if stats["home_conceded"] else self.league_avg_away_goals
-                away_conceded_avg = np.mean(stats["away_conceded"]) if stats["away_conceded"] else self.league_avg_home_goals
+                home_scored_avg = _wavg(stats["home_scored"], stats["home_w"], self.league_avg_home_goals)
+                away_scored_avg = _wavg(stats["away_scored"], stats["away_w"], self.league_avg_away_goals)
+                home_conceded_avg = _wavg(stats["home_conceded"], stats["home_w"], self.league_avg_away_goals)
+                away_conceded_avg = _wavg(stats["away_conceded"], stats["away_w"], self.league_avg_home_goals)
 
                 attack_strength = (
                     (home_scored_avg / self.league_avg_home_goals) +
@@ -112,7 +160,8 @@ class PoissonModel:
                 f"Poisson model fitted: {len(self._team_strengths)} teams, "
                 f"{len(self._league_avgs)} leagues calibrated, "
                 f"avg home goals={self.league_avg_home_goals:.2f}, "
-                f"avg away goals={self.league_avg_away_goals:.2f}"
+                f"avg away goals={self.league_avg_away_goals:.2f} "
+                f"(time-decay half-life={half_life}d)"
             )
 
     def predict(self, home_team_id: int, away_team_id: int) -> Dict:
@@ -127,7 +176,7 @@ class PoissonModel:
         """
         home_xg, away_xg = self._expected_goals(home_team_id, away_team_id)
 
-        # Score probability matrix
+        # Score probability matrix (with Dixon-Coles correction applied)
         score_matrix = self._score_matrix(home_xg, away_xg)
 
         # Market probabilities
@@ -172,7 +221,6 @@ class PoissonModel:
         based on the team ID so that different unknown teams still get different
         predictions instead of all converging to the same xG.
         """
-        default = {"attack": 1.0, "defense": 1.0}
         home_strength = self._team_strengths.get(home_team_id)
         away_strength = self._team_strengths.get(away_team_id)
 
@@ -202,11 +250,54 @@ class PoissonModel:
 
         return home_xg, away_xg
 
+    def _dc_tau(self, x: int, y: int, lam: float, mu: float, rho: float) -> float:
+        """Dixon-Coles low-score correction factor τ(x, y).
+
+        Adjusts the joint probability of low-scoring outcomes to correct the
+        known under-estimation of 0-0 and 1-1 results by independent Poisson.
+
+        Reference: Dixon & Coles (1997), "Modelling Association Football Scores
+        and Inefficiencies in the Football Betting Market."
+
+        With ρ < 0 (e.g. -0.13):
+          - τ(0,0) > 1  — 0-0 draws are more likely than independent Poisson predicts
+          - τ(1,1) > 1  — 1-1 draws are more likely
+          - τ(1,0) < 1  — 1-0 home wins are slightly less likely
+          - τ(0,1) < 1  — 0-1 away wins are slightly less likely
+        """
+        if x == 0 and y == 0:
+            return 1.0 - lam * mu * rho
+        elif x == 0 and y == 1:
+            return 1.0 + lam * rho
+        elif x == 1 and y == 0:
+            return 1.0 + mu * rho
+        elif x == 1 and y == 1:
+            return 1.0 - rho
+        return 1.0
+
     def _score_matrix(self, home_xg: float, away_xg: float) -> np.ndarray:
-        """Generate a probability matrix for all scoreline combinations."""
+        """Generate a probability matrix for all scoreline combinations.
+
+        Applies Dixon-Coles correction to low-scoring outcomes to address the
+        known under-estimation of 0-0 and 1-1 by the independent Poisson model.
+        Set models.dixon_coles_rho=0.0 in config to disable the correction.
+        """
         home_probs = [poisson.pmf(i, home_xg) for i in range(MAX_GOALS)]
         away_probs = [poisson.pmf(i, away_xg) for i in range(MAX_GOALS)]
-        return np.outer(home_probs, away_probs)
+        matrix = np.outer(home_probs, away_probs)
+
+        rho = self.config.get("models.dixon_coles_rho", -0.13)
+        if rho != 0.0:
+            # Apply correction to the 4 low-score cells
+            for i in range(min(2, MAX_GOALS)):
+                for j in range(min(2, MAX_GOALS)):
+                    matrix[i, j] *= self._dc_tau(i, j, home_xg, away_xg, rho)
+            # Renormalize so probabilities still sum to 1
+            total = matrix.sum()
+            if total > 0:
+                matrix /= total
+
+        return matrix
 
     def _over_under_prob(self, matrix: np.ndarray, threshold: float) -> float:
         """Calculate probability of total goals being over a threshold."""

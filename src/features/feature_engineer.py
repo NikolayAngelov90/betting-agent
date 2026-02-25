@@ -27,6 +27,7 @@ class FeatureEngineer:
         self.injury_features = InjuryFeatures()
         self.news_scraper = NewsScraper()
         self.db = get_db()
+        self._weather_service = None  # lazy-loaded on first use
 
     async def create_features(self, match_id: int) -> dict:
         """Build complete feature dictionary for a match.
@@ -158,12 +159,14 @@ class FeatureEngineer:
         features.update(bk_features)
 
         # 12. Situational context: rest days + midweek flag
+        _venue = None
         with self.db.get_session() as session:
             match_obj = session.get(Match, match_id)
             if match_obj:
                 _match_date = match_obj.match_date
                 _home_id = match_obj.home_team_id
                 _away_id = match_obj.away_team_id
+                _venue = match_obj.venue
             else:
                 _match_date = None
                 _home_id = home_id
@@ -180,6 +183,10 @@ class FeatureEngineer:
         # 13. League-specific baseline rates (home advantage, avg goals, BTTS rate, etc.)
         league_feat = self._get_league_features(league)
         features.update(league_feat)
+
+        # 14. Match-day weather (Open-Meteo free API — no key required)
+        weather = self._get_weather_features(_venue, _match_date)
+        features.update(weather)
 
         logger.debug(f"Generated {len(features)} features for match {match_id}")
         return features
@@ -545,6 +552,32 @@ class FeatureEngineer:
                 return {"rest_days": rest_days, "midweek_flag": midweek_flag}
         except Exception as e:
             logger.warning(f"Situational features failed for team {team_id}: {e}")
+            return defaults
+
+    def _get_weather_features(self, venue, match_date) -> dict:
+        """Return weather features for the match venue and date.
+
+        Uses Open-Meteo free API (no key). Returns neutral defaults on failure.
+        Can be disabled via models.weather_features_enabled: false in config.
+        """
+        defaults = {
+            "weather_temp_c": 12.0, "weather_wind_kmh": 10.0,
+            "weather_precip_mm": 0.0, "weather_is_raining": 0,
+            "weather_is_windy": 0, "weather_available": 0,
+        }
+        try:
+            from src.utils.config import get_config as _gc
+            if not _gc().get("models.weather_features_enabled", True):
+                return defaults
+            if self._weather_service is None:
+                from src.features.weather_service import WeatherService
+                self._weather_service = WeatherService()
+            if match_date is None:
+                return defaults
+            md = match_date.date() if hasattr(match_date, "date") else match_date
+            return self._weather_service.get_match_weather(venue, md)
+        except Exception as exc:
+            logger.debug(f"Weather features failed: {exc}")
             return defaults
 
     def _prefix_dict(self, d: dict, prefix: str) -> dict:

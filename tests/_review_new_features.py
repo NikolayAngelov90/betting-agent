@@ -204,6 +204,8 @@ ens.config.get = lambda key, default=None: {
 ens.weights = {"poisson": 0.25, "elo": 0.20, "xgboost": 0.35, "random_forest": 0.20}
 ens.ml_models = MagicMock()
 ens.ml_models.is_fitted = False
+ens.goals_model = MagicMock()
+ens.goals_model.is_fitted = False  # disabled in review test — GoalsMLModel blend not tested here
 
 mock_poisson = MagicMock()
 mock_poisson._team_strengths = {1: 1.0, 2: 1.0}

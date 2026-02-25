@@ -286,6 +286,103 @@ class TelegramNotifier:
         message = "\n".join(lines)
         await self._send_message(message)
 
+    async def send_performance_report(self, stats: dict):
+        """Send a comprehensive performance report via Telegram.
+
+        Includes all-time + recent records, ROI, per-market and per-league
+        breakdowns, Brier score calibration, and avg CLV.
+        """
+        if not self.enabled:
+            return
+
+        from datetime import date
+        header = f"<b>📊 Performance Report — {date.today().strftime('%d %b %Y')}</b>\n"
+
+        lines = [header]
+
+        # ── Overall periods ──────────────────────────────────────────────────
+        for period, label in [
+            ("all_time", "All Time"),
+            ("last_30_days", "Last 30 Days"),
+            ("last_7_days", "Last 7 Days"),
+            ("yesterday", "Yesterday"),
+        ]:
+            s = stats.get(period, {})
+            if s.get("total", 0) > 0:
+                roi_emoji = "📈" if s.get("roi", 0) >= 0 else "📉"
+                lines.append(
+                    f"\n<b>{label}</b>: {s['wins']}W-{s['losses']}L "
+                    f"({s['win_rate']:.0%}) {roi_emoji} ROI: {s['roi']:.1%}"
+                )
+
+        # ── Calibration & quality metrics ────────────────────────────────────
+        brier = stats.get("brier_score")
+        avg_clv = stats.get("avg_clv")
+        if brier is not None or avg_clv is not None:
+            lines.append("\n<b>─── Model Quality ───</b>")
+            if brier is not None:
+                cal_label = "good" if brier < 0.20 else ("fair" if brier < 0.25 else "poor")
+                lines.append(f"Brier Score: {brier:.4f} ({cal_label})")
+            if avg_clv is not None:
+                clv_emoji = "✅" if avg_clv > 0 else "⚠️"
+                lines.append(f"Avg CLV: {avg_clv:+.3f} {clv_emoji}")
+
+        # ── Per-market ────────────────────────────────────────────────────────
+        by_market = stats.get("by_market", {})
+        if by_market:
+            lines.append("\n<b>─── By Market ───</b>")
+            for market, ms in sorted(by_market.items(), key=lambda x: x[1].get("total", 0), reverse=True):
+                if ms.get("total", 0) >= 5:
+                    roi_emoji = "📈" if ms.get("roi", 0) >= 0 else "📉"
+                    lines.append(
+                        f"  {market}: {ms['wins']}W-{ms['losses']}L "
+                        f"({ms['win_rate']:.0%}) {roi_emoji} ROI: {ms['roi']:.1%}"
+                    )
+
+        # ── Per-league (top 8 by volume) ──────────────────────────────────────
+        by_league = stats.get("by_league", {})
+        if by_league:
+            lines.append("\n<b>─── By League (top 8) ───</b>")
+            top = sorted(by_league.items(), key=lambda x: x[1].get("total", 0), reverse=True)[:8]
+            for lg_key, ls in top:
+                if ls.get("total", 0) >= 3:
+                    lg_name = LEAGUE_DISPLAY.get(lg_key, lg_key)
+                    roi_emoji = "📈" if ls.get("roi", 0) >= 0 else "📉"
+                    lines.append(
+                        f"  {lg_name}: {ls['wins']}W-{ls['losses']}L "
+                        f"({ls['win_rate']:.0%}) {roi_emoji} ROI: {ls['roi']:.1%}"
+                    )
+
+        # ── Calibration buckets ───────────────────────────────────────────────
+        cal = stats.get("calibration", {})
+        if cal:
+            lines.append("\n<b>─── Calibration ───</b>")
+            for bucket, data in sorted(cal.items()):
+                pred = data["predicted_avg"]
+                actual = data["actual_win_rate"]
+                n = data["count"]
+                gap = actual - pred
+                indicator = "✅" if abs(gap) < 0.10 else ("🔼" if gap > 0 else "🔽")
+                lines.append(
+                    f"  {bucket}: pred {pred:.0%} / actual {actual:.0%} (n={n}) {indicator}"
+                )
+
+        # ── Model coverage ────────────────────────────────────────────────────
+        cov = stats.get("model_coverage", {})
+        if cov:
+            ml_status = "✅ Fitted" if cov.get("ml_fitted") else "❌ Not fitted"
+            lines.append(
+                f"\n<i>Coverage: Poisson {cov.get('poisson_teams', 0)} teams | "
+                f"Elo {cov.get('elo_teams', 0)} teams | ML {ml_status}</i>"
+            )
+
+        pending = stats.get("pending", 0)
+        if pending > 0:
+            lines.append(f"\n⏳ {pending} picks still pending")
+
+        message = "\n".join(lines)
+        await self._send_chunked(message, header)
+
     async def send_alert(self, text: str):
         """Send a generic alert message."""
         if not self.enabled:

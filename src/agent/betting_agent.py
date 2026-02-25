@@ -894,6 +894,27 @@ class FootballBettingAgent:
                         "count": len(bucket_picks),
                     }
 
+            # Brier score: mean squared error of predicted probabilities vs outcomes
+            brier_samples = [
+                (p.predicted_probability, 1.0 if p.result == "win" else 0.0)
+                for p in settled
+                if p.predicted_probability is not None
+            ]
+            brier_score = None
+            if brier_samples:
+                brier_score = round(
+                    float(np.mean([(pred - actual) ** 2 for pred, actual in brier_samples])), 4
+                )
+
+            # CLV (Closing Line Value): predicted_prob - 1/odds
+            # Positive CLV = model found genuine edge vs market
+            clv_values = [
+                p.predicted_probability - (1.0 / p.odds)
+                for p in settled
+                if p.predicted_probability is not None and p.odds and p.odds > 1.0
+            ]
+            avg_clv = round(float(np.mean(clv_values)), 4) if clv_values else None
+
             stats = {
                 "all_time": calc_stats(settled),
                 "last_7_days": calc_stats(week_picks),
@@ -913,6 +934,8 @@ class FootballBettingAgent:
                 },
                 "stale_picks": len(stale_picks),
                 "calibration": calibration,
+                "brier_score": brier_score,
+                "avg_clv": avg_clv,
             }
 
             return stats
@@ -1074,7 +1097,8 @@ class FootballBettingAgent:
 
         # Build feature matrix and labels — process in parallel batches
         X_list = []
-        y_list = []
+        y_list = []        # 1X2: 0=away, 1=draw, 2=home
+        y_goals_list = []  # over/under 2.5: 1=over, 0=under/equal
         feature_names = None
         skipped = 0
         BATCH_SIZE = 50  # concurrent DB sessions; WAL mode supports parallel reads
@@ -1106,6 +1130,10 @@ class FootballBettingAgent:
                         y_list.append(1)
                     else:
                         y_list.append(0)
+                    # Over 2.5 label: total goals > 2 (integer goals, so >2 means >=3)
+                    y_goals_list.append(
+                        1 if (md["home_goals"] + md["away_goals"]) > 2 else 0
+                    )
                 else:
                     skipped += 1
 
@@ -1119,10 +1147,11 @@ class FootballBettingAgent:
 
         X = np.array(X_list)
         y = np.array(y_list)
+        y_goals = np.array(y_goals_list)
 
         logger.info(f"Training on {len(X)} samples, {X.shape[1]} features (skipped {skipped})")
 
-        # Train models
+        # Train 1X2 models
         self.predictor.ml_models.fit(X, y, feature_names)
         self.predictor.ml_models.save()
 
@@ -1131,6 +1160,15 @@ class FootballBettingAgent:
         for model_name, features in importance.items():
             top5 = features[:5]
             logger.info(f"{model_name} top features: {', '.join(f'{n}={v:.3f}' for n, v in top5)}")
+
+        # Train dedicated over/under 2.5 goals model
+        over25_rate = float(np.mean(y_goals))
+        logger.info(
+            f"Training GoalsMLModel: over 2.5 base rate = {over25_rate:.1%} "
+            f"({int(y_goals.sum())}/{len(y_goals)} matches)"
+        )
+        self.predictor.goals_model.fit(X, y_goals, feature_names)
+        self.predictor.goals_model.save()
 
         logger.info("ML model training complete")
 
@@ -1205,6 +1243,7 @@ async def main():
         print("  --update            Run daily data update")
         print("  --picks             Show today's value picks")
         print("  --settle            Settle pending picks with actual results")
+        print("  --report            Send comprehensive performance report to Telegram")
         print("  --stats             Show prediction statistics")
         print("  --train             Train ML models on historical data")
         print("  --tune              Tune ensemble weights from recent results")
@@ -1301,6 +1340,8 @@ async def main():
             all_time = stats.get("all_time", {})
             print(f"\nSettled: {len(settled_picks)} picks")
             print(f"All time: {all_time.get('total', 0)} picks, Win rate: {all_time.get('win_rate', 0):.1%}")
+            if stats.get("avg_clv") is not None:
+                print(f"Avg CLV: {stats['avg_clv']:+.3f}")
             print(f"Pending: {stats.get('pending', 0)} picks")
 
             # Send settlement report to Telegram
@@ -1380,6 +1421,36 @@ async def main():
                 stale = stats.get("stale_picks", 0)
                 if stale > 0:
                     print(f"\n!! WARNING: {stale} picks pending >48h — check settlement logic !!")
+
+                brier = stats.get("brier_score")
+                avg_clv = stats.get("avg_clv")
+                if brier is not None or avg_clv is not None:
+                    print(f"\nModel Quality:")
+                    if brier is not None:
+                        cal_label = "good" if brier < 0.20 else ("fair" if brier < 0.25 else "poor")
+                        print(f"  Brier Score: {brier:.4f} ({cal_label})")
+                    if avg_clv is not None:
+                        print(f"  Avg CLV: {avg_clv:+.4f} ({'edge' if avg_clv > 0 else 'no edge'})")
+
+        elif command == "--report":
+            print("Generating performance report...")
+            await agent.settle_predictions()
+            stats = agent.get_stats()
+            if agent.telegram.enabled:
+                await agent.telegram.send_performance_report(stats)
+                print("Performance report sent to Telegram!")
+            else:
+                print("Telegram not enabled — printing to console:")
+                at = stats.get("all_time", {})
+                print(f"  All time: {at.get('total', 0)} picks, "
+                      f"{at.get('wins', 0)}W-{at.get('losses', 0)}L "
+                      f"({at.get('win_rate', 0):.1%}) ROI: {at.get('roi', 0):.1%}")
+                brier = stats.get("brier_score")
+                avg_clv = stats.get("avg_clv")
+                if brier is not None:
+                    print(f"  Brier Score: {brier:.4f}")
+                if avg_clv is not None:
+                    print(f"  Avg CLV: {avg_clv:+.4f}")
 
         elif command == "--tune":
             print("Tuning ensemble weights from recent results...")

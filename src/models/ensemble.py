@@ -6,7 +6,7 @@ from typing import Dict, Optional
 
 from src.models.poisson_model import PoissonModel
 from src.models.elo_system import EloRatingSystem
-from src.models.ml_models import MLModels
+from src.models.ml_models import MLModels, GoalsMLModel
 from src.utils.config import get_config
 from src.utils.logger import get_logger
 
@@ -24,6 +24,7 @@ class EnsemblePredictor:
         self.poisson = PoissonModel()
         self.elo = EloRatingSystem()
         self.ml_models = MLModels()
+        self.goals_model = GoalsMLModel()
 
         weights = self.config.get("models.ensemble_weights", {})
         self.weights = {
@@ -45,6 +46,7 @@ class EnsemblePredictor:
 
         # Try to load previously trained ML models from disk
         self.ml_models.load()
+        self.goals_model.load()
 
     def fit(self, league: str = None):
         """Fit all sub-models."""
@@ -205,6 +207,22 @@ class EnsemblePredictor:
                     away_over15 = round(
                         away_over15 * (1 - bk_blend) + bk_a15 * bk_blend, 4
                     )
+
+        # Goals ML model blend — when the dedicated over/under classifier is
+        # fitted, blend its P(over 2.5) with the current Poisson+bookmaker estimate.
+        # A 25% weight keeps Poisson dominant while respecting the ML signal.
+        if features_vector is not None and self.goals_model.is_fitted:
+            try:
+                ml_o25 = self.goals_model.predict_proba_over25(
+                    features_vector, feature_names=feature_names
+                )
+                goals_ml_w = self.config.get("models.goals_ml_blend_weight", 0.25)
+                adjusted_goals["over_2.5"] = round(
+                    adjusted_goals["over_2.5"] * (1 - goals_ml_w) + ml_o25 * goals_ml_w, 4
+                )
+                adjusted_goals["under_2.5"] = round(1.0 - adjusted_goals["over_2.5"], 4)
+            except Exception as _e:
+                logger.debug(f"GoalsMLModel blend skipped: {_e}")
 
         results["ensemble"]["home_xg"] = poisson_pred.get("home_xg", 0)
         results["ensemble"]["away_xg"] = poisson_pred.get("away_xg", 0)

@@ -56,6 +56,21 @@ models:
   # with Poisson-derived goal predictions. 0.40 = 40% bookmaker, 60% Poisson.
   # Set to 0.0 to disable blending (pure Poisson for goals markets).
   bookmaker_blend_weight: 0.40
+  # Weight for blending the dedicated GoalsMLModel over/under prediction
+  # with Poisson+bookmaker. 0.25 = 25% ML, 75% Poisson+bookmaker.
+  # Set to 0.0 to disable. GoalsMLModel must be trained via --train first.
+  goals_ml_blend_weight: 0.25
+  # Dixon-Coles correction parameter ρ for low-scoring outcomes.
+  # With ρ < 0 (typical ≈ -0.13), 0-0 and 1-1 probabilities are boosted
+  # while 1-0 and 0-1 are slightly reduced. Set to 0.0 to disable.
+  dixon_coles_rho: -0.13
+  # Time-decay half-life for Poisson strength calculations (days).
+  # Older matches are down-weighted with exponential decay.
+  # 180 = matches 6 months ago have half the weight of today's.
+  strength_half_life_days: 180
+  # Enable match-day weather features (Open-Meteo free API, no key needed).
+  # Adds temperature, wind, precipitation features. Set to false to disable.
+  weather_features_enabled: true
   retrain_interval_days: 7
   min_training_samples: 1000
 

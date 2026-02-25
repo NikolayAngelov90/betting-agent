@@ -314,3 +314,181 @@ class MLModels:
                 "model": "ml_average",
             }
         }
+
+
+class GoalsMLModel:
+    """Binary ML classifier for the 'over 2.5 goals' outcome.
+
+    Uses the same feature set as the 1X2 classifier but targets a binary
+    outcome: 1 = over 2.5 total goals, 0 = under/equal 2.5.
+    Trained and saved separately from the main 1X2 models.
+    """
+
+    _CALIBRATE = {"random_forest", "xgboost"}
+
+    def __init__(self):
+        self.scaler = StandardScaler()
+        self.models = {}
+        self.calibrated_models = {}
+        self.feature_names: List[str] = []
+        self.is_fitted = False
+        self._kept_feature_mask = None
+        self._corr_drop_mask = None
+        self._init_models()
+
+    def _init_models(self):
+        self.models = {
+            "logistic_regression": LogisticRegression(max_iter=1000, solver="lbfgs"),
+            "random_forest": RandomForestClassifier(
+                n_estimators=200, max_depth=10, min_samples_split=5,
+                random_state=43, n_jobs=-1,
+            ),
+        }
+        try:
+            from xgboost import XGBClassifier
+            self.models["xgboost"] = XGBClassifier(
+                n_estimators=200, max_depth=6, learning_rate=0.1,
+                objective="binary:logistic", eval_metric="logloss",
+                random_state=43, n_jobs=-1,
+            )
+        except ImportError:
+            pass
+
+    def fit(self, X: np.ndarray, y: np.ndarray, feature_names: List[str] = None):
+        """Train the goals model.
+
+        Args:
+            X: Feature matrix (n_samples, n_features)
+            y: Binary labels — 1 if total goals > 2.5, else 0
+            feature_names: Optional list of feature names
+        """
+        self.feature_names = feature_names or [f"feature_{i}" for i in range(X.shape[1])]
+
+        # Prune sparse features (>80% zeros)
+        zero_fractions = np.mean(X == 0, axis=0)
+        sparse_mask = zero_fractions > 0.80
+        if np.any(sparse_mask):
+            kept_mask = ~sparse_mask
+            X = X[:, kept_mask]
+            self.feature_names = [f for f, k in zip(self.feature_names, kept_mask) if k]
+            self._kept_feature_mask = kept_mask
+
+        # Correlation pruning — drop one of any pair with |corr| > 0.8
+        if X.shape[1] > 1:
+            corr_matrix = np.corrcoef(X.T)
+            upper = np.abs(np.triu(corr_matrix, k=1))
+            corr_drop = np.zeros(X.shape[1], dtype=bool)
+            for i in range(upper.shape[0]):
+                if corr_drop[i]:
+                    continue
+                for j in range(i + 1, upper.shape[1]):
+                    if upper[i, j] > 0.8:
+                        corr_drop[j] = True
+            if np.any(corr_drop):
+                keep_corr = ~corr_drop
+                X = X[:, keep_corr]
+                self.feature_names = [f for f, k in zip(self.feature_names, keep_corr) if k]
+                self._corr_drop_mask = keep_corr
+
+        logger.info(f"GoalsMLModel: training with {X.shape[1]} features, {X.shape[0]} samples")
+        X_scaled = self.scaler.fit_transform(X)
+        tscv = TimeSeriesSplit(n_splits=5)
+
+        for name, model in self.models.items():
+            cv_scores = []
+            for train_idx, val_idx in tscv.split(X_scaled):
+                X_tr, X_vl = X_scaled[train_idx], X_scaled[val_idx]
+                y_tr, y_vl = y[train_idx], y[val_idx]
+                model.fit(X_tr, y_tr)
+                cv_scores.append(accuracy_score(y_vl, model.predict(X_vl)))
+            logger.info(f"GoalsMLModel {name} CV accuracy: {np.mean(cv_scores):.4f}")
+
+        self.calibrated_models = {}
+        for name, model in self.models.items():
+            if name in self._CALIBRATE:
+                cal = CalibratedClassifierCV(model, cv=5, method="isotonic")
+                cal.fit(X_scaled, y)
+                self.calibrated_models[name] = cal
+            else:
+                model.fit(X_scaled, y)
+                self.calibrated_models[name] = model
+
+        self.is_fitted = True
+        logger.info("GoalsMLModel training complete")
+
+    def predict_proba_over25(self, X: np.ndarray,
+                             feature_names: List[str] = None) -> float:
+        """Return P(over 2.5 total goals). Feature alignment handled automatically.
+
+        Returns 0.5 (uninformative prior) when model is not fitted or on error.
+        """
+        if not self.is_fitted:
+            return 0.5
+
+        X = X.reshape(1, -1) if X.ndim == 1 else X
+
+        # Align features by name when provided
+        if feature_names and X.shape[1] != len(self.feature_names):
+            name_to_idx = {n: i for i, n in enumerate(feature_names)}
+            aligned = np.zeros((X.shape[0], len(self.feature_names)))
+            for j, name in enumerate(self.feature_names):
+                src = name_to_idx.get(name)
+                if src is not None:
+                    aligned[:, j] = X[:, src]
+            X = aligned
+
+        if self._kept_feature_mask is not None and X.shape[1] > len(self.feature_names):
+            X = X[:, self._kept_feature_mask]
+
+        try:
+            X_scaled = self.scaler.transform(X)
+        except ValueError:
+            return 0.5
+
+        probs = []
+        for name in self.models:
+            cal_model = self.calibrated_models.get(name, self.models[name])
+            try:
+                p = cal_model.predict_proba(X_scaled)[0]
+                if len(p) >= 2:
+                    probs.append(float(p[1]))  # p[1] = P(class=1) = P(over 2.5)
+            except Exception:
+                pass
+
+        return float(np.mean(probs)) if probs else 0.5
+
+    def save(self, path: str = None):
+        """Save model to disk."""
+        save_dir = Path(path) if path else MODELS_DIR
+        save_dir.mkdir(parents=True, exist_ok=True)
+        state = {
+            "models": self.models,
+            "calibrated_models": self.calibrated_models,
+            "scaler": self.scaler,
+            "feature_names": self.feature_names,
+            "is_fitted": self.is_fitted,
+            "_kept_feature_mask": self._kept_feature_mask,
+            "_corr_drop_mask": self._corr_drop_mask,
+        }
+        filepath = save_dir / "goals_model.pkl"
+        with open(filepath, "wb") as f:
+            pickle.dump(state, f)
+        logger.info(f"GoalsMLModel saved to {filepath}")
+
+    def load(self, path: str = None):
+        """Load model from disk."""
+        load_dir = Path(path) if path else MODELS_DIR
+        filepath = load_dir / "goals_model.pkl"
+        if not filepath.exists():
+            logger.debug(f"No saved goals model at {filepath}")
+            return
+        with open(filepath, "rb") as f:
+            state = pickle.load(f)
+        self.models = state["models"]
+        self.calibrated_models = state.get("calibrated_models", {})
+        self.scaler = state["scaler"]
+        self.feature_names = state["feature_names"]
+        self.is_fitted = state["is_fitted"]
+        self._kept_feature_mask = state.get("_kept_feature_mask")
+        self._corr_drop_mask = state.get("_corr_drop_mask")
+        logger.info(f"GoalsMLModel loaded from {filepath}")
