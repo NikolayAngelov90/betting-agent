@@ -1119,10 +1119,11 @@ class FlashscoreScraper(BaseScraper):
 
         # 3. Fuzzy match: ±4 h window + similar team names.
         #    ±4 h catches UTC vs UTC+2 local-time discrepancies (2 h) with margin.
+        #    We intentionally do NOT filter by is_fixture so that Flashscore results
+        #    can update existing fixture records from other sources (API-Football, FDO).
         window = timedelta(hours=4)
         candidates = session.query(Match).filter(
             Match.league == league,
-            Match.is_fixture == is_fixture,
             Match.match_date >= match_date - window,
             Match.match_date <= match_date + window,
         ).all()

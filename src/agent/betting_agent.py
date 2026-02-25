@@ -88,8 +88,8 @@ class FootballBettingAgent:
         # Runs before Flashscore so it can fill gaps when Chrome scraping fails.
         # Covers: PL, BL1, La Liga, Serie A, Ligue 1, CL, Eredivisie, Primeira Liga, ELC.
         try:
-            fdo_results = await self.footballdataorg.update_results(days_back=2)
-            fdo_fixtures = await self.footballdataorg.sync_fixtures(days_ahead=1)
+            fdo_results = await self.footballdataorg.update_results(days_back=1)
+            fdo_fixtures = await self.footballdataorg.sync_fixtures(days_ahead=0)
             logger.info(
                 f"football-data.org: {fdo_results} scores updated, "
                 f"{fdo_fixtures} new fixtures added"
@@ -157,7 +157,7 @@ class FootballBettingAgent:
             from src.data.models import Odds as _Odds
             _today = date.today()
             _start = datetime.combine(_today, datetime.min.time())
-            _end = _start + _td(days=2)  # today + tomorrow
+            _end = _start + _td(days=1)  # today only
             with self.db.get_session() as _sess:
                 _upcoming = _sess.query(Match).filter(
                     Match.is_fixture == True,
@@ -713,6 +713,8 @@ class FootballBettingAgent:
                             from datetime import timedelta as _td
                             window_start = ref_date - _td(hours=24)
                             window_end = ref_date + _td(hours=24)
+                            # Filter by league (from pick) to avoid false cross-league matches
+                            _league_filter = [Match.league == pick.league] if pick.league else []
                             candidates = (
                                 session.query(Match)
                                 .filter(
@@ -720,6 +722,7 @@ class FootballBettingAgent:
                                     Match.home_goals.isnot(None),
                                     Match.match_date >= window_start,
                                     Match.match_date <= window_end,
+                                    *_league_filter,
                                 )
                                 .all()
                             )

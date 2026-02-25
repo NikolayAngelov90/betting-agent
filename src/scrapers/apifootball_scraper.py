@@ -329,8 +329,8 @@ class APIFootballScraper(BaseScraper):
 
         logger.info("Starting API-Football update")
 
-        # 1. Fetch results for last 2 days (so settle can cover picks from 2 days ago)
-        await self.fetch_recent_results(days_back=2)
+        # 1. Fetch yesterday's results (free plan only allows yesterday+today+tomorrow)
+        await self.fetch_recent_results(days_back=1)
 
         # 2. Fetch today's fixtures only (CI runs daily — tomorrow handled next run)
         today = date.today()
