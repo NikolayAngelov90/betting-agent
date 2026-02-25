@@ -60,6 +60,9 @@ models:
   # with Poisson+bookmaker. 0.25 = 25% ML, 75% Poisson+bookmaker.
   # Set to 0.0 to disable. GoalsMLModel must be trained via --train first.
   goals_ml_blend_weight: 0.25
+  # Ceiling above which extreme probabilities are dampened back toward the ceiling.
+  # E.g. 0.90 means 98% → 92.4% (excess retained at 30%). Set to 1.0 to disable.
+  extreme_confidence_ceiling: 0.90
   # Dixon-Coles correction parameter ρ for low-scoring outcomes.
   # With ρ < 0 (typical ≈ -0.13), 0-0 and 1-1 probabilities are boosted
   # while 1-0 and 0-1 are slightly reduced. Set to 0.0 to disable.

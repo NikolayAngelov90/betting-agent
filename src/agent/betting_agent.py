@@ -498,6 +498,14 @@ class FootballBettingAgent:
         if max_picks_per_match:
             from collections import Counter
             match_counts: dict = Counter()
+            # Pre-populate from already-saved picks for today so re-running --picks
+            # doesn't accumulate more than max_picks_per_match across multiple runs.
+            with self.db.get_session() as _sess:
+                _existing = _sess.query(SavedPick.match_id).filter(
+                    SavedPick.pick_date == target
+                ).all()
+                for (_mid,) in _existing:
+                    match_counts[_mid] += 1
         for rec in all_recommendations:
             key = (rec.match, rec.selection)
             if key in seen_pick_keys:

@@ -419,8 +419,18 @@ class APIFootballScraper(BaseScraper):
                 away_name, league_key, apifootball_team_id=away_api_id
             )
 
-            # Check for existing match — primary: by team DB IDs
-            match_id = self._find_match_id(home_team_id, away_team_id, match_dt)
+            # Check for existing match — first by apifootball_id (most reliable),
+            # then by team DB IDs, then fuzzy name search.
+            match_id = None
+            with self.db.get_session() as session:
+                existing = session.query(Match).filter(
+                    Match.apifootball_id == fixture_id
+                ).first()
+                if existing:
+                    match_id = existing.id
+
+            if match_id is None:
+                match_id = self._find_match_id(home_team_id, away_team_id, match_dt)
 
             # Fallback: team-ID match failed (name mismatch created a different team
             # record, or fixture came from Flashscore/FDO under a slightly different name).

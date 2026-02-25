@@ -224,6 +224,57 @@ class EnsemblePredictor:
             except Exception as _e:
                 logger.debug(f"GoalsMLModel blend skipped: {_e}")
 
+        # Bookmaker 1X2 blend — same blend weight as goals markets.
+        # The 1X2 ensemble above only uses Poisson + Elo + ML; blending the
+        # bookmaker's implied 1X2 probabilities here keeps the output consistent.
+        if features_vector is not None and feature_names is not None:
+            _fd = dict(zip(feature_names, map(float, features_vector)))
+            if _fd.get("bookmaker_available", 0):
+                bk_1x2_w = self.config.get("models.bookmaker_blend_weight", 0.40)
+                bk_h = _fd.get("home_implied_prob", 0.0)
+                bk_d = _fd.get("draw_implied_prob", 0.0)
+                bk_a = _fd.get("away_implied_prob", 0.0)
+                if bk_h > 0 and bk_d > 0 and bk_a > 0:
+                    ensemble_1x2["home_win"] = round(
+                        ensemble_1x2["home_win"] * (1 - bk_1x2_w) + bk_h * bk_1x2_w, 4
+                    )
+                    ensemble_1x2["draw"] = round(
+                        ensemble_1x2["draw"] * (1 - bk_1x2_w) + bk_d * bk_1x2_w, 4
+                    )
+                    ensemble_1x2["away_win"] = round(
+                        ensemble_1x2["away_win"] * (1 - bk_1x2_w) + bk_a * bk_1x2_w, 4
+                    )
+                    # Renormalize to sum to 1.0
+                    _tot = ensemble_1x2["home_win"] + ensemble_1x2["draw"] + ensemble_1x2["away_win"]
+                    if _tot > 0:
+                        ensemble_1x2["home_win"] = round(ensemble_1x2["home_win"] / _tot, 4)
+                        ensemble_1x2["draw"] = round(ensemble_1x2["draw"] / _tot, 4)
+                        ensemble_1x2["away_win"] = round(ensemble_1x2["away_win"] / _tot, 4)
+
+        # Extreme-confidence dampening — shrink any prediction above the ceiling
+        # toward the ceiling to prevent the model from over-committing on sparse data.
+        # Excess above ceiling is retained at 30% to preserve signal direction.
+        _ceiling = self.config.get("models.extreme_confidence_ceiling", 0.90)
+        if _ceiling < 1.0:
+            for _key, _comp in [
+                ("over_2.5", "under_2.5"), ("over_1.5", None),
+                ("over_3.5", None), ("btts_yes", "btts_no"),
+            ]:
+                _v = adjusted_goals.get(_key, 0)
+                if _v > _ceiling:
+                    adjusted_goals[_key] = round(_ceiling + (_v - _ceiling) * 0.30, 4)
+                    if _comp:
+                        adjusted_goals[_comp] = round(1.0 - adjusted_goals[_key], 4)
+            for _key in ("home_win", "draw", "away_win"):
+                _v = ensemble_1x2.get(_key, 0)
+                if _v > _ceiling:
+                    ensemble_1x2[_key] = round(_ceiling + (_v - _ceiling) * 0.30, 4)
+            _tot1x2 = sum(ensemble_1x2.get(k, 0) for k in ("home_win", "draw", "away_win"))
+            if _tot1x2 > 0:
+                ensemble_1x2["home_win"] = round(ensemble_1x2["home_win"] / _tot1x2, 4)
+                ensemble_1x2["draw"] = round(ensemble_1x2["draw"] / _tot1x2, 4)
+                ensemble_1x2["away_win"] = round(ensemble_1x2["away_win"] / _tot1x2, 4)
+
         results["ensemble"]["home_xg"] = poisson_pred.get("home_xg", 0)
         results["ensemble"]["away_xg"] = poisson_pred.get("away_xg", 0)
         results["ensemble"]["over_1.5"] = round(adjusted_goals["over_1.5"], 4)
