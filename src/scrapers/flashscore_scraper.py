@@ -332,7 +332,9 @@ class FlashscoreScraper(BaseScraper):
         enriched = 0
         for match_id, fs_id in pending:
             match_url = f"{FLASHSCORE_BASE_URL}/match/{fs_id}/"
-            stats = await self.scrape_match_statistics(match_url)
+            # stats_only=True skips referee/venue page — halves per-match time so
+            # we can process 2× more matches within the CI timeout budget.
+            stats = await self.scrape_match_statistics(match_url, stats_only=True)
             if stats:
                 with db.get_session() as session:
                     m = session.get(Match, match_id)
@@ -660,13 +662,20 @@ class FlashscoreScraper(BaseScraper):
         except Exception:
             return None
 
-    async def scrape_match_statistics(self, match_url: str) -> Optional[dict]:
-        """Scrape detailed statistics + match info for a specific match URL."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._scrape_match_detail, match_url)
+    async def scrape_match_statistics(self, match_url: str, stats_only: bool = False) -> Optional[dict]:
+        """Scrape detailed statistics + match info for a specific match URL.
 
-    def _scrape_match_detail(self, url: str) -> Optional[dict]:
-        """Scrape match detail page for stats, referee, venue (runs in executor)."""
+        stats_only=True skips the second page load (referee/venue/capacity), cutting
+        per-match time from ~22s to ~12s.  Use this for bulk enrichment passes.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._scrape_match_detail, match_url, stats_only)
+
+    def _scrape_match_detail(self, url: str, stats_only: bool = False) -> Optional[dict]:
+        """Scrape match detail page for stats, referee, venue (runs in executor).
+
+        stats_only=True skips the referee/venue page — saves ~10s per match.
+        """
         driver = self._get_driver()
         if not driver:
             return None
@@ -726,6 +735,10 @@ class FlashscoreScraper(BaseScraper):
                     pass
 
             # --- Match information (referee, venue, capacity) ---
+            # Skipped in stats_only mode to halve per-match scrape time.
+            if stats_only:
+                return result if result else None
+
             try:
                 driver.get(url.rstrip("/") + "/")
                 WebDriverWait(driver, 10).until(

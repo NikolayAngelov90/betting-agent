@@ -229,12 +229,13 @@ class FootballBettingAgent:
             logger.error(f"Flashscore odds pre-cache failed: {e}")
 
         # 2c. Flashscore per-match stats enrichment (shots, possession, corners, etc.)
-        # Capped at 25 matches to stay well within the 10-minute timeout.
-        # Runs after results loop so scores are already saved.
+        # stats_only=True skips the referee/venue page (~12s/match vs ~22s), so 50
+        # matches ≈ 700s — comfortably inside the 15-minute cap.
+        # days_back=14 catches matches missed if CI was down for a day or two.
         try:
             await asyncio.wait_for(
-                self.scraper.enrich_recent_match_stats(days_back=7, max_matches=25),
-                timeout=600,  # 10-minute cap for the whole pass
+                self.scraper.enrich_recent_match_stats(days_back=14, max_matches=50),
+                timeout=900,  # 15-minute cap for the whole pass
             )
         except asyncio.TimeoutError:
             logger.warning("Flashscore stats enrichment timed out (partial results saved)")
