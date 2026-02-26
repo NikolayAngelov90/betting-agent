@@ -273,7 +273,7 @@ class APIFootballScraper(BaseScraper):
     # for 9 top leagues, so API-Football results/fixture calls are secondary.
     BUDGET_RESULTS = 4    # keep: settlement for leagues not in football-data.org
     BUDGET_FIXTURES = 2   # keep: fixture ids needed for odds lookup
-    BUDGET_XG = 5         # was 85 — Poisson ignores DB xG; keep tiny backfill
+    BUDGET_XG = 1         # was 5 — Poisson ignores DB xG; 1 request keeps backfill alive
     BUDGET_ODDS = 80      # was 0  — re-enabled: Over/Under 1.5, Team Goals, BTTS
     BUDGET_RESERVE = 9
 
