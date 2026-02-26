@@ -34,9 +34,16 @@ _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
 
+# Circuit breaker: after _CB_THRESHOLD consecutive failures (e.g. SSL timeouts in CI),
+# disable all weather fetches for the rest of the process run to avoid wasting time.
+_cb_failures: int = 0
+_CB_THRESHOLD: int = 2
+_weather_disabled: bool = False
+
 
 def _geocode(city: str) -> Optional[Tuple[float, float]]:
     """Return (latitude, longitude) for a city name. Results cached."""
+    global _cb_failures, _weather_disabled
     key = city.lower().strip()
     if key in _GEO_CACHE:
         return _GEO_CACHE[key]
@@ -44,22 +51,28 @@ def _geocode(city: str) -> Optional[Tuple[float, float]]:
         params = urllib.parse.urlencode({"name": city, "count": 1, "format": "json"})
         url = f"{_GEOCODING_URL}?{params}"
         req = urllib.request.Request(url, headers={"User-Agent": "betting-agent/1.0"})
-        with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
+        with urllib.request.urlopen(req, timeout=5, context=_SSL_CTX) as resp:
             data = json.loads(resp.read())
         results = data.get("results", [])
         if results:
             lat = float(results[0]["latitude"])
             lon = float(results[0]["longitude"])
             _GEO_CACHE[key] = (lat, lon)
+            _cb_failures = 0  # reset on success
             return (lat, lon)
     except Exception as exc:
         logger.debug(f"Geocoding failed for '{city}': {exc}")
+        _cb_failures += 1
+        if _cb_failures >= _CB_THRESHOLD:
+            _weather_disabled = True
+            logger.warning("Open-Meteo unreachable — disabling weather features for this run")
     _GEO_CACHE[key] = None
     return None
 
 
 def _fetch_daily_weather(lat: float, lon: float, match_date: date) -> Dict:
     """Fetch daily weather summary for coordinates and date from Open-Meteo."""
+    global _cb_failures, _weather_disabled
     cache_key = f"{lat:.3f},{lon:.3f},{match_date}"
     if cache_key in _WEATHER_CACHE:
         return _WEATHER_CACHE[cache_key]
@@ -77,7 +90,7 @@ def _fetch_daily_weather(lat: float, lon: float, match_date: date) -> Dict:
         })
         url = f"{_FORECAST_URL}?{params}"
         req = urllib.request.Request(url, headers={"User-Agent": "betting-agent/1.0"})
-        with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
+        with urllib.request.urlopen(req, timeout=5, context=_SSL_CTX) as resp:
             data = json.loads(resp.read())
 
         daily = data.get("daily", {})
@@ -97,10 +110,15 @@ def _fetch_daily_weather(lat: float, lon: float, match_date: date) -> Dict:
             "weather_is_windy": 1 if wind > 30.0 else 0,
             "weather_available": 1,
         }
+        _cb_failures = 0  # reset on success
         _WEATHER_CACHE[cache_key] = result
         return result
     except Exception as exc:
         logger.debug(f"Weather fetch failed for ({lat:.3f},{lon:.3f},{date_str}): {exc}")
+        _cb_failures += 1
+        if _cb_failures >= _CB_THRESHOLD:
+            _weather_disabled = True
+            logger.warning("Open-Meteo unreachable — disabling weather features for this run")
         result = dict(_DEFAULTS)
         _WEATHER_CACHE[cache_key] = result
         return result
@@ -132,7 +150,7 @@ class WeatherService:
                    If None or empty, defaults are returned immediately.
             match_date: Date of the match.
         """
-        if not venue:
+        if _weather_disabled or not venue:
             return dict(_DEFAULTS)
 
         coords = _geocode(venue)
