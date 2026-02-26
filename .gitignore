@@ -13,8 +13,15 @@ env/
 
 # Data & models
 data/football_betting.db
+data/*.db.bak
+data/*.db.local_backup
 data/models/*.pkl
+data/models_local_backup/
+data/picks_sync.json
 logs/
+
+# CI logs fetched locally
+ci_logs/
 
 # Secrets
 .env

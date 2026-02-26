@@ -426,6 +426,34 @@ class FootballBettingAgent:
         else:
             logger.info("All fixtures already have odds or no flashscore_id available.")
 
+        # ── API-Football odds fallback ─────────────────────────────────────────
+        # For fixtures that still have NO odds from any source, try API-Football
+        # if they have an apifootball_id. This catches Europa/Conference League
+        # matches that Flashscore missed or that have no flashscore_id.
+        if self.apifootball.enabled:
+            with self.db.get_session() as session:
+                apifb_fallback = []
+                for fid in fixture_ids:
+                    m = session.get(Match, fid)
+                    if m and m.apifootball_id:
+                        total_odds = session.query(Odds).filter_by(match_id=fid).count()
+                        if total_odds == 0:
+                            ht = m.home_team.name if m.home_team else str(m.home_team_id)
+                            at = m.away_team.name if m.away_team else str(m.away_team_id)
+                            apifb_fallback.append((fid, m.apifootball_id, ht, at))
+            if apifb_fallback:
+                logger.info(f"Fetching API-Football odds for {len(apifb_fallback)} fixtures with no odds")
+                for match_id, fixture_id, home, away in apifb_fallback:
+                    try:
+                        odds_data = await self.apifootball._fetch_fixture_odds(fixture_id)
+                        if odds_data:
+                            count = self.apifootball._save_fixture_odds(match_id, odds_data)
+                            logger.info(f"API-Football fallback: saved {count} odds for {home} vs {away}")
+                        else:
+                            logger.warning(f"No odds from any source for fixture {fixture_id} ({home} vs {away})")
+                    except Exception as exc:
+                        logger.warning(f"API-Football fallback failed for fixture {fixture_id}: {exc}")
+
         # Data coverage report — flag under-covered fixtures and leagues
         from src.scrapers.historical_loader import LEAGUE_CSV_MAP, EXTRA_LEAGUE_CSV_MAP
         # Flashscore-scraped leagues count as "covered" (results come from live scraping,
@@ -662,11 +690,8 @@ class FootballBettingAgent:
             except Exception:
                 pass
 
-        # 3. SECONDARY: API-Football (degrades gracefully when quota is exhausted).
-        try:
-            await self.apifootball.fetch_recent_results(days_back=days_back)
-        except Exception as e:
-            logger.warning(f"Could not fetch recent results from API-Football: {e}")
+        # Flashscore is the sole results source — API-Football free plan only
+        # allows today±1, so calling it here causes plan-restriction errors.
 
         settled = []
 

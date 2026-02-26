@@ -211,7 +211,8 @@ ID_TO_LEAGUE = {v: k for k, v in LEAGUE_ID_MAP.items()}
 PRIORITY_LEAGUES = [
     "england/premier-league", "spain/laliga", "germany/bundesliga",
     "italy/serie-a", "france/ligue-1", "europe/champions-league",
-    "europe/europa-league", "netherlands/eredivisie", "portugal/primeira-liga",
+    "europe/europa-league", "europe/europa-conference-league",
+    "netherlands/eredivisie", "portugal/primeira-liga",
     "belgium/jupiler-pro-league", "turkey/super-lig", "scotland/premiership",
 ]
 
