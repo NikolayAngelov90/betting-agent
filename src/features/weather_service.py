@@ -1,7 +1,6 @@
 """Weather features via Open-Meteo free API (no API key required)."""
 
 import json
-import ssl
 import urllib.request
 import urllib.parse
 from datetime import date
@@ -11,8 +10,10 @@ from src.utils.logger import get_logger
 
 logger = get_logger()
 
-_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
-_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+# Use plain HTTP to avoid SSL handshake timeouts in GitHub Actions CI.
+# Open-Meteo supports HTTP — no secrets are transmitted (only coords + dates).
+_GEOCODING_URL = "http://geocoding-api.open-meteo.com/v1/search"
+_FORECAST_URL = "http://api.open-meteo.com/v1/forecast"
 
 # In-memory caches (persist for the lifetime of the process)
 _GEO_CACHE: Dict[str, Optional[Tuple[float, float]]] = {}
@@ -27,12 +28,6 @@ _DEFAULTS = {
     "weather_is_windy": 0,
     "weather_available": 0,
 }
-
-# SSL context that tolerates restrictive CI network environments
-# (GitHub Actions sometimes blocks SSL handshakes to external APIs)
-_SSL_CTX = ssl.create_default_context()
-_SSL_CTX.check_hostname = False
-_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 # Circuit breaker: after _CB_THRESHOLD consecutive failures (e.g. SSL timeouts in CI),
 # disable all weather fetches for the rest of the process run to avoid wasting time.
@@ -51,7 +46,7 @@ def _geocode(city: str) -> Optional[Tuple[float, float]]:
         params = urllib.parse.urlencode({"name": city, "count": 1, "format": "json"})
         url = f"{_GEOCODING_URL}?{params}"
         req = urllib.request.Request(url, headers={"User-Agent": "betting-agent/1.0"})
-        with urllib.request.urlopen(req, timeout=5, context=_SSL_CTX) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
         results = data.get("results", [])
         if results:
@@ -90,7 +85,7 @@ def _fetch_daily_weather(lat: float, lon: float, match_date: date) -> Dict:
         })
         url = f"{_FORECAST_URL}?{params}"
         req = urllib.request.Request(url, headers={"User-Agent": "betting-agent/1.0"})
-        with urllib.request.urlopen(req, timeout=5, context=_SSL_CTX) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
 
         daily = data.get("daily", {})
