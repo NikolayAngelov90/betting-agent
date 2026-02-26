@@ -210,7 +210,7 @@ class FootballBettingAgent:
         try:
             await asyncio.wait_for(
                 self.scraper.enrich_recent_match_stats(days_back=7, max_matches=50),
-                timeout=300,  # 5-minute cap for the whole pass
+                timeout=600,  # 10-minute cap for the whole pass
             )
         except asyncio.TimeoutError:
             logger.warning("Flashscore stats enrichment timed out (partial results saved)")
@@ -524,41 +524,8 @@ class FootballBettingAgent:
                 match_counts[rec.match_id] += 1
         all_recommendations = limited
 
-        # Portfolio risk management: cap per-league and total Kelly exposure
-        # Prevents over-concentration in one league and oversized single-day bankroll risk.
-        MAX_PICKS_PER_LEAGUE = self.config.get("betting.max_picks_per_league", 3)
-        MAX_TOTAL_KELLY_PCT = self.config.get("betting.max_total_kelly_pct", 20.0)
-
-        from collections import Counter as _Counter
-        league_counts: dict = _Counter()
-        total_kelly = 0.0
-        portfolio = []
-        for rec in all_recommendations:
-            lg = rec.league or "unknown"
-            if league_counts[lg] >= MAX_PICKS_PER_LEAGUE:
-                logger.debug(
-                    f"Portfolio: skipping {rec.match} ({rec.selection}) — "
-                    f"league cap ({MAX_PICKS_PER_LEAGUE}) reached for {lg}"
-                )
-                continue
-            if total_kelly + rec.kelly_stake_percentage > MAX_TOTAL_KELLY_PCT:
-                logger.debug(
-                    f"Portfolio: skipping {rec.match} ({rec.selection}) — "
-                    f"total Kelly cap ({MAX_TOTAL_KELLY_PCT}%) would be exceeded"
-                )
-                continue
-            portfolio.append(rec)
-            league_counts[lg] += 1
-            total_kelly += rec.kelly_stake_percentage
-
-        if len(portfolio) < len(all_recommendations):
-            skipped_n = len(all_recommendations) - len(portfolio)
-            logger.info(
-                f"Portfolio filter: kept {len(portfolio)} picks "
-                f"(dropped {skipped_n} — league/Kelly caps). "
-                f"Total exposure: {total_kelly:.1f}% of bankroll"
-            )
-        all_recommendations = portfolio
+        # No portfolio caps — include all value picks to avoid missing edges.
+        # Risk is managed at the Kelly fraction and max_stake_percentage level.
 
         logger.info(f"Found {len(all_recommendations)} high-confidence picks for {target}")
 

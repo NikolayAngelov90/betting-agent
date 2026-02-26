@@ -431,7 +431,25 @@ class FlashscoreScraper(BaseScraper):
             # ensures the next league starts with a fresh Chrome instance instead
             # of inheriting a broken session that causes cascading failures.
             self._driver = None
-            logger.error(f"Error loading results page {url}: {e}")
+            logger.warning(f"Results page failed ({type(e).__name__}) for {url} — retrying once")
+            try:
+                driver2 = self._get_driver()
+                if driver2:
+                    driver2.get(url)
+                    WebDriverWait(driver2, 20).until(
+                        EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
+                    )
+                    for el in driver2.find_elements(By.CLASS_NAME, "event__match"):
+                        try:
+                            m = self._parse_result_element(el)
+                            if m:
+                                matches.append(m)
+                        except Exception:
+                            pass
+                    logger.info(f"Results page retry OK: {len(matches)} results from {url}")
+            except Exception as e2:
+                logger.warning(f"Results page retry also failed for {url}: {type(e2).__name__} — skipping")
+                self._driver = None
 
         return matches
 
@@ -474,7 +492,26 @@ class FlashscoreScraper(BaseScraper):
 
         except Exception as e:
             self._driver = None
-            logger.error(f"Error loading fixtures page {url}: {e}")
+            logger.warning(f"Fixtures page failed ({type(e).__name__}) for {url} — retrying once")
+            try:
+                driver2 = self._get_driver()
+                if driver2:
+                    driver2.get(url)
+                    WebDriverWait(driver2, 20).until(
+                        EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
+                    )
+                    cutoff = datetime.now() + timedelta(days=max_days_ahead)
+                    for el in driver2.find_elements(By.CLASS_NAME, "event__match"):
+                        try:
+                            m = self._parse_fixture_element(el)
+                            if m and (not m.get("match_date") or m["match_date"] <= cutoff):
+                                matches.append(m)
+                        except Exception:
+                            pass
+                    logger.info(f"Fixtures page retry OK: {len(matches)} fixtures from {url}")
+            except Exception as e2:
+                logger.warning(f"Fixtures page retry also failed for {url}: {type(e2).__name__} — skipping")
+                self._driver = None
 
         return matches
 

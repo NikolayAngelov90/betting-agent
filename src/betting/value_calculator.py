@@ -110,22 +110,15 @@ class ValueBettingCalculator:
                 home_team_name=home_team_name, away_team_name=away_team_name,
             )
 
-            # When no bookmaker odds are available, generate a probability-aware
-            # estimate using a standard 6% bookmaker overround. This means the
-            # implied odds roughly equal the fair price, so EV ≈ −6% and no
-            # artificial value bets are generated without real market data.
+            # Skip selections with no real bookmaker odds — estimated odds
+            # cannot be used for value betting since there is no market to beat.
             is_fallback = False
-            if not best_odds and prob >= high_ev_min_confidence:
-                overround = 0.06  # 6% typical bookmaker margin
-                estimated = round(1.0 / (prob * (1.0 + overround)), 2)
-                # Clamp to plausible bookmaker range
-                estimated = max(self.min_odds, min(estimated, self.max_odds))
-                best_odds = estimated
-                is_fallback = True
+            if not best_odds:
                 logger.debug(
                     f"No real odds for {match_name} {selection} "
-                    f"(prob={prob:.0%}) — estimated {best_odds:.2f}"
+                    f"(prob={prob:.0%}) — skipping (no bookmaker data)"
                 )
+                continue
 
             if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
                 continue

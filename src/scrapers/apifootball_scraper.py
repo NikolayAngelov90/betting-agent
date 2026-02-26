@@ -315,6 +315,9 @@ class APIFootballScraper(BaseScraper):
                 elif "requests" in errors:
                     logger.warning("API-Football daily quota exhausted — skipping all further API calls")
                     self._quota_exhausted = True
+                elif "plan" in str(errors).lower():
+                    # Free-tier date restriction — expected, not an error
+                    logger.debug(f"API-Football plan restriction: {errors}")
                 else:
                     logger.error(f"API-Football errors: {errors}")
                 return None

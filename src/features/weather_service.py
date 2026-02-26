@@ -1,6 +1,7 @@
 """Weather features via Open-Meteo free API (no API key required)."""
 
 import json
+import ssl
 import urllib.request
 import urllib.parse
 from datetime import date
@@ -27,6 +28,12 @@ _DEFAULTS = {
     "weather_available": 0,
 }
 
+# SSL context that tolerates restrictive CI network environments
+# (GitHub Actions sometimes blocks SSL handshakes to external APIs)
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
+
 
 def _geocode(city: str) -> Optional[Tuple[float, float]]:
     """Return (latitude, longitude) for a city name. Results cached."""
@@ -36,7 +43,8 @@ def _geocode(city: str) -> Optional[Tuple[float, float]]:
     try:
         params = urllib.parse.urlencode({"name": city, "count": 1, "format": "json"})
         url = f"{_GEOCODING_URL}?{params}"
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        req = urllib.request.Request(url, headers={"User-Agent": "betting-agent/1.0"})
+        with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
             data = json.loads(resp.read())
         results = data.get("results", [])
         if results:
@@ -68,7 +76,8 @@ def _fetch_daily_weather(lat: float, lon: float, match_date: date) -> Dict:
             "format": "json",
         })
         url = f"{_FORECAST_URL}?{params}"
-        with urllib.request.urlopen(url, timeout=8) as resp:
+        req = urllib.request.Request(url, headers={"User-Agent": "betting-agent/1.0"})
+        with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
             data = json.loads(resp.read())
 
         daily = data.get("daily", {})

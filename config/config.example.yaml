@@ -27,10 +27,10 @@ scraping:
     - switzerland/super-league
     - greece/super-league
     - denmark/superliga
-    # Nordic & Eastern European
-    - norway/eliteserien
-    - sweden/allsvenskan
-    - finland/veikkausliiga
+    # Nordic & Eastern European (Norway/Sweden/Finland off-season Nov-Mar — re-add in April)
+    # - norway/eliteserien
+    # - sweden/allsvenskan
+    # - finland/veikkausliiga
     - poland/ekstraklasa
     - romania/liga-1
     # European Competitions (Flashscore path: /football/europe/{league}/)
