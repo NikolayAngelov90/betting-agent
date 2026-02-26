@@ -205,11 +205,11 @@ class FootballBettingAgent:
             logger.error(f"Flashscore odds pre-cache failed: {e}")
 
         # 2c. Flashscore per-match stats enrichment (shots, possession, corners, etc.)
-        # Single cross-league pass capped at 50 matches so it doesn't timeout.
+        # Capped at 25 matches to stay well within the 10-minute timeout.
         # Runs after results loop so scores are already saved.
         try:
             await asyncio.wait_for(
-                self.scraper.enrich_recent_match_stats(days_back=7, max_matches=50),
+                self.scraper.enrich_recent_match_stats(days_back=7, max_matches=25),
                 timeout=600,  # 10-minute cap for the whole pass
             )
         except asyncio.TimeoutError:
@@ -557,17 +557,22 @@ class FootballBettingAgent:
 
         logger.info(f"Found {len(all_recommendations)} high-confidence picks for {target}")
 
-        # Save picks to database for tracking; track how many are new this run
-        newly_saved = self._save_picks(all_recommendations, target)
+        # Save picks; get back only the ones new this run (for Telegram deduplication)
+        new_picks = self._save_picks(all_recommendations, target)
 
-        return all_recommendations, newly_saved
+        return all_recommendations, new_picks
 
-    def _save_picks(self, picks: List[BetRecommendation], pick_date: date) -> int:
-        """Save picks to database for result tracking. Returns count of newly saved picks."""
+    def _save_picks(self, picks: List[BetRecommendation], pick_date: date) -> List[BetRecommendation]:
+        """Save picks to database for result tracking.
+
+        Returns the list of picks that were *newly* saved this run so the caller
+        can send only fresh picks to Telegram and avoid re-notifying for picks
+        that were already sent in an earlier run on the same day.
+        """
         if not picks:
-            return 0
+            return []
 
-        newly_saved = 0
+        new_picks: List[BetRecommendation] = []
         with self.db.get_session() as session:
             for pick in picks:
                 # Skip if already saved (same match + selection + date)
@@ -602,11 +607,11 @@ class FootballBettingAgent:
                     used_fallback_odds=pick.used_fallback_odds,
                 )
                 session.add(saved)
-                newly_saved += 1
+                new_picks.append(pick)
 
             session.commit()
-            logger.info(f"Saved {newly_saved} new picks to database (skipped {len(picks) - newly_saved} duplicates)")
-        return newly_saved
+            logger.info(f"Saved {len(new_picks)} new picks to database (skipped {len(picks) - len(new_picks)} duplicates)")
+        return new_picks
 
     async def settle_predictions(self):
         """Fetch recent results and settle pending picks.
@@ -1283,16 +1288,18 @@ async def main():
                     league_filter = [l.strip() for l in sys.argv[i + 1].split(",")]
                     break
             agent.predictor.fit()
-            picks, newly_saved = await agent.get_daily_picks(leagues=league_filter)
+            picks, new_picks = await agent.get_daily_picks(leagues=league_filter)
             if not picks:
                 print("No value picks found for today.")
             else:
-                # Send to Telegram only when new picks were saved this run
+                # Send to Telegram only the picks that are NEW this run.
+                # On a re-run on the same day, previously-sent picks are excluded
+                # so users don't receive duplicate notifications.
                 if agent.telegram.enabled:
-                    if newly_saved > 0:
+                    if new_picks:
                         stats = agent.get_stats()
-                        await agent.telegram.send_daily_picks(picks, stats=stats)
-                        print(f"\nPicks sent to Telegram! ({newly_saved} new)")
+                        await agent.telegram.send_daily_picks(new_picks, stats=stats)
+                        print(f"\nPicks sent to Telegram! ({len(new_picks)} new)")
                     else:
                         print(f"\nNo new picks — Telegram not re-notified (all {len(picks)} already saved).")
 

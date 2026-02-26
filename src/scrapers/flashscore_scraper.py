@@ -1009,6 +1009,17 @@ class FlashscoreScraper(BaseScraper):
             for selection, odds_value in all_odds.items():
                 if odds_value <= 1.0:
                     continue
+                # Filter out non-goals markets scraped by accident (corners, shots, etc.)
+                # Standard goal lines go up to 4.5 at most; anything higher is a
+                # different market (corners, booking points, etc.) and must be discarded.
+                if selection.startswith("Over ") or selection.startswith("Under "):
+                    try:
+                        line = float(selection.split()[1])
+                        if line > 4.5:
+                            logger.debug(f"Discarding non-goals line {selection} (line {line} > 4.5)")
+                            continue
+                    except (IndexError, ValueError):
+                        pass
                 market_type = market_for_selection.get(selection, "other")
                 session.add(Odds(
                     match_id=match_id,
