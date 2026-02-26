@@ -1080,6 +1080,45 @@ class APIFootballScraper(BaseScraper):
                                 ))
                     low_coverage.sort(key=lambda x: x[3])
 
+        # Second-pass: for teams still missing apifootball_team_id, try /teams?search=name.
+        # This covers teams created via Flashscore/FDO that were never in an API-Football
+        # fixture response. Once resolved, IDs are persisted so this cost is one-time per team.
+        # Hard-capped at 10 searches/day to preserve odds budget.
+        still_missing = [
+            (tid, name, cnt) for tid, api_id, name, cnt in low_coverage if not api_id
+        ]
+        if still_missing:
+            search_resolved = {}  # db_team_id -> apifootball_team_id
+            for tid, name, cnt in still_missing[:10]:
+                if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
+                    break
+                data = await self._api_get("/teams", {"search": name})
+                if not data:
+                    continue
+                teams_resp = data.get("response", [])
+                if teams_resp:
+                    api_team_id_val = teams_resp[0].get("team", {}).get("id")
+                    if api_team_id_val:
+                        search_resolved[tid] = api_team_id_val
+            if search_resolved:
+                with self.db.get_session() as session:
+                    for tid, api_id in search_resolved.items():
+                        team = session.get(Team, tid)
+                        if team and not team.apifootball_team_id:
+                            team.apifootball_team_id = api_id
+                    session.commit()
+                # Patch low_coverage tuples so the backfill loop can use the resolved IDs
+                id_map = {tid: api_id for tid, api_id in search_resolved.items()}
+                low_coverage = [
+                    (tid, id_map.get(tid, api_id), name, cnt)
+                    for tid, api_id, name, cnt in low_coverage
+                ]
+                resolved_names = [name for tid, name, _ in still_missing if tid in search_resolved]
+                logger.info(
+                    f"Resolved {len(search_resolved)} team IDs via /teams?search: "
+                    + ", ".join(resolved_names)
+                )
+
         requests_before = self._requests_today
 
         for team_id, api_team_id, team_name, current_count in low_coverage:

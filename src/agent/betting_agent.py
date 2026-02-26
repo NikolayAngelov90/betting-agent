@@ -131,7 +131,7 @@ class FootballBettingAgent:
             for league in leagues:
                 try:
                     await asyncio.wait_for(
-                        self.scraper.scrape_league_fixtures(league), timeout=45,
+                        self.scraper.scrape_league_fixtures(league), timeout=90,
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Flashscore fixture timeout for {league}, continuing")
@@ -189,15 +189,39 @@ class FootballBettingAgent:
                     f"Pre-caching Flashscore odds for {len(_to_scrape)} upcoming fixtures..."
                 )
                 _odds_scraper = FlashscoreScraper()
+                _cf_failures = 0  # consecutive Cloudflare / no-data failures
+                _cf_abort_threshold = 3
                 try:
                     for _mid, _fsid, _markets in _to_scrape:
+                        if _cf_failures >= _cf_abort_threshold:
+                            logger.warning(
+                                f"Cloudflare blocking detected ({_cf_failures} consecutive "
+                                f"failures) — aborting Flashscore odds pre-cache; "
+                                f"API-Football will cover remaining fixtures"
+                            )
+                            break
                         try:
+                            from src.data.models import Odds as _OddsCheck
+                            _odds_before = 0
+                            with self.db.get_session() as _chk:
+                                _odds_before = _chk.query(_OddsCheck).filter_by(
+                                    match_id=_mid, bookmaker="Flashscore"
+                                ).count()
                             await _odds_scraper.scrape_and_save_odds(
                                 _mid, _fsid,
                                 markets=_markets,
                             )
+                            with self.db.get_session() as _chk:
+                                _odds_after = _chk.query(_OddsCheck).filter_by(
+                                    match_id=_mid, bookmaker="Flashscore"
+                                ).count()
+                            if _odds_after > _odds_before:
+                                _cf_failures = 0  # reset on success
+                            else:
+                                _cf_failures += 1
                         except Exception as _exc:
                             logger.warning(f"Odds pre-cache failed for {_mid}: {_exc}")
+                            _cf_failures += 1
                 finally:
                     _odds_scraper.close_driver()
                 logger.info("Flashscore odds pre-caching complete.")
