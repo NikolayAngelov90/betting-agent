@@ -111,55 +111,6 @@ jobs:
         run: python -m pytest tests/ -v --tb=short
         continue-on-error: true
 
-      - name: Import local picks sync (one-time)
-        run: |
-          python << 'PYEOF'
-          import json, os, sys
-          sync_file = 'data/picks_sync.json'
-          if not os.path.exists(sync_file):
-              print('No picks_sync.json — skipping import')
-              sys.exit(0)
-          sys.path.insert(0, '.')
-          from src.data.database import DatabaseManager
-          from src.data.models import SavedPick
-          from datetime import date as _date
-          db = DatabaseManager()
-          with open(sync_file) as f:
-              picks = json.load(f)
-          imported = 0
-          with db.get_session() as session:
-              for p in picks:
-                  pick_date = _date.fromisoformat(p['pick_date'])
-                  existing = session.query(SavedPick).filter(
-                      SavedPick.match_name == p['match_name'],
-                      SavedPick.selection == p['selection'],
-                      SavedPick.pick_date == pick_date,
-                  ).first()
-                  if existing:
-                      continue
-                  session.add(SavedPick(
-                      match_id=p['match_id'],
-                      pick_date=pick_date,
-                      match_name=p['match_name'],
-                      league=p.get('league', ''),
-                      market=p.get('market', ''),
-                      selection=p['selection'],
-                      odds=p['odds'],
-                      predicted_probability=p['predicted_probability'],
-                      expected_value=p['expected_value'],
-                      confidence=p.get('confidence'),
-                      kelly_stake_percentage=p.get('kelly_stake_percentage', 2.0),
-                      risk_level=p.get('risk_level', 'medium'),
-                      used_fallback_odds=p.get('used_fallback_odds', False),
-                  ))
-                  imported += 1
-              session.commit()
-          print(f'Imported {imported} picks from picks_sync.json (skipped {len(picks)-imported} duplicates)')
-          os.remove(sync_file)
-          print('Deleted picks_sync.json')
-          PYEOF
-        continue-on-error: true
-
       - name: Settle yesterday's predictions
         run: python -m src.agent.betting_agent --settle
         continue-on-error: true
