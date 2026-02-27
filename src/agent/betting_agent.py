@@ -232,6 +232,12 @@ class FootballBettingAgent:
         # stats_only=True skips the referee/venue page (~12s/match vs ~22s), so 50
         # matches ≈ 700s — comfortably inside the 15-minute cap.
         # days_back=14 catches matches missed if CI was down for a day or two.
+        #
+        # Always open a fresh Chrome session here — the previous session may have
+        # been flagged by Cloudflare during odds pre-caching, causing all subsequent
+        # requests to silently return empty pages (run #29: 0/40 enriched despite
+        # match detail pages not being odds-comparison protected).
+        self.scraper.close_driver()
         try:
             await asyncio.wait_for(
                 self.scraper.enrich_recent_match_stats(days_back=14, max_matches=50),

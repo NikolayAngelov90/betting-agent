@@ -109,7 +109,12 @@ class FlashscoreScraper(BaseScraper):
         Uses undetected-chromedriver when available to bypass Cloudflare's
         bot detection (removes navigator.webdriver flag and other signals).
         Falls back to standard Selenium if the package is not installed.
+
+        When a virtual display is available (DISPLAY env var set by Xvfb in CI),
+        Chrome runs in headed mode — Cloudflare detects headless markers far more
+        reliably than headed Chrome, so Xvfb + headed is the primary bypass.
         """
+        import os as _os
         if self._chrome_failed:
             return None
         if self._driver is None:
@@ -136,6 +141,14 @@ class FlashscoreScraper(BaseScraper):
                 # causing driver.get() to hang for the full timeout. With 'none'
                 # we rely entirely on explicit WebDriverWait for specific elements.
                 options.page_load_strategy = "none"
+
+                # If a virtual display (Xvfb) is running, disable headless mode.
+                # Headed Chrome on Xvfb is indistinguishable from a real desktop
+                # browser to Cloudflare — the primary bypass for odds comparison pages.
+                _has_virtual_display = bool(_os.environ.get("DISPLAY"))
+                _run_headless = self.headless and not _has_virtual_display
+                if _has_virtual_display:
+                    logger.info("Xvfb detected — running Chrome in headed mode (Cloudflare bypass)")
 
                 if _UC_AVAILABLE:
                     import platform as _platform
@@ -180,7 +193,7 @@ class FlashscoreScraper(BaseScraper):
                     def _create_uc():
                         kwargs = dict(
                             options=options,
-                            headless=self.headless,
+                            headless=_run_headless,
                             use_subprocess=_use_subprocess,
                         )
                         if _chrome_version:
@@ -190,7 +203,7 @@ class FlashscoreScraper(BaseScraper):
                         future = pool.submit(_create_uc)
                         self._driver = future.result(timeout=30)
                 else:
-                    if self.headless:
+                    if _run_headless:
                         options.add_argument("--headless=new")
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                         future = pool.submit(webdriver.Chrome, options=options)  # type: ignore[attr-defined]
