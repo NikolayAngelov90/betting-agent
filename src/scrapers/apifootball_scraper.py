@@ -357,7 +357,7 @@ class APIFootballScraper(BaseScraper):
 
         # 5. Backfill historical match data for low-coverage pick teams (uses leftover budget)
         remaining = max(0, self._daily_limit - self._requests_today - self.BUDGET_RESERVE)
-        backfill_budget = min(remaining, 30)
+        backfill_budget = min(remaining, 50)
         if backfill_budget > 2:
             await self.backfill_team_history(max_budget=backfill_budget)
 
@@ -945,34 +945,36 @@ class APIFootballScraper(BaseScraper):
     async def backfill_team_history(self, min_matches: int = 20,
                                     seasons: List[int] = None,
                                     max_budget: int = 30):
-        """Fetch historical match data for teams that appear in upcoming fixtures
-        but have fewer than min_matches results in the database.
+        """Fetch historical match data for low-coverage teams in the database.
 
-        This is important for international competition teams (CL/EL/ECL) from
-        smaller leagues (e.g. Qarabag, Bodo/Glimt) that are absent from the
-        football-data.co.uk CSV files but have an API-Football team ID.
+        Covers ALL teams with fewer than min_matches completed results, not just
+        teams in today's fixtures. This ensures teams playing next week get
+        backfilled now rather than on the day of the match.
 
-        Uses at most max_budget API requests so it fits within the daily free tier.
-        Each team × season costs 1 request. Results are saved as completed matches.
+        Priority: teams with the fewest matches are processed first.
+        Each team × season costs 1 API request. Results saved as completed matches.
         """
         if seasons is None:
-            seasons = [2023, 2024]
+            seasons = [2023, 2024, 2025]
 
-        # Collect team IDs from all upcoming fixtures
+        # Collect ALL team IDs in the DB that have upcoming fixtures (within 14 days)
+        # plus any team that has ever appeared as low-coverage in a pick analysis.
+        # Using a 14-day window ensures teams for next week's fixtures are covered.
         with self.db.get_session() as session:
-            today_start = datetime.combine(date.today(), datetime.min.time())
+            cutoff = datetime.combine(date.today(), datetime.min.time()) + timedelta(days=14)
             upcoming = session.query(Match).filter(
                 Match.is_fixture == True,
-                Match.match_date >= today_start,
+                Match.match_date >= datetime.combine(date.today(), datetime.min.time()),
+                Match.match_date <= cutoff,
             ).all()
-
-            if not upcoming:
-                return
 
             team_ids = set()
             for m in upcoming:
                 team_ids.add(m.home_team_id)
                 team_ids.add(m.away_team_id)
+
+        if not team_ids:
+            return
 
         # Find teams with insufficient historical data
         from sqlalchemy import or_ as _or

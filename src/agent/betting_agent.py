@@ -90,9 +90,13 @@ class FootballBettingAgent:
         try:
             fdo_results = await self.footballdataorg.update_results(days_back=1)
             fdo_fixtures = await self.footballdataorg.sync_fixtures(days_ahead=2)
+            # Bulk-import current season matches for all 9 competitions. FDO has no
+            # daily limit so this runs for free. Fills coverage gaps for teams that
+            # Flashscore missed or that were promoted mid-season.
+            fdo_hist = await self.footballdataorg.backfill_historical_seasons(seasons=[2025])
             logger.info(
                 f"football-data.org: {fdo_results} scores updated, "
-                f"{fdo_fixtures} new fixtures added"
+                f"{fdo_fixtures} new fixtures added, {fdo_hist} historical matches saved"
             )
         except Exception as e:
             logger.warning(f"football-data.org update failed (non-critical): {e}")
@@ -1552,7 +1556,14 @@ async def main():
 
         elif command == "--backfill-history":
             print("Fetching historical match data for low-coverage teams...")
-            await agent.apifootball.backfill_team_history(min_matches=20, seasons=[2023, 2024], max_budget=80)
+            # Step 1: football-data.org bulk fetch (free, no daily limit).
+            # Fetches ALL finished matches for 9 competitions × 3 seasons ≈ 27 calls.
+            print("  [1/2] football-data.org: bulk-fetching 2023/2024/2025 seasons...")
+            fdo_saved = await agent.footballdataorg.backfill_historical_seasons(seasons=[2023, 2024, 2025])
+            print(f"  FDO: {fdo_saved} new match records saved")
+            # Step 2: API-Football backfill for teams not covered by FDO (uses leftover budget).
+            print("  [2/2] API-Football: backfilling remaining low-coverage teams...")
+            await agent.apifootball.backfill_team_history(min_matches=20, seasons=[2023, 2024, 2025], max_budget=80)
             print("Historical backfill complete.")
 
         elif command == "--telegram-setup":

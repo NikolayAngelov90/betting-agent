@@ -482,3 +482,131 @@ class FootballDataOrgScraper:
                 f"{match_dt.strftime('%Y-%m-%d %H:%M')} ({league})"
             )
             return True
+
+    # ------------------------------------------------------------------
+    # Historical season backfill
+    # ------------------------------------------------------------------
+
+    async def backfill_historical_seasons(self, seasons: List[int] = None) -> int:
+        """Bulk-fetch all finished matches for all 9 covered competitions across seasons.
+
+        football-data.org has no daily limit so this runs without touching the
+        API-Football quota. Each competition × season = 1 API call (6s rate limit).
+        9 competitions × 3 seasons = 27 calls ≈ 3 minutes total.
+
+        Saves any match not already in the DB, creating Team records as needed.
+        Returns total number of new match records created.
+        """
+        if not self.enabled:
+            return 0
+        if seasons is None:
+            seasons = [2023, 2024, 2025]
+
+        total_saved = 0
+        for code, league in COMPETITION_MAP.items():
+            for season in seasons:
+                data = await self._get(
+                    f"/competitions/{code}/matches",
+                    {"season": season, "status": "FINISHED"},
+                )
+                if not data:
+                    continue
+                matches = data.get("matches", [])
+                saved = 0
+                for m in matches:
+                    ft = m.get("score", {}).get("fullTime", {})
+                    home_goals = ft.get("home")
+                    away_goals = ft.get("away")
+                    if home_goals is None or away_goals is None:
+                        continue
+                    home_raw = m.get("homeTeam", {}).get("name", "")
+                    away_raw = m.get("awayTeam", {}).get("name", "")
+                    home_name = TEAM_NAME_MAP.get(home_raw, home_raw)
+                    away_name = TEAM_NAME_MAP.get(away_raw, away_raw)
+                    utc_str = m.get("utcDate", "")
+                    try:
+                        match_dt = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
+                        match_dt = match_dt.replace(tzinfo=None)
+                    except Exception:
+                        continue
+                    if self._ensure_historical_match(
+                        league, home_name, away_name, match_dt, home_goals, away_goals, str(season)
+                    ):
+                        saved += 1
+
+                if saved:
+                    logger.info(f"FDO backfill {code} {season}: {saved} new matches saved")
+                else:
+                    logger.debug(f"FDO backfill {code} {season}: {len(matches)} matches already in DB")
+                total_saved += saved
+
+        logger.info(f"FDO historical backfill complete: {total_saved} new matches saved")
+        return total_saved
+
+    def _ensure_historical_match(
+        self,
+        league: str,
+        home_name: str,
+        away_name: str,
+        match_dt: datetime,
+        home_goals: int,
+        away_goals: int,
+        season: str,
+    ) -> bool:
+        """Create a completed match record if it doesn't already exist.
+
+        Also creates Team records for any team not yet in the DB.
+        Returns True if a new record was created.
+        """
+        date_start = datetime.combine(match_dt.date(), datetime.min.time())
+        date_end = date_start + timedelta(days=1)
+
+        with self.db.get_session() as session:
+            # Check if already exists by home team name + date
+            existing = (
+                session.query(Match)
+                .join(Team, Match.home_team_id == Team.id)
+                .filter(
+                    Match.league == league,
+                    Match.match_date >= date_start,
+                    Match.match_date < date_end,
+                    Team.name == home_name,
+                )
+                .first()
+            )
+            if existing:
+                # Update score if this was a fixture stub without goals
+                if existing.home_goals is None:
+                    existing.home_goals = home_goals
+                    existing.away_goals = away_goals
+                    existing.is_fixture = False
+                    session.commit()
+                return False
+
+            # Get or create home team
+            home_team = session.query(Team).filter_by(name=home_name).first()
+            if not home_team:
+                home_team = Team(name=home_name)
+                session.add(home_team)
+                session.flush()
+
+            # Get or create away team
+            away_team = session.query(Team).filter_by(name=away_name).first()
+            if not away_team:
+                away_team = Team(name=away_name)
+                session.add(away_team)
+                session.flush()
+
+            match = Match(
+                home_team_id=home_team.id,
+                away_team_id=away_team.id,
+                match_date=match_dt,
+                league=league,
+                season=season,
+                is_fixture=False,
+                home_goals=home_goals,
+                away_goals=away_goals,
+            )
+            session.add(match)
+            session.commit()
+            return True
