@@ -59,6 +59,12 @@ except ImportError:
     from selenium.webdriver.chrome.options import Options
     _UC_AVAILABLE = False
 
+try:
+    import camoufox as _camoufox_mod  # noqa: F401
+    _CF_AVAILABLE = True
+except ImportError:
+    _CF_AVAILABLE = False
+
 from src.scrapers.base_scraper import BaseScraper
 from src.data.models import Team, Match
 from src.data.database import get_db
@@ -102,6 +108,10 @@ class FlashscoreScraper(BaseScraper):
         self.headless = self.config.get("scraping.headless", True)
         self._driver = None
         self._chrome_failed = False
+        # camoufox (Firefox + anti-fingerprinting) — primary Cloudflare bypass
+        self._cf_browser = None    # playwright sync Browser (camoufox)
+        self._cf_ctx_mgr = None   # camoufox context manager handle
+        self._cf_failed = False   # True after an unrecoverable camoufox error
 
     def _get_driver(self):
         """Create a Chrome driver. Returns None if Chrome unavailable.
@@ -216,8 +226,84 @@ class FlashscoreScraper(BaseScraper):
                 self._driver = None
         return self._driver
 
+    def _get_camoufox_browser(self):
+        """Lazy-init a persistent camoufox Firefox browser (Cloudflare bypass).
+
+        Returns a Playwright sync Browser on success, None if unavailable.
+        The browser is kept alive across requests so Cloudflare cookies
+        (cf_clearance, __cf_bm) persist between pages within a session.
+        """
+        import os as _os
+        if not _CF_AVAILABLE or self._cf_failed:
+            return None
+        if self._cf_browser is not None:
+            return self._cf_browser
+        try:
+            from camoufox.sync_api import Camoufox
+            # headed (headless=False) with Xvfb is the most realistic profile;
+            # headless=True still works but risks detection on Cloudflare JS challenge.
+            _has_display = bool(_os.environ.get("DISPLAY"))
+            mgr = Camoufox(
+                headless=(not _has_display),
+                os="windows",   # Windows UA fingerprint — most common desktop platform
+            )
+            self._cf_browser = mgr.__enter__()
+            self._cf_ctx_mgr = mgr
+            logger.info(
+                f"camoufox Firefox browser started "
+                f"(headless={not _has_display}, Cloudflare bypass active)"
+            )
+        except Exception as e:
+            logger.warning(f"camoufox failed to start: {e} — will use Selenium fallback")
+            self._cf_failed = True
+            self._cf_browser = None
+        return self._cf_browser
+
+    def _close_camoufox(self):
+        """Shut down the camoufox Firefox browser and reset state."""
+        if self._cf_ctx_mgr is not None:
+            try:
+                self._cf_ctx_mgr.__exit__(None, None, None)
+            except Exception:
+                pass
+        self._cf_browser = None
+        self._cf_ctx_mgr = None
+        self._cf_failed = False
+
+    def _cf_fetch_html(self, url: str, wait_selector: str,
+                       timeout_ms: int = 20000) -> Optional[str]:
+        """Load *url* with camoufox Firefox and return the page HTML.
+
+        Waits up to *timeout_ms* ms for *wait_selector* to appear before
+        returning the page source.  Returns None if camoufox is unavailable
+        or the page load fails (caller should fall back to Selenium).
+        """
+        browser = self._get_camoufox_browser()
+        if browser is None:
+            return None
+        try:
+            page = browser.new_page()
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                try:
+                    page.wait_for_selector(wait_selector, timeout=timeout_ms)
+                except Exception:
+                    pass  # selector may not appear if Cloudflare still blocks
+                html = page.content()
+            finally:
+                page.close()
+            return html
+        except Exception as e:
+            logger.warning(
+                f"camoufox page load failed ({type(e).__name__}) for {url} "
+                f"— marking camoufox as failed, falling back to Selenium"
+            )
+            self._close_camoufox()
+            self._cf_failed = True
+            return None
+
     def close_driver(self):
-        """Close the Selenium driver and reset failure flag for next use."""
+        """Close the Selenium driver and camoufox browser; reset failure flags."""
         if self._driver:
             try:
                 self._driver.quit()
@@ -226,6 +312,8 @@ class FlashscoreScraper(BaseScraper):
             self._driver = None
         # Reset so next league can attempt a fresh Chrome session
         self._chrome_failed = False
+        # Also close camoufox — caller can re-open a fresh browser next time
+        self._close_camoufox()
 
     async def update(self):
         """Run full update: results + fixtures for all configured leagues."""
@@ -708,17 +796,108 @@ class FlashscoreScraper(BaseScraper):
     async def scrape_match_statistics(self, match_url: str, stats_only: bool = False) -> Optional[dict]:
         """Scrape detailed statistics + match info for a specific match URL.
 
+        Tries camoufox (Firefox + anti-fingerprinting) first for better Cloudflare
+        bypass, then falls back to Selenium.
         stats_only=True skips the second page load (referee/venue/capacity), cutting
         per-match time from ~22s to ~12s.  Use this for bulk enrichment passes.
         """
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._scrape_match_detail, match_url, stats_only)
 
+    def _scrape_match_detail_cf(self, url: str, stats_only: bool = False) -> Optional[dict]:
+        """Scrape match stats using camoufox + BeautifulSoup (Cloudflare bypass).
+
+        Uses the same CSS selectors as the Selenium path but parses page HTML
+        with BS4 instead of Selenium element APIs.
+        """
+        result = {}
+
+        # --- Statistics sub-page ---
+        stats_url = url.rstrip("/") + "/summary/stats/0/"
+        html = self._cf_fetch_html(
+            stats_url,
+            "[data-testid='wcl-statistics'],[class*='stat__row']",
+            timeout_ms=20000,
+        )
+        if not html:
+            return None
+
+        soup = BeautifulSoup(html, "lxml")
+
+        # New (2025+) data-testid selectors
+        stat_rows = soup.select("[data-testid='wcl-statistics']")
+        for row in stat_rows:
+            label_el = row.select_one("[data-testid='wcl-statistics-category']")
+            val_els = row.select("[data-testid='wcl-statistics-value'] > strong")
+            if label_el and len(val_els) >= 2:
+                self._apply_stat(
+                    result,
+                    label_el.get_text(strip=True).lower(),
+                    val_els[0].get_text(strip=True),
+                    val_els[1].get_text(strip=True),
+                )
+
+        # Fallback to older class-based selectors
+        if not result:
+            for row in soup.select(".stat__row"):
+                label_el = row.select_one(".stat__categoryName")
+                home_el = row.select_one(".stat__homeValue")
+                away_el = row.select_one(".stat__awayValue")
+                if label_el and home_el and away_el:
+                    self._apply_stat(
+                        result,
+                        label_el.get_text(strip=True).lower(),
+                        home_el.get_text(strip=True),
+                        away_el.get_text(strip=True),
+                    )
+
+        if stats_only:
+            return result if result else None
+
+        # --- Match info (referee, venue, capacity) ---
+        info_html = self._cf_fetch_html(
+            url.rstrip("/") + "/",
+            "[data-testid='wcl-summaryMatchInformation']",
+            timeout_ms=15000,
+        )
+        if info_html:
+            soup2 = BeautifulSoup(info_html, "lxml")
+            container = soup2.select_one("[data-testid='wcl-summaryMatchInformation']")
+            if container:
+                divs = list(container.children)
+                divs = [d for d in divs if hasattr(d, "get_text")]
+                for i in range(0, len(divs) - 1, 2):
+                    key = divs[i].get_text(strip=True).lower()
+                    val = divs[i + 1].get_text(strip=True)
+                    if "referee" in key:
+                        result["referee"] = val
+                    elif "venue" in key or "stadium" in key or "ground" in key:
+                        result["venue"] = val
+                    elif "capacity" in key:
+                        try:
+                            result["venue_capacity"] = int(
+                                val.replace(",", "").replace(".", "")
+                            )
+                        except ValueError:
+                            pass
+
+        return result if result else None
+
     def _scrape_match_detail(self, url: str, stats_only: bool = False) -> Optional[dict]:
         """Scrape match detail page for stats, referee, venue (runs in executor).
 
+        Tries camoufox (Firefox + anti-fingerprinting) first for Cloudflare bypass,
+        then falls back to Selenium/undetected-chromedriver.
         stats_only=True skips the referee/venue page — saves ~10s per match.
         """
+        # --- camoufox path (primary: Firefox + anti-fingerprinting) ---
+        if _CF_AVAILABLE and not self._cf_failed:
+            result = self._scrape_match_detail_cf(url, stats_only)
+            if result:
+                return result
+            logger.debug(f"camoufox stats empty for {url} — trying Selenium fallback")
+
+        # --- Selenium fallback ---
         driver = self._get_driver()
         if not driver:
             return None
@@ -866,8 +1045,97 @@ class FlashscoreScraper(BaseScraper):
     # Odds scraping
     # ------------------------------------------------------------------
 
+    def _parse_odds_from_soup(self, soup: BeautifulSoup, market: str) -> dict:
+        """Parse odds from page HTML (used by the camoufox path)."""
+        result = {}
+        spans = soup.select("[data-testid='wcl-oddsValue']")
+        values = []
+        for span in spans:
+            try:
+                values.append(float(span.get_text(strip=True)))
+            except ValueError:
+                pass
+
+        if market == "home-draw-away":
+            if len(values) >= 3:
+                home_vals, draw_vals, away_vals = [], [], []
+                for i in range(0, len(values) - 2, 3):
+                    home_vals.append(values[i])
+                    draw_vals.append(values[i + 1])
+                    away_vals.append(values[i + 2])
+                if home_vals:
+                    result["Home Win"] = max(home_vals)
+                if draw_vals:
+                    result["Draw"] = max(draw_vals)
+                if away_vals:
+                    result["Away Win"] = max(away_vals)
+
+        elif market == "over-under":
+            rows = soup.select(".wclOddsRow, .wclOddsContent")
+            current_line = None
+            for row in rows:
+                text = row.get_text(strip=True)
+                line_match = re.search(r'(\d+\.5)', text)
+                if line_match and len(text.split()) <= 4:
+                    current_line = line_match.group(1)
+                    continue
+                if current_line:
+                    vals = re.findall(r'\d+\.\d{2}', text)
+                    if len(vals) >= 2:
+                        try:
+                            key_over = f"Over {current_line}"
+                            key_under = f"Under {current_line}"
+                            result[key_over] = max(result.get(key_over, 0), float(vals[0]))
+                            result[key_under] = max(result.get(key_under, 0), float(vals[1]))
+                        except ValueError:
+                            pass
+
+        elif market == "btts":
+            if len(values) >= 2:
+                yes_vals, no_vals = [], []
+                for i in range(0, len(values) - 1, 2):
+                    yes_vals.append(values[i])
+                    no_vals.append(values[i + 1])
+                ft_yes = [v for v in yes_vals if v < 2.5]
+                if ft_yes:
+                    result["BTTS Yes"] = max(ft_yes)
+                elif yes_vals:
+                    result["BTTS Yes"] = min(yes_vals)
+                if no_vals:
+                    result["BTTS No"] = max(no_vals)
+
+        return result
+
+    def _scrape_odds_page_cf(self, flashscore_id: str, market: str = "home-draw-away") -> dict:
+        """Scrape odds using camoufox Firefox (Cloudflare bypass).
+
+        Loads the Flashscore odds-comparison page with camoufox, then parses
+        the result HTML with BeautifulSoup.  Falls back gracefully (returns {})
+        if camoufox is not available or the page load fails.
+        """
+        market_path = {
+            "home-draw-away": "home-draw-away/full-time",
+            "over-under": "over-under/full-time",
+            "btts": "both-teams-to-score/full-time",
+        }.get(market, market)
+
+        urls = [
+            f"https://www.flashscore.com/match/{flashscore_id}/#/odds-comparison/{market_path}",
+            f"https://www.flashscore.com/match/{flashscore_id}/odds-comparison/{market_path}/",
+        ]
+        for url in urls:
+            html = self._cf_fetch_html(url, "[data-testid='wcl-oddsValue']", timeout_ms=20000)
+            if html:
+                soup = BeautifulSoup(html, "lxml")
+                result = self._parse_odds_from_soup(soup, market)
+                if result:
+                    return result
+        return {}
+
     def _scrape_odds_page(self, flashscore_id: str, market: str = "home-draw-away") -> dict:
         """Scrape bookmaker odds from the Flashscore odds-comparison page.
+
+        Tries camoufox (Firefox + anti-fingerprinting) first, then Selenium.
 
         Args:
             flashscore_id: 8-char Flashscore match ID (e.g. "G8MZEpbl")
@@ -877,6 +1145,16 @@ class FlashscoreScraper(BaseScraper):
             Dict mapping selection names to best available odds (float).
             Empty dict if scraping fails.
         """
+        # --- camoufox path (primary) ---
+        if _CF_AVAILABLE and not self._cf_failed:
+            result = self._scrape_odds_page_cf(flashscore_id, market)
+            if result:
+                return result
+            logger.debug(
+                f"camoufox odds empty for {flashscore_id} {market} — trying Selenium"
+            )
+
+        # --- Selenium fallback ---
         driver = self._get_driver()
         if not driver:
             return {}

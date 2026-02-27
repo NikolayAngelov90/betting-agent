@@ -10,6 +10,7 @@ requests>=2.31.0
 aiohttp>=3.9.0
 httpx>=0.25.0
 playwright>=1.40.0
+camoufox>=0.4.0        # Firefox-based anti-fingerprinting browser (Cloudflare bypass)
 
 # Database
 sqlalchemy>=2.0.0
