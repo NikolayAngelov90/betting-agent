@@ -944,7 +944,8 @@ class APIFootballScraper(BaseScraper):
 
     async def backfill_team_history(self, min_matches: int = 20,
                                     seasons: List[int] = None,
-                                    max_budget: int = 30):
+                                    max_budget: int = 30,
+                                    min_remaining_budget: int = 25):
         """Fetch historical match data for low-coverage teams in the database.
 
         Covers ALL teams with fewer than min_matches completed results, not just
@@ -956,6 +957,19 @@ class APIFootballScraper(BaseScraper):
         """
         if seasons is None:
             seasons = [2023, 2024, 2025]
+
+        # Guard: skip backfill if the remaining daily budget is too low.
+        # When a second run happens on the same day (manual trigger), the first
+        # run already consumed most of the 100 req/day quota.  Backfill needs at
+        # least min_remaining_budget requests to be useful; below that threshold
+        # we log a warning and return early to preserve budget for odds/fixtures.
+        remaining = self._daily_limit - self._requests_today
+        if remaining < min_remaining_budget:
+            logger.warning(
+                f"API-Football backfill skipped: only {remaining} requests remaining "
+                f"(threshold={min_remaining_budget}). Run again tomorrow for full backfill."
+            )
+            return
 
         # Collect ALL team IDs in the DB that have upcoming fixtures (within 14 days)
         # plus any team that has ever appeared as low-coverage in a pick analysis.

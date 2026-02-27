@@ -39,7 +39,7 @@ jobs:
           # Run Chrome in headed mode on a virtual framebuffer — Cloudflare detects
           # headless Chrome markers much more reliably than headed Chrome. Xvfb
           # provides a real display so Chrome behaves identically to a desktop browser.
-          Xvfb :99 -screen 0 1920x1080x24 -ac &
+          Xvfb :99 -screen 0 1920x1080x24 -ac 2>/dev/null &
           echo "DISPLAY=:99" >> $GITHUB_ENV
           sleep 1
           echo "Virtual display started on :99"

@@ -341,22 +341,52 @@ class FlashscoreScraper(BaseScraper):
             logger.debug("No matches need Flashscore stats enrichment")
             return 0
 
-        logger.info(f"Enriching stats for {len(pending)} recent matches (cross-league pass)")
+        total = len(pending)
+        logger.info(f"Enriching stats for {total} recent matches (cross-league pass)")
         enriched = 0
-        for match_id, fs_id in pending:
+        consecutive_failures = 0
+        _CF_ABORT = 4  # abort if Cloudflare blocks this many matches in a row
+
+        for n, (match_id, fs_id) in enumerate(pending, 1):
+            if consecutive_failures >= _CF_ABORT:
+                logger.warning(
+                    f"Stats enrichment: {consecutive_failures} consecutive failures "
+                    f"(Cloudflare?) — aborting early after {n - 1}/{total} matches"
+                )
+                break
+
+            logger.info(f"[Stats {n}/{total}] Scraping match {match_id} (id={fs_id})")
             match_url = f"{FLASHSCORE_BASE_URL}/match/{fs_id}/"
-            # stats_only=True skips referee/venue page — halves per-match time so
-            # we can process 2× more matches within the CI timeout budget.
-            stats = await self.scrape_match_statistics(match_url, stats_only=True)
+            try:
+                # Per-match 60s timeout — if Chrome hangs on a Cloudflare challenge
+                # we detect it quickly instead of burning the full 900s budget.
+                stats = await asyncio.wait_for(
+                    self.scrape_match_statistics(match_url, stats_only=True),
+                    timeout=60,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"[Stats {n}/{total}] Timeout after 60s for {fs_id}")
+                consecutive_failures += 1
+                continue
+            except Exception as exc:
+                logger.warning(f"[Stats {n}/{total}] Error for {fs_id}: {exc}")
+                consecutive_failures += 1
+                continue
+
             if stats:
                 with db.get_session() as session:
                     m = session.get(Match, match_id)
                     if m:
                         self._apply_stats_to_match(session, m, stats)
                         enriched += 1
+                consecutive_failures = 0  # reset on success
+            else:
+                logger.debug(f"[Stats {n}/{total}] No stats returned for {fs_id}")
+                consecutive_failures += 1
+
             await asyncio.sleep(1)
 
-        logger.info(f"Flashscore stats enriched: {enriched}/{len(pending)} matches")
+        logger.info(f"Flashscore stats enriched: {enriched}/{total} matches")
         return enriched
 
     async def scrape_league_fixtures(self, league: str):
