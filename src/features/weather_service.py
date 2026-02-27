@@ -106,6 +106,10 @@ def _fetch_daily_weather(lat: float, lon: float, match_date: date) -> Dict:
             "weather_available": 1,
         }
         _cb_failures = 0  # reset on success
+        logger.info(
+            f"Weather fetched for ({lat:.3f},{lon:.3f},{date_str}): "
+            f"{temp:.1f}°C, wind={wind:.1f}km/h, precip={precip:.1f}mm"
+        )
         _WEATHER_CACHE[cache_key] = result
         return result
     except Exception as exc:

@@ -89,6 +89,15 @@ class MLModels:
         else:
             self._kept_feature_mask = None
 
+        # Zero-variance pruning — constant features cause RuntimeWarning/NaN in np.corrcoef
+        _var_mask = np.var(X, axis=0) > 0
+        n_zero_var = int(np.sum(~_var_mask))
+        if n_zero_var > 0:
+            _zero_names = [self.feature_names[i] for i in range(len(self.feature_names)) if not _var_mask[i]]
+            logger.info(f"Dropping {n_zero_var} zero-variance features: {_zero_names[:10]}{'...' if len(_zero_names) > 10 else ''}")
+            X = X[:, _var_mask]
+            self.feature_names = [f for f, keep in zip(self.feature_names, _var_mask) if keep]
+
         # Correlation pruning — drop one of any pair with |corr| > 0.8
         if X.shape[1] > 1:
             corr_matrix = np.corrcoef(X.T)
@@ -376,6 +385,15 @@ class GoalsMLModel:
             X = X[:, kept_mask]
             self.feature_names = [f for f, k in zip(self.feature_names, kept_mask) if k]
             self._kept_feature_mask = kept_mask
+
+        # Zero-variance pruning — constant features cause RuntimeWarning/NaN in np.corrcoef
+        _var_mask = np.var(X, axis=0) > 0
+        n_zero_var = int(np.sum(~_var_mask))
+        if n_zero_var > 0:
+            _zero_names = [self.feature_names[i] for i in range(len(self.feature_names)) if not _var_mask[i]]
+            logger.info(f"GoalsMLModel: dropping {n_zero_var} zero-variance features: {_zero_names[:10]}{'...' if len(_zero_names) > 10 else ''}")
+            X = X[:, _var_mask]
+            self.feature_names = [f for f, keep in zip(self.feature_names, _var_mask) if keep]
 
         # Correlation pruning — drop one of any pair with |corr| > 0.8
         if X.shape[1] > 1:

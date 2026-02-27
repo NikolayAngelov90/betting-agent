@@ -1094,7 +1094,11 @@ class APIFootballScraper(BaseScraper):
             for tid, name, cnt in still_missing[:10]:
                 if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
                     break
-                data = await self._api_get("/teams", {"search": name})
+                # Strip apostrophes/special chars that break the API search
+                # e.g. "FC Twente '65" → "FC Twente 65"
+                import re as _re
+                search_name = _re.sub(r"['\u2018\u2019\u201a\u201b\u2032]", "", name).strip()
+                data = await self._api_get("/teams", {"search": search_name})
                 if not data:
                     continue
                 teams_resp = data.get("response", [])

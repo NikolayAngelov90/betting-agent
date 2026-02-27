@@ -424,6 +424,31 @@ class FootballDataOrgScraper:
             logger.info(f"football-data.org: added {added} new fixtures to DB")
         return added
 
+    @staticmethod
+    def _find_team_by_prefix(session, name: str):
+        """Return a Team whose stored name is a prefix of *name* (or vice-versa).
+
+        Flashscore sometimes stores truncated team names (e.g. "Go Ahead Eag"
+        instead of "Go Ahead Eagles").  When FDO provides the full name we try a
+        prefix match so we don't create a duplicate Team record.
+
+        Only applied when the name is longer than 8 characters to avoid false
+        positives on short names.
+        """
+        if len(name) <= 8:
+            return None
+        # FDO name starts with DB name (DB name is a truncated prefix)
+        candidate = session.query(Team).filter(
+            Team.name.ilike(f"{name[:12]}%")
+        ).first()
+        if candidate:
+            return candidate
+        # DB name starts with FDO name (FDO name is shorter)
+        candidate = session.query(Team).filter(
+            Team.name.ilike(f"{name}%")
+        ).first()
+        return candidate
+
     def _ensure_fixture(
         self,
         league: str,
@@ -457,12 +482,18 @@ class FootballDataOrgScraper:
             # Get or create home team
             home_team = session.query(Team).filter_by(name=home_name).first()
             if not home_team:
+                # Prefix fallback — Flashscore may store truncated names
+                # e.g. "Go Ahead Eag" in DB vs "Go Ahead Eagles" from FDO
+                home_team = self._find_team_by_prefix(session, home_name)
+            if not home_team:
                 home_team = Team(name=home_name)
                 session.add(home_team)
                 session.flush()
 
             # Get or create away team
             away_team = session.query(Team).filter_by(name=away_name).first()
+            if not away_team:
+                away_team = self._find_team_by_prefix(session, away_name)
             if not away_team:
                 away_team = Team(name=away_name)
                 session.add(away_team)
@@ -586,12 +617,16 @@ class FootballDataOrgScraper:
             # Get or create home team
             home_team = session.query(Team).filter_by(name=home_name).first()
             if not home_team:
+                home_team = self._find_team_by_prefix(session, home_name)
+            if not home_team:
                 home_team = Team(name=home_name)
                 session.add(home_team)
                 session.flush()
 
             # Get or create away team
             away_team = session.query(Team).filter_by(name=away_name).first()
+            if not away_team:
+                away_team = self._find_team_by_prefix(session, away_name)
             if not away_team:
                 away_team = Team(name=away_name)
                 session.add(away_team)

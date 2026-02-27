@@ -325,11 +325,22 @@ class FootballBettingAgent:
                 for o in odds_records
             ]
 
-        # Coverage gate — skip fixtures with insufficient historical data
+        # Coverage gate — skip fixtures where at least one team has no data
+        # from any model (no Poisson strengths AND no Elo rating).
+        # score-based check (< 0.50) was an edge case: two teams with only Elo
+        # ratings scored exactly 0.50 and slipped through despite 0% historical data.
         coverage = self.predictor.check_coverage(home_id, away_id)
-        if coverage["score"] < 0.50:
+        home_has_data = coverage["home_poisson"] or coverage["home_elo"]
+        away_has_data = coverage["away_poisson"] or coverage["away_elo"]
+        if not home_has_data or not away_has_data:
+            missing = []
+            if not home_has_data:
+                missing.append("home")
+            if not away_has_data:
+                missing.append("away")
             logger.info(
-                f"Skipping {match_name}: data coverage {coverage['score']:.0%} < 50% minimum"
+                f"Skipping {match_name}: no historical data for {'/'.join(missing)} team "
+                f"(coverage {coverage['score']:.0%})"
             )
             return MatchAnalysis(
                 match_id=match_id, match_name=match_name, match_date=match_date,
