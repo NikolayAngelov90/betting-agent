@@ -1080,24 +1080,45 @@ class FlashscoreScraper(BaseScraper):
                     result["Away Win"] = max(away_vals)
 
         elif market == "over-under":
-            rows = soup.select(".wclOddsRow, .wclOddsContent")
-            current_line = None
-            for row in rows:
-                text = row.get_text(strip=True)
-                line_match = re.search(r'(\d+\.5)', text)
-                if line_match and len(text.split()) <= 4:
-                    current_line = line_match.group(1)
+            # Walk UP from each wcl-oddsValue span to find its line-specific
+            # section.  A line section is the closest ancestor where exactly
+            # one "Over X.5" string appears in its text (avoids catching
+            # multi-line parent containers that hold all lines at once).
+            # Values come in pairs per bookmaker row: (Over, Under, Over, Under,
+            # ...) so even indices = Over, odd indices = Under for each line.
+            from collections import defaultdict as _dd
+            line_buckets: dict = _dd(list)
+
+            for span in soup.find_all(attrs={"data-testid": "wcl-oddsValue"}):
+                try:
+                    val = float(span.get_text(strip=True))
+                except ValueError:
                     continue
-                if current_line:
-                    vals = re.findall(r'\d+\.\d{2}', text)
-                    if len(vals) >= 2:
-                        try:
-                            key_over = f"Over {current_line}"
-                            key_under = f"Under {current_line}"
-                            result[key_over] = max(result.get(key_over, 0), float(vals[0]))
-                            result[key_under] = max(result.get(key_under, 0), float(vals[1]))
-                        except ValueError:
-                            pass
+
+                node = span.parent
+                assigned = None
+                while node and node.name not in ("body", "html", "[document]"):
+                    over_hits = re.findall(r"\bOver (\d+\.5)\b",
+                                          node.get_text(separator=" ", strip=True))
+                    if len(over_hits) == 1:
+                        assigned = over_hits[0]
+                        break
+                    if len(over_hits) > 1:
+                        break  # too high in the tree — stop
+                    node = node.parent
+
+                if assigned:
+                    line_buckets[assigned].append(val)
+
+            for line, vals in line_buckets.items():
+                if len(vals) < 2:
+                    continue
+                over_vals  = [v for v in vals[0::2] if 1.01 < v < 20]
+                under_vals = [v for v in vals[1::2] if 1.01 < v < 20]
+                if over_vals:
+                    result[f"Over {line}"]  = max(over_vals)
+                if under_vals:
+                    result[f"Under {line}"] = max(under_vals)
 
         elif market == "btts":
             if len(values) >= 2:
@@ -1128,14 +1149,23 @@ class FlashscoreScraper(BaseScraper):
             "btts": "both-teams-to-score/full-time",
         }.get(market, market)
 
+        # Use market-specific wait selectors.
+        # [data-testid='wcl-oddsValue'] fires on the initial 1X2 content
+        # before the SPA has navigated to the O/U or BTTS tab — we'd capture
+        # the wrong HTML.  Waiting for content that only exists on each tab
+        # ensures we have the right page before parsing.
+        wait_selector = {
+            "home-draw-away": "[data-testid='wcl-oddsValue']",
+            "over-under":     "text=Over 0.5",
+            "btts":           "text=Both Teams",
+        }.get(market, "[data-testid='wcl-oddsValue']")
+
         urls = [
             f"https://www.flashscore.com/match/{flashscore_id}/#/odds-comparison/{market_path}",
             f"https://www.flashscore.com/match/{flashscore_id}/odds-comparison/{market_path}/",
         ]
         for url in urls:
-            # 8s timeout: Flashscore's CDN is fast once CF challenge is cleared.
-            # Keeping it short avoids burning 20s on every failed O/U sub-page.
-            html = self._cf_fetch_html(url, "[data-testid='wcl-oddsValue']", timeout_ms=8000)
+            html = self._cf_fetch_html(url, wait_selector, timeout_ms=12000)
             if html:
                 soup = BeautifulSoup(html, "lxml")
                 result = self._parse_odds_from_soup(soup, market)
@@ -1277,38 +1307,12 @@ class FlashscoreScraper(BaseScraper):
 
     def _parse_ou_odds(self, driver) -> dict:
         """Parse Over/Under odds from the loaded odds-comparison page."""
-        result = {}
         try:
-            # Each odds section has a label row followed by bookmaker rows.
-            # Find the line headers (e.g. "2.5") and the corresponding odds.
-            # Strategy: find all elements that look like "X.5" labels,
-            # then get the next set of odds spans.
-            # Simpler: look for the wclOddsRow/wclOddsContent structure.
-            rows = driver.find_elements(By.CSS_SELECTOR, ".wclOddsRow, .wclOddsContent")
-            current_line = None
-            for row in rows:
-                text = row.text.strip()
-                # Line header row — e.g. "Over 1.5\nUnder 1.5" or just "1.5"
-                line_match = re.search(r'(\d+\.5)', text)
-                if line_match and len(text.split()) <= 4:
-                    current_line = line_match.group(1)
-                    continue
-                if current_line:
-                    vals = re.findall(r'\d+\.\d{2}', text)
-                    if len(vals) >= 2:
-                        try:
-                            over_val = float(vals[0])
-                            under_val = float(vals[1])
-                            # Store without " Goals" suffix so _find_best_odds can match them
-                            key_over = f"Over {current_line}"
-                            key_under = f"Under {current_line}"
-                            result[key_over] = max(result.get(key_over, 0), over_val)
-                            result[key_under] = max(result.get(key_under, 0), under_val)
-                        except ValueError:
-                            pass
+            soup = BeautifulSoup(driver.page_source, "lxml")
+            return self._parse_odds_from_soup(soup, "over-under")
         except Exception as e:
             logger.debug(f"O/U parsing error: {e}")
-        return result
+            return {}
 
     async def scrape_and_save_odds(self, match_id: int, flashscore_id: str,
                                      markets: tuple = ("home-draw-away", "over-under", "btts")):

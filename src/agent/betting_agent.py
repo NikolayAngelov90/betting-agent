@@ -448,31 +448,37 @@ class FootballBettingAgent:
             return []
 
         # ── Scrape live Flashscore odds for today's fixtures ──────────────────
-        # Collect matches that have a flashscore_id but no Flashscore odds yet.
+        # Check per-market which fixtures are still missing odds so that a
+        # partial run (e.g. --update aborted after 3 CF failures) doesn't
+        # prevent the remaining markets from being scraped here.
+        _MARKET_MAP = [
+            ("home-draw-away", "1X2"),
+            ("over-under",     "over_under"),
+            ("btts",           "btts"),
+        ]
         with self.db.get_session() as session:
             to_scrape = []
             for fid in fixture_ids:
                 m = session.get(Match, fid)
-                if m and m.flashscore_id:
-                    existing_odds = session.query(Odds).filter_by(
-                        match_id=fid, bookmaker="Flashscore"
-                    ).count()
-                    if existing_odds == 0:
-                        to_scrape.append((fid, m.flashscore_id))
+                if not (m and m.flashscore_id):
+                    continue
+                missing = [
+                    slug for slug, mtype in _MARKET_MAP
+                    if session.query(Odds).filter_by(
+                        match_id=fid, bookmaker="Flashscore", market_type=mtype
+                    ).count() == 0
+                ]
+                if missing:
+                    to_scrape.append((fid, m.flashscore_id, tuple(missing)))
 
         if to_scrape:
             logger.info(f"Scraping Flashscore odds for {len(to_scrape)} fixtures...")
             scraper = FlashscoreScraper()
             try:
-                # Scrape all three markets sequentially to avoid Chrome window conflicts.
-                # 1X2 + Over/Under + BTTS gives us complete value-bet coverage.
-                for match_id, fs_id in to_scrape:
+                for match_id, fs_id, markets in to_scrape:
                     try:
-                        # During picks: only scrape 1X2 odds (fastest, most impactful).
-                        # Over/Under + BTTS are scraped during --update for pre-caching.
                         await scraper.scrape_and_save_odds(
-                            match_id, fs_id,
-                            markets=("home-draw-away",),
+                            match_id, fs_id, markets=markets,
                         )
                     except Exception as exc:
                         logger.warning(f"Odds scrape failed for match {match_id}: {exc}")
