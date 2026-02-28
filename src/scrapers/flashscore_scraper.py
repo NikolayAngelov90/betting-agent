@@ -240,6 +240,15 @@ class FlashscoreScraper(BaseScraper):
             return self._cf_browser
         try:
             from camoufox.sync_api import Camoufox
+            # Worker-thread fix: asyncio.get_event_loop() in a run_in_executor thread
+            # can return the main thread's running loop, making Playwright's sync API
+            # refuse with "Playwright Sync API inside the asyncio loop". Setting a
+            # fresh (non-running) loop on this thread prevents the false-positive.
+            import asyncio as _asyncio
+            try:
+                _asyncio.set_event_loop(_asyncio.new_event_loop())
+            except Exception:
+                pass
             # headed (headless=False) with Xvfb is the most realistic profile;
             # headless=True still works but risks detection on Cloudflare JS challenge.
             _has_display = bool(_os.environ.get("DISPLAY"))
