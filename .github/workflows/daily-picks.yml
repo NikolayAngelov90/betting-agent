@@ -51,7 +51,7 @@ jobs:
           python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
 
       - name: Download camoufox Firefox binary
-        run: python -m camoufox fetch --os linux
+        run: python -m camoufox fetch
 
       - name: Restore database and models
         uses: actions/cache/restore@v4
