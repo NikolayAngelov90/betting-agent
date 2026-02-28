@@ -13,8 +13,11 @@ env/
 
 # Data & models
 data/football_betting.db
+data/*.db-shm
+data/*.db-wal
 data/*.db.bak
 data/*.db.local_backup
+data/historical_load_cache.json
 data/models/*.pkl
 data/models_local_backup/
 data/picks_sync.json
