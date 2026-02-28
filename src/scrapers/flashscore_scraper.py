@@ -1124,12 +1124,18 @@ class FlashscoreScraper(BaseScraper):
             f"https://www.flashscore.com/match/{flashscore_id}/odds-comparison/{market_path}/",
         ]
         for url in urls:
-            html = self._cf_fetch_html(url, "[data-testid='wcl-oddsValue']", timeout_ms=20000)
+            # 8s timeout: Flashscore's CDN is fast once CF challenge is cleared.
+            # Keeping it short avoids burning 20s on every failed O/U sub-page.
+            html = self._cf_fetch_html(url, "[data-testid='wcl-oddsValue']", timeout_ms=8000)
             if html:
                 soup = BeautifulSoup(html, "lxml")
                 result = self._parse_odds_from_soup(soup, market)
                 if result:
                     return result
+                # Got HTML but parsing returned nothing — both URLs go through the
+                # same SPA router so the second URL would return identical content.
+                # Stop early to avoid wasting another 8s.
+                break
         return {}
 
     def _scrape_odds_page(self, flashscore_id: str, market: str = "home-draw-away") -> dict:

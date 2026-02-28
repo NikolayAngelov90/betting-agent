@@ -195,8 +195,18 @@ class FootballBettingAgent:
                 _odds_scraper = FlashscoreScraper()
                 _cf_failures = 0  # consecutive Cloudflare / no-data failures
                 _cf_abort_threshold = 3
+                import time as _odds_timer
+                _ODDS_BUDGET_S = 1200  # 20-minute hard cap — prevents odds from eating the full job
+                _odds_deadline = _odds_timer.monotonic() + _ODDS_BUDGET_S
                 try:
                     for _mid, _fsid, _markets in _to_scrape:
+                        if _odds_timer.monotonic() > _odds_deadline:
+                            logger.warning(
+                                f"Odds pre-caching: {_ODDS_BUDGET_S // 60}-minute budget "
+                                f"exhausted — stopping early; remaining fixtures will use "
+                                f"API-Football odds"
+                            )
+                            break
                         if _cf_failures >= _cf_abort_threshold:
                             logger.warning(
                                 f"Cloudflare blocking detected ({_cf_failures} consecutive "
