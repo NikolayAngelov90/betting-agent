@@ -81,7 +81,7 @@ betting:
   min_odds: 1.30
   max_odds: 10.0
   min_expected_value: 0.03  # 3% minimum edge (professional standard is 2-3%)
-  min_confidence: 0.58      # 58% minimum model probability (after isotonic calibration)
+  min_confidence: 0.60      # 60% minimum model probability (after isotonic calibration)
   kelly_fraction: 0.25      # Fractional Kelly — 25% of full Kelly (professional standard)
   max_stake_percentage: 4.0 # Hard cap: maximum 4% of bankroll per bet
   max_picks_per_league: 5   # Portfolio: cap exposure per league per day

@@ -51,7 +51,7 @@ class ValueBettingCalculator:
         self.min_odds = betting.get("min_odds", 1.30)
         self.max_odds = betting.get("max_odds", 10.0)
         self.min_ev = betting.get("min_expected_value", 0.03)       # 3% — professional standard
-        self.min_confidence = betting.get("min_confidence", 0.58)   # 58% minimum model probability
+        self.min_confidence = betting.get("min_confidence", 0.60)   # 60% minimum model probability
         self.kelly_fraction = betting.get("kelly_fraction", 0.25)
         self.max_stake_pct = betting.get("max_stake_percentage", 5.0)
         # Reject picks where Kelly recommends less than this % of bankroll
@@ -96,13 +96,9 @@ class ValueBettingCalculator:
             ("Team Goals", "Away Over 1.5", ensemble.get("away_over_1.5", 0), "away_over_1.5"),
         ]
 
-        # Allow lower confidence (45%) for high-EV longshot picks;
-        # standard picks still need min_confidence (55%).
-        high_ev_min_confidence = 0.45
-
         for market, selection, prob, market_key in markets:
-            if prob < high_ev_min_confidence:
-                continue  # hard floor — never go below 45%
+            if prob < self.min_confidence:
+                continue  # hard floor — never go below min_confidence
 
             # Find best odds for this market/selection
             best_odds = self._find_best_odds(
@@ -127,9 +123,6 @@ class ValueBettingCalculator:
             if ev < self.min_ev:
                 continue
 
-            # Standard picks need min_confidence; only high-EV (>10%) can use 45-55%
-            if prob < self.min_confidence and ev < 0.10:
-                continue
 
             # Model-market divergence guard: reject when our model probability
             # is more than 2.5× the bookmaker's implied probability.
