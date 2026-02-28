@@ -22,6 +22,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Restore DB first — before any step that can fail (camoufox fetch, Chrome
+      # install, pip install, etc.).  If a later step fails and the job is saved
+      # with if:always(), it re-saves the properly restored DB instead of an empty one.
+      # This prevents "poison cache" where a broken run saves an empty DB and causes
+      # all subsequent runs to find 0 picks at settle time.
+      - name: Restore database and models
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/football_betting.db
+            data/models/
+            data/historical_load_cache.json
+          key: betting-data-${{ github.run_number }}
+          restore-keys: |
+            betting-data-
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -52,17 +68,6 @@ jobs:
 
       - name: Download camoufox Firefox binary
         run: python -m camoufox fetch
-
-      - name: Restore database and models
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            data/football_betting.db
-            data/models/
-            data/historical_load_cache.json
-          key: betting-data-${{ github.run_number }}
-          restore-keys: |
-            betting-data-
 
       - name: Create directories
         run: mkdir -p data/models logs
