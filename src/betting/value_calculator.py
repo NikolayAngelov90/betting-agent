@@ -51,7 +51,8 @@ class ValueBettingCalculator:
         self.min_odds = betting.get("min_odds", 1.30)
         self.max_odds = betting.get("max_odds", 10.0)
         self.min_ev = betting.get("min_expected_value", 0.03)       # 3% — professional standard
-        self.min_confidence = betting.get("min_confidence", 0.60)   # 60% minimum model probability
+        self.min_confidence = betting.get("min_confidence", 0.58)   # 58% minimum model probability
+        self.high_ev_min_confidence = 0.45  # hard floor — never go below 45% even with high EV
         self.kelly_fraction = betting.get("kelly_fraction", 0.25)
         self.max_stake_pct = betting.get("max_stake_percentage", 5.0)
         # Reject picks where Kelly recommends less than this % of bankroll
@@ -97,8 +98,8 @@ class ValueBettingCalculator:
         ]
 
         for market, selection, prob, market_key in markets:
-            if prob < self.min_confidence:
-                continue  # hard floor — never go below min_confidence
+            if prob < self.high_ev_min_confidence:
+                continue  # hard floor — never go below 45%
 
             # Find best odds for this market/selection
             best_odds = self._find_best_odds(
@@ -121,6 +122,10 @@ class ValueBettingCalculator:
 
             ev = self.calculate_expected_value(prob, best_odds)
             if ev < self.min_ev:
+                continue
+
+            # Below min_confidence (58%) is only allowed when EV is exceptional (>10%)
+            if prob < self.min_confidence and ev < 0.10:
                 continue
 
 
