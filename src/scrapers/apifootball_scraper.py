@@ -1108,10 +1108,21 @@ class APIFootballScraper(BaseScraper):
             for tid, name, cnt in still_missing[:10]:
                 if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
                     break
-                # Strip apostrophes/special chars that break the API search
+                # Strip non-ASCII and special chars that break the API search.
+                # API-Football /teams?search= only allows alphanumeric + spaces.
+                # e.g. "Gençlerbirliği S.K." → "Genclerbirligi S K"
                 # e.g. "FC Twente '65" → "FC Twente 65"
                 import re as _re
-                search_name = _re.sub(r"['\u2018\u2019\u201a\u201b\u2032]", "", name).strip()
+                import unicodedata as _ud
+                # Transliterate accented chars to ASCII (ç→c, ğ→g, ı→i, etc.)
+                search_name = _ud.normalize("NFKD", name).encode("ascii", "ignore").decode()
+                # Keep only alphanumeric and spaces
+                search_name = _re.sub(r"[^a-zA-Z0-9\s]", "", search_name).strip()
+                # Collapse multiple spaces
+                search_name = _re.sub(r"\s+", " ", search_name)
+                if len(search_name) < 3:
+                    logger.debug(f"Search name too short after sanitizing '{name}' → '{search_name}'")
+                    continue
                 data = await self._api_get("/teams", {"search": search_name})
                 if not data:
                     continue

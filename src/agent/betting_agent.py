@@ -194,7 +194,7 @@ class FootballBettingAgent:
                 )
                 _odds_scraper = FlashscoreScraper()
                 _cf_failures = 0  # consecutive Cloudflare / no-data failures
-                _cf_abort_threshold = 3
+                _cf_abort_threshold = 6  # raised from 3: some fixtures legitimately have no odds
                 import time as _odds_timer
                 _ODDS_BUDGET_S = 1200  # 20-minute hard cap — prevents odds from eating the full job
                 _odds_deadline = _odds_timer.monotonic() + _ODDS_BUDGET_S
@@ -470,19 +470,55 @@ class FootballBettingAgent:
                     ).count() == 0
                 ]
                 if missing:
-                    to_scrape.append((fid, m.flashscore_id, tuple(missing)))
+                    # Track how many markets are missing (fewer = partial, more likely to succeed)
+                    to_scrape.append((fid, m.flashscore_id, tuple(missing), len(missing)))
 
         if to_scrape:
+            # Sort: partial-odds fixtures first (1-2 missing markets), then full-missing (3).
+            # Partial fixtures are more likely to succeed (1X2 worked, just O/U or BTTS needed).
+            # Full-missing fixtures are more likely to be CF-blocked or have no data at all.
+            to_scrape.sort(key=lambda x: x[3])
             logger.info(f"Scraping Flashscore odds for {len(to_scrape)} fixtures...")
+            import time as _picks_timer
+            _PICKS_ODDS_BUDGET_S = 600  # 10-minute cap — update already did the heavy lifting
+            _picks_odds_deadline = _picks_timer.monotonic() + _PICKS_ODDS_BUDGET_S
+            _picks_cf_failures = 0
+            _picks_cf_abort = 5  # higher threshold: some fixtures legitimately have no odds
             scraper = FlashscoreScraper()
             try:
                 for match_id, fs_id, markets in to_scrape:
+                    if _picks_timer.monotonic() > _picks_odds_deadline:
+                        logger.warning(
+                            f"Picks odds scraping: {_PICKS_ODDS_BUDGET_S // 60}-min budget "
+                            f"exhausted — remaining fixtures will use existing odds"
+                        )
+                        break
+                    if _picks_cf_failures >= _picks_cf_abort:
+                        logger.warning(
+                            f"Cloudflare blocking detected ({_picks_cf_failures} consecutive "
+                            f"failures) — aborting odds scrape in picks"
+                        )
+                        break
                     try:
+                        _odds_before = 0
+                        with self.db.get_session() as _chk:
+                            _odds_before = _chk.query(Odds).filter_by(
+                                match_id=match_id, bookmaker="Flashscore"
+                            ).count()
                         await scraper.scrape_and_save_odds(
                             match_id, fs_id, markets=markets,
                         )
+                        with self.db.get_session() as _chk:
+                            _odds_after = _chk.query(Odds).filter_by(
+                                match_id=match_id, bookmaker="Flashscore"
+                            ).count()
+                        if _odds_after > _odds_before:
+                            _picks_cf_failures = 0
+                        else:
+                            _picks_cf_failures += 1
                     except Exception as exc:
                         logger.warning(f"Odds scrape failed for match {match_id}: {exc}")
+                        _picks_cf_failures += 1
             finally:
                 scraper.close_driver()
             logger.info("Flashscore odds scraping complete.")

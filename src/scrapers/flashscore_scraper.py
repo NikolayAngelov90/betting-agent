@@ -240,12 +240,16 @@ class FlashscoreScraper(BaseScraper):
             return self._cf_browser
         try:
             from camoufox.sync_api import Camoufox
-            # Worker-thread fix: asyncio.get_event_loop() in a run_in_executor thread
-            # can return the main thread's running loop, making Playwright's sync API
-            # refuse with "Playwright Sync API inside the asyncio loop". Setting a
-            # fresh (non-running) loop on this thread prevents the false-positive.
+            # Worker-thread fix: when called from run_in_executor, the worker thread
+            # inherits the parent's running-loop reference. Playwright's sync API checks
+            # asyncio._get_running_loop() and raises "Playwright Sync API inside the
+            # asyncio loop" even though this thread is NOT actually running the loop.
+            # Fix: clear the running-loop marker on this thread, then set a fresh
+            # (non-running) event loop so get_event_loop() doesn't error.
             import asyncio as _asyncio
             try:
+                # Clear the "running loop" flag inherited from the parent thread
+                _asyncio._set_running_loop(None)
                 _asyncio.set_event_loop(_asyncio.new_event_loop())
             except Exception:
                 pass
