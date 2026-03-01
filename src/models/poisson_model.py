@@ -37,6 +37,7 @@ class PoissonModel:
         self._team_strengths = {}
         self._team_league = {}  # team_id -> league string
         self._league_avgs = {}  # league -> {"home": float, "away": float}
+        self._league_rhos = {}  # league -> optimized Dixon-Coles rho
 
     def fit(self, league: str = None, num_matches: int = 5000):
         """Calculate time-decayed attack/defense strength ratings from historical data.
@@ -150,21 +151,103 @@ class PoissonModel:
                     (away_conceded_avg / self.league_avg_home_goals)
                 ) / 2
 
+                # Bayesian shrinkage: regress toward league-average (1.0) for
+                # teams with few observations.  A team with < shrinkage_cap
+                # matches is pulled toward the prior proportionally.
+                shrinkage_cap = self.config.get("models.shrinkage_sample_cap", 100)
+                total_matches = (len(stats["home_scored"])
+                                 + len(stats["away_scored"]))
+                shrinkage = min(total_matches, shrinkage_cap) / shrinkage_cap
+                attack_strength = attack_strength * shrinkage + 1.0 * (1 - shrinkage)
+                defense_strength = defense_strength * shrinkage + 1.0 * (1 - shrinkage)
+
                 # Floor to prevent zero xG (e.g. team conceded 0 in small sample)
                 self._team_strengths[team_id] = {
                     "attack": max(attack_strength, 0.15),
                     "defense": max(defense_strength, 0.15),
                 }
 
+            # Estimate per-league Dixon-Coles rho via MLE
+            self._estimate_league_rhos(matches)
+
             logger.info(
                 f"Poisson model fitted: {len(self._team_strengths)} teams, "
                 f"{len(self._league_avgs)} leagues calibrated, "
+                f"{len(self._league_rhos)} per-league rhos estimated, "
                 f"avg home goals={self.league_avg_home_goals:.2f}, "
                 f"avg away goals={self.league_avg_away_goals:.2f} "
                 f"(time-decay half-life={half_life}d)"
             )
 
-    def predict(self, home_team_id: int, away_team_id: int) -> Dict:
+    def _estimate_league_rhos(self, matches):
+        """Estimate per-league Dixon-Coles rho via maximum likelihood.
+
+        For each league with enough matches, grid-searches the rho value in
+        [-0.25, 0.05] that maximises the log-likelihood of observed scores
+        given each team's Poisson xG.
+        """
+        from scipy.optimize import minimize_scalar
+
+        min_matches = self.config.get("models.dc_rho_min_matches", 50)
+        default_rho = self.config.get("models.dixon_coles_rho", -0.13)
+
+        # Group matches by league
+        league_matches: dict = {}
+        for m in matches:
+            lg = m.league or "unknown"
+            league_matches.setdefault(lg, []).append(m)
+
+        for lg, lg_matches in league_matches.items():
+            if len(lg_matches) < min_matches:
+                continue
+
+            # Pre-compute xG for each match (need both team strengths known)
+            match_data = []
+            for m in lg_matches:
+                hs = self._team_strengths.get(m.home_team_id)
+                aws = self._team_strengths.get(m.away_team_id)
+                if hs is None or aws is None:
+                    continue
+                home_xg, away_xg = self._expected_goals(m.home_team_id, m.away_team_id)
+                if home_xg <= 0 or away_xg <= 0:
+                    continue
+                match_data.append((m.home_goals, m.away_goals, home_xg, away_xg))
+
+            if len(match_data) < min_matches:
+                continue
+
+            def neg_log_likelihood(rho):
+                ll = 0.0
+                for hg, ag, lam, mu in match_data:
+                    # Independent Poisson probability
+                    p = poisson.pmf(hg, lam) * poisson.pmf(ag, mu)
+                    # Dixon-Coles correction
+                    tau = self._dc_tau(hg, ag, lam, mu, rho)
+                    p *= tau
+                    if p > 0:
+                        ll += np.log(p)
+                    else:
+                        ll += -50  # penalty for zero probability
+                return -ll
+
+            try:
+                result = minimize_scalar(
+                    neg_log_likelihood,
+                    bounds=(-0.25, 0.05),
+                    method="bounded",
+                )
+                if result.success:
+                    self._league_rhos[lg] = round(float(result.x), 4)
+                else:
+                    self._league_rhos[lg] = default_rho
+            except Exception:
+                self._league_rhos[lg] = default_rho
+
+        if self._league_rhos:
+            logger.debug(f"Per-league DC rhos: {self._league_rhos}")
+
+    def predict(self, home_team_id: int, away_team_id: int,
+                league: str = None) -> Dict:
         """Predict match outcomes using Poisson model.
 
         Args:
@@ -176,8 +259,13 @@ class PoissonModel:
         """
         home_xg, away_xg = self._expected_goals(home_team_id, away_team_id)
 
+        # Resolve league from team mapping if not provided
+        if league is None:
+            league = self._team_league.get(
+                home_team_id, self._team_league.get(away_team_id))
+
         # Score probability matrix (with Dixon-Coles correction applied)
-        score_matrix = self._score_matrix(home_xg, away_xg)
+        score_matrix = self._score_matrix(home_xg, away_xg, league=league)
 
         # Market probabilities
         home_win_prob = np.sum(np.tril(score_matrix, -1))
@@ -275,18 +363,21 @@ class PoissonModel:
             return 1.0 - rho
         return 1.0
 
-    def _score_matrix(self, home_xg: float, away_xg: float) -> np.ndarray:
+    def _score_matrix(self, home_xg: float, away_xg: float,
+                      league: str = None) -> np.ndarray:
         """Generate a probability matrix for all scoreline combinations.
 
         Applies Dixon-Coles correction to low-scoring outcomes to address the
         known under-estimation of 0-0 and 1-1 by the independent Poisson model.
+        Uses per-league rho when available, falls back to global config.
         Set models.dixon_coles_rho=0.0 in config to disable the correction.
         """
         home_probs = [poisson.pmf(i, home_xg) for i in range(MAX_GOALS)]
         away_probs = [poisson.pmf(i, away_xg) for i in range(MAX_GOALS)]
         matrix = np.outer(home_probs, away_probs)
 
-        rho = self.config.get("models.dixon_coles_rho", -0.13)
+        default_rho = self.config.get("models.dixon_coles_rho", -0.13)
+        rho = self._league_rhos.get(league, default_rho) if league else default_rho
         if rho != 0.0:
             # Apply correction to the 4 low-score cells
             for i in range(min(2, MAX_GOALS)):

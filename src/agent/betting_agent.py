@@ -291,6 +291,7 @@ class FootballBettingAgent:
         # 6. Fit/update prediction models
         try:
             self.predictor.fit()
+            self.feature_engineer.elo_ratings = self.predictor.elo.ratings
             logger.info("Models fitted")
         except Exception as e:
             logger.error(f"Model fitting failed: {e}")
@@ -1039,6 +1040,7 @@ class FootballBettingAgent:
                         continue
                     home_id = match.home_team_id
                     away_id = match.away_team_id
+                    match_league = match.league or ""
 
                 # Actual result
                 if pick.actual_home_goals > pick.actual_away_goals:
@@ -1049,7 +1051,7 @@ class FootballBettingAgent:
                     actual = "away_win"
 
                 # Get individual model predictions
-                poisson_pred = self.predictor.poisson.predict(home_id, away_id)
+                poisson_pred = self.predictor.poisson.predict(home_id, away_id, league=match_league)
                 elo_pred = self.predictor.elo.predict(home_id, away_id)
 
                 for model_name, pred in [("poisson", poisson_pred), ("elo", elo_pred)]:
@@ -1141,6 +1143,7 @@ class FootballBettingAgent:
 
         # Fit Poisson/Elo first (needed for feature context)
         self.predictor.fit()
+        self.feature_engineer.elo_ratings = self.predictor.elo.ratings
 
         # Get most recent completed matches with results
         with self.db.get_session() as session:
@@ -1156,6 +1159,7 @@ class FootballBettingAgent:
                     "id": m.id,
                     "home_goals": m.home_goals,
                     "away_goals": m.away_goals,
+                    "match_date": m.match_date,
                 }
                 for m in reversed(matches)
             ]
@@ -1179,7 +1183,7 @@ class FootballBettingAgent:
 
             # Fan out: compute features for all matches in the batch concurrently
             batch_results = await asyncio.gather(
-                *(self.feature_engineer.create_features(md["id"]) for md in batch),
+                *(self.feature_engineer.create_features(md["id"], as_of_date=md["match_date"]) for md in batch),
                 return_exceptions=True,
             )
 
@@ -1282,6 +1286,9 @@ class FootballBettingAgent:
         context["home_xg_overperformance"] = features.get("home_xg_overperformance", 0.0)
         context["away_xg_overperformance"] = features.get("away_xg_overperformance", 0.0)
 
+        # Pass raw features dict for model agreement checks on goals markets
+        context["features_dict"] = features
+
         return context
 
     async def shutdown(self):
@@ -1350,6 +1357,7 @@ async def main():
                     league_filter = [l.strip() for l in sys.argv[i + 1].split(",")]
                     break
             agent.predictor.fit()
+            agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
             picks, new_picks = await agent.get_daily_picks(leagues=league_filter)
             if not picks:
                 print("No value picks found for today.")
@@ -1531,6 +1539,7 @@ async def main():
         elif command == "--tune":
             print("Tuning ensemble weights from recent results...")
             agent.predictor.fit()
+            agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
             result = agent.tune_ensemble_weights()
             if result:
                 print(f"\nModel Accuracy (1X2 picks, last 30d):")
@@ -1542,6 +1551,7 @@ async def main():
 
         elif command == "--analyze" and len(sys.argv) > 2:
             agent.predictor.fit()
+            agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
             match_id = int(sys.argv[2])
             analysis = await agent.analyze_fixture(match_id)
             print(f"\nMatch: {analysis.match_name}")

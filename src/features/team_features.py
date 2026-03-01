@@ -18,13 +18,16 @@ class TeamFeatures:
         self.db = get_db()
 
     def get_form_features(self, team_id: int, num_matches: int = 5,
-                          venue: str = "all") -> dict:
+                          venue: str = "all", as_of_date=None,
+                          elo_ratings: dict = None) -> dict:
         """Calculate form-based features for a team.
 
         Args:
             team_id: Team database ID
             num_matches: Number of recent matches to consider
             venue: 'home', 'away', or 'all'
+            as_of_date: Only use matches before this date (for training).
+                        None = no cutoff (live prediction).
 
         Returns:
             Dictionary of form features
@@ -34,6 +37,9 @@ class TeamFeatures:
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
             )
+
+            if as_of_date is not None:
+                query = query.filter(Match.match_date < as_of_date)
 
             if venue == "home":
                 query = query.filter(Match.home_team_id == team_id)
@@ -49,9 +55,10 @@ class TeamFeatures:
             if not matches:
                 return self._empty_form_features()
 
-            return self._calculate_form(matches, team_id)
+            return self._calculate_form(matches, team_id, elo_ratings=elo_ratings)
 
-    def _calculate_form(self, matches: List[Match], team_id: int) -> dict:
+    def _calculate_form(self, matches: List[Match], team_id: int,
+                        elo_ratings: dict = None) -> dict:
         """Calculate form statistics from a list of matches."""
         points = 0
         goals_scored = 0
@@ -80,6 +87,8 @@ class TeamFeatures:
 
         form_string = []
         per_match_pts = []  # for decay form score (index 0 = most recent)
+        quality_weighted_pts = 0.0
+        quality_weight_sum = 0.0
 
         for match in matches:
             is_home = match.home_team_id == team_id
@@ -120,15 +129,28 @@ class TeamFeatures:
                 wins += 1
                 form_string.append("W")
                 per_match_pts.append(3)
+                match_pts = 3
             elif scored == conceded:
                 points += 1
                 draws += 1
                 form_string.append("D")
                 per_match_pts.append(1)
+                match_pts = 1
             else:
                 losses += 1
                 form_string.append("L")
                 per_match_pts.append(0)
+                match_pts = 0
+
+            # Opponent-quality weighting: scale by opponent Elo / 1500
+            if elo_ratings:
+                opp_id = match.away_team_id if is_home else match.home_team_id
+                opp_elo = elo_ratings.get(opp_id, 1500)
+                quality_w = opp_elo / 1500.0
+            else:
+                quality_w = 1.0
+            quality_weighted_pts += match_pts * quality_w
+            quality_weight_sum += quality_w
 
             if shots is not None:
                 shots_total += shots
@@ -197,6 +219,7 @@ class TeamFeatures:
             "free_kicks_per_game_avg": round(fk_total / fk_count, 2) if fk_count else 0,
             "form_string": "-".join(form_string),
             "decay_form_score": decay_form_score,
+            "quality_adjusted_ppg": round(quality_weighted_pts / quality_weight_sum, 3) if quality_weight_sum else 0.0,
         }
 
     def _calculate_streak(self, form: List[str], result: str) -> int:
@@ -238,6 +261,7 @@ class TeamFeatures:
             "free_kicks_per_game_avg": 0,
             "form_string": "",
             "decay_form_score": 0.0,
+            "quality_adjusted_ppg": 0.0,
         }
 
     # Leagues classified as international competitions
@@ -245,7 +269,8 @@ class TeamFeatures:
         "europe/champions-league", "europe/europa-league", "europe/europa-conference-league",
     }
 
-    def get_international_form(self, team_id: int, num_matches: int = 10) -> dict:
+    def get_international_form(self, team_id: int, num_matches: int = 10,
+                               as_of_date=None) -> dict:
         """Calculate form features specifically from international competition matches.
 
         This captures how a team performs in CL/EL/ECL — different from domestic form
@@ -257,7 +282,10 @@ class TeamFeatures:
                 Match.home_goals.isnot(None),
                 Match.league.in_(self.INTERNATIONAL_LEAGUES),
                 or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
-            ).order_by(Match.match_date.desc()).limit(num_matches)
+            )
+            if as_of_date is not None:
+                query = query.filter(Match.match_date < as_of_date)
+            query = query.order_by(Match.match_date.desc()).limit(num_matches)
 
             matches = query.all()
 
@@ -284,7 +312,8 @@ class TeamFeatures:
                 "intl_active": 1,  # flag: team is in European competition
             }
 
-    def get_momentum_indicators(self, team_id: int, num_matches: int = 14) -> dict:
+    def get_momentum_indicators(self, team_id: int, num_matches: int = 14,
+                                as_of_date=None) -> dict:
         """Calculate RSI and MACD momentum indicators from recent match points.
 
         RSI > 70 → hot streak likely to cool; RSI < 30 → cold streak likely to bounce.
@@ -298,11 +327,14 @@ class TeamFeatures:
         }
 
         with self.db.get_session() as session:
-            matches = session.query(Match).filter(
+            query = session.query(Match).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
                 or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
-            ).order_by(Match.match_date.desc()).limit(num_matches).all()
+            )
+            if as_of_date is not None:
+                query = query.filter(Match.match_date < as_of_date)
+            matches = query.order_by(Match.match_date.desc()).limit(num_matches).all()
 
             if len(matches) < 5:
                 return empty
@@ -356,7 +388,7 @@ class TeamFeatures:
         """Invalidate the standings cache (call between training runs if needed)."""
         self._standings_cache: dict = {}
 
-    def _get_league_standings(self, league: str) -> list:
+    def _get_league_standings(self, league: str, as_of_date=None) -> list:
         """Build (or return cached) sorted standings for a league.
 
         Standings are cached per-instance so the expensive multi-team form
@@ -366,21 +398,22 @@ class TeamFeatures:
         if not hasattr(self, "_standings_cache"):
             self._standings_cache: dict = {}
 
-        if league in self._standings_cache:
-            return self._standings_cache[league]
+        cache_key = (league, as_of_date)
+        if cache_key in self._standings_cache:
+            return self._standings_cache[cache_key]
 
         with self.db.get_session() as session:
             teams = session.query(Team).filter_by(league=league).all()
             if not teams:
-                self._standings_cache[league] = []
+                self._standings_cache[cache_key] = []
                 return []
             team_ids = [(t.id, t.name) for t in teams]
 
         standings = []
         for team_id, team_name in team_ids:
-            form_all = self.get_form_features(team_id, num_matches=50, venue="all")
-            form_home = self.get_form_features(team_id, num_matches=50, venue="home")
-            form_away = self.get_form_features(team_id, num_matches=50, venue="away")
+            form_all = self.get_form_features(team_id, num_matches=50, venue="all", as_of_date=as_of_date)
+            form_home = self.get_form_features(team_id, num_matches=50, venue="home", as_of_date=as_of_date)
+            form_away = self.get_form_features(team_id, num_matches=50, venue="away", as_of_date=as_of_date)
 
             standings.append({
                 "team_id": team_id,
@@ -395,16 +428,17 @@ class TeamFeatures:
             })
 
         standings.sort(key=lambda x: (x["points"], x["goal_difference"], x["goals_scored"]), reverse=True)
-        self._standings_cache[league] = standings
+        self._standings_cache[cache_key] = standings
         return standings
 
-    def get_league_position(self, team_id: int, league: str, season: str = None) -> dict:
+    def get_league_position(self, team_id: int, league: str, season: str = None,
+                            as_of_date=None) -> dict:
         """Calculate current league position features for a team."""
         not_found = {"league_position": 0, "points": 0, "goal_difference": 0,
                      "points_per_game": 0, "home_points_per_game": 0, "away_points_per_game": 0,
                      "total_teams": 0, "title_gap": 0, "relegation_gap": 0, "in_relegation_zone": 0}
 
-        standings = self._get_league_standings(league)
+        standings = self._get_league_standings(league, as_of_date=as_of_date)
         if not standings:
             return not_found
 

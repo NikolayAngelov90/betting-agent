@@ -18,26 +18,31 @@ class H2HFeatures:
         self.db = get_db()
 
     def get_h2h_features(self, home_team_id: int, away_team_id: int,
-                         limit: int = 10) -> dict:
+                         limit: int = 10, as_of_date=None) -> dict:
         """Calculate H2H features between two teams.
 
         Args:
             home_team_id: Home team database ID
             away_team_id: Away team database ID
             limit: Number of past meetings to analyze
+            as_of_date: Only use matches before this date (for training).
+                        None = no cutoff (live prediction).
 
         Returns:
             Dictionary of H2H features
         """
         with self.db.get_session() as session:
-            matches = session.query(Match).filter(
+            query = session.query(Match).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
                 or_(
                     and_(Match.home_team_id == home_team_id, Match.away_team_id == away_team_id),
                     and_(Match.home_team_id == away_team_id, Match.away_team_id == home_team_id),
                 ),
-            ).order_by(Match.match_date.desc()).limit(limit).all()
+            )
+            if as_of_date is not None:
+                query = query.filter(Match.match_date < as_of_date)
+            matches = query.order_by(Match.match_date.desc()).limit(limit).all()
 
             if not matches:
                 return self._empty_h2h()

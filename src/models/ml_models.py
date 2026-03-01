@@ -26,9 +26,9 @@ class MLModels:
     Targets: 0 = away_win, 1 = draw, 2 = home_win
     """
 
-    # Models that need isotonic calibration (RF and XGBoost are overconfident;
+    # Models that need isotonic calibration (RF, XGBoost, LightGBM are overconfident;
     # Logistic Regression is already calibrated by its loss function)
-    _CALIBRATE_MODELS = {"random_forest", "xgboost"}
+    _CALIBRATE_MODELS = {"random_forest", "xgboost", "lightgbm"}
 
     def __init__(self):
         self.scaler = StandardScaler()
@@ -46,6 +46,7 @@ class MLModels:
             ),
             "random_forest": RandomForestClassifier(
                 n_estimators=200, max_depth=10, min_samples_split=5,
+                criterion="log_loss",
                 random_state=42, n_jobs=-1,
             ),
         }
@@ -60,6 +61,17 @@ class MLModels:
             )
         except ImportError:
             logger.warning("XGBoost not available, skipping")
+
+        # LightGBM is optional
+        try:
+            from lightgbm import LGBMClassifier
+            self.models["lightgbm"] = LGBMClassifier(
+                n_estimators=200, max_depth=8, learning_rate=0.1,
+                objective="multiclass", num_class=3,
+                random_state=42, n_jobs=-1, verbose=-1,
+            )
+        except ImportError:
+            logger.debug("LightGBM not available, skipping")
 
     def fit(self, X: np.ndarray, y: np.ndarray, feature_names: List[str] = None):
         """Train all models on the provided data.
@@ -336,7 +348,7 @@ class GoalsMLModel:
     Trained and saved separately from the main 1X2 models.
     """
 
-    _CALIBRATE = {"random_forest", "xgboost"}
+    _CALIBRATE = {"random_forest", "xgboost", "lightgbm"}
 
     def __init__(self):
         self.scaler = StandardScaler()
@@ -353,6 +365,7 @@ class GoalsMLModel:
             "logistic_regression": LogisticRegression(max_iter=1000, solver="lbfgs"),
             "random_forest": RandomForestClassifier(
                 n_estimators=200, max_depth=10, min_samples_split=5,
+                criterion="log_loss",
                 random_state=43, n_jobs=-1,
             ),
         }
@@ -362,6 +375,15 @@ class GoalsMLModel:
                 n_estimators=200, max_depth=6, learning_rate=0.1,
                 objective="binary:logistic", eval_metric="logloss",
                 random_state=43, n_jobs=-1,
+            )
+        except ImportError:
+            pass
+        try:
+            from lightgbm import LGBMClassifier
+            self.models["lightgbm"] = LGBMClassifier(
+                n_estimators=200, max_depth=8, learning_rate=0.1,
+                objective="binary",
+                random_state=43, n_jobs=-1, verbose=-1,
             )
         except ImportError:
             pass

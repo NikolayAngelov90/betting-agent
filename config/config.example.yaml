@@ -74,6 +74,15 @@ models:
   # Enable match-day weather features (Open-Meteo free API, no key needed).
   # Adds temperature, wind, precipitation features. Set to false to disable.
   weather_features_enabled: true
+  # International goals dampening: blend Poisson goal probs toward neutral priors
+  # for CL/EL/ECL matches. 0.30 = 30% prior, 70% Poisson. Set to 0.0 to disable.
+  intl_goals_dampen: 0.30
+  # Bayesian shrinkage: teams with < shrinkage_sample_cap total matches have their
+  # Poisson attack/defense strengths regressed toward league average (1.0).
+  shrinkage_sample_cap: 100
+  # Minimum matches per league to estimate a per-league Dixon-Coles rho via MLE.
+  # Leagues with fewer matches use the global dixon_coles_rho instead.
+  dc_rho_min_matches: 50
   retrain_interval_days: 7
   min_training_samples: 1000
 
@@ -86,6 +95,12 @@ betting:
   max_stake_percentage: 4.0 # Hard cap: maximum 4% of bankroll per bet
   max_picks_per_league: 5   # Portfolio: cap exposure per league per day
   max_total_kelly_pct: 40.0 # Portfolio: cap total bankroll exposure per day (%)
+  # Scale Kelly stake by model agreement level. Reduces exposure when models disagree.
+  kelly_agreement_scale:
+    unanimous: 1.0
+    majority: 0.80
+    split: 0.60
+    unknown: 0.75
 
 notifications:
   telegram_enabled: true

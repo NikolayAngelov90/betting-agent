@@ -83,7 +83,7 @@ class ValueBettingCalculator:
         ensemble = predictions.get("ensemble", {})
         recommendations = []
 
-        # Define markets to check (goals-oriented picks only)
+        # Define markets to check
         markets = [
             ("1X2", "Home Win", ensemble.get("home_win", 0), "home_win"),
             ("1X2", "Draw", ensemble.get("draw", 0), "draw"),
@@ -91,7 +91,11 @@ class ValueBettingCalculator:
             ("Over 1.5", "Over 1.5 Goals", ensemble.get("over_1.5", 0), "over_1.5"),
             ("Over 2.5", "Over 2.5 Goals", ensemble.get("over_2.5", 0), "over_2.5"),
             ("Over 3.5", "Over 3.5 Goals", ensemble.get("over_3.5", 0), "over_3.5"),
+            ("Under 1.5", "Under 1.5 Goals", ensemble.get("under_1.5", 0), "under_1.5"),
+            ("Under 2.5", "Under 2.5 Goals", ensemble.get("under_2.5", 0), "under_2.5"),
+            ("Under 3.5", "Under 3.5 Goals", ensemble.get("under_3.5", 0), "under_3.5"),
             ("BTTS", "BTTS Yes", ensemble.get("btts_yes", 0), "btts_yes"),
+            ("BTTS", "BTTS No", ensemble.get("btts_no", 0), "btts_no"),
             # Team goal line markets
             ("Team Goals", "Home Over 1.5", ensemble.get("home_over_1.5", 0), "home_over_1.5"),
             ("Team Goals", "Away Over 1.5", ensemble.get("away_over_1.5", 0), "away_over_1.5"),
@@ -144,20 +148,10 @@ class ValueBettingCalculator:
                     )
                     continue
 
-            kelly_pct = self.kelly_criterion(prob, best_odds)
-            # Skip bets where Kelly recommends a trivially small stake —
-            # these are on the edge of profitability and not worth the variance
-            if kelly_pct < self.min_kelly_stake:
-                logger.debug(
-                    f"Skipping {match_name} {selection}: "
-                    f"Kelly {kelly_pct:.2f}% < min {self.min_kelly_stake}%"
-                )
-                continue
-            risk = self._assess_risk(prob, best_odds, ev)
-
-            # Model agreement analysis
+            # Model agreement analysis (before Kelly so we can scale stake)
             agreement_info = self._check_model_agreement(
                 predictions, market_key, selection,
+                features_dict=context.get("features_dict"),
             )
 
             # Reject split-model picks that are also below minimum confidence.
@@ -170,6 +164,21 @@ class ValueBettingCalculator:
                     f"confidence {prob:.0%} < {self.min_confidence:.0%}"
                 )
                 continue
+
+            # Uncertainty-aware Kelly: scale stake by model agreement
+            kelly_pct = self.kelly_criterion(
+                prob, best_odds,
+                agreement=agreement_info.get("agreement"),
+            )
+            # Skip bets where Kelly recommends a trivially small stake —
+            # these are on the edge of profitability and not worth the variance
+            if kelly_pct < self.min_kelly_stake:
+                logger.debug(
+                    f"Skipping {match_name} {selection}: "
+                    f"Kelly {kelly_pct:.2f}% < min {self.min_kelly_stake}%"
+                )
+                continue
+            risk = self._assess_risk(prob, best_odds, ev)
 
             # xG insight
             xg_info = self._build_xg_insight(context, ensemble, market, selection)
@@ -228,11 +237,23 @@ class ValueBettingCalculator:
         """
         return (probability * odds) - 1.0
 
-    def kelly_criterion(self, probability: float, odds: float) -> float:
+    # Scale Kelly stake by model agreement level
+    _KELLY_AGREEMENT_SCALE = {
+        "unanimous": 1.0,
+        "majority": 0.80,
+        "split": 0.60,
+        "unknown": 0.75,
+    }
+
+    def kelly_criterion(self, probability: float, odds: float,
+                        agreement: str = None) -> float:
         """Calculate optimal stake using fractional Kelly Criterion.
 
         Kelly % = (bp - q) / b
         where b = odds - 1, p = win probability, q = 1 - p
+
+        When agreement is provided, the Kelly fraction is further scaled down
+        for non-unanimous model agreement to reduce exposure on uncertain bets.
 
         Returns percentage of bankroll to stake (capped at max_stake_pct).
         """
@@ -248,8 +269,18 @@ class ValueBettingCalculator:
         if kelly <= 0:
             return 0.0
 
-        # Apply fractional Kelly and cap
+        # Apply fractional Kelly
         fractional = kelly * self.kelly_fraction
+
+        # Scale by model agreement confidence
+        if agreement:
+            config_scale = self.config.get("betting.kelly_agreement_scale", {})
+            scale = config_scale.get(
+                agreement,
+                self._KELLY_AGREEMENT_SCALE.get(agreement, 1.0),
+            )
+            fractional *= scale
+
         return min(fractional * 100, self.max_stake_pct)
 
     def _find_best_odds(self, odds_data: List[Dict], market: str,
@@ -271,7 +302,9 @@ class ValueBettingCalculator:
             "Over 2.5 Goals": ["Over 2.5", "Over", "Over 2.5 Goals"],
             "Under 2.5 Goals": ["Under 2.5", "Under", "Under 2.5 Goals"],
             "Over 1.5 Goals": ["Over 1.5", "Over 1.5 Goals"],
+            "Under 1.5 Goals": ["Under 1.5", "Under 1.5 Goals"],
             "Over 3.5 Goals": ["Over 3.5", "Over 3.5 Goals"],
+            "Under 3.5 Goals": ["Under 3.5", "Under 3.5 Goals"],
             "BTTS Yes": ["Yes", "BTTS Yes"],
             "BTTS No": ["No", "BTTS No"],
             # Team goal line markets (stored via API-Football team_goals market)
@@ -288,7 +321,9 @@ class ValueBettingCalculator:
             "Over 2.5": ["over_under", "totals"],
             "Under 2.5": ["over_under", "totals"],
             "Over 1.5": ["over_under", "totals"],
+            "Under 1.5": ["over_under", "totals"],
             "Over 3.5": ["over_under", "totals"],
+            "Under 3.5": ["over_under", "totals"],
             "BTTS": ["btts"],
             "Team Goals": ["team_goals", "team_over_under"],
         }
@@ -320,7 +355,8 @@ class ValueBettingCalculator:
         return "high"
 
     def _check_model_agreement(self, predictions: Dict, market_key: str,
-                                selection: str) -> Dict:
+                                selection: str,
+                                features_dict: Dict = None) -> Dict:
         """Check how many models agree on this selection.
 
         Returns dict with agreement level and model names.
@@ -333,10 +369,6 @@ class ValueBettingCalculator:
         models_against = []
 
         # For 1X2 markets: check if each model's top pick matches selection
-        selection_to_key = {
-            "Home Win": "home_win", "Draw": "draw", "Away Win": "away_win",
-        }
-
         if market_key in ("home_win", "draw", "away_win"):
             for model_name, pred in [("Poisson", poisson), ("Elo", elo), ("ML", ml)]:
                 if not pred:
@@ -348,15 +380,47 @@ class ValueBettingCalculator:
                 else:
                     models_against.append(model_name)
         else:
-            # Goals/BTTS/team goal line markets — check if model prob > 50%
-            for model_name, pred in [("Poisson", poisson)]:
-                if not pred:
-                    continue
-                model_prob = pred.get(market_key, 0)
-                if model_prob > 0.50:
-                    models_for.append(model_name)
+            # Goals/BTTS/team goal line markets — check all available signals
+            # 1. Poisson
+            if poisson:
+                poisson_prob = poisson.get(market_key, 0)
+                # For under/no markets, invert the check
+                if market_key.startswith("under_") or market_key == "btts_no":
+                    poisson_prob = 1.0 - poisson.get(
+                        market_key.replace("under_", "over_").replace("btts_no", "btts_yes"), 0
+                    ) if poisson_prob == 0 else poisson_prob
+                if poisson_prob > 0.50:
+                    models_for.append("Poisson")
                 else:
-                    models_against.append(model_name)
+                    models_against.append("Poisson")
+
+            # 2. GoalsML (available for over_2.5 / under_2.5)
+            goals_ml_prob = predictions.get("goals_ml_over25")
+            if goals_ml_prob is not None and market_key in ("over_2.5", "under_2.5"):
+                effective = goals_ml_prob if market_key == "over_2.5" else (1.0 - goals_ml_prob)
+                if effective > 0.50:
+                    models_for.append("GoalsML")
+                else:
+                    models_against.append("GoalsML")
+
+            # 3. Bookmaker implied probability
+            if features_dict:
+                _bk_map = {
+                    "over_2.5": "over25_implied_prob",
+                    "under_2.5": "under25_implied_prob",
+                    "over_1.5": "over15_implied_prob",
+                    "under_1.5": "under15_implied_prob",
+                    "btts_yes": "btts_yes_implied_prob",
+                    "btts_no": "btts_no_implied_prob",
+                }
+                bk_key = _bk_map.get(market_key)
+                if bk_key:
+                    bk_p = features_dict.get(bk_key, 0)
+                    if bk_p > 0:
+                        if bk_p > 0.50:
+                            models_for.append("Bookmaker")
+                        else:
+                            models_against.append("Bookmaker")
 
         total = len(models_for) + len(models_against)
         if total == 0:

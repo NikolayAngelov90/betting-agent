@@ -28,12 +28,15 @@ class FeatureEngineer:
         self.news_scraper = NewsScraper()
         self.db = get_db()
         self._weather_service = None  # lazy-loaded on first use
+        self.elo_ratings = None  # set externally from predictor.elo.ratings
 
-    async def create_features(self, match_id: int) -> dict:
+    async def create_features(self, match_id: int, as_of_date=None) -> dict:
         """Build complete feature dictionary for a match.
 
         Args:
             match_id: Match database ID
+            as_of_date: Only use data before this date (for training).
+                        None = no cutoff (live prediction).
 
         Returns:
             Dictionary containing all features for the match
@@ -52,10 +55,11 @@ class FeatureEngineer:
         features = {}
 
         # 1. Team form features (overall, home, away) — all windows at 10 games
-        home_form_all = self.team_features.get_form_features(home_id, 10, "all")
-        home_form_home = self.team_features.get_form_features(home_id, 10, "home")
-        away_form_all = self.team_features.get_form_features(away_id, 10, "all")
-        away_form_away = self.team_features.get_form_features(away_id, 10, "away")
+        _elo = self.elo_ratings
+        home_form_all = self.team_features.get_form_features(home_id, 10, "all", as_of_date=as_of_date, elo_ratings=_elo)
+        home_form_home = self.team_features.get_form_features(home_id, 10, "home", as_of_date=as_of_date, elo_ratings=_elo)
+        away_form_all = self.team_features.get_form_features(away_id, 10, "all", as_of_date=as_of_date, elo_ratings=_elo)
+        away_form_away = self.team_features.get_form_features(away_id, 10, "away", as_of_date=as_of_date, elo_ratings=_elo)
 
         features.update(self._prefix_dict(home_form_all, "home_overall_"))
         features.update(self._prefix_dict(home_form_home, "home_home_"))
@@ -63,7 +67,7 @@ class FeatureEngineer:
         features.update(self._prefix_dict(away_form_away, "away_away_"))
 
         # 2. H2H features
-        h2h = self.h2h_features.get_h2h_features(home_id, away_id)
+        h2h = self.h2h_features.get_h2h_features(home_id, away_id, as_of_date=as_of_date)
         features.update(h2h)
 
         # 3. Injury features
@@ -73,8 +77,8 @@ class FeatureEngineer:
         features.update(self._prefix_dict(away_injuries, "away_injury_"))
 
         # 4. League position features
-        home_pos = self.team_features.get_league_position(home_id, league)
-        away_pos = self.team_features.get_league_position(away_id, league)
+        home_pos = self.team_features.get_league_position(home_id, league, as_of_date=as_of_date)
+        away_pos = self.team_features.get_league_position(away_id, league, as_of_date=as_of_date)
         features.update(self._prefix_dict(home_pos, "home_league_"))
         features.update(self._prefix_dict(away_pos, "away_league_"))
 
@@ -100,8 +104,8 @@ class FeatureEngineer:
         features["away_news_count"] = away_sentiment.get("article_count", 0)
 
         # 6. International competition features (CL/EL/ECL form)
-        home_intl = self.team_features.get_international_form(home_id)
-        away_intl = self.team_features.get_international_form(away_id)
+        home_intl = self.team_features.get_international_form(home_id, as_of_date=as_of_date)
+        away_intl = self.team_features.get_international_form(away_id, as_of_date=as_of_date)
         features.update(self._prefix_dict(home_intl, "home_"))
         features.update(self._prefix_dict(away_intl, "away_"))
 
@@ -114,8 +118,8 @@ class FeatureEngineer:
         features["intl_quality_diff"] = home_intl["intl_points_per_match"] - away_intl["intl_points_per_match"]
 
         # 7. xG-based features (from API-Football)
-        home_xg = self._get_xg_features(home_id, "home")
-        away_xg = self._get_xg_features(away_id, "away")
+        home_xg = self._get_xg_features(home_id, "home", as_of_date=as_of_date)
+        away_xg = self._get_xg_features(away_id, "away", as_of_date=as_of_date)
         features.update(self._prefix_dict(home_xg, "home_"))
         features.update(self._prefix_dict(away_xg, "away_"))
 
@@ -143,12 +147,12 @@ class FeatureEngineer:
         features["offsides_diff"] = home_off - away_off  # proxy for pressing line height
 
         # 9. Referee features (from Flashscore — if referee is known for this fixture)
-        ref_features = self._get_referee_features(referee)
+        ref_features = self._get_referee_features(referee, as_of_date=as_of_date)
         features.update(ref_features)
 
         # 10. RSI + MACD momentum indicators
-        home_mom = self.team_features.get_momentum_indicators(home_id)
-        away_mom = self.team_features.get_momentum_indicators(away_id)
+        home_mom = self.team_features.get_momentum_indicators(home_id, as_of_date=as_of_date)
+        away_mom = self.team_features.get_momentum_indicators(away_id, as_of_date=as_of_date)
         features.update(self._prefix_dict(home_mom, "home_"))
         features.update(self._prefix_dict(away_mom, "away_"))
         features["rsi_diff"] = home_mom["rsi"] - away_mom["rsi"]
@@ -181,7 +185,7 @@ class FeatureEngineer:
             features["rest_days_diff"] = home_sit["rest_days"] - away_sit["rest_days"]
 
         # 13. League-specific baseline rates (home advantage, avg goals, BTTS rate, etc.)
-        league_feat = self._get_league_features(league)
+        league_feat = self._get_league_features(league, as_of_date=as_of_date)
         features.update(league_feat)
 
         # 14. Match-day weather (Open-Meteo free API — no key required)
@@ -214,7 +218,7 @@ class FeatureEngineer:
         ]
 
     def _get_xg_features(self, team_id: int, venue: str = "all",
-                          num_matches: int = 10) -> dict:
+                          num_matches: int = 10, as_of_date=None) -> dict:
         """Calculate xG-based features for a team from recent matches.
 
         Returns rolling averages for xG for/against and overperformance.
@@ -230,6 +234,9 @@ class FeatureEngineer:
                 Match.home_goals.isnot(None),
                 Match.home_xg.isnot(None),
             )
+
+            if as_of_date is not None:
+                query = query.filter(Match.match_date < as_of_date)
 
             if venue == "home":
                 query = query.filter(Match.home_team_id == team_id)
@@ -272,7 +279,7 @@ class FeatureEngineer:
             "xg_matches": len(xg_for_list),
         }
 
-    def _get_referee_features(self, referee: str) -> dict:
+    def _get_referee_features(self, referee: str, as_of_date=None) -> dict:
         """Get historical statistics for a referee across their last 30 matches.
 
         Returns metrics that inform card/goal probability (referee strictness, pace of play).
@@ -288,11 +295,14 @@ class FeatureEngineer:
             return empty
 
         with self.db.get_session() as session:
-            matches = session.query(Match).filter(
+            query = session.query(Match).filter(
                 Match.referee == referee,
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
-            ).order_by(Match.match_date.desc()).limit(30).all()
+            )
+            if as_of_date is not None:
+                query = query.filter(Match.match_date < as_of_date)
+            matches = query.order_by(Match.match_date.desc()).limit(30).all()
 
             if not matches:
                 return empty
@@ -464,7 +474,7 @@ class FeatureEngineer:
             logger.warning(f"Bookmaker features failed for match {match_id}: {e}")
             return defaults
 
-    def _get_league_features(self, league: str) -> dict:
+    def _get_league_features(self, league: str, as_of_date=None) -> dict:
         """Compute league-specific baseline rates from the last 200 completed matches.
 
         These give the ML model a league-aware prior so it can learn that, e.g.,
@@ -488,20 +498,24 @@ class FeatureEngineer:
 
         if not hasattr(self, "_league_features_cache"):
             self._league_features_cache: dict = {}
-        if league in self._league_features_cache:
-            return self._league_features_cache[league]
+        cache_key = (league, as_of_date)
+        if cache_key in self._league_features_cache:
+            return self._league_features_cache[cache_key]
 
         try:
             with self.db.get_session() as session:
-                matches = session.query(Match).filter(
+                query = session.query(Match).filter(
                     Match.league == league,
                     Match.is_fixture == False,
                     Match.home_goals.isnot(None),
                     Match.away_goals.isnot(None),
-                ).order_by(Match.match_date.desc()).limit(200).all()
+                )
+                if as_of_date is not None:
+                    query = query.filter(Match.match_date < as_of_date)
+                matches = query.order_by(Match.match_date.desc()).limit(200).all()
 
                 if len(matches) < 10:
-                    self._league_features_cache[league] = defaults
+                    self._league_features_cache[cache_key] = defaults
                     return defaults
 
                 n = len(matches)
@@ -525,7 +539,7 @@ class FeatureEngineer:
                     "league_btts_rate": round(btts / n, 4),
                     "league_matches_count": n,
                 }
-                self._league_features_cache[league] = result
+                self._league_features_cache[cache_key] = result
                 return result
 
         except Exception as e:

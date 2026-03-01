@@ -105,7 +105,7 @@ class EnsemblePredictor:
         results["coverage"] = coverage
 
         # Poisson predictions
-        poisson_pred = self.poisson.predict(home_team_id, away_team_id)
+        poisson_pred = self.poisson.predict(home_team_id, away_team_id, league=league)
         results["poisson"] = poisson_pred
 
         # Elo predictions
@@ -136,6 +136,18 @@ class EnsemblePredictor:
             "btts_yes": poisson_pred.get("btts_yes", 0),
             "btts_no": poisson_pred.get("btts_no", 0),
         }
+
+        # International matches: Poisson goal predictions use league-calibrated
+        # strengths that are unreliable when teams come from different leagues.
+        # Dampen toward neutral priors (same logic as 1X2 weight adjustment).
+        if is_intl:
+            intl_dampen = self.config.get("models.intl_goals_dampen", 0.30)
+            _priors = {"over_1.5": 0.75, "over_2.5": 0.50, "over_3.5": 0.25}
+            for key, prior in _priors.items():
+                poisson_goals[key] = poisson_goals[key] * (1 - intl_dampen) + prior * intl_dampen
+            poisson_goals["under_2.5"] = 1.0 - poisson_goals["over_2.5"]
+            poisson_goals["btts_yes"] = poisson_goals["btts_yes"] * (1 - intl_dampen) + 0.50 * intl_dampen
+            poisson_goals["btts_no"] = 1.0 - poisson_goals["btts_yes"]
 
         # Derive goal market adjustments from ensemble 1X2 confidence:
         # - Strong favourite (high home/away win prob) -> more goals expected
@@ -216,6 +228,7 @@ class EnsemblePredictor:
                 ml_o25 = self.goals_model.predict_proba_over25(
                     features_vector, feature_names=feature_names
                 )
+                results["goals_ml_over25"] = ml_o25  # store for model agreement check
                 goals_ml_w = self.config.get("models.goals_ml_blend_weight", 0.25)
                 adjusted_goals["over_2.5"] = round(
                     adjusted_goals["over_2.5"] * (1 - goals_ml_w) + ml_o25 * goals_ml_w, 4
@@ -280,7 +293,9 @@ class EnsemblePredictor:
         results["ensemble"]["over_1.5"] = round(adjusted_goals["over_1.5"], 4)
         results["ensemble"]["over_2.5"] = round(adjusted_goals["over_2.5"], 4)
         results["ensemble"]["over_3.5"] = round(adjusted_goals["over_3.5"], 4)
+        results["ensemble"]["under_1.5"] = round(1.0 - adjusted_goals["over_1.5"], 4)
         results["ensemble"]["under_2.5"] = round(adjusted_goals["under_2.5"], 4)
+        results["ensemble"]["under_3.5"] = round(1.0 - adjusted_goals["over_3.5"], 4)
         results["ensemble"]["btts_yes"] = round(adjusted_goals["btts_yes"], 4)
         results["ensemble"]["btts_no"] = round(adjusted_goals["btts_no"], 4)
         # Team goal lines: blended with bookmaker when available
