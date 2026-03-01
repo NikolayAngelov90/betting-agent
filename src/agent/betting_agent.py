@@ -486,7 +486,7 @@ class FootballBettingAgent:
             _picks_cf_abort = 5  # higher threshold: some fixtures legitimately have no odds
             scraper = FlashscoreScraper()
             try:
-                for match_id, fs_id, markets in to_scrape:
+                for match_id, fs_id, markets, _n_missing in to_scrape:
                     if _picks_timer.monotonic() > _picks_odds_deadline:
                         logger.warning(
                             f"Picks odds scraping: {_PICKS_ODDS_BUDGET_S // 60}-min budget "

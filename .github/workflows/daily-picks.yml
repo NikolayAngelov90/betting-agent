@@ -128,6 +128,66 @@ jobs:
         run: python -m pytest tests/ -v --tb=short
         continue-on-error: true
 
+      - name: Sync local DB picks (if available)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check for a local-db-sync release — contains a DB with locally-generated
+          # picks that need to be merged before settlement.
+          if gh release view local-db-sync >/dev/null 2>&1; then
+            echo "Found local-db-sync release — downloading DB..."
+            gh release download local-db-sync -p 'football_betting.db' -D /tmp/local-sync --clobber
+            # Merge local picks into the CI DB (don't overwrite — the CI DB may have
+            # fresher match results).  Copy only saved_picks rows that don't exist yet.
+            python << 'PYEOF'
+          import sqlite3, os, shutil
+          local_db = '/tmp/local-sync/football_betting.db'
+          ci_db = 'data/football_betting.db'
+          if not os.path.exists(local_db):
+              print('Downloaded DB not found — skipping')
+              exit(0)
+          if not os.path.exists(ci_db):
+              # No CI DB yet — just use the local one
+              shutil.copy2(local_db, ci_db)
+              print('No CI DB — using local DB directly')
+              exit(0)
+          # Attach local DB and copy missing saved_picks
+          conn = sqlite3.connect(ci_db, timeout=30)
+          conn.execute(f"ATTACH DATABASE '{local_db}' AS local_db")
+          # Count picks before
+          before = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
+          # Insert picks that don't exist in CI DB (match by match_id + market + selection)
+          conn.execute("""
+              INSERT OR IGNORE INTO saved_picks
+                  (match_id, market, selection, odds, predicted_probability,
+                   expected_value, kelly_stake, model_agreement, reasoning,
+                   timestamp, result, actual_outcome, profit_loss)
+              SELECT match_id, market, selection, odds, predicted_probability,
+                     expected_value, kelly_stake, model_agreement, reasoning,
+                     timestamp, result, actual_outcome, profit_loss
+              FROM local_db.saved_picks lp
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM saved_picks sp
+                  WHERE sp.match_id = lp.match_id
+                    AND sp.market = lp.market
+                    AND sp.selection = lp.selection
+              )
+          """)
+          conn.commit()
+          after = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
+          conn.execute("DETACH DATABASE local_db")
+          conn.close()
+          merged = after - before
+          print(f'Merged {merged} new picks from local DB (total: {after})')
+          PYEOF
+            # Delete the release so it's not re-applied on subsequent runs
+            gh release delete local-db-sync --yes --cleanup-tag 2>/dev/null || true
+            echo "local-db-sync release consumed and deleted"
+          else
+            echo "No local-db-sync release found — skipping"
+          fi
+        continue-on-error: true
+
       - name: Settle yesterday's predictions
         run: python -m src.agent.betting_agent --settle
         continue-on-error: true
