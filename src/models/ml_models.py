@@ -226,13 +226,17 @@ class MLModels:
             )
             return self._default_prediction()
 
+        # Wrap in DataFrame so LightGBM gets feature names (suppresses warning)
+        import pandas as _pd
+        X_named = _pd.DataFrame(X_scaled, columns=self.feature_names)
+
         predictions = {}
         all_probs = []
 
         for name, model in self.models.items():
             # Use calibrated model if available (RF/XGBoost); otherwise raw (LR)
             cal_model = self.calibrated_models.get(name, model)
-            probs = cal_model.predict_proba(X_scaled)[0]
+            probs = cal_model.predict_proba(X_named)[0]
 
             # Ensure we have 3 classes (away=0, draw=1, home=2)
             if len(probs) == 3:
@@ -489,11 +493,15 @@ class GoalsMLModel:
         except ValueError:
             return 0.5
 
+        # Wrap in DataFrame so LightGBM gets feature names (suppresses warning)
+        import pandas as _pd
+        X_named = _pd.DataFrame(X_scaled, columns=self.feature_names)
+
         probs = []
         for name in self.models:
             cal_model = self.calibrated_models.get(name, self.models[name])
             try:
-                p = cal_model.predict_proba(X_scaled)[0]
+                p = cal_model.predict_proba(X_named)[0]
                 if len(p) >= 2:
                     probs.append(float(p[1]))  # p[1] = P(class=1) = P(over 2.5)
             except Exception:

@@ -1105,21 +1105,39 @@ class APIFootballScraper(BaseScraper):
         ]
         if still_missing:
             search_resolved = {}  # db_team_id -> apifootball_team_id
+            # Override map for abbreviated DB names → full API-Football search terms
+            _SEARCH_OVERRIDES = {
+                "Oxford Utd": "Oxford United",
+                "Atl. Madrid": "Atletico Madrid",
+                "Ath Madrid": "Atletico Madrid",
+                "Atl Madrid": "Atletico Madrid",
+                "MK Dons": "Milton Keynes Dons",
+                "Sheff Wed": "Sheffield Wednesday",
+                "Sheffield Utd": "Sheffield United",
+                "Nott'm Forest": "Nottingham Forest",
+                "Man United": "Manchester United",
+                "Man City": "Manchester City",
+                "Sp Braga": "Sporting Braga",
+                "West Brom": "West Bromwich",
+                "Ein Frankfurt": "Eintracht Frankfurt",
+                "M'gladbach": "Monchengladbach",
+                "Ath Bilbao": "Athletic Bilbao",
+                "Paris SG": "Paris Saint Germain",
+            }
             for tid, name, cnt in still_missing[:10]:
                 if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
                     break
-                # Strip non-ASCII and special chars that break the API search.
-                # API-Football /teams?search= only allows alphanumeric + spaces.
-                # e.g. "Gençlerbirliği S.K." → "Genclerbirligi S K"
-                # e.g. "FC Twente '65" → "FC Twente 65"
+                # Use override if available, otherwise sanitize the DB name
                 import re as _re
                 import unicodedata as _ud
-                # Transliterate accented chars to ASCII (ç→c, ğ→g, ı→i, etc.)
-                search_name = _ud.normalize("NFKD", name).encode("ascii", "ignore").decode()
-                # Keep only alphanumeric and spaces
-                search_name = _re.sub(r"[^a-zA-Z0-9\s]", "", search_name).strip()
-                # Collapse multiple spaces
-                search_name = _re.sub(r"\s+", " ", search_name)
+                search_name = _SEARCH_OVERRIDES.get(name)
+                if not search_name:
+                    # Transliterate accented chars to ASCII (ç→c, ğ→g, ı→i, etc.)
+                    search_name = _ud.normalize("NFKD", name).encode("ascii", "ignore").decode()
+                    # Keep only alphanumeric and spaces
+                    search_name = _re.sub(r"[^a-zA-Z0-9\s]", "", search_name).strip()
+                    # Collapse multiple spaces
+                    search_name = _re.sub(r"\s+", " ", search_name)
                 if len(search_name) < 3:
                     logger.debug(f"Search name too short after sanitizing '{name}' → '{search_name}'")
                     continue

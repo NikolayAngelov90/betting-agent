@@ -147,24 +147,21 @@ jobs:
               print('Downloaded DB not found — skipping')
               exit(0)
           if not os.path.exists(ci_db):
-              # No CI DB yet — just use the local one
               shutil.copy2(local_db, ci_db)
               print('No CI DB — using local DB directly')
               exit(0)
-          # Attach local DB and copy missing saved_picks
           conn = sqlite3.connect(ci_db, timeout=30)
           conn.execute(f"ATTACH DATABASE '{local_db}' AS local_db")
-          # Count picks before
           before = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
-          # Insert picks that don't exist in CI DB (match by match_id + market + selection)
-          conn.execute("""
-              INSERT OR IGNORE INTO saved_picks
-                  (match_id, market, selection, odds, predicted_probability,
-                   expected_value, kelly_stake, model_agreement, reasoning,
-                   timestamp, result, actual_outcome, profit_loss)
-              SELECT match_id, market, selection, odds, predicted_probability,
-                     expected_value, kelly_stake, model_agreement, reasoning,
-                     timestamp, result, actual_outcome, profit_loss
+          # Get column names dynamically (skip 'id' — auto-increment)
+          ci_cols = [r[1] for r in conn.execute("PRAGMA table_info(saved_picks)") if r[1] != 'id']
+          local_cols = [r[1] for r in conn.execute("PRAGMA local_db.table_info(saved_picks)") if r[1] != 'id']
+          # Use only columns that exist in BOTH databases
+          shared = [c for c in ci_cols if c in local_cols]
+          cols_str = ', '.join(shared)
+          conn.execute(f"""
+              INSERT OR IGNORE INTO saved_picks ({cols_str})
+              SELECT {cols_str}
               FROM local_db.saved_picks lp
               WHERE NOT EXISTS (
                   SELECT 1 FROM saved_picks sp
@@ -177,8 +174,7 @@ jobs:
           after = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
           conn.execute("DETACH DATABASE local_db")
           conn.close()
-          merged = after - before
-          print(f'Merged {merged} new picks from local DB (total: {after})')
+          print(f'Merged {after - before} new picks from local DB (total: {after})')
           PYEOF
             # Delete the release so it's not re-applied on subsequent runs
             gh release delete local-db-sync --yes --cleanup-tag 2>/dev/null || true
