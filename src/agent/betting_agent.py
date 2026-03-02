@@ -880,8 +880,12 @@ class FootballBettingAgent:
                     won = total < 2.5
                 elif sel == "Over 1.5 Goals":
                     won = total > 1.5
+                elif sel == "Under 1.5 Goals":
+                    won = total < 1.5
                 elif sel == "Over 3.5 Goals":
                     won = total > 3.5
+                elif sel == "Under 3.5 Goals":
+                    won = total < 3.5
                 elif sel == "BTTS Yes":
                     won = btts
                 elif sel == "BTTS No":
