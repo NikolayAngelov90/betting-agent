@@ -112,6 +112,8 @@ class FlashscoreScraper(BaseScraper):
         self._cf_browser = None    # playwright sync Browser (camoufox)
         self._cf_ctx_mgr = None   # camoufox context manager handle
         self._cf_failed = False   # True after an unrecoverable camoufox error
+        self._cf_page = None      # persistent page/tab for camoufox (reused across requests)
+        self._cf_warmed = False   # True after homepage warm-up solved CF challenge
 
     def _get_driver(self):
         """Create a Chrome driver. Returns None if Chrome unavailable.
@@ -232,6 +234,9 @@ class FlashscoreScraper(BaseScraper):
         Returns a Playwright sync Browser on success, None if unavailable.
         The browser is kept alive across requests so Cloudflare cookies
         (cf_clearance, __cf_bm) persist between pages within a session.
+
+        On first launch, navigates to the Flashscore homepage to solve the
+        CF challenge once — subsequent deep-URL navigations reuse the cookies.
         """
         import os as _os
         if not _CF_AVAILABLE or self._cf_failed:
@@ -248,32 +253,76 @@ class FlashscoreScraper(BaseScraper):
             # (non-running) event loop so get_event_loop() doesn't error.
             import asyncio as _asyncio
             try:
-                # Clear the "running loop" flag inherited from the parent thread
                 _asyncio._set_running_loop(None)
                 _asyncio.set_event_loop(_asyncio.new_event_loop())
             except Exception:
                 pass
-            # headed (headless=False) with Xvfb is the most realistic profile;
-            # headless=True still works but risks detection on Cloudflare JS challenge.
+            # Use virtual display mode on Linux (more realistic than true headless),
+            # fall back to headless=True only if no display is available at all.
             _has_display = bool(_os.environ.get("DISPLAY"))
             mgr = Camoufox(
-                headless=(not _has_display),
+                headless="virtual" if _has_display else True,
+                humanize=True,  # human-like cursor movement — helps pass CF behavioral checks
                 os="windows",   # Windows UA fingerprint — most common desktop platform
             )
             self._cf_browser = mgr.__enter__()
             self._cf_ctx_mgr = mgr
             logger.info(
                 f"camoufox Firefox browser started "
-                f"(headless={not _has_display}, Cloudflare bypass active)"
+                f"(headless={'virtual' if _has_display else True}, "
+                f"humanize=True, Cloudflare bypass active)"
             )
+
+            # --- Session warm-up: solve CF challenge on homepage first ---
+            self._warm_up_cf_session()
+
         except Exception as e:
             logger.warning(f"camoufox failed to start: {e} — will use Selenium fallback")
             self._cf_failed = True
             self._cf_browser = None
         return self._cf_browser
 
+    def _warm_up_cf_session(self):
+        """Navigate to Flashscore homepage to solve CF challenge and set cookies.
+
+        The cf_clearance cookie obtained here is valid for 30-60 minutes and
+        reused by all subsequent navigations within the same browser context.
+        """
+        import time as _time
+        if self._cf_warmed or self._cf_browser is None:
+            return
+        try:
+            page = self._cf_browser.new_page()
+            page.goto(
+                "https://www.flashscore.com/",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            # Wait for actual site content — proves CF challenge was solved
+            try:
+                page.wait_for_selector(
+                    ".event__match, .sportName, [class*='leagues']",
+                    timeout=20000,
+                )
+                logger.info("camoufox CF warm-up: homepage loaded, cookies set")
+            except Exception:
+                # Even if selector doesn't appear, CF cookies may be partially set.
+                # Give CF JS challenge extra time to resolve in the background.
+                _time.sleep(8)
+                logger.info("camoufox CF warm-up: waited 8s for challenge resolution")
+            page.close()
+            self._cf_warmed = True
+        except Exception as e:
+            logger.warning(f"camoufox CF warm-up failed: {e}")
+
     def _close_camoufox(self):
         """Shut down the camoufox Firefox browser and reset state."""
+        if self._cf_page is not None:
+            try:
+                self._cf_page.close()
+            except Exception:
+                pass
+            self._cf_page = None
         if self._cf_ctx_mgr is not None:
             try:
                 self._cf_ctx_mgr.__exit__(None, None, None)
@@ -282,35 +331,97 @@ class FlashscoreScraper(BaseScraper):
         self._cf_browser = None
         self._cf_ctx_mgr = None
         self._cf_failed = False
+        self._cf_warmed = False
+
+    @staticmethod
+    def _is_cf_challenge(html: str) -> bool:
+        """Detect if the HTML is a Cloudflare challenge page (not real content)."""
+        if not html or len(html) < 500:
+            return True
+        _cf_markers = [
+            "Checking your browser",
+            "cf-browser-verification",
+            "challenge-platform",
+            "Just a moment",
+            "_cf_chl_opt",
+            "Verify you are human",
+        ]
+        return any(m in html for m in _cf_markers)
 
     def _cf_fetch_html(self, url: str, wait_selector: str,
                        timeout_ms: int = 20000) -> Optional[str]:
         """Load *url* with camoufox Firefox and return the page HTML.
 
-        Waits up to *timeout_ms* ms for *wait_selector* to appear before
-        returning the page source.  Returns None if camoufox is unavailable
-        or the page load fails (caller should fall back to Selenium).
+        Reuses a single persistent page/tab across calls to preserve navigation
+        history, referrer headers, and cookies — more human-like than opening
+        a new page per request.
+
+        Adds a random inter-request delay (2-4s) and a small scroll after
+        page load to trigger Cloudflare's behavioral analysis positively.
+
+        If CF challenge HTML is detected, attempts a warm-up retry once.
         """
+        import time as _time
+        import random as _rnd
+
         browser = self._get_camoufox_browser()
         if browser is None:
             return None
+
+        # Random delay between navigations (skip for the very first request)
+        if self._cf_page is not None:
+            _time.sleep(_rnd.uniform(2.0, 4.5))
+
         try:
-            page = browser.new_page()
+            # Reuse persistent page; create one if needed
+            if self._cf_page is None:
+                self._cf_page = browser.new_page()
+
+            page = self._cf_page
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             try:
+                page.wait_for_selector(wait_selector, timeout=timeout_ms)
+            except Exception:
+                pass  # selector may not appear if Cloudflare still blocks
+
+            # Human-like scroll after page load
+            try:
+                page.mouse.wheel(0, _rnd.randint(200, 500))
+                _time.sleep(_rnd.uniform(0.3, 0.8))
+            except Exception:
+                pass
+
+            html = page.content()
+
+            # Detect CF challenge page — if found, try warm-up retry once
+            if self._is_cf_challenge(html):
+                logger.debug(f"CF challenge detected for {url} — attempting warm-up retry")
+                self._cf_warmed = False
+                self._warm_up_cf_session()
+                _time.sleep(_rnd.uniform(2.0, 4.0))
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 try:
                     page.wait_for_selector(wait_selector, timeout=timeout_ms)
                 except Exception:
-                    pass  # selector may not appear if Cloudflare still blocks
+                    pass
                 html = page.content()
-            finally:
-                page.close()
+                if self._is_cf_challenge(html):
+                    logger.debug(f"CF challenge persists after retry for {url}")
+                    return None
+
             return html
         except Exception as e:
             logger.warning(
                 f"camoufox page load failed ({type(e).__name__}) for {url} "
                 f"— marking camoufox as failed, falling back to Selenium"
             )
+            # Close the persistent page on hard error (browser crash, timeout, etc.)
+            if self._cf_page is not None:
+                try:
+                    self._cf_page.close()
+                except Exception:
+                    pass
+                self._cf_page = None
             self._close_camoufox()
             self._cf_failed = True
             return None
@@ -446,7 +557,9 @@ class FlashscoreScraper(BaseScraper):
         logger.info(f"Enriching stats for {total} recent matches (cross-league pass)")
         enriched = 0
         consecutive_failures = 0
-        _CF_ABORT = 4  # abort if Cloudflare blocks this many matches in a row
+        _CF_ABORT = 6  # abort if Cloudflare blocks this many matches in a row
+
+        import random as _rnd
 
         for n, (match_id, fs_id) in enumerate(pending, 1):
             if consecutive_failures >= _CF_ABORT:
@@ -455,6 +568,12 @@ class FlashscoreScraper(BaseScraper):
                     f"(Cloudflare?) — aborting early after {n - 1}/{total} matches"
                 )
                 break
+
+            # Periodic longer pause every ~10 matches to look more human
+            if n > 1 and n % 10 == 1:
+                _pause = _rnd.uniform(5.0, 10.0)
+                logger.debug(f"[Stats] Reading pause: {_pause:.1f}s")
+                await asyncio.sleep(_pause)
 
             logger.info(f"[Stats {n}/{total}] Scraping match {match_id} (id={fs_id})")
             match_url = f"{FLASHSCORE_BASE_URL}/match/{fs_id}/"
@@ -485,7 +604,7 @@ class FlashscoreScraper(BaseScraper):
                 logger.debug(f"[Stats {n}/{total}] No stats returned for {fs_id}")
                 consecutive_failures += 1
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(_rnd.uniform(0.5, 1.5))
 
         logger.info(f"Flashscore stats enriched: {enriched}/{total} matches")
         return enriched

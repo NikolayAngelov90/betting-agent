@@ -526,30 +526,44 @@ class FootballBettingAgent:
             logger.info("All fixtures already have odds or no flashscore_id available.")
 
         # ── API-Football odds fallback ─────────────────────────────────────────
-        # For fixtures that still have NO odds from any source, try API-Football
-        # if they have an apifootball_id. This catches Europa/Conference League
-        # matches that Flashscore missed or that have no flashscore_id.
+        # For fixtures that have NO real bookmaker odds (zero odds, or only
+        # "Flashscore" display odds), try API-Football if they have an
+        # apifootball_id and we have budget remaining (free tier = 100/day).
         if self.apifootball.enabled:
+            _apifb_budget_remaining = max(
+                0, self.apifootball._daily_limit
+                - self.apifootball._requests_today
+                - self.apifootball.BUDGET_RESERVE
+            )
             with self.db.get_session() as session:
                 apifb_fallback = []
                 for fid in fixture_ids:
                     m = session.get(Match, fid)
                     if m and m.apifootball_id:
-                        total_odds = session.query(Odds).filter_by(match_id=fid).count()
-                        if total_odds == 0:
+                        # Count only REAL bookmaker odds (exclude "Flashscore" display odds)
+                        real_odds = session.query(Odds).filter(
+                            Odds.match_id == fid,
+                            Odds.bookmaker != "Flashscore",
+                        ).count()
+                        if real_odds == 0:
                             ht = m.home_team.name if m.home_team else str(m.home_team_id)
                             at = m.away_team.name if m.away_team else str(m.away_team_id)
                             apifb_fallback.append((fid, m.apifootball_id, ht, at))
             if apifb_fallback:
-                logger.info(f"Fetching API-Football odds for {len(apifb_fallback)} fixtures with no odds")
-                for match_id, fixture_id, home, away in apifb_fallback:
+                capped = apifb_fallback[:_apifb_budget_remaining]
+                logger.info(
+                    f"Fetching API-Football odds for {len(capped)}/{len(apifb_fallback)} "
+                    f"fixtures missing real bookmaker odds "
+                    f"(budget: {_apifb_budget_remaining} requests left)"
+                )
+                for match_id, fixture_id, home, away in capped:
                     try:
                         odds_data = await self.apifootball._fetch_fixture_odds(fixture_id)
                         if odds_data:
                             count = self.apifootball._save_fixture_odds(match_id, odds_data)
                             logger.info(f"API-Football fallback: saved {count} odds for {home} vs {away}")
                         else:
-                            logger.warning(f"No odds from any source for fixture {fixture_id} ({home} vs {away})")
+                            logger.debug(f"No API-Football odds for fixture {fixture_id} ({home} vs {away})")
                     except Exception as exc:
                         logger.warning(f"API-Football fallback failed for fixture {fixture_id}: {exc}")
 
