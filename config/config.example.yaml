@@ -43,8 +43,9 @@ scraping:
   request_delay: 3  # seconds between requests
 
 database:
-  type: sqlite
-  sqlite_path: data/football_betting.db
+  # Set DATABASE_URL env var for PostgreSQL (Neon), or leave unset for local SQLite
+  # url: postgresql://user:pass@host/db?sslmode=require
+  sqlite_path: data/football_betting.db  # fallback when DATABASE_URL is not set
 
 models:
   ensemble_weights:

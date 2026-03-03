@@ -78,6 +78,12 @@ class FootballBettingAgent:
         """Run the full daily data collection cycle."""
         logger.info("Starting daily update cycle")
 
+        # 0. Prune old odds to keep DB size under control (Neon 500MB free tier)
+        try:
+            self.db.prune_old_odds(keep_days=400)
+        except Exception as e:
+            logger.warning(f"Odds pruning failed (non-fatal): {e}")
+
         # 1. Historical data (bootstrap — loads CSV results from football-data.co.uk)
         try:
             await self.historical_loader.update()

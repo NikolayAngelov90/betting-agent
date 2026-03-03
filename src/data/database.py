@@ -1,5 +1,6 @@
 """Database manager for Football Betting Agent."""
 
+import os
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -21,48 +22,47 @@ class DatabaseManager:
         self.engine = self._create_engine()
         self.SessionLocal = sessionmaker(bind=self.engine)
 
+    @property
+    def is_postgres(self) -> bool:
+        return self.engine.dialect.name == "postgresql"
+
     def _create_engine(self):
         db_config = self.config.database
-        db_type = db_config.get("type", "sqlite")
 
-        if db_type == "sqlite":
-            db_path = Path(db_config.get("sqlite_path", "data/football_betting.db"))
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-            url = f"sqlite:///{db_path}"
+        # 1. Prefer DATABASE_URL env var (works for both local + CI)
+        database_url = db_config.get("url") or os.environ.get("DATABASE_URL")
 
-            engine = create_engine(
-                url, echo=False,
-                pool_pre_ping=True,
-                connect_args={"check_same_thread": False},
-            )
-
-            # Enable WAL mode and other SQLite optimizations on every connect
-            @event.listens_for(engine, "connect")
-            def _set_sqlite_pragmas(dbapi_conn, connection_record):
-                cursor = dbapi_conn.cursor()
-                cursor.execute("PRAGMA journal_mode=WAL")
-                cursor.execute("PRAGMA synchronous=NORMAL")
-                cursor.execute("PRAGMA busy_timeout=5000")
-                cursor.close()
-
-            return engine
-
-        elif db_type == "postgresql":
-            host = db_config.get("host", "localhost")
-            port = db_config.get("port", 5432)
-            name = db_config.get("name", "football_betting")
-            user = db_config.get("user", "")
-            password = db_config.get("password", "")
-            url = f"postgresql://{user}:{password}@{host}:{port}/{name}"
-
+        if database_url:
+            logger.info(f"Using PostgreSQL database (Neon)")
             return create_engine(
-                url, echo=False,
+                database_url, echo=False,
                 pool_pre_ping=True,
                 pool_size=5,
                 max_overflow=10,
+                pool_recycle=300,  # recycle connections every 5min (Neon scale-to-zero)
             )
-        else:
-            raise ValueError(f"Unsupported database type: {db_type}")
+
+        # 2. Fall back to SQLite (local dev without DATABASE_URL)
+        db_path = Path(db_config.get("sqlite_path", "data/football_betting.db"))
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        url = f"sqlite:///{db_path}"
+        logger.info(f"Using SQLite database: {db_path}")
+
+        engine = create_engine(
+            url, echo=False,
+            pool_pre_ping=True,
+            connect_args={"check_same_thread": False},
+        )
+
+        @event.listens_for(engine, "connect")
+        def _set_sqlite_pragmas(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.close()
+
+        return engine
 
     def create_tables(self):
         """Create all tables defined in models, and add any missing columns/indexes."""
@@ -107,6 +107,30 @@ class DatabaseManager:
                         logger.info(f"Migration: created index {idx.name} on {table_name}")
                     except Exception as e:
                         logger.debug(f"Index {idx.name} creation skipped: {e}")
+
+    def prune_old_odds(self, keep_days: int = 400):
+        """Delete odds for matches older than keep_days to control DB size.
+
+        Keeps all odds for matches within the retention window and any match
+        that has an associated saved_pick (so we never lose betting history).
+        """
+        from datetime import datetime, timedelta
+        from src.data.models import Odds, Match, SavedPick
+        cutoff = datetime.utcnow() - timedelta(days=keep_days)
+        with self.get_session() as session:
+            # Subquery: match IDs that have saved picks (never prune these)
+            pick_match_ids = session.query(SavedPick.match_id).distinct().subquery()
+            deleted = (
+                session.query(Odds)
+                .join(Match, Odds.match_id == Match.id)
+                .filter(
+                    Match.match_date < cutoff,
+                    ~Odds.match_id.in_(session.query(pick_match_ids.c.match_id)),
+                )
+                .delete(synchronize_session=False)
+            )
+            if deleted:
+                logger.info(f"Pruned {deleted:,} old odds rows (matches before {cutoff.date()})")
 
     def drop_tables(self):
         """Drop all tables. Use with caution."""
@@ -182,25 +206,24 @@ def get_db() -> DatabaseManager:
 def init_db():
     """Initialize database: create engine and all tables.
 
-    If the cached DB file is malformed (e.g. incomplete WAL from a crashed
-    previous run), it is deleted and a fresh empty database is created so
-    the rest of the pipeline can continue normally.
+    For SQLite: if the cached DB file is malformed, it is deleted and recreated.
+    For PostgreSQL: tables are created if they don't exist.
     """
     global _db_manager
     db = get_db()
     try:
         db.create_tables()
     except Exception as e:
-        if "malformed" in str(e).lower() or "corrupt" in str(e).lower():
+        if not db.is_postgres and (
+            "malformed" in str(e).lower() or "corrupt" in str(e).lower()
+        ):
             logger.warning(f"Cached database is corrupt ({e}). Deleting and recreating.")
-            from pathlib import Path
             db_path = Path(db.config.database.get("sqlite_path", "data/football_betting.db"))
             for suffix in ("", "-wal", "-shm"):
                 p = Path(str(db_path) + suffix)
                 if p.exists():
                     p.unlink()
                     logger.warning(f"Removed: {p}")
-            # Reset global singleton so engine is recreated against fresh file
             _db_manager = None
             db = get_db()
             db.create_tables()

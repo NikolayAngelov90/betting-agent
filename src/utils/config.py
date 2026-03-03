@@ -17,6 +17,7 @@ _ENV_OVERRIDES = {
     "notifications.telegram_bot_token": "TELEGRAM_BOT_TOKEN",
     "notifications.telegram_chat_id": "TELEGRAM_CHAT_ID",
     "database.sqlite_path": "DB_PATH",
+    "database.url": "DATABASE_URL",
     "logging.level": "LOG_LEVEL",
 }
 

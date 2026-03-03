@@ -16,26 +16,21 @@ jobs:
       FOOTBALL_DATA_ORG_KEY: ${{ secrets.FOOTBALL_DATA_ORG_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Restore DB first — before any step that can fail (camoufox fetch, Chrome
-      # install, pip install, etc.).  If a later step fails and the job is saved
-      # with if:always(), it re-saves the properly restored DB instead of an empty one.
-      # This prevents "poison cache" where a broken run saves an empty DB and causes
-      # all subsequent runs to find 0 picks at settle time.
-      - name: Restore database and models
+      - name: Restore ML models cache
         uses: actions/cache/restore@v4
         with:
           path: |
-            data/football_betting.db
             data/models/
             data/historical_load_cache.json
-          key: betting-data-${{ github.run_number }}
+          key: betting-models-${{ github.run_number }}
           restore-keys: |
-            betting-data-
+            betting-models-
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -51,9 +46,6 @@ jobs:
 
       - name: Start virtual display (Xvfb)
         run: |
-          # Run Chrome in headed mode on a virtual framebuffer — Cloudflare detects
-          # headless Chrome markers much more reliably than headed Chrome. Xvfb
-          # provides a real display so Chrome behaves identically to a desktop browser.
           Xvfb :99 -screen 0 1920x1080x24 -ac 2>/dev/null &
           echo "DISPLAY=:99" >> $GITHUB_ENV
           sleep 1
@@ -74,114 +66,17 @@ jobs:
       - name: Create config from example
         run: cp config/config.example.yaml config/config.yaml
 
-      - name: Verify and recover database
+      - name: Verify database connection
         run: |
-          python << 'PYEOF'
-          import sqlite3, os
-          db = 'data/football_betting.db'
-          cache_file = 'data/historical_load_cache.json'
-
-          def reset_cache(reason):
-              if os.path.exists(cache_file):
-                  os.remove(cache_file)
-                  print(f'Reset historical_load_cache.json ({reason}) — CSVs will be reloaded')
-
-          def wipe_db(reason):
-              for ext in ('', '-wal', '-shm'):
-                  p = db + ext
-                  if os.path.exists(p):
-                      os.remove(p)
-              print(f'Removed database: {reason}')
-              reset_cache('DB wiped')
-
-          if os.path.exists(db):
-              try:
-                  conn = sqlite3.connect(db, timeout=10)
-                  result = conn.execute('PRAGMA integrity_check').fetchone()
-                  if result[0] != 'ok':
-                      conn.close()
-                      wipe_db(f'integrity_check={result[0]}')
-                  else:
-                      # Check if DB has enough historical data to be useful
-                      count = conn.execute(
-                          "SELECT COUNT(*) FROM matches WHERE home_goals IS NOT NULL"
-                      ).fetchone()[0]
-                      picks = conn.execute(
-                          "SELECT COUNT(*) FROM saved_picks"
-                      ).fetchone()[0]
-                      conn.close()
-                      print(f'Database OK: {count} completed matches, {picks} saved picks')
-                      if count < 500:
-                          print(f'WARNING: only {count} completed matches — resetting CSV cache to force reload')
-                          reset_cache(f'only {count} matches in DB')
-              except Exception as e:
-                  wipe_db(str(e))
-          else:
-              print('No database file — fresh start')
-              reset_cache('fresh start')
-          PYEOF
-
-      - name: Initialize database
-        run: python -c "from src.data.database import init_db; init_db()"
+          python -c "
+          from src.data.database import init_db
+          db = init_db()
+          assert db.health_check(), 'Database health check failed'
+          print('Database connection OK (PostgreSQL/Neon)')
+          "
 
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short
-        continue-on-error: true
-
-      - name: Sync local DB picks (if available)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Check for a local-db-sync release — contains a DB with locally-generated
-          # picks that need to be merged before settlement.
-          if gh release view local-db-sync >/dev/null 2>&1; then
-            echo "Found local-db-sync release — downloading DB..."
-            gh release download local-db-sync -p 'football_betting.db' -D /tmp/local-sync --clobber
-            # Merge local picks into the CI DB (don't overwrite — the CI DB may have
-            # fresher match results).  Copy only saved_picks rows that don't exist yet.
-            python << 'PYEOF'
-          import sqlite3, os, shutil
-          local_db = '/tmp/local-sync/football_betting.db'
-          ci_db = 'data/football_betting.db'
-          if not os.path.exists(local_db):
-              print('Downloaded DB not found — skipping')
-              exit(0)
-          if not os.path.exists(ci_db):
-              shutil.copy2(local_db, ci_db)
-              print('No CI DB — using local DB directly')
-              exit(0)
-          conn = sqlite3.connect(ci_db, timeout=30)
-          conn.execute(f"ATTACH DATABASE '{local_db}' AS local_db")
-          before = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
-          # Get column names dynamically (skip 'id' — auto-increment)
-          ci_cols = [r[1] for r in conn.execute("PRAGMA table_info(saved_picks)") if r[1] != 'id']
-          local_cols = [r[1] for r in conn.execute("PRAGMA local_db.table_info(saved_picks)") if r[1] != 'id']
-          # Use only columns that exist in BOTH databases
-          shared = [c for c in ci_cols if c in local_cols]
-          cols_str = ', '.join(shared)
-          conn.execute(f"""
-              INSERT OR IGNORE INTO saved_picks ({cols_str})
-              SELECT {cols_str}
-              FROM local_db.saved_picks lp
-              WHERE NOT EXISTS (
-                  SELECT 1 FROM saved_picks sp
-                  WHERE sp.match_id = lp.match_id
-                    AND sp.market = lp.market
-                    AND sp.selection = lp.selection
-              )
-          """)
-          conn.commit()
-          after = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
-          conn.execute("DETACH DATABASE local_db")
-          conn.close()
-          print(f'Merged {after - before} new picks from local DB (total: {after})')
-          PYEOF
-            # Delete the release so it's not re-applied on subsequent runs
-            gh release delete local-db-sync --yes --cleanup-tag 2>/dev/null || true
-            echo "local-db-sync release consumed and deleted"
-          else
-            echo "No local-db-sync release found — skipping"
-          fi
         continue-on-error: true
 
       - name: Settle yesterday's predictions
@@ -195,20 +90,17 @@ jobs:
       - name: Check DB health before training
         run: |
           python << 'PYEOF'
-          import sqlite3
-          db = 'data/football_betting.db'
-          try:
-              conn = sqlite3.connect(db)
-              completed = conn.execute("SELECT COUNT(*) FROM matches WHERE home_goals IS NOT NULL").fetchone()[0]
-              fixtures  = conn.execute("SELECT COUNT(*) FROM matches WHERE is_fixture = 1").fetchone()[0]
-              picks     = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
-              pending   = conn.execute("SELECT COUNT(*) FROM saved_picks WHERE result IS NULL").fetchone()[0]
-              conn.close()
-              print(f'DB health: {completed} completed matches | {fixtures} fixtures | {picks} total picks ({pending} pending settlement)')
-              if completed < 100:
-                  print('WARNING: fewer than 100 completed matches — ML training will be skipped')
-          except Exception as e:
-              print(f'DB health check failed: {e}')
+          from src.data.database import get_db
+          from src.data.models import Match, SavedPick
+          db = get_db()
+          with db.get_session() as session:
+              completed = session.query(Match).filter(Match.home_goals.isnot(None)).count()
+              fixtures = session.query(Match).filter(Match.is_fixture == True).count()
+              picks = session.query(SavedPick).count()
+              pending = session.query(SavedPick).filter(SavedPick.result.is_(None)).count()
+          print(f'DB health: {completed} completed matches | {fixtures} fixtures | {picks} total picks ({pending} pending)')
+          if completed < 100:
+              print('WARNING: fewer than 100 completed matches — ML training may be skipped')
           PYEOF
 
       - name: Train ML models on settled data
@@ -229,49 +121,14 @@ jobs:
           fi
         continue-on-error: true
 
-      - name: Checkpoint SQLite WAL before save
-        if: always()
-        run: |
-          python << 'PYEOF'
-          import sqlite3, os
-          db = 'data/football_betting.db'
-          if os.path.exists(db):
-              try:
-                  # isolation_level=None = autocommit; needed for PRAGMA wal_checkpoint
-                  conn = sqlite3.connect(db, timeout=30, isolation_level=None)
-                  conn.execute('PRAGMA wal_checkpoint(FULL)')
-                  conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-                  # Count what we're saving for visibility
-                  completed = conn.execute("SELECT COUNT(*) FROM matches WHERE home_goals IS NOT NULL").fetchone()[0]
-                  picks     = conn.execute("SELECT COUNT(*) FROM saved_picks").fetchone()[0]
-                  conn.close()
-                  print(f'WAL checkpoint OK — saving DB with {completed} completed matches, {picks} picks')
-              except Exception as e:
-                  print(f'WAL checkpoint error: {e}')
-          else:
-              print('No DB file found, skipping checkpoint')
-          PYEOF
-
-      - name: Save database and models
+      - name: Save ML models cache
         if: always()
         uses: actions/cache/save@v4
         with:
           path: |
-            data/football_betting.db
             data/models/
             data/historical_load_cache.json
-          key: betting-data-${{ github.run_number }}
-
-      - name: Export database and models for local sync
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: betting-db-latest
-          path: |
-            data/football_betting.db
-            data/models/
-          retention-days: 7
-          overwrite: true
+          key: betting-models-${{ github.run_number }}
 
       - name: Upload logs on failure
         if: failure()
