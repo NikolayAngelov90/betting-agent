@@ -248,20 +248,23 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"Flashscore odds pre-cache failed: {e}")
 
-        # 2c. Flashscore per-match stats enrichment (shots, possession, corners, etc.)
-        # stats_only=True skips the referee/venue page (~12s/match vs ~22s), so 50
-        # matches ≈ 700s — comfortably inside the 15-minute cap.
-        # days_back=14 catches matches missed if CI was down for a day or two.
-        #
-        # Always open a fresh Chrome session here — the previous session may have
-        # been flagged by Cloudflare during odds pre-caching, causing all subsequent
-        # requests to silently return empty pages (run #29: 0/40 enriched despite
-        # match detail pages not being odds-comparison protected).
+        # 2c. API-Football (fixtures, xG, advanced stats) — runs BEFORE Flashscore
+        # enrichment so its fast API calls fill shots/possession/etc. for most matches,
+        # leaving Flashscore scraping only for matches without an API-Football ID.
+        try:
+            await self.apifootball.update()
+            logger.info("API-Football update complete")
+        except Exception as e:
+            logger.error(f"API-Football update failed: {e}")
+
+        # 2d. Flashscore per-match stats enrichment (fallback for matches API-Football missed).
+        # stats_only=True skips the referee/venue page (~12s/match vs ~22s).
+        # Reduced max_matches since API-Football now covers most stats.
         self.scraper.close_driver()
         try:
             await asyncio.wait_for(
-                self.scraper.enrich_recent_match_stats(days_back=14, max_matches=50),
-                timeout=900,  # 15-minute cap for the whole pass
+                self.scraper.enrich_recent_match_stats(days_back=14, max_matches=30),
+                timeout=600,  # 10-minute cap (fewer matches now)
             )
         except asyncio.TimeoutError:
             logger.warning("Flashscore stats enrichment timed out (partial results saved)")
@@ -272,13 +275,6 @@ class FootballBettingAgent:
                 self.scraper.close_driver()
             except Exception:
                 pass
-
-        # 3. API-Football (fixtures, xG, advanced stats)
-        try:
-            await self.apifootball.update()
-            logger.info("API-Football update complete")
-        except Exception as e:
-            logger.error(f"API-Football update failed: {e}")
 
         # 4. Injury data
         try:

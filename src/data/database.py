@@ -118,13 +118,21 @@ class DatabaseManager:
         from src.data.models import Odds, Match, SavedPick
         cutoff = datetime.utcnow() - timedelta(days=keep_days)
         with self.get_session() as session:
-            # Subquery: match IDs that have saved picks (never prune these)
-            pick_match_ids = session.query(SavedPick.match_id).distinct().subquery()
+            # Subquery: match IDs older than cutoff that have NO saved picks
+            old_match_ids = (
+                session.query(Match.id)
+                .filter(Match.match_date < cutoff)
+                .subquery()
+            )
+            pick_match_ids = (
+                session.query(SavedPick.match_id)
+                .distinct()
+                .subquery()
+            )
             deleted = (
                 session.query(Odds)
-                .join(Match, Odds.match_id == Match.id)
                 .filter(
-                    Match.match_date < cutoff,
+                    Odds.match_id.in_(session.query(old_match_ids.c.id)),
                     ~Odds.match_id.in_(session.query(pick_match_ids.c.match_id)),
                 )
                 .delete(synchronize_session=False)

@@ -168,6 +168,10 @@ class HistoricalDataLoader(BaseScraper):
         CSVs that were already fetched recently:
           - Past seasons (2324, 2223): re-fetch at most every 60 days
           - Current season + extra leagues: re-fetch at most every 7 days
+
+        When the DB already has substantial historical data (e.g. migrated from
+        SQLite to Neon), past seasons are skipped entirely to avoid thousands of
+        per-row existence checks over the network.
         """
         seasons = seasons or SEASONS
         current_season = seasons[0]  # Most recent season code (e.g. "2425")
@@ -175,9 +179,27 @@ class HistoricalDataLoader(BaseScraper):
         cache = self._load_cache()
         skipped = 0
 
+        # Fast check: if DB already has plenty of matches, skip past seasons.
+        # This prevents re-processing thousands of rows via slow network queries
+        # when historical data was already migrated (e.g. SQLite → Neon).
+        db = get_db()
+        with db.get_session() as session:
+            match_count = session.query(Match).filter(
+                Match.home_goals.isnot(None)
+            ).count()
+        skip_past = match_count > 10000
+        if skip_past:
+            logger.info(
+                f"Historical loader: {match_count:,} matches in DB — "
+                f"skipping past seasons, only refreshing current ({current_season})"
+            )
+
         # Main leagues (mmz4281 per-season format)
         for league, info in LEAGUE_CSV_MAP.items():
             for season in seasons:
+                if skip_past and season != current_season:
+                    skipped += 1
+                    continue
                 refresh_days = (
                     CURRENT_SEASON_REFRESH_DAYS
                     if season == current_season

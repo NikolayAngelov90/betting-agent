@@ -273,8 +273,8 @@ class APIFootballScraper(BaseScraper):
     # for 9 top leagues, so API-Football results/fixture calls are secondary.
     BUDGET_RESULTS = 4    # keep: settlement for leagues not in football-data.org
     BUDGET_FIXTURES = 2   # keep: fixture ids needed for odds lookup
-    BUDGET_XG = 1         # was 5 — Poisson ignores DB xG; 1 request keeps backfill alive
-    BUDGET_ODDS = 80      # was 0  — re-enabled: Over/Under 1.5, Team Goals, BTTS
+    BUDGET_XG = 15        # stats backfill (shots, possession, xG) — runs before Flashscore enrichment
+    BUDGET_ODDS = 66      # Over/Under 1.5, Team Goals, BTTS
     BUDGET_RESERVE = 9
 
     def __init__(self, config=None):
@@ -492,28 +492,33 @@ class APIFootballScraper(BaseScraper):
 
         logger.info(f"API-Football fixtures {date_str}: {created} created, {updated} updated")
 
-    async def _backfill_xg(self, days_back: int = 7):
-        """Fetch xG and stats for recent matches that don't have xG data yet."""
+    async def _backfill_xg(self, days_back: int = 14):
+        """Fetch xG and stats for recent matches missing xG OR match stats.
+
+        This is the primary stats enrichment path — much faster than Flashscore
+        scraping (~0.5s/match via API vs ~12s/match via browser).
+        """
+        from sqlalchemy import or_
         with self.db.get_session() as session:
             cutoff = datetime.utcnow() - timedelta(days=days_back)
             matches = session.query(Match).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
-                Match.home_xg.is_(None),
-                Match.match_date >= cutoff,
                 Match.apifootball_id.isnot(None),
-            ).limit(self.BUDGET_XG).all()
+                Match.match_date >= cutoff,
+                or_(Match.home_xg.is_(None), Match.home_shots.is_(None)),
+            ).order_by(Match.match_date.desc()).limit(self.BUDGET_XG).all()
 
             if not matches:
-                logger.debug("No matches need xG backfill")
+                logger.debug("No matches need stats backfill")
                 return
 
-            logger.info(f"Backfilling xG for {len(matches)} recent matches")
+            logger.info(f"Backfilling xG/stats for {len(matches)} recent matches via API-Football")
             match_data = [(m.id, m.apifootball_id) for m in matches]
 
         for match_id, fixture_id in match_data:
             if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
-                logger.warning("Approaching API limit, stopping xG backfill")
+                logger.warning("Approaching API limit, stopping stats backfill")
                 break
 
             stats = await self._fetch_fixture_stats(fixture_id)
