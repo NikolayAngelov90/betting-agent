@@ -4,39 +4,36 @@
 
 scraping:
   flashscore_leagues:
-    # Top 5 Leagues + Second Divisions
+    # Top 5 Leagues (first divisions only — second divisions cut for CI speed)
     - england/premier-league
-    - england/championship
-    - england/league-one
-    - england/league-two
     - spain/laliga
-    - spain/laliga2
     - germany/bundesliga
-    - germany/2-bundesliga
     - italy/serie-a
-    - italy/serie-b
     - france/ligue-1
-    - france/ligue-2
     # Strong European Leagues
     - netherlands/eredivisie
     - portugal/primeira-liga
     - belgium/jupiler-pro-league
     - turkey/super-lig
     - scotland/premiership
-    - austria/bundesliga
-    - switzerland/super-league
-    - greece/super-league
-    - denmark/superliga
-    # Nordic & Eastern European (Norway/Sweden/Finland off-season Nov-Mar — re-add in April)
-    # - norway/eliteserien
-    # - sweden/allsvenskan
-    # - finland/veikkausliiga
-    - poland/ekstraklasa
-    - romania/liga-1
-    # European Competitions (Flashscore path: /football/europe/{league}/)
+    # European Competitions
     - europe/champions-league
     - europe/europa-league
     - europe/europa-conference-league
+    # Second divisions & smaller leagues (uncomment for local runs)
+    # - england/championship
+    # - england/league-one
+    # - england/league-two
+    # - spain/laliga2
+    # - germany/2-bundesliga
+    # - italy/serie-b
+    # - france/ligue-2
+    # - austria/bundesliga
+    # - switzerland/super-league
+    # - greece/super-league
+    # - denmark/superliga
+    # - poland/ekstraklasa
+    # - romania/liga-1
 
   update_interval_hours: 6
   headless: true

@@ -273,8 +273,8 @@ class APIFootballScraper(BaseScraper):
     # for 9 top leagues, so API-Football results/fixture calls are secondary.
     BUDGET_RESULTS = 4    # keep: settlement for leagues not in football-data.org
     BUDGET_FIXTURES = 2   # keep: fixture ids needed for odds lookup
-    BUDGET_XG = 15        # stats backfill (shots, possession, xG) — runs before Flashscore enrichment
-    BUDGET_ODDS = 66      # Over/Under 1.5, Team Goals, BTTS
+    BUDGET_XG = 30        # stats backfill (shots, possession, xG) — primary enrichment path
+    BUDGET_ODDS = 51      # Over/Under 1.5, Team Goals, BTTS (today's fixtures, typically 10-20)
     BUDGET_RESERVE = 9
 
     def __init__(self, config=None):

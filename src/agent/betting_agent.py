@@ -198,7 +198,7 @@ class FootballBettingAgent:
                 _cf_failures = 0  # consecutive Cloudflare / no-data failures
                 _cf_abort_threshold = 6  # raised from 3: some fixtures legitimately have no odds
                 import time as _odds_timer
-                _ODDS_BUDGET_S = 1200  # 20-minute hard cap — prevents odds from eating the full job
+                _ODDS_BUDGET_S = 600  # 10-minute hard cap — API-Football odds cover the rest
                 _odds_deadline = _odds_timer.monotonic() + _ODDS_BUDGET_S
                 try:
                     for _mid, _fsid, _markets in _to_scrape:
@@ -253,24 +253,11 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"API-Football update failed: {e}")
 
-        # 2d. Flashscore per-match stats enrichment (fallback for matches API-Football missed).
-        # stats_only=True skips the referee/venue page (~12s/match vs ~22s).
-        # Reduced max_matches since API-Football now covers most stats.
+        # 2d. Flashscore per-match stats enrichment — DISABLED.
+        # API-Football (BUDGET_XG=30) is the primary stats source now and covers
+        # shots/possession/xG via fast API calls (~0.5s/match). Flashscore browser
+        # scraping (~12s/match) is unreliable due to Cloudflare blocking in CI.
         self.scraper.close_driver()
-        try:
-            await asyncio.wait_for(
-                self.scraper.enrich_recent_match_stats(days_back=14, max_matches=30),
-                timeout=600,  # 10-minute cap (fewer matches now)
-            )
-        except asyncio.TimeoutError:
-            logger.warning("Flashscore stats enrichment timed out (partial results saved)")
-        except Exception as e:
-            logger.error(f"Flashscore stats enrichment failed: {e}")
-        finally:
-            try:
-                self.scraper.close_driver()
-            except Exception:
-                pass
 
         # 4. Injury data
         try:
@@ -1228,7 +1215,9 @@ class FootballBettingAgent:
         y_goals_list = []  # over/under 2.5: 1=over, 0=under/equal
         feature_names = None
         skipped = 0
-        BATCH_SIZE = 50  # concurrent DB sessions; WAL mode supports parallel reads
+        # Neon PostgreSQL has ~50ms network latency per query; limit concurrency
+        # to avoid connection pool exhaustion. SQLite is local so 50 is fine.
+        BATCH_SIZE = 10 if self.db.is_postgres else 50
 
         for batch_start in range(0, len(match_data), BATCH_SIZE):
             batch = match_data[batch_start:batch_start + BATCH_SIZE]
@@ -1265,7 +1254,7 @@ class FootballBettingAgent:
                     skipped += 1
 
             processed = min(batch_start + BATCH_SIZE, len(match_data))
-            if processed % 200 == 0 or processed == len(match_data):
+            if processed % 50 == 0 or processed == len(match_data):
                 logger.info(f"Processed {processed}/{len(match_data)} matches ({len(X_list)} valid)...")
 
         if len(X_list) < 100:
@@ -1398,7 +1387,12 @@ async def main():
 
         elif command == "--train":
             print("Training ML models on historical data...")
-            await agent.train_ml_models()
+            # Use fewer samples when running against remote Neon DB (CI)
+            # to avoid 30K+ network round-trips for feature extraction.
+            from src.data.database import get_db as _get_db_check
+            _db_tmp = _get_db_check()
+            _max = 500 if _db_tmp.is_postgres else 2000
+            await agent.train_ml_models(max_samples=_max)
             print("ML training complete.")
 
         elif command == "--picks":
