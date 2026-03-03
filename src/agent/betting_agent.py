@@ -96,13 +96,9 @@ class FootballBettingAgent:
         try:
             fdo_results = await self.footballdataorg.update_results(days_back=1)
             fdo_fixtures = await self.footballdataorg.sync_fixtures(days_ahead=2)
-            # Bulk-import current season matches for all 9 competitions. FDO has no
-            # daily limit so this runs for free. Fills coverage gaps for teams that
-            # Flashscore missed or that were promoted mid-season.
-            fdo_hist = await self.footballdataorg.backfill_historical_seasons(seasons=[2025])
             logger.info(
                 f"football-data.org: {fdo_results} scores updated, "
-                f"{fdo_fixtures} new fixtures added, {fdo_hist} historical matches saved"
+                f"{fdo_fixtures} new fixtures added"
             )
         except Exception as e:
             logger.warning(f"football-data.org update failed (non-critical): {e}")
