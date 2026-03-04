@@ -1391,7 +1391,7 @@ async def main():
             # to avoid 30K+ network round-trips for feature extraction.
             from src.data.database import get_db as _get_db_check
             _db_tmp = _get_db_check()
-            _max = 500 if _db_tmp.is_postgres else 2000
+            _max = 200 if _db_tmp.is_postgres else 2000
             await agent.train_ml_models(max_samples=_max)
             print("ML training complete.")
 

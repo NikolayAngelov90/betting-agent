@@ -273,8 +273,8 @@ class APIFootballScraper(BaseScraper):
     # for 9 top leagues, so API-Football results/fixture calls are secondary.
     BUDGET_RESULTS = 4    # keep: settlement for leagues not in football-data.org
     BUDGET_FIXTURES = 2   # keep: fixture ids needed for odds lookup
-    BUDGET_XG = 30        # stats backfill (shots, possession, xG) — primary enrichment path
-    BUDGET_ODDS = 51      # Over/Under 1.5, Team Goals, BTTS (today's fixtures, typically 10-20)
+    BUDGET_XG = 10        # stats backfill — 10 matches max (~10 min over Neon)
+    BUDGET_ODDS = 71      # Over/Under 1.5, Team Goals, BTTS (today's fixtures)
     BUDGET_RESERVE = 9
 
     def __init__(self, config=None):
@@ -322,8 +322,8 @@ class APIFootballScraper(BaseScraper):
                 else:
                     logger.error(f"API-Football errors: {errors}")
                 return None
-            # Pace requests to stay under 10/min free-tier limit
-            await asyncio.sleep(7)
+            # Pace requests to stay under 10/min free-tier limit (6s = safe margin)
+            await asyncio.sleep(6)
             return data
         except Exception as e:
             self._requests_today += 1
@@ -355,11 +355,10 @@ class APIFootballScraper(BaseScraper):
         # 4. Fetch real bookmaker odds for today's fixtures
         await self.fetch_upcoming_odds()
 
-        # 5. Backfill historical match data for low-coverage pick teams (uses leftover budget)
-        remaining = max(0, self._daily_limit - self._requests_today - self.BUDGET_RESERVE)
-        backfill_budget = min(remaining, 50)
-        if backfill_budget > 2:
-            await self.backfill_team_history(max_budget=backfill_budget)
+        # 5. Historical backfill — DISABLED for CI speed.
+        # backfill_team_history used 40 requests + 30 min on obscure teams (Pescara,
+        # Boulogne, Nancy). The 30K+ matches in Neon already provide sufficient
+        # coverage for top league teams. Re-enable for local runs if needed.
 
         logger.info(f"API-Football update complete ({self._requests_today} requests used)")
 
