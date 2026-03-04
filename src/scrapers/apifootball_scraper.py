@@ -833,18 +833,30 @@ class APIFootballScraper(BaseScraper):
                 for m in upcoming
             ]
 
-        # Sort by league priority
-        def league_priority(item):
-            league = item[2]
+        # Count existing real (non-Flashscore) odds per fixture so we can
+        # prioritise matches that have NO odds yet — critical when budget is
+        # limited after multiple runs in the same day.
+        with self.db.get_session() as session:
+            from src.data.models import Odds
+            odds_counts: dict = {}
+            for mid, _afid, _lg in fixture_list:
+                cnt = session.query(Odds).filter(
+                    Odds.match_id == mid,
+                    Odds.bookmaker != "Flashscore",
+                ).count()
+                odds_counts[mid] = cnt
+
+        # Sort: fixtures with fewest existing odds first, then by league priority
+        def sort_key(item):
+            mid, _afid, league = item
+            existing = odds_counts.get(mid, 0)
             try:
-                return PRIORITY_LEAGUES.index(league)
+                lp = PRIORITY_LEAGUES.index(league)
             except ValueError:
-                return len(PRIORITY_LEAGUES)
+                lp = len(PRIORITY_LEAGUES)
+            return (existing, lp)
 
-        fixture_list.sort(key=league_priority)
-
-        # Always fetch odds for all today's fixtures so newly added bet types
-        # (e.g. team goal markets) are picked up even if 1X2 odds already exist.
+        fixture_list.sort(key=sort_key)
         need_odds = fixture_list
 
         fetched = 0

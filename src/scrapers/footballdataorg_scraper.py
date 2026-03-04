@@ -464,20 +464,21 @@ class FootballDataOrgScraper:
         date_end = date_start + timedelta(days=1)
 
         with self.db.get_session() as session:
-            # Check if already exists (any score status)
-            existing = (
+            # Check if already exists — use fuzzy matching to avoid duplicates
+            # when Flashscore and FDO use different name variants for the same team
+            candidates = (
                 session.query(Match)
-                .join(Team, Match.home_team_id == Team.id)
                 .filter(
                     Match.league == league,
                     Match.match_date >= date_start,
                     Match.match_date < date_end,
-                    Team.name == home_name,
                 )
-                .first()
+                .all()
             )
-            if existing:
-                return False
+            for cand in candidates:
+                ht = session.get(Team, cand.home_team_id)
+                if ht and _names_match(home_name, ht.name):
+                    return False
 
             # Get or create home team
             home_team = session.query(Team).filter_by(name=home_name).first()

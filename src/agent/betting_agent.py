@@ -196,9 +196,9 @@ class FootballBettingAgent:
                 )
                 _odds_scraper = FlashscoreScraper()
                 _cf_failures = 0  # consecutive Cloudflare / no-data failures
-                _cf_abort_threshold = 6  # raised from 3: some fixtures legitimately have no odds
+                _cf_abort_threshold = 3  # fail fast — Cloudflare blocking is all-or-nothing in CI
                 import time as _odds_timer
-                _ODDS_BUDGET_S = 600  # 10-minute hard cap — API-Football odds cover the rest
+                _ODDS_BUDGET_S = 180  # 3-minute cap — fail fast, API-Football covers the rest
                 _odds_deadline = _odds_timer.monotonic() + _ODDS_BUDGET_S
                 try:
                     for _mid, _fsid, _markets in _to_scrape:
@@ -427,7 +427,45 @@ class FootballBettingAgent:
             if leagues:
                 query = query.filter(Match.league.in_(leagues))
             fixtures = query.all()
-            fixture_ids = [f.id for f in fixtures]
+
+            # Deduplicate fixtures: Flashscore and football-data.org may create
+            # separate Match records for the same game (e.g. "Man City" vs
+            # "Manchester City"). Keep the record with more odds or with
+            # flashscore_id (better enrichment data).
+            from src.scrapers.footballdataorg_scraper import _names_match as _nm
+            seen: dict = {}  # key = (league, approx kickoff hour) → (match_id, home_name)
+            dedup_ids: list = []
+            for f in fixtures:
+                ht = session.get(Team, f.home_team_id)
+                h_name = ht.name if ht else ""
+                # Check if we've seen a match in same league within 2h window
+                dup_key = None
+                for key, (existing_id, existing_home) in list(seen.items()):
+                    e_league, e_hour = key
+                    if e_league == f.league and abs(e_hour - f.match_date.hour) <= 2:
+                        if _nm(h_name, existing_home):
+                            dup_key = key
+                            break
+                if dup_key:
+                    # Keep the one with more odds data
+                    existing_id = seen[dup_key][0]
+                    new_odds = session.query(Odds).filter_by(match_id=f.id).count()
+                    old_odds = session.query(Odds).filter_by(match_id=existing_id).count()
+                    if new_odds > old_odds:
+                        dedup_ids.remove(existing_id)
+                        dedup_ids.append(f.id)
+                        seen[dup_key] = (f.id, h_name)
+                        logger.debug(f"Dedup: replaced fixture {existing_id} with {f.id} ({h_name}, more odds)")
+                    else:
+                        logger.debug(f"Dedup: skipping duplicate fixture {f.id} ({h_name}, fewer odds)")
+                else:
+                    key = (f.league, f.match_date.hour)
+                    seen[key] = (f.id, h_name)
+                    dedup_ids.append(f.id)
+
+            fixture_ids = dedup_ids
+            if len(dedup_ids) < len(fixtures):
+                logger.info(f"Deduplicated {len(fixtures)} → {len(dedup_ids)} fixtures")
 
         if not fixture_ids:
             logger.info(f"No fixtures found for {target}")
@@ -465,10 +503,10 @@ class FootballBettingAgent:
             to_scrape.sort(key=lambda x: x[3])
             logger.info(f"Scraping Flashscore odds for {len(to_scrape)} fixtures...")
             import time as _picks_timer
-            _PICKS_ODDS_BUDGET_S = 600  # 10-minute cap — update already did the heavy lifting
+            _PICKS_ODDS_BUDGET_S = 180  # 3-minute cap — fail fast, API-Football covers the rest
             _picks_odds_deadline = _picks_timer.monotonic() + _PICKS_ODDS_BUDGET_S
             _picks_cf_failures = 0
-            _picks_cf_abort = 5  # higher threshold: some fixtures legitimately have no odds
+            _picks_cf_abort = 3  # fail fast — Cloudflare blocking is all-or-nothing in CI
             scraper = FlashscoreScraper()
             try:
                 for match_id, fs_id, markets, _n_missing in to_scrape:
