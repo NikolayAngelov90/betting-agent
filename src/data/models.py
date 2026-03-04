@@ -120,8 +120,6 @@ class Match(Base):
     home_team = relationship("Team", foreign_keys=[home_team_id], back_populates="home_matches")
     away_team = relationship("Team", foreign_keys=[away_team_id], back_populates="away_matches")
     odds = relationship("Odds", back_populates="match")
-    predictions = relationship("Prediction", back_populates="match")
-
     def __repr__(self):
         return f"<Match({self.home_team.name if self.home_team else 'TBD'} vs {self.away_team.name if self.away_team else 'TBD'}, {self.match_date})>"
 
@@ -254,23 +252,3 @@ class SavedPick(Base):
         return f"<SavedPick({self.match_name}: {self.selection} @ {self.odds} — {status})>"
 
 
-class Prediction(Base):
-    """Prediction model."""
-
-    __tablename__ = 'predictions'
-
-    id = Column(Integer, primary_key=True)
-    match_id = Column(Integer, ForeignKey('matches.id'), nullable=False)
-    prediction_type = Column(String(50))  # '1X2', 'over_under', 'btts', etc.
-    predicted_outcome = Column(String(50))
-    confidence = Column(Float)  # 0 to 1
-    expected_value = Column(Float)
-    model_version = Column(String(50))
-    features_used = Column(JSON)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Relationships
-    match = relationship("Match", back_populates="predictions")
-
-    def __repr__(self):
-        return f"<Prediction({self.prediction_type}: {self.predicted_outcome}, confidence={self.confidence:.2f})>"

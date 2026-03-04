@@ -69,7 +69,19 @@ class DatabaseManager:
         Base.metadata.create_all(self.engine)
         self._migrate_missing_columns()
         self._migrate_missing_indexes()
+        self._drop_removed_tables()
         logger.info("Database tables created successfully")
+
+    def _drop_removed_tables(self):
+        """Drop tables that no longer have corresponding models."""
+        removed = ["predictions"]
+        inspector = inspect(self.engine)
+        existing = inspector.get_table_names()
+        for table in removed:
+            if table in existing:
+                with self.engine.begin() as conn:
+                    conn.execute(text(f'DROP TABLE IF EXISTS "{table}" CASCADE'))
+                logger.info(f"Dropped removed table: {table}")
 
     def _migrate_missing_columns(self):
         """Auto-add columns that exist in models but not in the DB (simple migration).

@@ -274,7 +274,8 @@ class APIFootballScraper(BaseScraper):
     BUDGET_RESULTS = 4    # keep: settlement for leagues not in football-data.org
     BUDGET_FIXTURES = 2   # keep: fixture ids needed for odds lookup
     BUDGET_XG = 10        # stats backfill — 10 matches max (~10 min over Neon)
-    BUDGET_ODDS = 71      # Over/Under 1.5, Team Goals, BTTS (today's fixtures)
+    BUDGET_ODDS = 66      # Over/Under 1.5, Team Goals, BTTS (today's fixtures)
+    BUDGET_INJURIES = 5   # injuries for today's fixtures (1 request per fixture)
     BUDGET_RESERVE = 9
 
     def __init__(self, config=None):

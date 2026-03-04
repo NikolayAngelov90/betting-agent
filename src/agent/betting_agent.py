@@ -61,10 +61,10 @@ class FootballBettingAgent:
         # Initialize components
         self.db = init_db()
         self.scraper = FlashscoreScraper(self.config)
-        self.injury_tracker = InjuryScraper(self.config)
         self.news_aggregator = NewsScraper(self.config)
         self.historical_loader = HistoricalDataLoader(self.config)
         self.apifootball = APIFootballScraper(self.config)
+        self.injury_tracker = InjuryScraper(self.config, apifootball=self.apifootball)
         self.footballdataorg = FootballDataOrgScraper(self.config)
         self.feature_engineer = FeatureEngineer()
         self.predictor = EnsemblePredictor(self.config)
