@@ -43,6 +43,9 @@ mcp-servers/
 Thumbs.db
 .DS_Store
 
+# BMAD output (generated artifacts)
+_bmad-output/
+
 # Testing
 .pytest_cache/
 htmlcov/
