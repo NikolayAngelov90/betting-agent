@@ -938,8 +938,10 @@ class APIFootballScraper(BaseScraper):
                             ).first()
 
                             if existing:
-                                # Update if odds changed
+                                # Update if odds changed; preserve opening_odds
                                 if existing.odds_value != odds_value:
+                                    if existing.opening_odds is None:
+                                        existing.opening_odds = existing.odds_value
                                     existing.odds_value = odds_value
                                     existing.timestamp = datetime.utcnow()
                                 continue
@@ -950,6 +952,7 @@ class APIFootballScraper(BaseScraper):
                                 market_type=market_type,
                                 selection=selection,
                                 odds_value=odds_value,
+                                opening_odds=odds_value,
                             )
                             session.add(odds)
                             count += 1

@@ -1480,7 +1480,14 @@ class FlashscoreScraper(BaseScraper):
                 market_for_selection[key] = "over_under"
 
         with db.get_session() as session:
-            # Remove stale Flashscore odds for this match first
+            # Capture opening odds before deleting stale records
+            old_records = session.query(Odds).filter_by(
+                match_id=match_id, bookmaker="Flashscore"
+            ).all()
+            old_opening = {
+                (r.selection,): r.opening_odds or r.odds_value
+                for r in old_records
+            }
             session.query(Odds).filter_by(match_id=match_id, bookmaker="Flashscore").delete()
             for selection, odds_value in all_odds.items():
                 if odds_value <= 1.0:
@@ -1497,12 +1504,14 @@ class FlashscoreScraper(BaseScraper):
                     except (IndexError, ValueError):
                         pass
                 market_type = market_for_selection.get(selection, "other")
+                prev_opening = old_opening.get((selection,))
                 session.add(Odds(
                     match_id=match_id,
                     bookmaker="Flashscore",
                     market_type=market_type,
                     selection=selection,
                     odds_value=odds_value,
+                    opening_odds=prev_opening or odds_value,
                 ))
             session.commit()
 

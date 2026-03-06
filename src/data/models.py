@@ -181,6 +181,7 @@ class Odds(Base):
     market_type = Column(String(50))  # '1X2', 'over_under', 'btts', 'asian_handicap'
     selection = Column(String(50))
     odds_value = Column(Float, nullable=False)
+    opening_odds = Column(Float, nullable=True)  # First-seen odds value (never overwritten)
     timestamp = Column(DateTime, default=utcnow)
 
     # Relationships

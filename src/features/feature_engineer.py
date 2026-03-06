@@ -162,6 +162,10 @@ class FeatureEngineer:
         bk_features = self._get_bookmaker_features(match_id)
         features.update(bk_features)
 
+        # 11b. Odds movement features (opening vs current odds)
+        odds_movement = self._get_odds_movement_features(match_id)
+        features.update(odds_movement)
+
         # 12. Situational context: rest days + midweek flag
         _venue = None
         with self.db.get_session() as session:
@@ -493,6 +497,74 @@ class FeatureEngineer:
 
         except Exception as e:
             logger.warning(f"Bookmaker features failed for match {match_id}: {e}")
+            return defaults
+
+    def _get_odds_movement_features(self, match_id: int) -> dict:
+        """Compute odds movement features from opening_odds vs current odds_value.
+
+        Sharp money typically moves lines in predictable ways:
+        - Home odds shortening (dropping) → sharp money on home team
+        - Over 2.5 shortening → sharp money expects goals
+
+        Features returned (0 when no movement data available):
+        - home_odds_movement: % change in home win odds (negative = shortening)
+        - away_odds_movement: % change in away win odds
+        - over25_odds_movement: % change in over 2.5 odds
+        - max_abs_movement: largest absolute odds movement (sharp signal strength)
+        - movement_direction: +1 if home shortening, -1 if away shortening, 0 neutral
+        """
+        defaults = {
+            "home_odds_movement": 0.0,
+            "away_odds_movement": 0.0,
+            "over25_odds_movement": 0.0,
+            "max_abs_movement": 0.0,
+            "movement_direction": 0.0,
+        }
+        try:
+            with self.db.get_session() as session:
+                rows = session.query(Odds).filter(
+                    Odds.match_id == match_id,
+                    Odds.opening_odds.isnot(None),
+                    Odds.bookmaker != "Flashscore",
+                ).all()
+
+                if not rows:
+                    return defaults
+
+                # Find movements for key selections
+                movements = {}
+                for row in rows:
+                    if row.opening_odds and row.opening_odds > 0 and row.odds_value > 0:
+                        pct_change = (row.odds_value - row.opening_odds) / row.opening_odds
+                        key = (row.market_type, row.selection)
+                        # Keep the one from the preferred bookmaker (first seen wins)
+                        if key not in movements:
+                            movements[key] = round(pct_change, 4)
+
+                result = dict(defaults)
+
+                home_mv = movements.get(("1X2", "Home"), 0)
+                away_mv = movements.get(("1X2", "Away"), 0)
+                over25_mv = movements.get(("over_under", "Over 2.5"), 0)
+
+                result["home_odds_movement"] = home_mv
+                result["away_odds_movement"] = away_mv
+                result["over25_odds_movement"] = over25_mv
+
+                all_mvs = [abs(v) for v in movements.values() if v != 0]
+                result["max_abs_movement"] = max(all_mvs) if all_mvs else 0.0
+
+                # Direction: negative home_mv means home odds dropped = sharp on home
+                if home_mv < -0.02 and away_mv > 0.02:
+                    result["movement_direction"] = 1.0  # sharp on home
+                elif away_mv < -0.02 and home_mv > 0.02:
+                    result["movement_direction"] = -1.0  # sharp on away
+                else:
+                    result["movement_direction"] = 0.0
+
+                return result
+        except Exception as e:
+            logger.warning(f"Odds movement features failed for match {match_id}: {e}")
             return defaults
 
     def _get_league_features(self, league: str, as_of_date=None) -> dict:

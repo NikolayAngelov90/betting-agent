@@ -1338,6 +1338,83 @@ class FootballBettingAgent:
         # Apply immediately
         self.predictor.weights = new_weights
 
+        # Model Confidence Calibration: compute how well each model's
+        # predicted probabilities match actual outcomes. Overconfident models
+        # (high predicted prob but low hit rate) get a discount factor <1.0.
+        try:
+            # Collect (predicted_prob, hit) per model from the loop above data
+            model_predictions: dict = {"poisson": [], "elo": [], "ml": []}
+            for pick in settled:
+                if pick.market != "1X2" or pick.actual_home_goals is None:
+                    continue
+                try:
+                    with self.db.get_session() as session:
+                        match = session.get(Match, pick.match_id)
+                        if not match:
+                            continue
+                        home_id = match.home_team_id
+                        away_id = match.away_team_id
+                        match_league = match.league or ""
+
+                    if pick.actual_home_goals > pick.actual_away_goals:
+                        actual = "home_win"
+                    elif pick.actual_home_goals == pick.actual_away_goals:
+                        actual = "draw"
+                    else:
+                        actual = "away_win"
+
+                    # Each model's top pick probability + whether it hit
+                    poisson_pred = self.predictor.poisson.predict(home_id, away_id, league=match_league)
+                    p_best_key = max(["home_win", "draw", "away_win"], key=lambda k: poisson_pred.get(k, 0))
+                    model_predictions["poisson"].append(
+                        (poisson_pred.get(p_best_key, 0.33), 1 if p_best_key == actual else 0)
+                    )
+
+                    elo_pred = self.predictor.elo.predict(home_id, away_id)
+                    e_best_key = max(["home_win", "draw", "away_win"], key=lambda k: elo_pred.get(k, 0))
+                    model_predictions["elo"].append(
+                        (elo_pred.get(e_best_key, 0.33), 1 if e_best_key == actual else 0)
+                    )
+                except Exception:
+                    continue
+
+            # Compute calibration factor per model:
+            # Split predictions into bins, compare mean predicted prob vs actual hit rate.
+            # calibration_score = 1 - mean_absolute_error(predicted, actual) per bin
+            # Factor is clamped to [0.6, 1.0] — never discount more than 40%.
+            cal_factors = {}
+            for model, data in model_predictions.items():
+                if len(data) < 15:
+                    cal_factors[model] = 1.0
+                    continue
+                # 5 bins: [0.33-0.45), [0.45-0.55), [0.55-0.65), [0.65-0.75), [0.75-1.0]
+                bins = [(0.33, 0.45), (0.45, 0.55), (0.55, 0.65), (0.65, 0.75), (0.75, 1.01)]
+                total_error = 0.0
+                n_bins_used = 0
+                for lo, hi in bins:
+                    in_bin = [(p, h) for p, h in data if lo <= p < hi]
+                    if len(in_bin) < 3:
+                        continue
+                    mean_pred = sum(p for p, _ in in_bin) / len(in_bin)
+                    mean_hit = sum(h for _, h in in_bin) / len(in_bin)
+                    total_error += abs(mean_pred - mean_hit)
+                    n_bins_used += 1
+                if n_bins_used > 0:
+                    avg_cal_error = total_error / n_bins_used
+                    # Convert to discount: 0 error = 1.0, 0.20 error = 0.80
+                    cal_factors[model] = round(max(0.6, 1.0 - avg_cal_error), 3)
+                else:
+                    cal_factors[model] = 1.0
+
+            # Save and apply calibration factors
+            cal_path = Path("data/models/calibration.json")
+            cal_path.parent.mkdir(parents=True, exist_ok=True)
+            cal_path.write_text(json.dumps(cal_factors, indent=2))
+            self.predictor.calibration_factors.update(cal_factors)
+            logger.info(f"Calibration factors: {cal_factors}")
+        except Exception as e:
+            logger.warning(f"Calibration computation failed: {e}")
+
         # Update Bayesian per-league weight learner from settled 1X2 picks
         bayesian = self.predictor.bayesian_weights
         for pick in settled:
@@ -1369,12 +1446,12 @@ class FootballBettingAgent:
                 # Poisson
                 poisson_pred = self.predictor.poisson.predict(home_id, away_id, league=match_league)
                 poisson_best = max(["home_win", "draw", "away_win"], key=lambda k: poisson_pred.get(k, 0))
-                bayesian.update(match_league, "poisson", poisson_best == actual, days_ago)
+                bayesian.update(match_league, "poisson", poisson_best == actual, days_ago, market="1X2")
 
                 # Elo
                 elo_pred = self.predictor.elo.predict(home_id, away_id)
                 elo_best = max(["home_win", "draw", "away_win"], key=lambda k: elo_pred.get(k, 0))
-                bayesian.update(match_league, "elo", elo_best == actual, days_ago)
+                bayesian.update(match_league, "elo", elo_best == actual, days_ago, market="1X2")
 
                 # ML (if fitted)
                 if self.predictor.ml_models.is_fitted:
@@ -1389,9 +1466,16 @@ class FootballBettingAgent:
                             ml_avg = ml_preds.get("ml_average", {})
                             if ml_avg:
                                 ml_best = max(["home_win", "draw", "away_win"], key=lambda k: ml_avg.get(k, 0))
-                                bayesian.update(match_league, "ml", ml_best == actual, days_ago)
+                                bayesian.update(match_league, "ml", ml_best == actual, days_ago, market="1X2")
                     except Exception:
                         pass
+
+                # Goals market: track Poisson accuracy on over/under 2.5
+                if pick.actual_home_goals is not None and pick.actual_away_goals is not None:
+                    total_goals = pick.actual_home_goals + pick.actual_away_goals
+                    actual_over25 = total_goals > 2.5
+                    poisson_over25 = poisson_pred.get("over_2.5", 0.5) > 0.5
+                    bayesian.update(match_league, "poisson", poisson_over25 == actual_over25, days_ago, market="goals")
             except Exception:
                 continue
 

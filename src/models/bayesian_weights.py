@@ -84,7 +84,8 @@ class BayesianWeightLearner:
         beta = (1 - w) * self._prior_strength
         return {"alpha": alpha, "beta": beta, "n": 0}
 
-    def update(self, league: str, model: str, correct: bool, days_ago: int = 0):
+    def update(self, league: str, model: str, correct: bool, days_ago: int = 0,
+               market: str = ""):
         """Record a prediction outcome for a model in a league.
 
         Args:
@@ -92,6 +93,7 @@ class BayesianWeightLearner:
             model: Model name ("poisson", "elo", or "ml")
             correct: Whether the model's top prediction was correct
             days_ago: How many days ago this observation occurred (for decay)
+            market: Optional market type ("1X2", "goals", "btts") for per-market weights
         """
         if model not in MODELS:
             return
@@ -125,8 +127,22 @@ class BayesianWeightLearner:
             gp["beta"] += decay
         gp["n"] += 1
 
-    def get_weights(self, league: str = None) -> Dict[str, float]:
-        """Get ensemble weights, optionally specialized for a league.
+        # Per-market tracking (league+market combo)
+        if market:
+            mkt_key = f"{league}::{market}"
+            if mkt_key not in self._league_params:
+                self._league_params[mkt_key] = {
+                    m: self._default_params(m) for m in MODELS
+                }
+            mp = self._league_params[mkt_key][model]
+            if correct:
+                mp["alpha"] += decay
+            else:
+                mp["beta"] += decay
+            mp["n"] += 1
+
+    def get_weights(self, league: str = None, market: str = "") -> Dict[str, float]:
+        """Get ensemble weights, optionally specialized for a league and market.
 
         Returns normalized weights that sum to 1.0 across models.
         For leagues with insufficient data (< MIN_LEAGUE_OBS), returns
@@ -136,10 +152,28 @@ class BayesianWeightLearner:
         Args:
             league: Optional league to get specialized weights for.
                     None returns global weights.
+            market: Optional market type ("1X2", "goals", "btts") for
+                    per-market specialization.
 
         Returns:
             Dict mapping model names to weights (sum = 1.0)
         """
+        # Try per-market weights first (most specific)
+        if league and market:
+            mkt_key = f"{league}::{market}"
+            if mkt_key in self._league_params:
+                mkt_data = self._league_params[mkt_key]
+                total_obs = sum(p["n"] for p in mkt_data.values())
+                if total_obs >= MIN_LEAGUE_OBS:
+                    # Blend market-specific with league-level weights
+                    blend = min(1.0, (total_obs - MIN_LEAGUE_OBS) / (2 * MIN_LEAGUE_OBS))
+                    mkt_weights = self._params_to_weights(mkt_data)
+                    league_weights = self.get_weights(league)  # recurse for league-level
+                    weights = {}
+                    for m in MODELS:
+                        weights[m] = mkt_weights[m] * blend + league_weights[m] * (1 - blend)
+                    return self._normalize(weights)
+
         if league and league in self._league_params:
             league_data = self._league_params[league]
             total_obs = sum(p["n"] for p in league_data.values())
@@ -194,6 +228,8 @@ class BayesianWeightLearner:
         """Get a summary of learned weights per league for diagnostics."""
         summary = {"global": self._get_global_weights()}
         for league in sorted(self._league_params.keys()):
+            if "::" in league:
+                continue  # skip per-market keys in summary
             total_obs = sum(p["n"] for p in self._league_params[league].values())
             summary[league] = {
                 "weights": self.get_weights(league),

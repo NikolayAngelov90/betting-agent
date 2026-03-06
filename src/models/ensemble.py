@@ -50,6 +50,18 @@ class EnsemblePredictor:
         # Bayesian adaptive weight learner (per-league weights)
         self.bayesian_weights = BayesianWeightLearner(self.config)
 
+        # Per-model calibration discounts (1.0 = perfectly calibrated)
+        # Overconfident models get <1.0, reducing their ensemble weight.
+        self.calibration_factors = {"poisson": 1.0, "elo": 1.0, "ml": 1.0}
+        cal_path = Path("data/models/calibration.json")
+        if cal_path.exists():
+            try:
+                cal = json.loads(cal_path.read_text())
+                self.calibration_factors.update(cal)
+                logger.info(f"Loaded calibration factors: {self.calibration_factors}")
+            except Exception as e:
+                logger.warning(f"Failed to load calibration factors: {e}")
+
         # Try to load previously trained ML models from disk
         self.ml_models.load()
         self.goals_model.load()
@@ -351,16 +363,17 @@ class EnsemblePredictor:
         static config weights. For international matches (CL/EL/ECL), Poisson
         weight is halved and redistributed to Elo.
         """
-        # Get weights: Bayesian per-league > static config
-        bw = self.bayesian_weights.get_weights(league if league else None)
+        # Get weights: Bayesian per-league+market > per-league > static config
+        bw = self.bayesian_weights.get_weights(league if league else None, market="1X2")
+        cal = self.calibration_factors
 
         total_weight = 0.0
         home_win = 0.0
         draw = 0.0
         away_win = 0.0
 
-        # Poisson — downweight for international matches
-        w = bw.get("poisson", 0.25)
+        # Poisson — downweight for international matches, apply calibration
+        w = bw.get("poisson", 0.25) * cal.get("poisson", 1.0)
         if international:
             w *= 0.5
         home_win += w * poisson.get("home_win", 0.33)
@@ -368,8 +381,8 @@ class EnsemblePredictor:
         away_win += w * poisson.get("away_win", 0.33)
         total_weight += w
 
-        # Elo — upweight for international matches
-        w = bw.get("elo", 0.20)
+        # Elo — upweight for international matches, apply calibration
+        w = bw.get("elo", 0.20) * cal.get("elo", 1.0)
         if international:
             w *= 1.5
         home_win += w * elo.get("home_win", 0.33)
@@ -377,9 +390,9 @@ class EnsemblePredictor:
         away_win += w * elo.get("away_win", 0.33)
         total_weight += w
 
-        # ML
+        # ML — apply calibration
         if ml:
-            w = bw.get("ml", 0.55)
+            w = bw.get("ml", 0.55) * cal.get("ml", 1.0)
             home_win += w * ml.get("home_win", 0.33)
             draw += w * ml.get("draw", 0.33)
             away_win += w * ml.get("away_win", 0.33)
