@@ -632,6 +632,10 @@ class FootballBettingAgent:
                     f"Add them to historical_loader.py to improve predictions."
                 )
 
+        # Value threshold auto-calibration: adjust min EV based on recent hit rate.
+        # Hot streak → tighten (be more selective), cold streak → loosen slightly.
+        self._auto_calibrate_ev_threshold()
+
         # Analyze all fixtures concurrently — injury and news lookups are local-DB
         # queries, so running them in parallel is safe with SQLite WAL mode.
         logger.info(f"Analyzing {len(fixture_ids)} fixtures concurrently...")
@@ -666,12 +670,35 @@ class FootballBettingAgent:
                         f"{', '.join(sorted(muted_leagues))}"
                     )
 
-        # Sort order mirrors value_calculator: EV × confidence × agreement bonus.
-        # This ensures the portfolio cap (below) takes the best-conviction picks first.
+        # Sort order: EV × confidence × agreement bonus × contrarian bonus.
+        # Contrarian picks (model significantly disagrees with market) get
+        # a boost when backed by strong model agreement — these are genuine
+        # edges the market is mispricing, not model errors.
         _agreement_bonus = {"unanimous": 1.15, "majority": 1.0, "split": 0.85, "unknown": 0.95}
+
+        def _contrarian_bonus(r):
+            """1.0 for normal, up to 1.10 for contrarian + unanimous."""
+            cv = getattr(r, "contrarian_value", 0) or 0
+            if cv >= 1.3 and r.model_agreement == "unanimous":
+                return 1.10
+            if cv >= 1.3 and r.model_agreement == "majority":
+                return 1.05
+            return 1.0
+
+        # Log contrarian picks for visibility
+        for r in all_recommendations:
+            cv = getattr(r, "contrarian_value", 0) or 0
+            if cv >= 1.3:
+                logger.info(
+                    f"Contrarian pick: {r.match} {r.selection} — model "
+                    f"{r.predicted_probability:.0%} vs market "
+                    f"{1/r.odds:.0%} ({cv:.1f}x divergence, {r.model_agreement})"
+                )
+
         all_recommendations.sort(
             key=lambda r: r.expected_value * r.confidence
-            * _agreement_bonus.get(r.model_agreement, 1.0),
+            * _agreement_bonus.get(r.model_agreement, 1.0)
+            * _contrarian_bonus(r),
             reverse=True,
         )
 
@@ -756,6 +783,33 @@ class FootballBettingAgent:
                 rec.kelly_stake_percentage = round(
                     rec.kelly_stake_percentage * dd_multiplier, 2
                 )
+
+        # Daily exposure limit: cap total Kelly stake across all picks to
+        # prevent over-betting even when many value picks are found.
+        max_daily_exposure = self.config.get("betting.max_total_kelly_pct", 40.0)
+        if max_daily_exposure > 0 and all_recommendations:
+            # Already sorted by EV×conf×agreement — trim from the bottom
+            total_exposure = sum(r.kelly_stake_percentage for r in all_recommendations)
+            if total_exposure > max_daily_exposure:
+                capped = []
+                running = 0.0
+                for rec in all_recommendations:
+                    if running + rec.kelly_stake_percentage > max_daily_exposure:
+                        # If we haven't added any yet, add this one scaled down
+                        if not capped:
+                            rec.kelly_stake_percentage = round(max_daily_exposure, 2)
+                            capped.append(rec)
+                        break
+                    running += rec.kelly_stake_percentage
+                    capped.append(rec)
+                trimmed = len(all_recommendations) - len(capped)
+                logger.info(
+                    f"Daily exposure cap: {total_exposure:.1f}% → "
+                    f"{sum(r.kelly_stake_percentage for r in capped):.1f}% "
+                    f"(dropped {trimmed} lowest-ranked picks, "
+                    f"cap={max_daily_exposure:.0f}%)"
+                )
+                all_recommendations = capped
 
         logger.info(f"Found {len(all_recommendations)} high-confidence picks for {target}")
 
@@ -1513,6 +1567,67 @@ class FootballBettingAgent:
         except Exception as e:
             logger.warning(f"League profitability check failed: {e}")
         return muted
+
+    def _auto_calibrate_ev_threshold(self):
+        """Dynamically adjust min EV threshold based on recent hit rate.
+
+        Looks at the last N settled picks and computes hit rate. Compared
+        to the expected baseline (~50-55%), adjusts min_ev:
+        - Hit rate > 60%: hot streak → tighten min_ev by up to +2pp
+        - Hit rate 45-60%: normal range → keep base min_ev
+        - Hit rate < 45%: cold streak → loosen min_ev by up to -1.5pp
+
+        This prevents over-betting during cold streaks (by demanding higher
+        edge) and captures more volume during hot streaks.  Adjustments are
+        bounded: min_ev never goes below 1% or above 8%.
+        """
+        lookback = self.config.get("models.ev_calibration_lookback", 40)
+        base_ev = self.config.betting.get("min_expected_value", 0.03)
+
+        try:
+            with self.db.get_session() as session:
+                recent = (
+                    session.query(SavedPick)
+                    .filter(SavedPick.result.isnot(None))
+                    .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
+                    .limit(lookback)
+                    .all()
+                )
+                if len(recent) < 15:
+                    return  # not enough data
+
+                wins = sum(1 for p in recent if p.result == "win")
+                hit_rate = wins / len(recent)
+
+                # Baseline expected hit rate for value bets (~52%)
+                baseline = 0.52
+
+                if hit_rate > 0.60:
+                    # Hot streak: tighten — be more selective (raise min EV)
+                    # Scale: 60% → +0pp, 75%+ → +2pp
+                    bonus = min((hit_rate - 0.60) / 0.15, 1.0) * 0.02
+                    new_ev = base_ev + bonus
+                elif hit_rate < 0.45:
+                    # Cold streak: loosen — lower min EV to capture more volume
+                    # Scale: 45% → -0pp, 30%- → -1.5pp
+                    penalty = min((0.45 - hit_rate) / 0.15, 1.0) * 0.015
+                    new_ev = base_ev - penalty
+                else:
+                    return  # normal range, keep base
+
+                # Clamp to sane bounds
+                new_ev = max(0.01, min(0.08, round(new_ev, 4)))
+
+                if abs(new_ev - base_ev) > 0.001:
+                    self.value_calculator.min_ev = new_ev
+                    direction = "tightened" if new_ev > base_ev else "loosened"
+                    logger.info(
+                        f"EV auto-calibration: {direction} min_ev from "
+                        f"{base_ev:.1%} → {new_ev:.1%} "
+                        f"(hit rate={hit_rate:.0%} over last {len(recent)} picks)"
+                    )
+        except Exception as e:
+            logger.warning(f"EV auto-calibration failed: {e}")
 
     # Pairs of (selection_A, selection_B) that are positively correlated —
     # if one hits, the other is significantly more likely to hit too.

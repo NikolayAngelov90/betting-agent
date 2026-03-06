@@ -166,6 +166,11 @@ class TelegramNotifier:
                         if pick.models_for:
                             line += f" - {pick.models_for} agree"
 
+                    # Contrarian signal
+                    cv = getattr(pick, "contrarian_value", 0) or 0
+                    if cv >= 1.3:
+                        line += f"\n      🎯 Contrarian ({cv:.1f}x vs market)"
+
                     # xG edge
                     if pick.xg_edge:
                         line += f"\n      📈 {pick.xg_edge}"

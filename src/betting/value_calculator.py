@@ -40,6 +40,7 @@ class BetRecommendation:
     xg_edge: str = ""              # xG-based insight string
     predicted_xg: str = ""         # e.g. "1.45 - 0.92"
     match_date: Optional[datetime] = None  # Kickoff time (UTC)
+    contrarian_value: float = 0.0          # Model-vs-market divergence ratio (>1.3 = contrarian)
 
 
 class ValueBettingCalculator:
@@ -133,20 +134,17 @@ class ValueBettingCalculator:
                 continue
 
 
-            # Model-market divergence guard: reject when our model probability
-            # is more than 2.5× the bookmaker's implied probability.
-            # Such extreme gaps almost always mean the model is miscalibrated
-            # (e.g. limited data for a team, date-corrupted historical results)
-            # rather than a genuine market inefficiency.
-            if not is_fallback:
-                implied_prob = 1.0 / best_odds
-                divergence = prob / implied_prob if implied_prob > 0 else 0
-                if divergence > 2.0:
-                    logger.debug(
-                        f"Rejecting {match_name} {selection}: model {prob:.0%} vs "
-                        f"market {implied_prob:.0%} ({divergence:.1f}x divergence > 2.0x)"
-                    )
-                    continue
+            # Model-market divergence: compute how much our model disagrees
+            # with the bookmaker.  Used as both a guard (reject >2x) and as a
+            # contrarian signal (1.3x–2.0x = genuine edge territory).
+            implied_prob = 1.0 / best_odds if best_odds > 0 else 0
+            divergence = prob / implied_prob if implied_prob > 0 else 0
+            if not is_fallback and divergence > 2.0:
+                logger.debug(
+                    f"Rejecting {match_name} {selection}: model {prob:.0%} vs "
+                    f"market {implied_prob:.0%} ({divergence:.1f}x divergence > 2.0x)"
+                )
+                continue
 
             # Model agreement analysis (before Kelly so we can scale stake)
             agreement_info = self._check_model_agreement(
@@ -214,6 +212,7 @@ class ValueBettingCalculator:
                 away_xg_avg=context.get("away_xg_avg", 0.0),
                 xg_edge=xg_info.get("insight", ""),
                 predicted_xg=xg_info.get("predicted_xg", ""),
+                contrarian_value=round(divergence, 2),
             )
             recommendations.append(rec)
 
