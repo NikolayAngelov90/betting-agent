@@ -1628,8 +1628,8 @@ class FootballBettingAgent:
                 league_stats: dict = {}
                 for p in settled:
                     lg = p.league or ""
-                    if not lg:
-                        continue
+                    if not lg or p.result not in ("win", "loss"):
+                        continue  # skip void/push picks
                     league_stats.setdefault(lg, {"staked": 0.0, "profit": 0.0, "n": 0})
                     stake = p.kelly_stake_percentage or 1.0
                     league_stats[lg]["staked"] += stake
@@ -1717,11 +1717,11 @@ class FootballBettingAgent:
     # if one hits, the other is significantly more likely to hit too.
     _CORRELATED_PAIRS = {
         # Home win correlates with high-scoring outcomes
-        ("Home", "Over 2.5"),
-        ("Home", "Home Over 1.5"),
+        ("Home Win", "Over 2.5"),
+        ("Home Win", "Home Over 1.5"),
         # Away win correlates with high-scoring outcomes
-        ("Away", "Over 2.5"),
-        ("Away", "Away Over 1.5"),
+        ("Away Win", "Over 2.5"),
+        ("Away Win", "Away Over 1.5"),
         # Draw correlates with low-scoring outcomes
         ("Draw", "Under 2.5"),
         # BTTS correlates with over goals
@@ -1910,6 +1910,10 @@ class FootballBettingAgent:
         reduce_at = self.config.get("models.drawdown_reduce_threshold", -0.10)
         pause_at = self.config.get("models.drawdown_pause_threshold", -0.30)
 
+        # Guard: if thresholds are equal or inverted, no interpolation possible
+        if reduce_at <= pause_at:
+            return 1.0
+
         try:
             with self.db.get_session() as session:
                 recent = (
@@ -1925,6 +1929,8 @@ class FootballBettingAgent:
                 total_staked = 0.0
                 total_profit = 0.0
                 for p in recent:
+                    if p.result not in ("win", "loss"):
+                        continue  # skip void/push picks
                     stake = p.kelly_stake_percentage or 1.0
                     total_staked += stake
                     if p.result == "win":
