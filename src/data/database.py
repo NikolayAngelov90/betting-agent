@@ -72,12 +72,19 @@ class DatabaseManager:
         self._drop_removed_tables()
         logger.info("Database tables created successfully")
 
+    # Allowlist of tables that were removed from models and should be dropped.
+    # Only names in this set will be processed — never user/dynamic input.
+    _REMOVED_TABLES = frozenset(["predictions"])
+
     def _drop_removed_tables(self):
         """Drop tables that no longer have corresponding models."""
-        removed = ["predictions"]
+        import re
         inspector = inspect(self.engine)
         existing = inspector.get_table_names()
-        for table in removed:
+        for table in self._REMOVED_TABLES:
+            if not re.fullmatch(r"[a-z_][a-z0-9_]*", table):
+                logger.warning(f"Skipping invalid table name in _REMOVED_TABLES: {table!r}")
+                continue
             if table in existing:
                 with self.engine.begin() as conn:
                     cascade = " CASCADE" if self.is_postgres else ""
@@ -127,9 +134,10 @@ class DatabaseManager:
         Keeps all odds for matches within the retention window and any match
         that has an associated saved_pick (so we never lose betting history).
         """
-        from datetime import datetime, timedelta
+        from datetime import timedelta
         from src.data.models import Odds, Match, SavedPick
-        cutoff = datetime.utcnow() - timedelta(days=keep_days)
+        from src.utils.logger import utcnow
+        cutoff = utcnow() - timedelta(days=keep_days)
         with self.get_session() as session:
             # Subquery: match IDs older than cutoff that have NO saved picks
             old_match_ids = (
@@ -212,15 +220,19 @@ class DatabaseManager:
         return session.query(model)
 
 
-# Global database manager instance
+# Global database manager instance (thread-safe lazy init)
+import threading
 _db_manager = None
+_db_lock = threading.Lock()
 
 
 def get_db() -> DatabaseManager:
-    """Get global database manager instance."""
+    """Get global database manager instance (thread-safe)."""
     global _db_manager
     if _db_manager is None:
-        _db_manager = DatabaseManager()
+        with _db_lock:
+            if _db_manager is None:
+                _db_manager = DatabaseManager()
     return _db_manager
 
 

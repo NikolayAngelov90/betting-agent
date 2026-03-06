@@ -352,16 +352,21 @@ class PoissonModel:
           - τ(1,1) > 1  — 1-1 draws are more likely
           - τ(1,0) < 1  — 1-0 home wins are slightly less likely
           - τ(0,1) < 1  — 0-1 away wins are slightly less likely
+
+        Result is clamped to [0.01, ∞) to prevent negative probabilities
+        when per-league MLE produces unusual rho values.
         """
         if x == 0 and y == 0:
-            return 1.0 - lam * mu * rho
+            tau = 1.0 - lam * mu * rho
         elif x == 0 and y == 1:
-            return 1.0 + lam * rho
+            tau = 1.0 + lam * rho
         elif x == 1 and y == 0:
-            return 1.0 + mu * rho
+            tau = 1.0 + mu * rho
         elif x == 1 and y == 1:
-            return 1.0 - rho
-        return 1.0
+            tau = 1.0 - rho
+        else:
+            return 1.0
+        return max(tau, 0.01)
 
     def _score_matrix(self, home_xg: float, away_xg: float,
                       league: str = None) -> np.ndarray:

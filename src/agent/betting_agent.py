@@ -17,12 +17,11 @@ from src.scrapers.footballdataorg_scraper import FootballDataOrgScraper
 from src.features.feature_engineer import FeatureEngineer
 from src.models.ensemble import EnsemblePredictor
 from src.betting.value_calculator import ValueBettingCalculator, BetRecommendation
-from src.betting.bankroll_manager import BankrollManager
 from src.reporting.telegram_bot import TelegramNotifier
 from src.data.models import Match, Team, Odds, SavedPick
 from src.data.database import get_db, init_db
 from src.utils.config import get_config
-from src.utils.logger import get_logger, setup_logger
+from src.utils.logger import get_logger, setup_logger, utcnow
 
 logger = get_logger()
 
@@ -69,7 +68,6 @@ class FootballBettingAgent:
         self.feature_engineer = FeatureEngineer()
         self.predictor = EnsemblePredictor(self.config)
         self.value_calculator = ValueBettingCalculator(self.config)
-        self.bankroll = BankrollManager(config=self.config)
         self.telegram = TelegramNotifier(self.config)
 
         logger.info("Football Betting Agent initialized")
@@ -417,7 +415,7 @@ class FootballBettingAgent:
             # Only include matches that haven't kicked off yet — skip finished
             # matches and those already in progress (match_date is kickoff time).
             # DB stores UTC datetimes so compare against UTC, not local time.
-            now = datetime.utcnow()
+            now = utcnow()
             query = session.query(Match).filter(
                 Match.is_fixture == True,
                 Match.match_date >= day_start,
@@ -434,34 +432,38 @@ class FootballBettingAgent:
             # flashscore_id (better enrichment data).
             from src.scrapers.flashscore_scraper import FlashscoreScraper as _FS
             _nm = _FS._team_names_similar
-            seen: dict = {}  # key = (league, approx kickoff hour) → (match_id, home_name)
+            # seen_list: [(match_id, home_name, league, match_date)]
+            seen_list: list = []
             dedup_ids: list = []
+
+            def _hours_apart(dt1, dt2):
+                """Absolute time difference in hours (handles midnight wrap)."""
+                return abs((dt1 - dt2).total_seconds()) / 3600
+
             for f in fixtures:
                 ht = session.get(Team, f.home_team_id)
                 h_name = ht.name if ht else ""
                 # Check if we've seen a match in same league within 2h window
-                dup_key = None
-                for key, (existing_id, existing_home) in list(seen.items()):
-                    e_league, e_hour = key
-                    if e_league == f.league and abs(e_hour - f.match_date.hour) <= 2:
+                dup_idx = None
+                for idx, (existing_id, existing_home, e_league, e_dt) in enumerate(seen_list):
+                    if e_league == f.league and _hours_apart(e_dt, f.match_date) <= 2:
                         if _nm(h_name, existing_home):
-                            dup_key = key
+                            dup_idx = idx
                             break
-                if dup_key:
+                if dup_idx is not None:
                     # Keep the one with more odds data
-                    existing_id = seen[dup_key][0]
+                    existing_id = seen_list[dup_idx][0]
                     new_odds = session.query(Odds).filter_by(match_id=f.id).count()
                     old_odds = session.query(Odds).filter_by(match_id=existing_id).count()
                     if new_odds > old_odds:
                         dedup_ids.remove(existing_id)
                         dedup_ids.append(f.id)
-                        seen[dup_key] = (f.id, h_name)
+                        seen_list[dup_idx] = (f.id, h_name, f.league, f.match_date)
                         logger.debug(f"Dedup: replaced fixture {existing_id} with {f.id} ({h_name}, more odds)")
                     else:
                         logger.debug(f"Dedup: skipping duplicate fixture {f.id} ({h_name}, fewer odds)")
                 else:
-                    key = (f.league, f.match_date.hour)
-                    seen[key] = (f.id, h_name)
+                    seen_list.append((f.id, h_name, f.league, f.match_date))
                     dedup_ids.append(f.id)
 
             fixture_ids = dedup_ids
@@ -944,7 +946,7 @@ class FootballBettingAgent:
                 pick.result = "win" if won else "loss"
                 pick.actual_home_goals = hg
                 pick.actual_away_goals = ag
-                pick.settled_at = datetime.utcnow()
+                pick.settled_at = utcnow()
 
                 settled.append({
                     "match_name": pick.match_name,
@@ -1112,7 +1114,7 @@ class FootballBettingAgent:
 
             return stats
 
-    def tune_ensemble_weights(self):
+    async def tune_ensemble_weights(self):
         """Adjust ensemble weights based on recent prediction accuracy."""
         with self.db.get_session() as session:
             month_ago = date.today() - timedelta(days=30)
@@ -1160,13 +1162,27 @@ class FootballBettingAgent:
                     if best == actual:
                         model_correct[model_name] += 1
 
-                # ML model
+                # ML model — get a real prediction using features when possible
                 if self.predictor.ml_models.is_fitted:
-                    model_total["ml"] += 1
-                    # ML prediction would need features, approximate by checking if pick was correct
-                    # since ensemble includes ML weight
-                    if pick.result == "win":
-                        model_correct["ml"] += 1
+                    try:
+                        ml_features = await self.feature_engineer.create_features(
+                            pick.match_id, as_of_date=match.match_date,
+                        )
+                        if ml_features:
+                            fv = self.feature_engineer.create_feature_vector(ml_features)
+                            fn = self.feature_engineer.get_feature_names(ml_features)
+                            ml_preds = self.predictor.ml_models.predict(fv, feature_names=fn)
+                            ml_avg = ml_preds.get("ml_average", {})
+                            if ml_avg:
+                                ml_best = max(
+                                    ["home_win", "draw", "away_win"],
+                                    key=lambda k: ml_avg.get(k, 0),
+                                )
+                                model_total["ml"] += 1
+                                if ml_best == actual:
+                                    model_correct["ml"] += 1
+                    except Exception:
+                        pass  # skip ML eval for this match if features fail
 
             except Exception:
                 continue
@@ -1647,7 +1663,7 @@ async def main():
             print("Tuning ensemble weights from recent results...")
             agent.predictor.fit()
             agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
-            result = agent.tune_ensemble_weights()
+            result = await agent.tune_ensemble_weights()
             if result:
                 print(f"\nModel Accuracy (1X2 picks, last 30d):")
                 for model, acc in sorted(result["accuracies"].items()):

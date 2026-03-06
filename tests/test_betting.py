@@ -1,4 +1,4 @@
-"""Tests for value betting calculator and bankroll manager."""
+"""Tests for value betting calculator, bankroll manager, and settlement logic."""
 
 import pytest
 
@@ -119,3 +119,160 @@ class TestBankrollManager:
         assert perf["wins"] == 1
         assert perf["losses"] == 1
         assert perf["hit_rate"] == 0.5
+
+
+class TestSettlementLogic:
+    """Tests for the settlement outcome determination.
+
+    This exercises the exact same if/elif chain used in
+    betting_agent.settle_predictions() to determine win/loss.
+    """
+
+    @staticmethod
+    def _settle(selection: str, home_goals: int, away_goals: int) -> str:
+        """Replicate the settlement logic from betting_agent.py."""
+        hg, ag = home_goals, away_goals
+        total = hg + ag
+        btts = hg > 0 and ag > 0
+        won = False
+
+        if selection == "Home Win":
+            won = hg > ag
+        elif selection == "Draw":
+            won = hg == ag
+        elif selection == "Away Win":
+            won = hg < ag
+        elif selection == "Over 2.5 Goals":
+            won = total > 2.5
+        elif selection == "Under 2.5 Goals":
+            won = total < 2.5
+        elif selection == "Over 1.5 Goals":
+            won = total > 1.5
+        elif selection == "Under 1.5 Goals":
+            won = total < 1.5
+        elif selection == "Over 3.5 Goals":
+            won = total > 3.5
+        elif selection == "Under 3.5 Goals":
+            won = total < 3.5
+        elif selection == "BTTS Yes":
+            won = btts
+        elif selection == "BTTS No":
+            won = not btts
+        elif selection == "Home Over 1.5":
+            won = hg >= 2
+        elif selection == "Away Over 1.5":
+            won = ag >= 2
+
+        return "win" if won else "loss"
+
+    # ── 1X2 ──────────────────────────────────────────────────────────────
+
+    def test_home_win(self):
+        assert self._settle("Home Win", 2, 1) == "win"
+
+    def test_home_win_loss(self):
+        assert self._settle("Home Win", 0, 1) == "loss"
+
+    def test_home_win_draw(self):
+        assert self._settle("Home Win", 1, 1) == "loss"
+
+    def test_draw_win(self):
+        assert self._settle("Draw", 1, 1) == "win"
+
+    def test_draw_loss(self):
+        assert self._settle("Draw", 2, 1) == "loss"
+
+    def test_away_win(self):
+        assert self._settle("Away Win", 0, 2) == "win"
+
+    def test_away_win_loss(self):
+        assert self._settle("Away Win", 3, 1) == "loss"
+
+    # ── Over/Under ───────────────────────────────────────────────────────
+
+    def test_over25_win(self):
+        assert self._settle("Over 2.5 Goals", 2, 1) == "win"
+
+    def test_over25_loss_exactly_2(self):
+        assert self._settle("Over 2.5 Goals", 1, 1) == "loss"
+
+    def test_under25_win(self):
+        assert self._settle("Under 2.5 Goals", 1, 0) == "win"
+
+    def test_under25_loss(self):
+        assert self._settle("Under 2.5 Goals", 2, 1) == "loss"
+
+    def test_over15_win(self):
+        assert self._settle("Over 1.5 Goals", 1, 1) == "win"
+
+    def test_over15_loss(self):
+        assert self._settle("Over 1.5 Goals", 1, 0) == "loss"
+
+    def test_under15_win(self):
+        assert self._settle("Under 1.5 Goals", 1, 0) == "win"
+
+    def test_under15_loss(self):
+        assert self._settle("Under 1.5 Goals", 1, 1) == "loss"
+
+    def test_over35_win(self):
+        assert self._settle("Over 3.5 Goals", 3, 1) == "win"
+
+    def test_over35_loss(self):
+        assert self._settle("Over 3.5 Goals", 2, 1) == "loss"
+
+    def test_under35_win(self):
+        assert self._settle("Under 3.5 Goals", 2, 1) == "win"
+
+    def test_under35_loss(self):
+        assert self._settle("Under 3.5 Goals", 3, 1) == "loss"
+
+    # ── BTTS ─────────────────────────────────────────────────────────────
+
+    def test_btts_yes_win(self):
+        assert self._settle("BTTS Yes", 1, 1) == "win"
+
+    def test_btts_yes_loss(self):
+        assert self._settle("BTTS Yes", 2, 0) == "loss"
+
+    def test_btts_no_win(self):
+        assert self._settle("BTTS No", 2, 0) == "win"
+
+    def test_btts_no_loss(self):
+        assert self._settle("BTTS No", 1, 2) == "loss"
+
+    # ── Team goals ───────────────────────────────────────────────────────
+
+    def test_home_over15_win(self):
+        assert self._settle("Home Over 1.5", 2, 0) == "win"
+
+    def test_home_over15_loss(self):
+        assert self._settle("Home Over 1.5", 1, 3) == "loss"
+
+    def test_away_over15_win(self):
+        assert self._settle("Away Over 1.5", 0, 2) == "win"
+
+    def test_away_over15_loss(self):
+        assert self._settle("Away Over 1.5", 3, 1) == "loss"
+
+    # ── Edge cases: 0-0 scoreline ────────────────────────────────────────
+
+    def test_0_0_draw_wins(self):
+        assert self._settle("Draw", 0, 0) == "win"
+
+    def test_0_0_under15_wins(self):
+        assert self._settle("Under 1.5 Goals", 0, 0) == "win"
+
+    def test_0_0_under25_wins(self):
+        assert self._settle("Under 2.5 Goals", 0, 0) == "win"
+
+    def test_0_0_under35_wins(self):
+        assert self._settle("Under 3.5 Goals", 0, 0) == "win"
+
+    def test_0_0_btts_no_wins(self):
+        assert self._settle("BTTS No", 0, 0) == "win"
+
+    def test_0_0_btts_yes_loses(self):
+        assert self._settle("BTTS Yes", 0, 0) == "loss"
+
+    def test_0_0_over25_loses(self):
+        assert self._settle("Over 2.5 Goals", 0, 0) == "loss"

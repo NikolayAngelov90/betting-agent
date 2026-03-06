@@ -278,15 +278,19 @@ class EnsemblePredictor:
                     adjusted_goals[_key] = round(_ceiling + (_v - _ceiling) * 0.30, 4)
                     if _comp:
                         adjusted_goals[_comp] = round(1.0 - adjusted_goals[_key], 4)
-            for _key in ("home_win", "draw", "away_win"):
-                _v = ensemble_1x2.get(_key, 0)
-                if _v > _ceiling:
-                    ensemble_1x2[_key] = round(_ceiling + (_v - _ceiling) * 0.30, 4)
-            _tot1x2 = sum(ensemble_1x2.get(k, 0) for k in ("home_win", "draw", "away_win"))
-            if _tot1x2 > 0:
-                ensemble_1x2["home_win"] = round(ensemble_1x2["home_win"] / _tot1x2, 4)
-                ensemble_1x2["draw"] = round(ensemble_1x2["draw"] / _tot1x2, 4)
-                ensemble_1x2["away_win"] = round(ensemble_1x2["away_win"] / _tot1x2, 4)
+            # Dampen 1X2 probabilities, renormalize, then cap again.
+            # Two passes prevent renormalization from pushing a dampened value
+            # back above the ceiling.
+            for _pass in range(2):
+                for _key in ("home_win", "draw", "away_win"):
+                    _v = ensemble_1x2.get(_key, 0)
+                    if _v > _ceiling:
+                        ensemble_1x2[_key] = round(_ceiling + (_v - _ceiling) * 0.30, 4)
+                _tot1x2 = sum(ensemble_1x2.get(k, 0) for k in ("home_win", "draw", "away_win"))
+                if _tot1x2 > 0:
+                    ensemble_1x2["home_win"] = round(ensemble_1x2["home_win"] / _tot1x2, 4)
+                    ensemble_1x2["draw"] = round(ensemble_1x2["draw"] / _tot1x2, 4)
+                    ensemble_1x2["away_win"] = round(ensemble_1x2["away_win"] / _tot1x2, 4)
 
         results["ensemble"]["home_xg"] = poisson_pred.get("home_xg", 0)
         results["ensemble"]["away_xg"] = poisson_pred.get("away_xg", 0)
@@ -305,14 +309,28 @@ class EnsemblePredictor:
         results["ensemble"]["model"] = "ensemble"
 
         # Apply confidence penalty for low-coverage matches:
-        # Pull probabilities toward the prior (0.33) proportional to missing data.
+        # Pull probabilities toward their priors proportional to missing data.
         penalty = (1.0 - coverage["score"]) * 0.25  # max 25% regression
         if penalty > 0:
-            prior = 1.0 / 3.0
+            # 1X2: regress toward uniform 0.33
+            prior_1x2 = 1.0 / 3.0
             for key in ("home_win", "draw", "away_win"):
                 results["ensemble"][key] = round(
-                    results["ensemble"][key] * (1 - penalty) + prior * penalty, 4
+                    results["ensemble"][key] * (1 - penalty) + prior_1x2 * penalty, 4
                 )
+            # Goals markets: regress toward neutral priors
+            _goals_priors = {
+                "over_1.5": 0.75, "under_1.5": 0.25,
+                "over_2.5": 0.50, "under_2.5": 0.50,
+                "over_3.5": 0.25, "under_3.5": 0.75,
+                "btts_yes": 0.50, "btts_no": 0.50,
+                "home_over_1.5": 0.40, "away_over_1.5": 0.30,
+            }
+            for key, prior in _goals_priors.items():
+                if key in results["ensemble"]:
+                    results["ensemble"][key] = round(
+                        results["ensemble"][key] * (1 - penalty) + prior * penalty, 4
+                    )
 
         return results
 

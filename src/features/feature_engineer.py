@@ -199,6 +199,8 @@ class FeatureEngineer:
         """Convert feature dictionary to a numeric numpy array for ML models.
 
         Non-numeric features (strings, booleans) are converted appropriately.
+        Keys are sorted alphabetically for deterministic ordering regardless
+        of which feature sections executed or in what order.
         """
         numeric_features = {}
         for key, value in features.items():
@@ -208,14 +210,18 @@ class FeatureEngineer:
                 numeric_features[key] = float(value)
             # Skip string features like form_string
 
-        return np.array(list(numeric_features.values()))
+        sorted_keys = sorted(numeric_features.keys())
+        return np.array([numeric_features[k] for k in sorted_keys])
 
     def get_feature_names(self, features: dict) -> list:
-        """Get ordered list of numeric feature names (matches create_feature_vector order)."""
-        return [
+        """Get ordered list of numeric feature names (matches create_feature_vector order).
+
+        Sorted alphabetically for deterministic ordering.
+        """
+        return sorted(
             key for key, value in features.items()
             if isinstance(value, (int, float, bool))
-        ]
+        )
 
     def _get_xg_features(self, team_id: int, venue: str = "all",
                           num_matches: int = 10, as_of_date=None) -> dict:
@@ -390,20 +396,24 @@ class FeatureEngineer:
                 h = od.get("Home") or od.get("Home Win")
                 d = od.get("Draw")
                 a = od.get("Away") or od.get("Away Win")
-                if not (h and d and a):
+                if not (h and d and a) or min(h, d, a) <= 0:
                     return None
                 rh, rd, ra = 1/h, 1/d, 1/a
                 m = rh + rd + ra
+                if m <= 0:
+                    return None
                 return round(rh/m, 4), round(rd/m, 4), round(ra/m, 4)
 
             # Helper: margin-remove a 2-way market (over/under style)
             def _2way(od, over_key, under_key):
                 o = od.get(over_key)
                 u = od.get(under_key)
-                if not (o and u):
+                if not (o and u) or min(o, u) <= 0:
                     return None
                 ro, ru = 1/o, 1/u
                 m = ro + ru
+                if m <= 0:
+                    return None
                 return round(ro/m, 4), round(ru/m, 4)
 
             # Bookmaker priority order
@@ -449,11 +459,12 @@ class FeatureEngineer:
             if od:
                 yes_odds = od.get("Yes") or od.get("BTTS Yes")
                 no_odds = od.get("No") or od.get("BTTS No")
-                if yes_odds and no_odds:
+                if yes_odds and no_odds and min(yes_odds, no_odds) > 0:
                     ry, rn = 1/yes_odds, 1/no_odds
                     m = ry + rn
-                    result["btts_yes_implied_prob"] = round(ry/m, 4)
-                    result["btts_no_implied_prob"] = round(rn/m, 4)
+                    if m > 0:
+                        result["btts_yes_implied_prob"] = round(ry/m, 4)
+                        result["btts_no_implied_prob"] = round(rn/m, 4)
                     result["btts_bookmaker_available"] = 1
 
             # ── Team goal lines ───────────────────────────────────────────────

@@ -124,13 +124,17 @@ class Config:
         return self.config.get('logging', {})
 
 
-# Global config instance
+# Global config instance (thread-safe lazy init)
+import threading
 _config = None
+_config_lock = threading.Lock()
 
 
 def get_config() -> Config:
-    """Get global configuration instance."""
+    """Get global configuration instance (thread-safe)."""
     global _config
     if _config is None:
-        _config = Config()
+        with _config_lock:
+            if _config is None:
+                _config = Config()
     return _config

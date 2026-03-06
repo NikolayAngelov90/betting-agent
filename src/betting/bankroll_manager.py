@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from src.utils.logger import utcnow
 from typing import List, Optional
 
 from src.utils.config import get_config
@@ -26,7 +27,7 @@ class BetRecord:
 
     def __post_init__(self):
         if self.placed_at is None:
-            self.placed_at = datetime.utcnow()
+            self.placed_at = utcnow()
 
 
 class BankrollManager:

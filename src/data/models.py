@@ -7,6 +7,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship
 
+from src.utils.logger import utcnow
+
 Base = declarative_base()
 
 
@@ -22,7 +24,7 @@ class Team(Base):
     flashscore_id = Column(String(50))
     transfermarkt_id = Column(String(50))
     apifootball_team_id = Column(Integer)  # API-Football team ID for history backfill
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Relationships
     home_matches = relationship("Match", foreign_keys="Match.home_team_id", back_populates="home_team")
@@ -102,7 +104,7 @@ class Match(Base):
 
     # Match status
     is_fixture = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Indexes on the columns hit by every form/xG/momentum query:
     #  · (home_team_id, is_fixture, match_date) — home form queries
@@ -158,7 +160,7 @@ class Injury(Base):
     expected_return = Column(Date)
     status = Column(String(50))  # 'out', 'doubtful', 'available'
     source = Column(String(200))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     # Relationships
     player = relationship("Player", back_populates="injuries")
@@ -179,7 +181,7 @@ class Odds(Base):
     market_type = Column(String(50))  # '1X2', 'over_under', 'btts', 'asian_handicap'
     selection = Column(String(50))
     odds_value = Column(Float, nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utcnow)
 
     # Relationships
     match = relationship("Match", back_populates="odds")
@@ -205,7 +207,7 @@ class News(Base):
     url = Column(String(500))
     sentiment_score = Column(Float)  # -1 to +1
     published_at = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Relationships
     team = relationship("Team", back_populates="news")
@@ -242,7 +244,7 @@ class SavedPick(Base):
     actual_away_goals = Column(Integer)
     settled_at = Column(DateTime)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Relationships
     match = relationship("Match")

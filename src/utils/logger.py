@@ -1,9 +1,19 @@
-"""Logging configuration for Football Betting Agent."""
+"""Logging configuration and shared utilities for Football Betting Agent."""
 
 import uuid
+from datetime import datetime, timezone
 from loguru import logger
 from pathlib import Path
 import sys
+
+
+def utcnow() -> datetime:
+    """Return the current UTC time as a timezone-aware datetime.
+
+    Replacement for the deprecated ``datetime.utcnow()`` which returns a
+    naive datetime.  All call-sites should use this instead.
+    """
+    return datetime.now(timezone.utc)
 
 
 def setup_logger(log_level: str = "INFO", log_file: str = "logs/betting_agent.log"):

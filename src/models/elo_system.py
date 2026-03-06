@@ -1,10 +1,12 @@
 """Elo rating system for football teams."""
 
 import math
+from datetime import date
 from typing import Dict, Tuple
 
 from src.data.models import Match
 from src.data.database import get_db
+from src.utils.config import get_config
 from src.utils.logger import get_logger
 
 logger = get_logger()
@@ -30,9 +32,17 @@ class EloRatingSystem:
     def fit(self, league: str = None):
         """Build Elo ratings by processing all historical matches chronologically.
 
+        Applies between-season regression toward the mean so that stale ratings
+        from years ago don't dominate. When the year changes between consecutive
+        matches, all ratings are regressed toward DEFAULT_ELO by a configurable
+        factor (default 1/3 — e.g. a team rated 1800 becomes 1700).
+
         Args:
             league: Optional league filter
         """
+        config = get_config()
+        regression_factor = config.get("models.elo_season_regression", 0.33)
+
         db = get_db()
         with db.get_session() as session:
             query = session.query(Match).filter(
@@ -44,7 +54,20 @@ class EloRatingSystem:
 
             matches = query.order_by(Match.match_date.asc()).all()
 
+            prev_year = None
             for match in matches:
+                # Between-season regression toward the mean
+                m_date = match.match_date
+                m_year = m_date.year if m_date else None
+                if prev_year is not None and m_year is not None and m_year > prev_year:
+                    for team_id in list(self.ratings.keys()):
+                        self.ratings[team_id] = (
+                            self.ratings[team_id] * (1 - regression_factor)
+                            + DEFAULT_ELO * regression_factor
+                        )
+                if m_year is not None:
+                    prev_year = m_year
+
                 self._process_match(
                     match.home_team_id, match.away_team_id,
                     match.home_goals, match.away_goals,

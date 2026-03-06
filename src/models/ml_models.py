@@ -1,6 +1,9 @@
 """Machine learning prediction models."""
 
+import hashlib
+import hmac
 import numpy as np
+import os
 import pickle
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -17,6 +20,45 @@ from src.utils.logger import get_logger
 logger = get_logger()
 
 MODELS_DIR = Path("data/models")
+
+# HMAC key for model file integrity. Uses env var if set, otherwise a
+# deterministic fallback so existing pickle files can still be loaded
+# (with a warning) until they are re-saved with a proper key.
+_MODEL_HMAC_KEY = os.environ.get("MODEL_HMAC_KEY", "betting-agent-default-key").encode()
+
+
+def _compute_hmac(data: bytes) -> str:
+    """Compute HMAC-SHA256 hex digest for model data."""
+    return hmac.new(_MODEL_HMAC_KEY, data, hashlib.sha256).hexdigest()
+
+
+def _safe_save(state: dict, filepath: Path):
+    """Pickle state and write alongside an HMAC signature file."""
+    data = pickle.dumps(state)
+    sig = _compute_hmac(data)
+    with open(filepath, "wb") as f:
+        f.write(data)
+    filepath.with_suffix(".sig").write_text(sig)
+
+
+def _safe_load(filepath: Path) -> dict:
+    """Load pickle after verifying HMAC signature. Raises on tampering."""
+    data = filepath.read_bytes()
+    sig_path = filepath.with_suffix(".sig")
+    if sig_path.exists():
+        expected = sig_path.read_text().strip()
+        actual = _compute_hmac(data)
+        if not hmac.compare_digest(expected, actual):
+            raise RuntimeError(
+                f"Model file {filepath} failed integrity check — "
+                f"file may have been tampered with. Re-train models to fix."
+            )
+    else:
+        logger.warning(
+            f"No signature file for {filepath} — loading without verification. "
+            f"Re-save models to create a signature."
+        )
+    return pickle.loads(data)  # noqa: S301
 
 
 class MLModels:
@@ -272,7 +314,7 @@ class MLModels:
         return importance
 
     def save(self, path: str = None):
-        """Save all models to disk."""
+        """Save all models to disk with HMAC integrity signature."""
         save_dir = Path(path) if path else MODELS_DIR
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -287,13 +329,11 @@ class MLModels:
         }
 
         filepath = save_dir / "ml_models.pkl"
-        with open(filepath, "wb") as f:
-            pickle.dump(state, f)
-
+        _safe_save(state, filepath)
         logger.info(f"Models saved to {filepath}")
 
     def load(self, path: str = None):
-        """Load models from disk."""
+        """Load models from disk with HMAC integrity verification."""
         load_dir = Path(path) if path else MODELS_DIR
         filepath = load_dir / "ml_models.pkl"
 
@@ -301,8 +341,11 @@ class MLModels:
             logger.warning(f"No saved models found at {filepath}")
             return
 
-        with open(filepath, "rb") as f:
-            state = pickle.load(f)
+        try:
+            state = _safe_load(filepath)
+        except RuntimeError as e:
+            logger.error(str(e))
+            return
 
         self.models = state["models"]
         self.calibrated_models = state.get("calibrated_models", {})
@@ -510,7 +553,7 @@ class GoalsMLModel:
         return float(np.mean(probs)) if probs else 0.5
 
     def save(self, path: str = None):
-        """Save model to disk."""
+        """Save model to disk with HMAC integrity signature."""
         save_dir = Path(path) if path else MODELS_DIR
         save_dir.mkdir(parents=True, exist_ok=True)
         state = {
@@ -523,19 +566,21 @@ class GoalsMLModel:
             "_corr_drop_mask": self._corr_drop_mask,
         }
         filepath = save_dir / "goals_model.pkl"
-        with open(filepath, "wb") as f:
-            pickle.dump(state, f)
+        _safe_save(state, filepath)
         logger.info(f"GoalsMLModel saved to {filepath}")
 
     def load(self, path: str = None):
-        """Load model from disk."""
+        """Load model from disk with HMAC integrity verification."""
         load_dir = Path(path) if path else MODELS_DIR
         filepath = load_dir / "goals_model.pkl"
         if not filepath.exists():
             logger.debug(f"No saved goals model at {filepath}")
             return
-        with open(filepath, "rb") as f:
-            state = pickle.load(f)
+        try:
+            state = _safe_load(filepath)
+        except RuntimeError as e:
+            logger.error(str(e))
+            return
         self.models = state["models"]
         self.calibrated_models = state.get("calibrated_models", {})
         self.scaler = state["scaler"]
