@@ -193,7 +193,7 @@ LEAGUE_ID_MAP = {
     "austria/bundesliga": 218,
     "switzerland/super-league": 207,
     "greece/super-league": 197,
-    "denmark/superliga": 119,
+    # "denmark/superliga": 119,  # season ended 2026-03-01; re-enable ~July 2026
     "norway/eliteserien": 103,
     "sweden/allsvenskan": 113,
     "finland/veikkausliiga": 244,
