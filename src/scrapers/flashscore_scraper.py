@@ -1586,9 +1586,22 @@ class FlashscoreScraper(BaseScraper):
 
         shorter, longer = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
 
+        # Common abbreviations that differ between sources
+        _ABBREVS = {
+            "utd": "united", "united": "united",
+            "cty": "city", "city": "city",
+            "ath": "athletic", "athletic": "athletic",
+            "weds": "wednesday", "wednesday": "wednesday",
+            "wed": "wednesday",
+            "nott'm": "nottingham", "nottingham": "nottingham",
+        }
+
         def _tok_match(t1: str, t2: str) -> bool:
             # Exact prefix match (handles "Man"/"Manchester", "Stockport"/"Stockport County")
             if t2.startswith(t1) or t1.startswith(t2):
+                return True
+            # Common abbreviation expansion (handles "Utd"/"United", "Cty"/"City")
+            if _ABBREVS.get(t1) and _ABBREVS.get(t1) == _ABBREVS.get(t2):
                 return True
             # Fuzzy match: catches diacritics stripped unevenly, k/c spelling variants
             return SequenceMatcher(None, t1, t2).ratio() >= 0.75
