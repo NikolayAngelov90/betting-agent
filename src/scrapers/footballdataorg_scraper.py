@@ -475,9 +475,10 @@ class FootballDataOrgScraper:
                 )
                 .all()
             )
+            from src.scrapers.flashscore_scraper import FlashscoreScraper as _FS
             for cand in candidates:
                 ht = session.get(Team, cand.home_team_id)
-                if ht and _names_match(home_name, ht.name):
+                if ht and _FS._team_names_similar(home_name, ht.name):
                     return False
 
             # Get or create home team

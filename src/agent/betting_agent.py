@@ -432,7 +432,8 @@ class FootballBettingAgent:
             # separate Match records for the same game (e.g. "Man City" vs
             # "Manchester City"). Keep the record with more odds or with
             # flashscore_id (better enrichment data).
-            from src.scrapers.footballdataorg_scraper import _names_match as _nm
+            from src.scrapers.flashscore_scraper import FlashscoreScraper as _FS
+            _nm = _FS._team_names_similar
             seen: dict = {}  # key = (league, approx kickoff hour) → (match_id, home_name)
             dedup_ids: list = []
             for f in fixtures:
@@ -655,37 +656,59 @@ class FootballBettingAgent:
             reverse=True,
         )
 
-        # Limit picks per match and deduplicate identical (match, selection) pairs.
-        # Use (match string, selection) as key to also catch the case where the
-        # same physical game has two DB rows with different IDs (e.g. scraped twice).
+        # Limit picks per match: keep only the top N by confidence per match.
+        # First deduplicate identical (match, selection) pairs, then group by
+        # match and keep the highest-confidence picks from each group.
         seen_pick_keys: set = set()
-        limited = []
-        if max_picks_per_match:
-            from collections import Counter
-            match_counts: dict = Counter()
-            # Pre-populate from already-saved picks for today so re-running --picks
-            # doesn't accumulate more than max_picks_per_match across multiple runs.
-            with self.db.get_session() as _sess:
-                _existing = _sess.query(SavedPick.match_id).filter(
-                    SavedPick.pick_date == target
-                ).all()
-                for (_mid,) in _existing:
-                    match_counts[_mid] += 1
+        deduped = []
         for rec in all_recommendations:
             key = (rec.match, rec.selection)
             if key in seen_pick_keys:
                 logger.debug(f"Skipping duplicate pick for {rec.match}: {rec.selection}")
                 continue
-            if max_picks_per_match and match_counts[rec.match_id] >= max_picks_per_match:
-                logger.debug(
-                    f"Skipping extra pick for match {rec.match}: "
-                    f"{rec.selection} (already {max_picks_per_match} picks)"
-                )
-                continue
             seen_pick_keys.add(key)
-            limited.append(rec)
-            if max_picks_per_match:
-                match_counts[rec.match_id] += 1
+            deduped.append(rec)
+
+        limited = deduped
+        if max_picks_per_match:
+            from collections import Counter, defaultdict
+            # Pre-populate from already-saved picks for today so re-running --picks
+            # doesn't accumulate more than max_picks_per_match across multiple runs.
+            existing_counts: dict = Counter()
+            with self.db.get_session() as _sess:
+                _existing = _sess.query(SavedPick.match_id).filter(
+                    SavedPick.pick_date == target
+                ).all()
+                for (_mid,) in _existing:
+                    existing_counts[_mid] += 1
+
+            # Group picks by match_id, sort each group by confidence descending,
+            # then keep only the top N (minus already-saved) from each match.
+            by_match: dict = defaultdict(list)
+            for rec in deduped:
+                by_match[rec.match_id].append(rec)
+
+            limited = []
+            for match_id, group in by_match.items():
+                group.sort(key=lambda r: r.confidence, reverse=True)
+                already = existing_counts.get(match_id, 0)
+                slots = max(0, max_picks_per_match - already)
+                if slots < len(group):
+                    skipped = group[slots:]
+                    for s in skipped:
+                        logger.debug(
+                            f"Skipping lower-confidence pick for {s.match}: "
+                            f"{s.selection} (conf={s.confidence:.1%}, "
+                            f"keeping top {max_picks_per_match} per match)"
+                        )
+                limited.extend(group[:slots])
+
+            # Re-sort by EV × confidence × agreement for final ordering
+            limited.sort(
+                key=lambda r: r.expected_value * r.confidence
+                * _agreement_bonus.get(r.model_agreement, 1.0),
+                reverse=True,
+            )
         all_recommendations = limited
 
         # No portfolio caps — include all value picks to avoid missing edges.

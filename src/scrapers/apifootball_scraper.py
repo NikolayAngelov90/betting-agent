@@ -780,7 +780,8 @@ class APIFootballScraper(BaseScraper):
                 at = session.get(Team, m.away_team_id)
                 if not ht or not at:
                     continue
-                if self._names_similar(home_name_api, ht.name) and self._names_similar(
+                from src.scrapers.flashscore_scraper import FlashscoreScraper as _FS
+                if _FS._team_names_similar(home_name_api, ht.name) and _FS._team_names_similar(
                     away_name_api, at.name
                 ):
                     return m.id
