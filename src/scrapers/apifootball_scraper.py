@@ -193,7 +193,7 @@ LEAGUE_ID_MAP = {
     "austria/bundesliga": 218,
     "switzerland/super-league": 207,
     "greece/super-league": 197,
-    "denmark/superliga": 120,
+    "denmark/superliga": 119,
     "norway/eliteserien": 103,
     "sweden/allsvenskan": 113,
     "finland/veikkausliiga": 244,
