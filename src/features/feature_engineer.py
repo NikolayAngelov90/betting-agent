@@ -309,6 +309,9 @@ class FeatureEngineer:
             "referee_cards_per_match_avg": 0.0,
             "referee_fouls_per_match_avg": 0.0,
             "referee_goals_per_match_avg": 0.0,
+            "referee_over25_rate": 0.0,
+            "referee_avg_yellow_cards": 0.0,
+            "referee_avg_red_cards": 0.0,
             "referee_matches": 0,
         }
         if not referee:
@@ -328,15 +331,23 @@ class FeatureEngineer:
                 return empty
 
             cards_list = []
+            yellow_list = []
+            red_list = []
             fouls_total = 0
             fouls_matches = 0
             goals_list = []
+            over25_count = 0
 
             for m in matches:
                 yc = (m.home_yellow_cards or 0) + (m.away_yellow_cards or 0)
                 rc = (m.home_red_cards or 0) + (m.away_red_cards or 0)
                 cards_list.append(yc + rc)
-                goals_list.append((m.home_goals or 0) + (m.away_goals or 0))
+                yellow_list.append(yc)
+                red_list.append(rc)
+                total_goals = (m.home_goals or 0) + (m.away_goals or 0)
+                goals_list.append(total_goals)
+                if total_goals > 2.5:
+                    over25_count += 1
                 hf = m.home_fouls or 0
                 af = m.away_fouls or 0
                 if hf > 0 or af > 0:
@@ -349,6 +360,9 @@ class FeatureEngineer:
             "referee_cards_per_match_avg": round(sum(cards_list) / n, 2),
             "referee_fouls_per_match_avg": round(fouls_total / fouls_matches, 2) if fouls_matches else 0.0,
             "referee_goals_per_match_avg": round(sum(goals_list) / n, 2),
+            "referee_over25_rate": round(over25_count / n, 3),
+            "referee_avg_yellow_cards": round(sum(yellow_list) / n, 2),
+            "referee_avg_red_cards": round(sum(red_list) / n, 2),
             "referee_matches": n,
         }
 
