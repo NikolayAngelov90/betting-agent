@@ -81,6 +81,23 @@ models:
   # Minimum matches per league to estimate a per-league Dixon-Coles rho via MLE.
   # Leagues with fewer matches use the global dixon_coles_rho instead.
   dc_rho_min_matches: 50
+  # Bayesian ensemble weight learning: half-life (days) for temporal decay
+  # of observations. 90 = observations 3 months ago have half the weight.
+  bayesian_weight_half_life_days: 90
+  # Prior strength: effective pseudo-observations from config weights.
+  # Higher = more data needed before per-league weights diverge from global.
+  bayesian_prior_strength: 10
+  # Use xG instead of raw goals for Poisson attack/defense strengths when
+  # xG data is available. Falls back to raw goals for matches without xG.
+  poisson_use_xg: true
+  # Minimum fraction of matches with xG data required before xG-based
+  # strengths are used for a team (0.5 = at least 50% of matches need xG).
+  poisson_xg_min_coverage: 0.50
+  # League profitability: minimum settled picks per league before
+  # auto-muting unprofitable leagues. Set to 0 to disable.
+  league_profit_min_picks: 15
+  # ROI threshold below which a league is muted from picks (-0.15 = -15% ROI).
+  league_profit_mute_threshold: -0.15
   retrain_interval_days: 7
   min_training_samples: 1000
 

@@ -77,9 +77,27 @@ class PoissonModel:
 
             weights = [match_weight(m) for m in matches]
 
+            # xG mode: use expected goals instead of raw goals when available.
+            # Falls back to raw goals for matches without xG data.
+            use_xg = self.config.get("models.poisson_use_xg", True)
+            xg_min_coverage = self.config.get("models.poisson_xg_min_coverage", 0.50)
+            xg_available = sum(1 for m in matches if m.home_xg is not None and m.home_xg > 0)
+            xg_fraction = xg_available / len(matches) if matches else 0
+            use_xg_global = use_xg and xg_fraction >= xg_min_coverage
+
+            def _goal_value(match, side_goals, side_xg):
+                """Return xG if available and enabled, else raw goals."""
+                if use_xg_global and side_xg is not None and side_xg > 0:
+                    return side_xg
+                return side_goals
+
             # Weighted global averages
-            home_goals_arr = np.array([m.home_goals for m in matches], dtype=float)
-            away_goals_arr = np.array([m.away_goals for m in matches], dtype=float)
+            home_goals_arr = np.array(
+                [_goal_value(m, m.home_goals, m.home_xg) for m in matches], dtype=float
+            )
+            away_goals_arr = np.array(
+                [_goal_value(m, m.away_goals, m.away_xg) for m in matches], dtype=float
+            )
             w = np.array(weights)
             w_sum = w.sum()
             if w_sum > 0:
@@ -94,8 +112,8 @@ class PoissonModel:
             for m, wt in zip(matches, weights):
                 lg = m.league or "unknown"
                 league_goals.setdefault(lg, {"home": [], "away": [], "w": []})
-                league_goals[lg]["home"].append(m.home_goals)
-                league_goals[lg]["away"].append(m.away_goals)
+                league_goals[lg]["home"].append(_goal_value(m, m.home_goals, m.home_xg))
+                league_goals[lg]["away"].append(_goal_value(m, m.away_goals, m.away_xg))
                 league_goals[lg]["w"].append(wt)
             for lg, gdata in league_goals.items():
                 if len(gdata["home"]) >= 30:
@@ -110,9 +128,11 @@ class PoissonModel:
             # Per-team attack and defense strengths (time-weighted)
             team_stats: dict = {}
             for match, wt in zip(matches, weights):
+                h_scored = _goal_value(match, match.home_goals, match.home_xg)
+                a_scored = _goal_value(match, match.away_goals, match.away_xg)
                 for team_id, scored, conceded, venue in [
-                    (match.home_team_id, match.home_goals, match.away_goals, "home"),
-                    (match.away_team_id, match.away_goals, match.home_goals, "away"),
+                    (match.home_team_id, h_scored, a_scored, "home"),
+                    (match.away_team_id, a_scored, h_scored, "away"),
                 ]:
                     if match.league:
                         self._team_league[team_id] = match.league
@@ -170,13 +190,14 @@ class PoissonModel:
             # Estimate per-league Dixon-Coles rho via MLE
             self._estimate_league_rhos(matches)
 
+            xg_label = f"xG mode ({xg_available}/{len(matches)} matches)" if use_xg_global else "raw goals"
             logger.info(
                 f"Poisson model fitted: {len(self._team_strengths)} teams, "
                 f"{len(self._league_avgs)} leagues calibrated, "
                 f"{len(self._league_rhos)} per-league rhos estimated, "
                 f"avg home goals={self.league_avg_home_goals:.2f}, "
                 f"avg away goals={self.league_avg_away_goals:.2f} "
-                f"(time-decay half-life={half_life}d)"
+                f"(time-decay half-life={half_life}d, {xg_label})"
             )
 
     def _estimate_league_rhos(self, matches):

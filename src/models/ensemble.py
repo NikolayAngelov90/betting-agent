@@ -7,6 +7,7 @@ from typing import Dict, Optional
 from src.models.poisson_model import PoissonModel
 from src.models.elo_system import EloRatingSystem
 from src.models.ml_models import MLModels, GoalsMLModel
+from src.models.bayesian_weights import BayesianWeightLearner
 from src.utils.config import get_config
 from src.utils.logger import get_logger
 
@@ -17,6 +18,8 @@ class EnsemblePredictor:
     """Combines predictions from Poisson, Elo, and ML models using weighted averaging.
 
     Weights are configured in config.yaml under models.ensemble_weights.
+    When Bayesian adaptive weights are enabled (default), per-league weights
+    are learned from settled picks and override the static config weights.
     """
 
     def __init__(self, config=None):
@@ -43,6 +46,9 @@ class EnsemblePredictor:
                 logger.info(f"Loaded tuned ensemble weights: {self.weights}")
             except Exception as e:
                 logger.warning(f"Failed to load tuned weights: {e}")
+
+        # Bayesian adaptive weight learner (per-league weights)
+        self.bayesian_weights = BayesianWeightLearner(self.config)
 
         # Try to load previously trained ML models from disk
         self.ml_models.load()
@@ -119,10 +125,11 @@ class EnsemblePredictor:
             ml_pred = ml_predictions.get("ml_average")
             results["ml"] = ml_predictions
 
-        # Weighted ensemble for 1X2
+        # Weighted ensemble for 1X2 (using Bayesian per-league weights when available)
         is_intl = league in self.INTERNATIONAL_LEAGUES
         ensemble_1x2 = self._weighted_average_1x2(poisson_pred, elo_pred, ml_pred,
-                                                    international=is_intl)
+                                                    international=is_intl,
+                                                    league=league)
         results["ensemble"] = ensemble_1x2
 
         # Blend goals/BTTS predictions using both Poisson and ensemble 1X2
@@ -336,39 +343,43 @@ class EnsemblePredictor:
 
     def _weighted_average_1x2(self, poisson: Dict, elo: Dict,
                                ml: Optional[Dict],
-                               international: bool = False) -> Dict:
+                               international: bool = False,
+                               league: str = "") -> Dict:
         """Compute weighted average of 1X2 probabilities across models.
 
-        For international matches (CL/EL/ECL), Poisson weight is halved and
-        redistributed to Elo because Poisson's league-calibrated attack/defence
-        strengths are misleading when teams come from different domestic leagues.
+        Uses Bayesian per-league weights when available, falling back to
+        static config weights. For international matches (CL/EL/ECL), Poisson
+        weight is halved and redistributed to Elo.
         """
+        # Get weights: Bayesian per-league > static config
+        bw = self.bayesian_weights.get_weights(league if league else None)
+
         total_weight = 0.0
         home_win = 0.0
         draw = 0.0
         away_win = 0.0
 
         # Poisson — downweight for international matches
-        w = self.weights.get("poisson", 0.25)
+        w = bw.get("poisson", 0.25)
         if international:
-            w *= 0.5  # halve Poisson influence
+            w *= 0.5
         home_win += w * poisson.get("home_win", 0.33)
         draw += w * poisson.get("draw", 0.33)
         away_win += w * poisson.get("away_win", 0.33)
         total_weight += w
 
-        # Elo — upweight for international matches (captures cross-league quality)
-        w = self.weights.get("elo", 0.20)
+        # Elo — upweight for international matches
+        w = bw.get("elo", 0.20)
         if international:
-            w *= 1.5  # boost Elo influence
+            w *= 1.5
         home_win += w * elo.get("home_win", 0.33)
         draw += w * elo.get("draw", 0.33)
         away_win += w * elo.get("away_win", 0.33)
         total_weight += w
 
-        # ML (use combined xgboost + random_forest weight)
+        # ML
         if ml:
-            w = self.weights.get("xgboost", 0.35) + self.weights.get("random_forest", 0.20)
+            w = bw.get("ml", 0.55)
             home_win += w * ml.get("home_win", 0.33)
             draw += w * ml.get("draw", 0.33)
             away_win += w * ml.get("away_win", 0.33)

@@ -645,9 +645,26 @@ class FootballBettingAgent:
             if isinstance(result, Exception):
                 logger.error(f"Error analyzing match {mid}: {result}")
                 continue
-            # value_calculator.find_value_bets() already applied EV/confidence
-            # filters from config — no secondary filter needed here.
             all_recommendations.extend(result.recommendations)
+
+        # League profitability filter: auto-mute leagues with consistently
+        # negative ROI to avoid bleeding money on leagues the models can't predict.
+        _lp_min = self.config.get("models.league_profit_min_picks", 15)
+        _lp_threshold = self.config.get("models.league_profit_mute_threshold", -0.15)
+        if _lp_min > 0:
+            muted_leagues = self._get_muted_leagues(_lp_min, _lp_threshold)
+            if muted_leagues:
+                before = len(all_recommendations)
+                all_recommendations = [
+                    r for r in all_recommendations
+                    if r.league not in muted_leagues
+                ]
+                muted_count = before - len(all_recommendations)
+                if muted_count > 0:
+                    logger.info(
+                        f"League profitability filter: muted {muted_count} picks from "
+                        f"{', '.join(sorted(muted_leagues))}"
+                    )
 
         # Sort order mirrors value_calculator: EV × confidence × agreement bonus.
         # This ensures the portfolio cap (below) takes the best-conviction picks first.
@@ -1243,6 +1260,72 @@ class FootballBettingAgent:
         # Apply immediately
         self.predictor.weights = new_weights
 
+        # Update Bayesian per-league weight learner from settled 1X2 picks
+        bayesian = self.predictor.bayesian_weights
+        for pick in settled:
+            if pick.market != "1X2":
+                continue
+            try:
+                with self.db.get_session() as session:
+                    match = session.get(Match, pick.match_id)
+                    if not match:
+                        continue
+                    home_id = match.home_team_id
+                    away_id = match.away_team_id
+                    match_league = match.league or ""
+                    match_date = match.match_date
+
+                if not match_league:
+                    continue
+
+                # Actual result
+                if pick.actual_home_goals > pick.actual_away_goals:
+                    actual = "home_win"
+                elif pick.actual_home_goals == pick.actual_away_goals:
+                    actual = "draw"
+                else:
+                    actual = "away_win"
+
+                days_ago = (date.today() - pick.pick_date).days if pick.pick_date else 0
+
+                # Poisson
+                poisson_pred = self.predictor.poisson.predict(home_id, away_id, league=match_league)
+                poisson_best = max(["home_win", "draw", "away_win"], key=lambda k: poisson_pred.get(k, 0))
+                bayesian.update(match_league, "poisson", poisson_best == actual, days_ago)
+
+                # Elo
+                elo_pred = self.predictor.elo.predict(home_id, away_id)
+                elo_best = max(["home_win", "draw", "away_win"], key=lambda k: elo_pred.get(k, 0))
+                bayesian.update(match_league, "elo", elo_best == actual, days_ago)
+
+                # ML (if fitted)
+                if self.predictor.ml_models.is_fitted:
+                    try:
+                        ml_features = await self.feature_engineer.create_features(
+                            pick.match_id, as_of_date=match_date,
+                        )
+                        if ml_features:
+                            fv = self.feature_engineer.create_feature_vector(ml_features)
+                            fn = self.feature_engineer.get_feature_names(ml_features)
+                            ml_preds = self.predictor.ml_models.predict(fv, feature_names=fn)
+                            ml_avg = ml_preds.get("ml_average", {})
+                            if ml_avg:
+                                ml_best = max(["home_win", "draw", "away_win"], key=lambda k: ml_avg.get(k, 0))
+                                bayesian.update(match_league, "ml", ml_best == actual, days_ago)
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
+        bayesian.save()
+        bw_summary = bayesian.get_league_summary()
+        logger.info(f"Bayesian weights updated: {len(bw_summary) - 1} leagues learned")
+        for lg, info in bw_summary.items():
+            if lg == "global":
+                logger.info(f"  Global weights: {info}")
+            elif isinstance(info, dict) and info.get("observations", 0) > 0:
+                logger.debug(f"  {lg}: {info['weights']} ({info['observations']} obs)")
+
         return {"weights": new_weights, "accuracies": accuracies}
 
     async def train_ml_models(self, max_samples: int = 2000):
@@ -1364,6 +1447,48 @@ class FootballBettingAgent:
         self.predictor.goals_model.save()
 
         logger.info("ML model training complete")
+
+    def _get_muted_leagues(self, min_picks: int = 15, roi_threshold: float = -0.15) -> set:
+        """Return set of leagues that should be muted due to consistently negative ROI.
+
+        A league is muted when it has at least min_picks settled picks AND its
+        ROI is below roi_threshold. This prevents the agent from bleeding money
+        on leagues the models can't predict well.
+        """
+        muted = set()
+        try:
+            with self.db.get_session() as session:
+                settled = session.query(SavedPick).filter(
+                    SavedPick.result.isnot(None),
+                    SavedPick.league.isnot(None),
+                ).all()
+
+                league_stats: dict = {}
+                for p in settled:
+                    lg = p.league or ""
+                    if not lg:
+                        continue
+                    league_stats.setdefault(lg, {"staked": 0.0, "profit": 0.0, "n": 0})
+                    stake = p.kelly_stake_percentage or 1.0
+                    league_stats[lg]["staked"] += stake
+                    league_stats[lg]["n"] += 1
+                    if p.result == "win":
+                        league_stats[lg]["profit"] += stake * (p.odds - 1)
+                    else:
+                        league_stats[lg]["profit"] -= stake
+
+                for lg, stats in league_stats.items():
+                    if stats["n"] >= min_picks and stats["staked"] > 0:
+                        roi = stats["profit"] / stats["staked"]
+                        if roi < roi_threshold:
+                            muted.add(lg)
+                            logger.info(
+                                f"League muted: {lg} (ROI={roi:.1%}, "
+                                f"{stats['n']} picks, threshold={roi_threshold:.0%})"
+                            )
+        except Exception as e:
+            logger.warning(f"League profitability check failed: {e}")
+        return muted
 
     def _build_context(self, features: Dict, injury_report: Dict,
                        news_summary: Dict) -> Dict:
