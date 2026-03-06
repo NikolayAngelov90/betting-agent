@@ -98,6 +98,10 @@ models:
   league_profit_min_picks: 15
   # ROI threshold below which a league is muted from picks (-0.15 = -15% ROI).
   league_profit_mute_threshold: -0.15
+  # Drawdown circuit breaker: reduces stakes during losing streaks.
+  drawdown_lookback_picks: 30       # number of recent settled picks to evaluate
+  drawdown_reduce_threshold: -0.10  # ROI below this starts reducing stakes
+  drawdown_pause_threshold: -0.30   # ROI below this pauses all betting
   retrain_interval_days: 7
   min_training_samples: 1000
 

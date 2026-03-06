@@ -730,8 +730,32 @@ class FootballBettingAgent:
             )
         all_recommendations = limited
 
+        # Market correlation filter: when a match has 2 correlated picks
+        # (e.g. Home Win + Over 2.5), keep only the higher-EV one to avoid
+        # over-concentrating risk on correlated outcomes.
+        all_recommendations = self._filter_correlated_picks(all_recommendations)
+
         # No portfolio caps — include all value picks to avoid missing edges.
         # Risk is managed at the Kelly fraction and max_stake_percentage level.
+
+        # Drawdown circuit breaker: scale down stakes (or skip picks entirely)
+        # when recent performance shows a significant drawdown.
+        dd_multiplier = self._get_drawdown_multiplier()
+        if dd_multiplier < 1.0:
+            if dd_multiplier <= 0.0:
+                logger.warning(
+                    "Drawdown circuit breaker TRIGGERED — skipping all picks "
+                    "(drawdown exceeds pause threshold)"
+                )
+                return [], []
+            logger.info(
+                f"Drawdown circuit breaker: scaling stakes to "
+                f"{dd_multiplier:.0%} of normal"
+            )
+            for rec in all_recommendations:
+                rec.kelly_stake_percentage = round(
+                    rec.kelly_stake_percentage * dd_multiplier, 2
+                )
 
         logger.info(f"Found {len(all_recommendations)} high-confidence picks for {target}")
 
@@ -1489,6 +1513,145 @@ class FootballBettingAgent:
         except Exception as e:
             logger.warning(f"League profitability check failed: {e}")
         return muted
+
+    # Pairs of (selection_A, selection_B) that are positively correlated —
+    # if one hits, the other is significantly more likely to hit too.
+    _CORRELATED_PAIRS = {
+        # Home win correlates with high-scoring outcomes
+        ("Home", "Over 2.5"),
+        ("Home", "Home Over 1.5"),
+        # Away win correlates with high-scoring outcomes
+        ("Away", "Over 2.5"),
+        ("Away", "Away Over 1.5"),
+        # Draw correlates with low-scoring outcomes
+        ("Draw", "Under 2.5"),
+        # BTTS correlates with over goals
+        ("Yes", "Over 2.5"),        # BTTS Yes + Over 2.5
+        # Under markets are correlated with each other
+        ("Under 2.5", "Under 1.5"),
+        ("Under 2.5", "Home Under 1.5"),
+        ("Under 2.5", "Away Under 1.5"),
+        # Over markets correlate with each other
+        ("Over 2.5", "Home Over 1.5"),
+        ("Over 2.5", "Away Over 1.5"),
+        # BTTS No correlates with under goals and team unders
+        ("No", "Under 2.5"),
+        ("No", "Home Under 1.5"),
+        ("No", "Away Under 1.5"),
+    }
+
+    def _filter_correlated_picks(
+        self, picks: List[BetRecommendation]
+    ) -> List[BetRecommendation]:
+        """Remove the lower-EV pick from correlated pairs on the same match.
+
+        When two picks on the same match are positively correlated (e.g.
+        Home Win + Over 2.5), keeping both over-concentrates risk. This
+        method detects such pairs and drops the one with lower
+        EV × confidence, logging the removal.
+        """
+        from collections import defaultdict
+
+        by_match: dict = defaultdict(list)
+        for p in picks:
+            by_match[p.match_id].append(p)
+
+        to_remove: set = set()  # indices in `picks`
+        pick_index = {id(p): i for i, p in enumerate(picks)}
+
+        for match_id, group in by_match.items():
+            if len(group) < 2:
+                continue
+            # Check all pairs within this match
+            for i in range(len(group)):
+                for j in range(i + 1, len(group)):
+                    a, b = group[i], group[j]
+                    pair = (a.selection, b.selection)
+                    pair_rev = (b.selection, a.selection)
+                    if pair in self._CORRELATED_PAIRS or pair_rev in self._CORRELATED_PAIRS:
+                        # Drop the lower-EV one
+                        score_a = a.expected_value * a.confidence
+                        score_b = b.expected_value * b.confidence
+                        loser = b if score_a >= score_b else a
+                        winner = a if score_a >= score_b else b
+                        idx = pick_index[id(loser)]
+                        if idx not in to_remove:
+                            to_remove.add(idx)
+                            logger.info(
+                                f"Correlation filter: dropping '{loser.selection}' "
+                                f"(EV={loser.expected_value:.1%}) for {loser.match} — "
+                                f"correlated with '{winner.selection}' "
+                                f"(EV={winner.expected_value:.1%})"
+                            )
+
+        if to_remove:
+            picks = [p for i, p in enumerate(picks) if i not in to_remove]
+        return picks
+
+    def _get_drawdown_multiplier(self) -> float:
+        """Compute a stake multiplier based on recent bankroll drawdown.
+
+        Looks at the last N settled picks (configurable via
+        drawdown_lookback_picks, default 30) and computes cumulative P&L
+        as a fraction of total staked.  Three zones:
+
+        - ROI >= reduce_threshold (default -0.10):  normal (1.0×)
+        - reduce < ROI < pause:  linear scale from 1.0× down to 0.0×
+        - ROI <= pause_threshold (default -0.30):  pause all betting (0.0×)
+
+        Returns a multiplier in [0.0, 1.0].
+        """
+        lookback = self.config.get("models.drawdown_lookback_picks", 30)
+        reduce_at = self.config.get("models.drawdown_reduce_threshold", -0.10)
+        pause_at = self.config.get("models.drawdown_pause_threshold", -0.30)
+
+        try:
+            with self.db.get_session() as session:
+                recent = (
+                    session.query(SavedPick)
+                    .filter(SavedPick.result.isnot(None))
+                    .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
+                    .limit(lookback)
+                    .all()
+                )
+                if len(recent) < 10:
+                    return 1.0  # not enough data to judge
+
+                total_staked = 0.0
+                total_profit = 0.0
+                for p in recent:
+                    stake = p.kelly_stake_percentage or 1.0
+                    total_staked += stake
+                    if p.result == "win":
+                        total_profit += stake * (p.odds - 1)
+                    else:
+                        total_profit -= stake
+
+                if total_staked == 0:
+                    return 1.0
+
+                roi = total_profit / total_staked
+
+                if roi >= reduce_at:
+                    return 1.0
+                if roi <= pause_at:
+                    logger.warning(
+                        f"Drawdown breaker: ROI={roi:.1%} over last "
+                        f"{len(recent)} picks (pause threshold={pause_at:.0%})"
+                    )
+                    return 0.0
+
+                # Linear interpolation between reduce_at (1.0) and pause_at (0.0)
+                multiplier = (roi - pause_at) / (reduce_at - pause_at)
+                logger.info(
+                    f"Drawdown breaker: ROI={roi:.1%} over last "
+                    f"{len(recent)} picks → stake multiplier={multiplier:.2f}"
+                )
+                return round(multiplier, 2)
+
+        except Exception as e:
+            logger.warning(f"Drawdown circuit breaker check failed: {e}")
+            return 1.0
 
     def _build_context(self, features: Dict, injury_report: Dict,
                        news_summary: Dict) -> Dict:

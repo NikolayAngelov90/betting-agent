@@ -183,6 +183,16 @@ class FeatureEngineer:
             features["home_midweek_flag"] = home_sit["midweek_flag"]
             features["away_midweek_flag"] = away_sit["midweek_flag"]
             features["rest_days_diff"] = home_sit["rest_days"] - away_sit["rest_days"]
+            # Fatigue index features
+            features["home_matches_14d"] = home_sit["matches_14d"]
+            features["away_matches_14d"] = away_sit["matches_14d"]
+            features["home_matches_30d"] = home_sit["matches_30d"]
+            features["away_matches_30d"] = away_sit["matches_30d"]
+            features["home_fatigue_index"] = home_sit["fatigue_index"]
+            features["away_fatigue_index"] = away_sit["fatigue_index"]
+            features["fatigue_diff"] = home_sit["fatigue_index"] - away_sit["fatigue_index"]
+            features["home_short_rest_count"] = home_sit["short_rest_count"]
+            features["away_short_rest_count"] = away_sit["short_rest_count"]
 
         # 13. League-specific baseline rates (home advantage, avg goals, BTTS rate, etc.)
         league_feat = self._get_league_features(league, as_of_date=as_of_date)
@@ -558,26 +568,86 @@ class FeatureEngineer:
             return defaults
 
     def _get_situational_features(self, team_id: int, match_date) -> dict:
-        """Return rest days and midweek flag based on team's previous match date."""
-        defaults = {"rest_days": 7, "midweek_flag": 0}
+        """Return rest days, midweek flag, and cumulative fatigue index.
+
+        Fatigue index considers:
+        - Number of matches in the last 14, 21, and 30 days
+        - Whether any recent match went to extra time (120 min)
+        - Cumulative short-rest matches (< 4 days between games)
+        """
+        defaults = {
+            "rest_days": 7, "midweek_flag": 0,
+            "matches_14d": 0, "matches_21d": 0, "matches_30d": 0,
+            "fatigue_index": 0.0, "short_rest_count": 0,
+        }
         try:
             with self.db.get_session() as session:
-                prev = session.query(Match).filter(
+                # Fetch last 10 matches (enough to cover 30 days for busy teams)
+                recent = session.query(Match).filter(
                     Match.is_fixture == False,
                     Match.home_goals.isnot(None),
                     Match.match_date < match_date,
                     or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
-                ).order_by(Match.match_date.desc()).limit(1).first()
+                ).order_by(Match.match_date.desc()).limit(10).all()
 
-                if not prev:
+                if not recent:
                     return defaults
 
+                prev = recent[0]
                 delta = (match_date - prev.match_date).days
                 rest_days = min(delta, 21)
-                # Midweek = previous match was Tue(1), Wed(2), or Thu(3)
                 midweek_flag = 1 if prev.match_date.weekday() in (1, 2, 3) else 0
 
-                return {"rest_days": rest_days, "midweek_flag": midweek_flag}
+                # Count matches in recent windows
+                matches_14d = 0
+                matches_21d = 0
+                matches_30d = 0
+                short_rest_count = 0
+                extra_time_recent = 0
+
+                match_dates = []
+                for m in recent:
+                    days_before = (match_date - m.match_date).days
+                    if days_before <= 14:
+                        matches_14d += 1
+                    if days_before <= 21:
+                        matches_21d += 1
+                    if days_before <= 30:
+                        matches_30d += 1
+                    match_dates.append(m.match_date)
+                    # Check for extra time (regulation score exists and differs from final)
+                    if (m.regulation_home_goals is not None
+                            and m.home_goals is not None
+                            and (m.regulation_home_goals != m.home_goals
+                                 or m.regulation_away_goals != m.away_goals)):
+                        if days_before <= 14:
+                            extra_time_recent += 1
+
+                # Count short-rest intervals (< 4 days between consecutive matches)
+                for i in range(len(match_dates) - 1):
+                    gap = (match_dates[i] - match_dates[i + 1]).days
+                    if gap < 4:
+                        short_rest_count += 1
+
+                # Composite fatigue index (0-1 scale):
+                # - matches_14d contributes most (congestion is immediate)
+                # - short_rest_count penalises accumulated fatigue
+                # - extra_time adds penalty
+                fatigue_index = (
+                    min(matches_14d / 5.0, 1.0) * 0.50       # 5+ matches in 14d = max
+                    + min(short_rest_count / 3.0, 1.0) * 0.30  # 3+ short rests = max
+                    + min(extra_time_recent, 1) * 0.20          # any extra time = penalty
+                )
+
+                return {
+                    "rest_days": rest_days,
+                    "midweek_flag": midweek_flag,
+                    "matches_14d": matches_14d,
+                    "matches_21d": matches_21d,
+                    "matches_30d": matches_30d,
+                    "fatigue_index": round(fatigue_index, 3),
+                    "short_rest_count": short_rest_count,
+                }
         except Exception as e:
             logger.warning(f"Situational features failed for team {team_id}: {e}")
             return defaults
