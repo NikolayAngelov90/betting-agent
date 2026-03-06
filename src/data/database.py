@@ -80,7 +80,8 @@ class DatabaseManager:
         for table in removed:
             if table in existing:
                 with self.engine.begin() as conn:
-                    conn.execute(text(f'DROP TABLE IF EXISTS "{table}" CASCADE'))
+                    cascade = " CASCADE" if self.is_postgres else ""
+                    conn.execute(text(f'DROP TABLE IF EXISTS "{table}"{cascade}'))
                 logger.info(f"Dropped removed table: {table}")
 
     def _migrate_missing_columns(self):
