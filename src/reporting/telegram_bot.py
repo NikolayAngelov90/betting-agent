@@ -300,7 +300,13 @@ class TelegramNotifier:
             for leg in parlay["legs"]:
                 kickoff = ""
                 if leg.match_date:
-                    kickoff = f" ({self._format_kickoff(leg.match_date)})"
+                    try:
+                        from zoneinfo import ZoneInfo
+                        local_tz = ZoneInfo("Europe/Kiev")
+                    except Exception:
+                        local_tz = timezone(timedelta(hours=2))
+                    local_dt = leg.match_date.replace(tzinfo=timezone.utc).astimezone(local_tz)
+                    kickoff = f" ({local_dt.strftime('%H:%M')})"
                 lines.append(
                     f"  {leg.match}{kickoff}\n"
                     f"    {leg.selection} @ {leg.odds:.2f} (conf: {leg.confidence:.0%})"
