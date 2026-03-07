@@ -625,21 +625,31 @@ class FlashscoreScraper(BaseScraper):
         logger.info(f"Scraped {len(matches)} fixtures from {league}")
         return matches
 
-    def _click_load_more(self, driver):
-        """Click 'Load more' until all matches are visible on the listing page."""
+    def _click_load_more(self, driver, max_seconds: int = 15):
+        """Click 'Load more' until all matches are visible on the listing page.
+
+        Args:
+            max_seconds: Hard time budget for clicking.  Prevents runaway loops
+                         on pages with many paginated rounds (e.g. fixtures).
+        """
+        import time as _t
         LOAD_MORE_SELECTOR = '[data-testid="wcl-buttonLink"]'
         MATCH_SELECTOR = ".event__match.event__match--static.event__match--twoLine"
         MAX_EMPTY_CYCLES = 4
         empty_cycles = 0
+        deadline = _t.monotonic() + max_seconds
 
         while True:
+            if _t.monotonic() > deadline:
+                logger.debug("_click_load_more: time budget exhausted")
+                break
             try:
                 count_before = len(driver.find_elements(By.CSS_SELECTOR, MATCH_SELECTOR))
                 btn = driver.find_elements(By.CSS_SELECTOR, LOAD_MORE_SELECTOR)
                 if not btn:
                     break
                 btn[0].click()
-                import time; time.sleep(0.7)
+                _t.sleep(0.7)
                 count_after = len(driver.find_elements(By.CSS_SELECTOR, MATCH_SELECTOR))
                 if count_after == count_before:
                     empty_cycles += 1

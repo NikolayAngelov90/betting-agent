@@ -104,9 +104,20 @@ class FootballBettingAgent:
         # 2. Flashscore results + fixtures (no API quota — primary fixture source)
         # Results and fixtures are scraped independently so a results timeout does
         # not prevent today's fixtures from being loaded.
+        # Each section has a hard time budget to prevent runaway Chrome processes
+        # from blowing the CI timeout.
+        import time as _timer
         leagues = self.config.get("scraping.flashscore_leagues", [])
+
+        _RESULTS_BUDGET_S = 300   # 5 minutes for all results
+        _FIXTURES_BUDGET_S = 480  # 8 minutes for all fixtures
+
         try:
+            _results_deadline = _timer.monotonic() + _RESULTS_BUDGET_S
             for league in leagues:
+                if _timer.monotonic() > _results_deadline:
+                    logger.warning("Flashscore results: time budget exhausted, skipping remaining leagues")
+                    break
                 try:
                     await asyncio.wait_for(
                         self.scraper.scrape_league_results(league, skip_stats=True),
@@ -132,7 +143,11 @@ class FootballBettingAgent:
         # Fixtures (today's upcoming matches) — always attempted independently
         # Driver is freshly created here (results session was closed above).
         try:
+            _fixtures_deadline = _timer.monotonic() + _FIXTURES_BUDGET_S
             for league in leagues:
+                if _timer.monotonic() > _fixtures_deadline:
+                    logger.warning("Flashscore fixtures: time budget exhausted, skipping remaining leagues")
+                    break
                 try:
                     await asyncio.wait_for(
                         self.scraper.scrape_league_fixtures(league), timeout=90,
@@ -246,8 +261,10 @@ class FootballBettingAgent:
         # enrichment so its fast API calls fill shots/possession/etc. for most matches,
         # leaving Flashscore scraping only for matches without an API-Football ID.
         try:
-            await self.apifootball.update()
+            await asyncio.wait_for(self.apifootball.update(), timeout=600)  # 10 min cap
             logger.info("API-Football update complete")
+        except asyncio.TimeoutError:
+            logger.warning("API-Football update timed out after 10 minutes")
         except Exception as e:
             logger.error(f"API-Football update failed: {e}")
 

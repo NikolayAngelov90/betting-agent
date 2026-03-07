@@ -274,7 +274,7 @@ class APIFootballScraper(BaseScraper):
     BUDGET_RESULTS = 4    # keep: settlement for leagues not in football-data.org
     BUDGET_FIXTURES = 2   # keep: fixture ids needed for odds lookup
     BUDGET_XG = 10        # stats backfill — 10 matches max (~10 min over Neon)
-    BUDGET_ODDS = 66      # Over/Under 1.5, Team Goals, BTTS (today's fixtures)
+    BUDGET_ODDS = 25      # Reduced from 66: each fixture takes ~60s over Neon (DB writes)
     BUDGET_INJURIES = 5   # injuries for today's fixtures (1 request per fixture)
     BUDGET_RESERVE = 9
 
@@ -848,6 +848,19 @@ class APIFootballScraper(BaseScraper):
                 ).count()
                 odds_counts[mid] = cnt
 
+        # Only fetch odds for configured leagues — skip lower divisions that
+        # have apifootball_id but aren't in PRIORITY_LEAGUES (prevents
+        # wasting budget on league-one/league-two/etc.)
+        priority_set = set(PRIORITY_LEAGUES)
+        fixture_list = [
+            (mid, afid, lg) for mid, afid, lg in fixture_list
+            if lg in priority_set
+        ]
+
+        if not fixture_list:
+            logger.debug("No priority-league fixtures need odds")
+            return 0
+
         # Sort: fixtures with fewest existing odds first, then by league priority
         def sort_key(item):
             mid, _afid, league = item
@@ -859,12 +872,21 @@ class APIFootballScraper(BaseScraper):
             return (existing, lp)
 
         fixture_list.sort(key=sort_key)
-        need_odds = fixture_list
+
+        import time as _t
+        _ODDS_TIME_BUDGET_S = 600  # 10-minute hard cap on odds fetching
+        _odds_deadline = _t.monotonic() + _ODDS_TIME_BUDGET_S
 
         fetched = 0
-        for match_id, fixture_id, league in need_odds:
+        for match_id, fixture_id, league in fixture_list:
             if fetched >= odds_budget:
                 logger.info(f"Odds budget exhausted after {fetched} fixtures")
+                break
+            if _t.monotonic() > _odds_deadline:
+                logger.warning(
+                    f"Odds time budget exhausted ({_ODDS_TIME_BUDGET_S // 60} min) "
+                    f"after {fetched} fixtures"
+                )
                 break
 
             odds_data = await self._fetch_fixture_odds(fixture_id)
@@ -887,6 +909,14 @@ class APIFootballScraper(BaseScraper):
             return None
         return data.get("response", [])
 
+    # Only save odds from these major bookmakers to reduce DB writes.
+    # 200+ odds per fixture (15+ bookies × 14+ markets) causes 60s+ of
+    # individual SELECTs over Neon.  5 top bookies covers all markets well.
+    _TOP_BOOKMAKERS = {
+        "Bet365", "1xBet", "Unibet", "Betfair", "William Hill",
+        "Pinnacle", "Bwin", "Marathon Bet", "Betway",
+    }
+
     def _save_fixture_odds(self, match_id: int, odds_response: list) -> int:
         """Parse API-Football odds response and save to database.
 
@@ -899,6 +929,8 @@ class APIFootballScraper(BaseScraper):
                 bookmakers = entry.get("bookmakers", [])
                 for bookie in bookmakers:
                     bookie_name = bookie.get("name", "Unknown")
+                    if bookie_name not in self._TOP_BOOKMAKERS:
+                        continue
                     bets = bookie.get("bets", [])
 
                     for bet in bets:
