@@ -601,6 +601,7 @@ class FootballBettingAgent:
                     f"fixtures missing real bookmaker odds "
                     f"(budget: {_apifb_budget_remaining} requests left)"
                 )
+                import time as _timer
                 _FALLBACK_ODDS_BUDGET_S = 600  # 10-minute hard cap
                 _fallback_deadline = _timer.monotonic() + _FALLBACK_ODDS_BUDGET_S
                 for match_id, fixture_id, home, away in capped:
