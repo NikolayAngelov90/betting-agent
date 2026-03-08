@@ -273,9 +273,9 @@ class APIFootballScraper(BaseScraper):
     # for 9 top leagues, so API-Football results/fixture calls are secondary.
     BUDGET_RESULTS = 4    # keep: settlement for leagues not in football-data.org
     BUDGET_FIXTURES = 2   # keep: fixture ids needed for odds lookup
-    BUDGET_XG = 10        # stats backfill — 10 matches max (~10 min over Neon)
-    BUDGET_ODDS = 25      # Reduced from 66: each fixture takes ~60s over Neon (DB writes)
-    BUDGET_INJURIES = 5   # injuries for today's fixtures (1 request per fixture)
+    BUDGET_XG = 5         # stats backfill — reduced, most xG comes from football-data.org
+    BUDGET_ODDS = 25      # odds from top 3 bookmakers — fast DB writes now
+    BUDGET_INJURIES = 45  # injuries for ALL today's fixtures (1 request per fixture)
     BUDGET_RESERVE = 9
 
     def __init__(self, config=None):
@@ -912,9 +912,10 @@ class APIFootballScraper(BaseScraper):
     # Only save odds from these major bookmakers to reduce DB writes.
     # 200+ odds per fixture (15+ bookies × 14+ markets) causes 60s+ of
     # individual SELECTs over Neon.  5 top bookies covers all markets well.
+    # Only save odds from the 3 most reliable bookmakers — keeps DB lean
+    # (~12 rows/fixture instead of 100+) and speeds up Neon writes.
     _TOP_BOOKMAKERS = {
-        "Bet365", "1xBet", "Unibet", "Betfair", "William Hill",
-        "Pinnacle", "Bwin", "Marathon Bet", "Betway",
+        "Bet365", "1xBet", "Pinnacle",
     }
 
     def _save_fixture_odds(self, match_id: int, odds_response: list) -> int:

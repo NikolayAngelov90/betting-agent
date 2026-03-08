@@ -42,7 +42,7 @@ class TestInjuryScraper:
         from src.scrapers.injury_scraper import InjuryScraper
         import asyncio
         scraper = InjuryScraper(config={}, apifootball=None)
-        summary = asyncio.get_event_loop().run_until_complete(
+        summary = asyncio.run(
             scraper.get_injury_summary(team_id=99999)
         )
         assert summary["total_injured"] == 0

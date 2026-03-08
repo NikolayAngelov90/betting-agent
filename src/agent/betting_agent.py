@@ -169,97 +169,11 @@ class FootballBettingAgent:
             except Exception:
                 pass
 
-        # 2b. Scrape Flashscore odds for upcoming fixtures (1X2 + O/U + BTTS).
-        # Runs after fixtures are saved so all flashscore_ids are populated.
-        try:
-            from datetime import date, timedelta as _td
-            from src.data.models import Odds as _Odds
-            _today = date.today()
-            _start = datetime.combine(_today, datetime.min.time())
-            _end = _start + _td(days=1)  # today only
-            with self.db.get_session() as _sess:
-                _upcoming = _sess.query(Match).filter(
-                    Match.is_fixture == True,
-                    Match.match_date >= _start,
-                    Match.match_date < _end,
-                    Match.flashscore_id.isnot(None),
-                ).all()
-                # Check per market type so O/U + BTTS get scraped even when
-                # a previous run already stored 1X2 odds for this fixture.
-                _to_scrape = []
-                for _m in _upcoming:
-                    _missing = []
-                    if _sess.query(_Odds).filter_by(
-                        match_id=_m.id, bookmaker="Flashscore", market_type="1X2"
-                    ).count() == 0:
-                        _missing.append("home-draw-away")
-                    if _sess.query(_Odds).filter_by(
-                        match_id=_m.id, bookmaker="Flashscore", market_type="over_under"
-                    ).count() == 0:
-                        _missing.append("over-under")
-                    if _sess.query(_Odds).filter_by(
-                        match_id=_m.id, bookmaker="Flashscore", market_type="btts"
-                    ).count() == 0:
-                        _missing.append("btts")
-                    if _missing:
-                        _to_scrape.append((_m.id, _m.flashscore_id, tuple(_missing)))
-            if _to_scrape:
-                logger.info(
-                    f"Pre-caching Flashscore odds for {len(_to_scrape)} upcoming fixtures..."
-                )
-                _odds_scraper = FlashscoreScraper()
-                _cf_failures = 0  # consecutive Cloudflare / no-data failures
-                _cf_abort_threshold = 3  # fail fast — Cloudflare blocking is all-or-nothing in CI
-                import time as _odds_timer
-                _ODDS_BUDGET_S = 180  # 3-minute cap — fail fast, API-Football covers the rest
-                _odds_deadline = _odds_timer.monotonic() + _ODDS_BUDGET_S
-                try:
-                    for _mid, _fsid, _markets in _to_scrape:
-                        if _odds_timer.monotonic() > _odds_deadline:
-                            logger.warning(
-                                f"Odds pre-caching: {_ODDS_BUDGET_S // 60}-minute budget "
-                                f"exhausted — stopping early; remaining fixtures will use "
-                                f"API-Football odds"
-                            )
-                            break
-                        if _cf_failures >= _cf_abort_threshold:
-                            logger.warning(
-                                f"Cloudflare blocking detected ({_cf_failures} consecutive "
-                                f"failures) — aborting Flashscore odds pre-cache; "
-                                f"API-Football will cover remaining fixtures"
-                            )
-                            break
-                        try:
-                            from src.data.models import Odds as _OddsCheck
-                            _odds_before = 0
-                            with self.db.get_session() as _chk:
-                                _odds_before = _chk.query(_OddsCheck).filter_by(
-                                    match_id=_mid, bookmaker="Flashscore"
-                                ).count()
-                            await _odds_scraper.scrape_and_save_odds(
-                                _mid, _fsid,
-                                markets=_markets,
-                            )
-                            with self.db.get_session() as _chk:
-                                _odds_after = _chk.query(_OddsCheck).filter_by(
-                                    match_id=_mid, bookmaker="Flashscore"
-                                ).count()
-                            if _odds_after > _odds_before:
-                                _cf_failures = 0  # reset on success
-                            else:
-                                _cf_failures += 1
-                        except Exception as _exc:
-                            logger.warning(f"Odds pre-cache failed for {_mid}: {_exc}")
-                            _cf_failures += 1
-                finally:
-                    _odds_scraper.close_driver()
-                logger.info("Flashscore odds pre-caching complete.")
-        except Exception as e:
-            logger.error(f"Flashscore odds pre-cache failed: {e}")
+        # 2b. Flashscore odds scraping REMOVED — Cloudflare blocks all browser
+        # requests in CI consistently. API-Football is now the sole odds source
+        # (fetches 1X2 + O/U + BTTS from top bookmakers via fast API calls).
 
-        # 2c. API-Football (fixtures, xG, advanced stats) — runs BEFORE Flashscore
-        # enrichment so its fast API calls fill shots/possession/etc. for most matches,
-        # leaving Flashscore scraping only for matches without an API-Football ID.
+        # 2c. API-Football (fixtures, xG, advanced stats, odds).
         try:
             await asyncio.wait_for(self.apifootball.update(), timeout=600)  # 10 min cap
             logger.info("API-Football update complete")
@@ -295,6 +209,52 @@ class FootballBettingAgent:
             logger.info("Models fitted")
         except Exception as e:
             logger.error(f"Model fitting failed: {e}")
+
+        # 6b. Targeted backfill for low-coverage teams in today's fixtures.
+        # If a team in today's fixtures has no Poisson/Elo data (e.g. newly promoted),
+        # fetch its recent history from API-Football using remaining budget.
+        try:
+            from datetime import date as _dt_date, timedelta as _td2
+            _today = _dt_date.today()
+            _start = datetime.combine(_today, datetime.min.time())
+            _end = _start + _td2(days=1)
+            with self.db.get_session() as _sess:
+                _fixtures = _sess.query(Match).filter(
+                    Match.is_fixture == True,
+                    Match.match_date >= _start,
+                    Match.match_date < _end,
+                ).all()
+                _low_cov_team_ids = set()
+                for _m in _fixtures:
+                    cov = self.predictor.check_coverage(_m.home_team_id, _m.away_team_id)
+                    if not cov["home_poisson"] or not cov["home_elo"]:
+                        _low_cov_team_ids.add(_m.home_team_id)
+                    if not cov["away_poisson"] or not cov["away_elo"]:
+                        _low_cov_team_ids.add(_m.away_team_id)
+            if _low_cov_team_ids:
+                _remaining = max(0,
+                    self.apifootball._daily_limit
+                    - self.apifootball._requests_today
+                    - self.apifootball.BUDGET_RESERVE
+                )
+                _backfill_budget = min(15, _remaining)
+                logger.info(
+                    f"Found {len(_low_cov_team_ids)} low-coverage teams in today's fixtures — "
+                    f"triggering targeted backfill (budget: {_backfill_budget})"
+                )
+                if _backfill_budget > 0:
+                    await self.apifootball.backfill_team_history(
+                        min_matches=10,
+                        seasons=[2024, 2025],
+                        max_budget=_backfill_budget,
+                        min_remaining_budget=0,
+                    )
+                # Re-fit models with newly fetched data
+                self.predictor.fit()
+                self.feature_engineer.elo_ratings = self.predictor.elo.ratings
+                logger.info("Models re-fitted after backfill")
+        except Exception as e:
+            logger.debug(f"Low-coverage backfill skipped: {e}")
 
         logger.info("Daily update cycle complete")
 
@@ -491,82 +451,11 @@ class FootballBettingAgent:
             logger.info(f"No fixtures found for {target}")
             return []
 
-        # ── Scrape live Flashscore odds for today's fixtures ──────────────────
-        # Check per-market which fixtures are still missing odds so that a
-        # partial run (e.g. --update aborted after 3 CF failures) doesn't
-        # prevent the remaining markets from being scraped here.
-        _MARKET_MAP = [
-            ("home-draw-away", "1X2"),
-            ("over-under",     "over_under"),
-            ("btts",           "btts"),
-        ]
-        with self.db.get_session() as session:
-            to_scrape = []
-            for fid in fixture_ids:
-                m = session.get(Match, fid)
-                if not (m and m.flashscore_id):
-                    continue
-                missing = [
-                    slug for slug, mtype in _MARKET_MAP
-                    if session.query(Odds).filter_by(
-                        match_id=fid, bookmaker="Flashscore", market_type=mtype
-                    ).count() == 0
-                ]
-                if missing:
-                    # Track how many markets are missing (fewer = partial, more likely to succeed)
-                    to_scrape.append((fid, m.flashscore_id, tuple(missing), len(missing)))
-
-        if to_scrape:
-            # Sort: partial-odds fixtures first (1-2 missing markets), then full-missing (3).
-            # Partial fixtures are more likely to succeed (1X2 worked, just O/U or BTTS needed).
-            # Full-missing fixtures are more likely to be CF-blocked or have no data at all.
-            to_scrape.sort(key=lambda x: x[3])
-            logger.info(f"Scraping Flashscore odds for {len(to_scrape)} fixtures...")
-            import time as _picks_timer
-            _PICKS_ODDS_BUDGET_S = 180  # 3-minute cap — fail fast, API-Football covers the rest
-            _picks_odds_deadline = _picks_timer.monotonic() + _PICKS_ODDS_BUDGET_S
-            _picks_cf_failures = 0
-            _picks_cf_abort = 3  # fail fast — Cloudflare blocking is all-or-nothing in CI
-            scraper = FlashscoreScraper()
-            try:
-                for match_id, fs_id, markets, _n_missing in to_scrape:
-                    if _picks_timer.monotonic() > _picks_odds_deadline:
-                        logger.warning(
-                            f"Picks odds scraping: {_PICKS_ODDS_BUDGET_S // 60}-min budget "
-                            f"exhausted — remaining fixtures will use existing odds"
-                        )
-                        break
-                    if _picks_cf_failures >= _picks_cf_abort:
-                        logger.warning(
-                            f"Cloudflare blocking detected ({_picks_cf_failures} consecutive "
-                            f"failures) — aborting odds scrape in picks"
-                        )
-                        break
-                    try:
-                        _odds_before = 0
-                        with self.db.get_session() as _chk:
-                            _odds_before = _chk.query(Odds).filter_by(
-                                match_id=match_id, bookmaker="Flashscore"
-                            ).count()
-                        await scraper.scrape_and_save_odds(
-                            match_id, fs_id, markets=markets,
-                        )
-                        with self.db.get_session() as _chk:
-                            _odds_after = _chk.query(Odds).filter_by(
-                                match_id=match_id, bookmaker="Flashscore"
-                            ).count()
-                        if _odds_after > _odds_before:
-                            _picks_cf_failures = 0
-                        else:
-                            _picks_cf_failures += 1
-                    except Exception as exc:
-                        logger.warning(f"Odds scrape failed for match {match_id}: {exc}")
-                        _picks_cf_failures += 1
-            finally:
-                scraper.close_driver()
-            logger.info("Flashscore odds scraping complete.")
-        else:
-            logger.info("All fixtures already have odds or no flashscore_id available.")
+        # ── Flashscore odds scraping REMOVED ─────────────────────────────────
+        # Flashscore is consistently Cloudflare-blocked in CI (always aborts
+        # after 3 consecutive failures). API-Football now fetches odds for all
+        # fixtures during --update, so browser-based odds scraping is redundant.
+        # Removing saves ~3 min of wasted Chrome startup + CF detection time.
 
         # ── API-Football odds fallback ─────────────────────────────────────────
         # For fixtures that have NO real bookmaker odds (zero odds, or only

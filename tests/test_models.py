@@ -1,5 +1,6 @@
 """Tests for prediction models."""
 
+import warnings
 import numpy as np
 import pytest
 
@@ -95,11 +96,14 @@ class TestMLModels:
         np.random.seed(42)
         X = np.random.randn(100, 5)
         y = np.random.choice([0, 1, 2], size=100)
+        feature_names = [f"f{i}" for i in range(5)]
 
-        ml.fit(X, y, feature_names=[f"f{i}" for i in range(5)])
+        ml.fit(X, y, feature_names=feature_names)
         assert ml.is_fitted
 
-        pred = ml.predict(np.random.randn(5))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            pred = ml.predict(np.random.randn(5), feature_names=feature_names)
         avg = pred["ml_average"]
         total = avg["home_win"] + avg["draw"] + avg["away_win"]
         assert abs(total - 1.0) < 0.01

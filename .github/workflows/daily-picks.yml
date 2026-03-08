@@ -108,15 +108,6 @@ jobs:
               print('WARNING: fewer than 100 completed matches — ML training may be skipped')
           PYEOF
 
-      - name: Check ML models
-        run: |
-          if [ -f data/models/ml_models.pkl ] && [ $(stat -c%s data/models/ml_models.pkl) -gt 1000 ]; then
-            echo "Cached ML models found ($(du -h data/models/ml_models.pkl | cut -f1))"
-          else
-            echo "No ML models — picks will use Poisson + Elo only (ML weight=0)."
-            echo "To add ML: run --train locally with SQLite, commit models, then cache will persist them."
-          fi
-
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks
         timeout-minutes: 45

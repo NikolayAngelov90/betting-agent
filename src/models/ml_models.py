@@ -181,8 +181,11 @@ class MLModels:
 
         logger.info(f"Training with {X.shape[1]} features, {n_samples} samples")
 
-        # Scale features
+        # Scale features — use DataFrame with column names so LightGBM/XGBoost
+        # store correct feature names (avoids sklearn UserWarning at predict time)
+        import pandas as _pd
         X_scaled = self.scaler.fit_transform(X)
+        X_df = _pd.DataFrame(X_scaled, columns=self.feature_names)
 
         # Time-series cross-validation
         tscv = TimeSeriesSplit(n_splits=5)
@@ -191,8 +194,8 @@ class MLModels:
             logger.info(f"Training {name}...")
 
             cv_scores = []
-            for train_idx, val_idx in tscv.split(X_scaled):
-                X_train, X_val = X_scaled[train_idx], X_scaled[val_idx]
+            for train_idx, val_idx in tscv.split(X_df):
+                X_train, X_val = X_df.iloc[train_idx], X_df.iloc[val_idx]
                 y_train, y_val = y[train_idx], y[val_idx]
 
                 model.fit(X_train, y_train)
@@ -213,14 +216,14 @@ class MLModels:
         for name, model in self.models.items():
             if name in self._CALIBRATE_MODELS:
                 cal = CalibratedClassifierCV(model, cv=5, method="isotonic")
-                cal.fit(X_scaled, y)
+                cal.fit(X_df, y)
                 self.calibrated_models[name] = cal
                 logger.info(
-                    f"{name}: isotonic calibration with 5-fold CV on {len(X_scaled)} samples"
+                    f"{name}: isotonic calibration with 5-fold CV on {len(X_df)} samples"
                 )
             else:
                 # LR: train on all data (already probability-calibrated)
-                model.fit(X_scaled, y)
+                model.fit(X_df, y)
                 self.calibrated_models[name] = model
 
         self.is_fitted = True
@@ -338,7 +341,7 @@ class MLModels:
         filepath = load_dir / "ml_models.pkl"
 
         if not filepath.exists():
-            logger.warning(f"No saved models found at {filepath}")
+            logger.debug(f"No saved models found at {filepath} — using Poisson+Elo only")
             return
 
         try:
