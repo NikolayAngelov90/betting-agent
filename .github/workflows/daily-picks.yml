@@ -88,6 +88,10 @@ jobs:
         timeout-minutes: 25
         continue-on-error: true
 
+      - name: Re-settle after update (catches API-Football-only matches)
+        run: python -m src.agent.betting_agent --settle
+        continue-on-error: true
+
       - name: Check DB health before training
         run: |
           python << 'PYEOF'
