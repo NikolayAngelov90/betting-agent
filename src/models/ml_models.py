@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import numpy as np
 import os
+import pandas as pd
 import pickle
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -183,9 +184,8 @@ class MLModels:
 
         # Scale features — use DataFrame with column names so LightGBM/XGBoost
         # store correct feature names (avoids sklearn UserWarning at predict time)
-        import pandas as _pd
         X_scaled = self.scaler.fit_transform(X)
-        X_df = _pd.DataFrame(X_scaled, columns=self.feature_names)
+        X_df = pd.DataFrame(X_scaled, columns=self.feature_names)
 
         # Time-series cross-validation
         tscv = TimeSeriesSplit(n_splits=5)
@@ -272,8 +272,7 @@ class MLModels:
             return self._default_prediction()
 
         # Wrap in DataFrame so LightGBM gets feature names (suppresses warning)
-        import pandas as _pd
-        X_named = _pd.DataFrame(X_scaled, columns=self.feature_names)
+        X_named = pd.DataFrame(X_scaled, columns=self.feature_names)
 
         predictions = {}
         all_probs = []
@@ -540,8 +539,7 @@ class GoalsMLModel:
             return 0.5
 
         # Wrap in DataFrame so LightGBM gets feature names (suppresses warning)
-        import pandas as _pd
-        X_named = _pd.DataFrame(X_scaled, columns=self.feature_names)
+        X_named = pd.DataFrame(X_scaled, columns=self.feature_names)
 
         probs = []
         for name in self.models:

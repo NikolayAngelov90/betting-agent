@@ -30,6 +30,39 @@ class TestNewsScraper:
         assert score < 0.0
 
 
+class TestAPIFootballScraper:
+    """Tests for API-Football scraper budget helpers."""
+
+    def test_remaining_budget_default(self):
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper._daily_limit = 100
+        scraper._requests_today = 0
+        assert scraper.remaining_budget() == 100 - scraper.BUDGET_RESERVE
+
+    def test_remaining_budget_after_requests(self):
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper._daily_limit = 100
+        scraper._requests_today = 60
+        assert scraper.remaining_budget() == 100 - 60 - scraper.BUDGET_RESERVE
+
+    def test_remaining_budget_never_negative(self):
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper._daily_limit = 100
+        scraper._requests_today = 200
+        assert scraper.remaining_budget() == 0
+
+    def test_fallback_bookmakers_defined(self):
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        assert len(APIFootballScraper._TOP_BOOKMAKERS) >= 3
+        assert len(APIFootballScraper._FALLBACK_BOOKMAKERS) >= 3
+        assert APIFootballScraper._TOP_BOOKMAKERS.isdisjoint(
+            APIFootballScraper._FALLBACK_BOOKMAKERS
+        )
+
+
 class TestInjuryScraper:
     """Tests for injury scraper."""
 

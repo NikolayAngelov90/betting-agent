@@ -286,6 +286,10 @@ class APIFootballScraper(BaseScraper):
         self._quota_exhausted = False  # Set True on first quota error; skips all further calls
         self._logged_unknown_bets: set = set()  # Suppress repeated unknown bet type logs
 
+    def remaining_budget(self) -> int:
+        """Return remaining API requests available (excluding safety reserve)."""
+        return max(0, self._daily_limit - self._requests_today - self.BUDGET_RESERVE)
+
     async def _api_get(self, endpoint: str, params: dict = None) -> Optional[dict]:
         """Make an authenticated GET request to API-Football.
 
@@ -909,17 +913,27 @@ class APIFootballScraper(BaseScraper):
             return None
         return data.get("response", [])
 
-    # Only save odds from the 3 most reliable bookmakers — keeps DB lean
-    # (~12 rows/fixture instead of 100+) and speeds up Neon writes.
-    _TOP_BOOKMAKERS = {
-        "Bet365", "1xBet", "Pinnacle",
-    }
+    # Primary bookmakers (preferred). If none cover a fixture, fall back to
+    # the secondary tier so minor leagues still get odds.
+    _TOP_BOOKMAKERS = {"Bet365", "1xBet", "Pinnacle"}
+    _FALLBACK_BOOKMAKERS = {"Unibet", "Betfair", "William Hill", "Bwin", "Betway"}
 
     def _save_fixture_odds(self, match_id: int, odds_response: list) -> int:
         """Parse API-Football odds response and save to database.
 
+        Uses primary bookmakers first; falls back to secondary tier if the
+        primary set produces zero odds for this fixture.
+
         Returns count of odds records created.
         """
+        count = self._save_odds_from_set(match_id, odds_response, self._TOP_BOOKMAKERS)
+        if count == 0:
+            count = self._save_odds_from_set(match_id, odds_response, self._FALLBACK_BOOKMAKERS)
+        return count
+
+    def _save_odds_from_set(self, match_id: int, odds_response: list,
+                            allowed_bookmakers: set) -> int:
+        """Save odds for a fixture, filtered to the given bookmaker set."""
         count = 0
 
         with self.db.get_session() as session:
@@ -927,7 +941,7 @@ class APIFootballScraper(BaseScraper):
                 bookmakers = entry.get("bookmakers", [])
                 for bookie in bookmakers:
                     bookie_name = bookie.get("name", "Unknown")
-                    if bookie_name not in self._TOP_BOOKMAKERS:
+                    if bookie_name not in allowed_bookmakers:
                         continue
                     bets = bookie.get("bets", [])
 
@@ -994,24 +1008,32 @@ class APIFootballScraper(BaseScraper):
     # ---- Historical data backfill ----
 
     async def backfill_team_history(self, min_matches: int = 20,
-                                    seasons: List[int] = None,
+                                    seasons: Optional[List[int]] = None,
                                     max_budget: int = 30,
                                     min_remaining_budget: int = 25,
-                                    target_team_ids: set = None):
+                                    target_team_ids: Optional[set] = None):
         """Fetch historical match data for low-coverage teams in the database.
 
         When target_team_ids is provided, only those teams are considered
         (used by targeted backfill for today's fixtures). Otherwise scans
         all teams with upcoming fixtures within 14 days.
 
+        Args:
+            min_matches: Skip teams with at least this many completed matches.
+            seasons: API-Football season years to fetch. Defaults to [2023, 2024, 2025].
+            max_budget: Maximum API requests to spend on backfill.
+            min_remaining_budget: Skip backfill if fewer than this many requests
+                remain. Callers that already reserved budget may pass 0.
+            target_team_ids: When set, only backfill these team IDs.
+
         Priority: teams with the fewest matches are processed first.
-        Each team × season costs 1 API request. Results saved as completed matches.
+        Each team × season costs 1 API request.
         """
         if seasons is None:
             seasons = [2023, 2024, 2025]
 
         # Guard: skip backfill if the remaining daily budget is too low.
-        remaining = self._daily_limit - self._requests_today
+        remaining = self.remaining_budget()
         if remaining < min_remaining_budget:
             logger.warning(
                 f"API-Football backfill skipped: only {remaining} requests remaining "

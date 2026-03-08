@@ -169,11 +169,7 @@ class FootballBettingAgent:
             except Exception:
                 pass
 
-        # 2b. Flashscore odds scraping REMOVED — Cloudflare blocks all browser
-        # requests in CI consistently. API-Football is now the sole odds source
-        # (fetches 1X2 + O/U + BTTS from top bookmakers via fast API calls).
-
-        # 2c. API-Football (fixtures, xG, advanced stats, odds).
+        # 2b. API-Football (fixtures, xG, advanced stats, odds).
         try:
             await asyncio.wait_for(self.apifootball.update(), timeout=600)  # 10 min cap
             logger.info("API-Football update complete")
@@ -211,13 +207,10 @@ class FootballBettingAgent:
             logger.error(f"Model fitting failed: {e}")
 
         # 6b. Targeted backfill for low-coverage teams in today's fixtures.
-        # If a team in today's fixtures has no Poisson/Elo data (e.g. newly promoted),
-        # fetch its recent history from API-Football using remaining budget.
         try:
-            from datetime import date as _dt_date, timedelta as _td2
-            _today = _dt_date.today()
+            _today = date.today()
             _start = datetime.combine(_today, datetime.min.time())
-            _end = _start + _td2(days=1)
+            _end = _start + timedelta(days=1)
             with self.db.get_session() as _sess:
                 _fixtures = _sess.query(Match).filter(
                     Match.is_fixture == True,
@@ -232,27 +225,23 @@ class FootballBettingAgent:
                     if not cov["away_poisson"] or not cov["away_elo"]:
                         _low_cov_team_ids.add(_m.away_team_id)
             if _low_cov_team_ids:
-                _remaining = max(0,
-                    self.apifootball._daily_limit
-                    - self.apifootball._requests_today
-                    - self.apifootball.BUDGET_RESERVE
-                )
-                _backfill_budget = min(15, _remaining)
+                _backfill_budget = min(15, self.apifootball.remaining_budget())
                 logger.info(
                     f"Found {len(_low_cov_team_ids)} low-coverage teams in today's fixtures — "
                     f"triggering targeted backfill (budget: {_backfill_budget})"
                 )
                 if _backfill_budget > 0:
-                    _reqs_before = self.apifootball._requests_today
+                    _budget_before = self.apifootball.remaining_budget()
+                    _bf_seasons = self.config.get("models.backfill_seasons", [2023, 2024, 2025])
+                    _bf_min = self.config.get("models.backfill_min_matches", 10)
                     await self.apifootball.backfill_team_history(
-                        min_matches=10,
-                        seasons=[2024, 2025],
+                        min_matches=_bf_min,
+                        seasons=_bf_seasons,
                         max_budget=_backfill_budget,
                         min_remaining_budget=0,
                         target_team_ids=_low_cov_team_ids,
                     )
-                    _reqs_used = self.apifootball._requests_today - _reqs_before
-                    # Only re-fit if backfill actually fetched new data
+                    _reqs_used = _budget_before - self.apifootball.remaining_budget()
                     if _reqs_used > 0:
                         self.predictor.fit()
                         self.feature_engineer.elo_ratings = self.predictor.elo.ratings
@@ -457,24 +446,12 @@ class FootballBettingAgent:
             logger.info(f"No fixtures found for {target}")
             return []
 
-        # ── Flashscore odds scraping REMOVED ─────────────────────────────────
-        # Flashscore is consistently Cloudflare-blocked in CI (always aborts
-        # after 3 consecutive failures). API-Football now fetches odds for all
-        # fixtures during --update, so browser-based odds scraping is redundant.
-        # Removing saves ~3 min of wasted Chrome startup + CF detection time.
-
         # ── API-Football odds fallback ─────────────────────────────────────────
         # For fixtures that have NO real bookmaker odds (zero odds, or only
         # "Flashscore" display odds), try API-Football if they have an
         # apifootball_id and we have budget remaining (free tier = 100/day).
         if self.apifootball.enabled:
-            _apifb_budget_remaining = max(
-                0, self.apifootball._daily_limit
-                - self.apifootball._requests_today
-                - self.apifootball.BUDGET_RESERVE
-            )
-            # Cap to 20 requests max to avoid 40+ min of odds fetching
-            _apifb_budget_remaining = min(_apifb_budget_remaining, 20)
+            _apifb_budget_remaining = min(self.apifootball.remaining_budget(), 20)
             with self.db.get_session() as session:
                 apifb_fallback = []
                 for fid in fixture_ids:
