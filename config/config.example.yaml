@@ -106,6 +106,8 @@ models:
   backfill_seasons: [2023, 2024, 2025]
   # Minimum matches a team needs before it's no longer considered low-coverage
   backfill_min_matches: 10
+  # Max API requests for injury fetching per run (leaves room for backfill)
+  max_injury_budget: 30
   retrain_interval_days: 7
   min_training_samples: 1000
 

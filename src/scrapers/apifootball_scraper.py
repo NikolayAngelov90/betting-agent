@@ -929,6 +929,8 @@ class APIFootballScraper(BaseScraper):
         count = self._save_odds_from_set(match_id, odds_response, self._TOP_BOOKMAKERS)
         if count == 0:
             count = self._save_odds_from_set(match_id, odds_response, self._FALLBACK_BOOKMAKERS)
+            if count > 0:
+                logger.debug(f"Match {match_id}: primary bookmakers had no odds, saved {count} from fallback tier")
         return count
 
     def _save_odds_from_set(self, match_id: int, odds_response: list,
@@ -1007,7 +1009,7 @@ class APIFootballScraper(BaseScraper):
 
     # ---- Historical data backfill ----
 
-    async def backfill_team_history(self, min_matches: int = 20,
+    async def backfill_team_history(self, min_matches: int = 10,
                                     seasons: Optional[List[int]] = None,
                                     max_budget: int = 30,
                                     min_remaining_budget: int = 25,

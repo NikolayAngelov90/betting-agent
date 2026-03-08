@@ -62,6 +62,38 @@ class TestAPIFootballScraper:
             APIFootballScraper._FALLBACK_BOOKMAKERS
         )
 
+    def test_save_fixture_odds_primary_succeeds(self):
+        """When primary bookmakers return odds, fallback is not called."""
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper._logged_unknown_bets = set()
+        calls = []
+        def mock_save(match_id, odds_resp, bookmakers):
+            calls.append(bookmakers)
+            if bookmakers is APIFootballScraper._TOP_BOOKMAKERS:
+                return 5  # primary found odds
+            return 3
+        scraper._save_odds_from_set = mock_save
+        result = scraper._save_fixture_odds(1, [{}])
+        assert result == 5
+        assert len(calls) == 1  # fallback never called
+
+    def test_save_fixture_odds_fallback_triggers(self):
+        """When primary returns 0, fallback tier is tried."""
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper._logged_unknown_bets = set()
+        calls = []
+        def mock_save(match_id, odds_resp, bookmakers):
+            calls.append(bookmakers)
+            if bookmakers is APIFootballScraper._TOP_BOOKMAKERS:
+                return 0  # primary has nothing
+            return 4  # fallback finds odds
+        scraper._save_odds_from_set = mock_save
+        result = scraper._save_fixture_odds(1, [{}])
+        assert result == 4
+        assert len(calls) == 2  # both tiers called
+
 
 class TestInjuryScraper:
     """Tests for injury scraper."""
