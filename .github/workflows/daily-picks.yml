@@ -9,7 +9,7 @@ on:
 jobs:
   daily-picks:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
 
     env:
       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
@@ -115,6 +115,7 @@ jobs:
 
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks
+        timeout-minutes: 45
 
       - name: Send weekly performance report (Sundays only)
         if: success()

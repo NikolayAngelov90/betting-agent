@@ -109,8 +109,8 @@ class FootballBettingAgent:
         import time as _timer
         leagues = self.config.get("scraping.flashscore_leagues", [])
 
-        _RESULTS_BUDGET_S = 300   # 5 minutes for all results
-        _FIXTURES_BUDGET_S = 480  # 8 minutes for all fixtures
+        _RESULTS_BUDGET_S = 480   # 8 minutes for all results (~80s/league × 13 leagues)
+        _FIXTURES_BUDGET_S = 300  # 5 minutes for all fixtures (~15s/league × 13 leagues)
 
         try:
             _results_deadline = _timer.monotonic() + _RESULTS_BUDGET_S
@@ -578,6 +578,8 @@ class FootballBettingAgent:
                 - self.apifootball._requests_today
                 - self.apifootball.BUDGET_RESERVE
             )
+            # Cap to 20 requests max to avoid 40+ min of odds fetching
+            _apifb_budget_remaining = min(_apifb_budget_remaining, 20)
             with self.db.get_session() as session:
                 apifb_fallback = []
                 for fid in fixture_ids:
@@ -599,7 +601,15 @@ class FootballBettingAgent:
                     f"fixtures missing real bookmaker odds "
                     f"(budget: {_apifb_budget_remaining} requests left)"
                 )
+                _FALLBACK_ODDS_BUDGET_S = 600  # 10-minute hard cap
+                _fallback_deadline = _timer.monotonic() + _FALLBACK_ODDS_BUDGET_S
                 for match_id, fixture_id, home, away in capped:
+                    if _timer.monotonic() > _fallback_deadline:
+                        logger.warning(
+                            f"Fallback odds time budget exhausted "
+                            f"({_FALLBACK_ODDS_BUDGET_S // 60} min)"
+                        )
+                        break
                     try:
                         odds_data = await self.apifootball._fetch_fixture_odds(fixture_id)
                         if odds_data:
