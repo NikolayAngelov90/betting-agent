@@ -31,20 +31,22 @@ class InjuryScraper:
         """Fetch injuries for today's fixtures that have an apifootball_id.
 
         Uses the shared APIFootballScraper instance so all requests count
-        against the single daily quota.  Uses BUDGET_INJURIES to cover all fixtures.
+        against the single daily quota.  Budget is dynamic: min(fixture_count,
+        remaining requests) so low-fixture days release budget for other uses.
         """
         if not self.apifootball or not self.apifootball.enabled:
             logger.debug("API-Football not available — skipping injury update")
             return
 
-        # Use the dedicated injury budget (default 45) to cover all fixtures
+        # Dynamic budget: use whatever remains after static steps, capped to
+        # actual fixture count (no point reserving 55 if only 20 fixtures today)
         budget_remaining = max(
             0,
             self.apifootball._daily_limit
             - self.apifootball._requests_today
             - self.apifootball.BUDGET_RESERVE
         )
-        injury_budget = min(self.apifootball.BUDGET_INJURIES, budget_remaining)
+        injury_budget = budget_remaining  # will be capped to len(fixture_list) below
         if injury_budget <= 0:
             logger.debug("No API budget remaining for injuries")
             return
@@ -69,8 +71,11 @@ class InjuryScraper:
             logger.debug("No fixtures for injury update")
             return
 
+        # Cap budget to actual fixture count — release unused requests for backfill
+        injury_budget = min(injury_budget, len(fixture_list))
+
         logger.info(
-            f"Fetching injuries for {min(len(fixture_list), injury_budget)}"
+            f"Fetching injuries for {injury_budget}"
             f"/{len(fixture_list)} fixtures (budget: {injury_budget})"
         )
 

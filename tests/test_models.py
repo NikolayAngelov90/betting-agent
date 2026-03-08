@@ -1,6 +1,5 @@
 """Tests for prediction models."""
 
-import warnings
 import numpy as np
 import pytest
 
@@ -101,9 +100,7 @@ class TestMLModels:
         ml.fit(X, y, feature_names=feature_names)
         assert ml.is_fitted
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            pred = ml.predict(np.random.randn(5), feature_names=feature_names)
+        pred = ml.predict(np.random.randn(5), feature_names=feature_names)
         avg = pred["ml_average"]
         total = avg["home_win"] + avg["draw"] + avg["away_win"]
         assert abs(total - 1.0) < 0.01

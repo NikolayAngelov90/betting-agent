@@ -263,20 +263,15 @@ class APIFootballScraper(BaseScraper):
     """Fetches xG, match statistics, fixtures, and odds from API-Football."""
 
     # Request budget allocation (out of 100/day free tier).
-    #
-    # Strategy: redirect the bulk of the budget from xG backfill (which the
-    # Poisson model ignores entirely — it computes its own expected goals from
-    # attack/defense ratings) to rich odds markets that the value calculator
-    # can directly use (Over/Under 1.5, Team Goals Home/Away, etc.).
-    #
-    # football-data.org (free, no daily limit) now covers fixtures + results
-    # for 9 top leagues, so API-Football results/fixture calls are secondary.
-    BUDGET_RESULTS = 4    # keep: settlement for leagues not in football-data.org
-    BUDGET_FIXTURES = 2   # keep: fixture ids needed for odds lookup
-    BUDGET_XG = 5         # stats backfill — reduced, most xG comes from football-data.org
-    BUDGET_ODDS = 25      # odds from top 3 bookmakers — fast DB writes now
-    BUDGET_INJURIES = 45  # injuries for ALL today's fixtures (1 request per fixture)
-    BUDGET_RESERVE = 9
+    # Static total: 4+2+10+20+9 = 45.  Remaining 55 shared dynamically
+    # between injuries (1 per fixture) and targeted backfill.
+    BUDGET_RESULTS = 4    # settlement for leagues not in football-data.org
+    BUDGET_FIXTURES = 2   # fixture ids needed for odds lookup
+    BUDGET_XG = 10        # xG backfill — API-Football is the sole xG source
+    BUDGET_ODDS = 20      # odds from top 3 bookmakers (fast DB writes)
+    BUDGET_RESERVE = 9    # safety margin
+    # Note: no static BUDGET_INJURIES — computed dynamically as
+    # min(fixture_count, remaining_after_static_steps) in injury_scraper.
 
     def __init__(self, config=None):
         super().__init__(config)
@@ -898,6 +893,11 @@ class APIFootballScraper(BaseScraper):
                         f"Saved {count} odds for fixture {fixture_id} "
                         f"(match {match_id}, {league})"
                     )
+                else:
+                    logger.debug(
+                        f"No odds from top bookmakers for fixture {fixture_id} "
+                        f"(match {match_id}, {league}) — bookmakers may not cover this market"
+                    )
 
         logger.info(f"Fetched odds for {fetched} upcoming fixtures ({self._requests_today} API requests used)")
         return fetched
@@ -909,9 +909,6 @@ class APIFootballScraper(BaseScraper):
             return None
         return data.get("response", [])
 
-    # Only save odds from these major bookmakers to reduce DB writes.
-    # 200+ odds per fixture (15+ bookies × 14+ markets) causes 60s+ of
-    # individual SELECTs over Neon.  5 top bookies covers all markets well.
     # Only save odds from the 3 most reliable bookmakers — keeps DB lean
     # (~12 rows/fixture instead of 100+) and speeds up Neon writes.
     _TOP_BOOKMAKERS = {
@@ -999,12 +996,13 @@ class APIFootballScraper(BaseScraper):
     async def backfill_team_history(self, min_matches: int = 20,
                                     seasons: List[int] = None,
                                     max_budget: int = 30,
-                                    min_remaining_budget: int = 25):
+                                    min_remaining_budget: int = 25,
+                                    target_team_ids: set = None):
         """Fetch historical match data for low-coverage teams in the database.
 
-        Covers ALL teams with fewer than min_matches completed results, not just
-        teams in today's fixtures. This ensures teams playing next week get
-        backfilled now rather than on the day of the match.
+        When target_team_ids is provided, only those teams are considered
+        (used by targeted backfill for today's fixtures). Otherwise scans
+        all teams with upcoming fixtures within 14 days.
 
         Priority: teams with the fewest matches are processed first.
         Each team × season costs 1 API request. Results saved as completed matches.
@@ -1013,10 +1011,6 @@ class APIFootballScraper(BaseScraper):
             seasons = [2023, 2024, 2025]
 
         # Guard: skip backfill if the remaining daily budget is too low.
-        # When a second run happens on the same day (manual trigger), the first
-        # run already consumed most of the 100 req/day quota.  Backfill needs at
-        # least min_remaining_budget requests to be useful; below that threshold
-        # we log a warning and return early to preserve budget for odds/fixtures.
         remaining = self._daily_limit - self._requests_today
         if remaining < min_remaining_budget:
             logger.warning(
@@ -1025,21 +1019,23 @@ class APIFootballScraper(BaseScraper):
             )
             return
 
-        # Collect ALL team IDs in the DB that have upcoming fixtures (within 14 days)
-        # plus any team that has ever appeared as low-coverage in a pick analysis.
-        # Using a 14-day window ensures teams for next week's fixtures are covered.
-        with self.db.get_session() as session:
-            cutoff = datetime.combine(date.today(), datetime.min.time()) + timedelta(days=14)
-            upcoming = session.query(Match).filter(
-                Match.is_fixture == True,
-                Match.match_date >= datetime.combine(date.today(), datetime.min.time()),
-                Match.match_date <= cutoff,
-            ).all()
+        if target_team_ids is not None:
+            # Targeted mode: only backfill specific teams (e.g. today's low-coverage)
+            team_ids = target_team_ids
+        else:
+            # Default mode: scan all teams with upcoming fixtures (14-day window)
+            with self.db.get_session() as session:
+                cutoff = datetime.combine(date.today(), datetime.min.time()) + timedelta(days=14)
+                upcoming = session.query(Match).filter(
+                    Match.is_fixture == True,
+                    Match.match_date >= datetime.combine(date.today(), datetime.min.time()),
+                    Match.match_date <= cutoff,
+                ).all()
 
-            team_ids = set()
-            for m in upcoming:
-                team_ids.add(m.home_team_id)
-                team_ids.add(m.away_team_id)
+                team_ids = set()
+                for m in upcoming:
+                    team_ids.add(m.home_team_id)
+                    team_ids.add(m.away_team_id)
 
         if not team_ids:
             return

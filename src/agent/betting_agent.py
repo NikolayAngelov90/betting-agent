@@ -243,18 +243,24 @@ class FootballBettingAgent:
                     f"triggering targeted backfill (budget: {_backfill_budget})"
                 )
                 if _backfill_budget > 0:
+                    _reqs_before = self.apifootball._requests_today
                     await self.apifootball.backfill_team_history(
                         min_matches=10,
                         seasons=[2024, 2025],
                         max_budget=_backfill_budget,
                         min_remaining_budget=0,
+                        target_team_ids=_low_cov_team_ids,
                     )
-                # Re-fit models with newly fetched data
-                self.predictor.fit()
-                self.feature_engineer.elo_ratings = self.predictor.elo.ratings
-                logger.info("Models re-fitted after backfill")
+                    _reqs_used = self.apifootball._requests_today - _reqs_before
+                    # Only re-fit if backfill actually fetched new data
+                    if _reqs_used > 0:
+                        self.predictor.fit()
+                        self.feature_engineer.elo_ratings = self.predictor.elo.ratings
+                        logger.info(f"Models re-fitted after backfill ({_reqs_used} requests used)")
+                    else:
+                        logger.debug("Backfill made no API calls — skipping re-fit")
         except Exception as e:
-            logger.debug(f"Low-coverage backfill skipped: {e}")
+            logger.warning(f"Low-coverage backfill failed: {e}")
 
         logger.info("Daily update cycle complete")
 

@@ -413,8 +413,6 @@ class FeatureEngineer:
                     return defaults
 
                 for row in rows:
-                    if row.bookmaker == "Flashscore":
-                        continue  # Flashscore odds are display/fair odds, not real lines
                     bk_data[(row.market_type, row.bookmaker)][row.selection] = row.odds_value
 
             result = dict(defaults)
