@@ -320,6 +320,7 @@ class MLModels:
         save_dir = Path(path) if path else MODELS_DIR
         save_dir.mkdir(parents=True, exist_ok=True)
 
+        from src.utils.logger import utcnow as _utcnow
         state = {
             "models": self.models,
             "calibrated_models": getattr(self, "calibrated_models", {}),
@@ -328,6 +329,7 @@ class MLModels:
             "is_fitted": self.is_fitted,
             "_kept_feature_mask": getattr(self, "_kept_feature_mask", None),
             "_corr_drop_mask": getattr(self, "_corr_drop_mask", None),
+            "trained_at": _utcnow().isoformat(),
         }
 
         filepath = save_dir / "ml_models.pkl"
@@ -356,6 +358,7 @@ class MLModels:
         self.is_fitted = state["is_fitted"]
         self._kept_feature_mask = state.get("_kept_feature_mask")
         self._corr_drop_mask = state.get("_corr_drop_mask")
+        self.trained_at = state.get("trained_at")
 
         logger.info(f"Models loaded from {filepath}")
 
@@ -557,6 +560,7 @@ class GoalsMLModel:
         """Save model to disk with HMAC integrity signature."""
         save_dir = Path(path) if path else MODELS_DIR
         save_dir.mkdir(parents=True, exist_ok=True)
+        from src.utils.logger import utcnow as _utcnow
         state = {
             "models": self.models,
             "calibrated_models": self.calibrated_models,
@@ -565,6 +569,7 @@ class GoalsMLModel:
             "is_fitted": self.is_fitted,
             "_kept_feature_mask": self._kept_feature_mask,
             "_corr_drop_mask": self._corr_drop_mask,
+            "trained_at": _utcnow().isoformat(),
         }
         filepath = save_dir / "goals_model.pkl"
         _safe_save(state, filepath)
@@ -589,4 +594,5 @@ class GoalsMLModel:
         self.is_fitted = state["is_fitted"]
         self._kept_feature_mask = state.get("_kept_feature_mask")
         self._corr_drop_mask = state.get("_corr_drop_mask")
+        self.trained_at = state.get("trained_at")
         logger.info(f"GoalsMLModel loaded from {filepath}")

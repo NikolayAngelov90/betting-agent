@@ -551,25 +551,6 @@ class FootballBettingAgent:
                 continue
             all_recommendations.extend(result.recommendations)
 
-        # League profitability filter: auto-mute leagues with consistently
-        # negative ROI to avoid bleeding money on leagues the models can't predict.
-        _lp_min = self.config.get("models.league_profit_min_picks", 15)
-        _lp_threshold = self.config.get("models.league_profit_mute_threshold", -0.15)
-        if _lp_min > 0:
-            muted_leagues = self._get_muted_leagues(_lp_min, _lp_threshold)
-            if muted_leagues:
-                before = len(all_recommendations)
-                all_recommendations = [
-                    r for r in all_recommendations
-                    if r.league not in muted_leagues
-                ]
-                muted_count = before - len(all_recommendations)
-                if muted_count > 0:
-                    logger.info(
-                        f"League profitability filter: muted {muted_count} picks from "
-                        f"{', '.join(sorted(muted_leagues))}"
-                    )
-
         # Sort order: EV × confidence × agreement bonus × contrarian bonus.
         # Contrarian picks (model significantly disagrees with market) get
         # a boost when backed by strong model agreement — these are genuine
@@ -1510,47 +1491,81 @@ class FootballBettingAgent:
 
         logger.info("ML model training complete")
 
-    def _get_muted_leagues(self, min_picks: int = 15, roi_threshold: float = -0.15) -> set:
-        """Return set of leagues that should be muted due to consistently negative ROI.
-
-        A league is muted when it has at least min_picks settled picks AND its
-        ROI is below roi_threshold. This prevents the agent from bleeding money
-        on leagues the models can't predict well.
-        """
-        muted = set()
+    def _ml_models_stale(self, max_age_days: int = 3) -> bool:
+        """Check if ML models are older than max_age_days and need retraining."""
+        trained_at = getattr(self.predictor.ml_models, "trained_at", None)
+        if not trained_at:
+            return True  # never trained
         try:
-            with self.db.get_session() as session:
-                settled = session.query(SavedPick).filter(
-                    SavedPick.result.isnot(None),
-                    SavedPick.league.isnot(None),
-                ).all()
+            trained_dt = datetime.fromisoformat(trained_at)
+            # Make timezone-aware if naive
+            if trained_dt.tzinfo is None:
+                from datetime import timezone
+                trained_dt = trained_dt.replace(tzinfo=timezone.utc)
+            age_days = (utcnow() - trained_dt).days
+            return age_days >= max_age_days
+        except Exception:
+            return True
 
-                league_stats: dict = {}
-                for p in settled:
-                    lg = p.league or ""
-                    if not lg or p.result not in ("win", "loss"):
-                        continue  # skip void/push picks
-                    league_stats.setdefault(lg, {"staked": 0.0, "profit": 0.0, "n": 0})
-                    stake = p.kelly_stake_percentage or 1.0
-                    league_stats[lg]["staked"] += stake
-                    league_stats[lg]["n"] += 1
-                    if p.result == "win":
-                        league_stats[lg]["profit"] += stake * (p.odds - 1)
-                    else:
-                        league_stats[lg]["profit"] -= stake
+    async def learn_from_settled(self):
+        """Post-settlement learning: update all model feedback loops.
 
-                for lg, stats in league_stats.items():
-                    if stats["n"] >= min_picks and stats["staked"] > 0:
-                        roi = stats["profit"] / stats["staked"]
-                        if roi < roi_threshold:
-                            muted.add(lg)
-                            logger.info(
-                                f"League muted: {lg} (ROI={roi:.1%}, "
-                                f"{stats['n']} picks, threshold={roi_threshold:.0%})"
-                            )
+        Called automatically after settle_predictions() to ensure every CI
+        run learns from newly settled picks without requiring a separate
+        --tune command. This closes the feedback loop so models improve
+        workflow-to-workflow.
+
+        Steps:
+        1. Fit Poisson/Elo on latest match results
+        2. Tune ensemble weights (accuracy-based + Bayesian + calibration)
+        3. Auto-calibrate EV threshold (persisted)
+        4. Retrain ML models if stale (>3 days since last training)
+        """
+        logger.info("Post-settlement learning: updating model feedback loops")
+
+        # 1. Refit Poisson/Elo with latest results
+        try:
+            self.predictor.fit()
+            self.feature_engineer.elo_ratings = self.predictor.elo.ratings
+            logger.info("Poisson/Elo refitted with latest results")
         except Exception as e:
-            logger.warning(f"League profitability check failed: {e}")
-        return muted
+            logger.warning(f"Poisson/Elo refit failed: {e}")
+
+        # 2. Tune ensemble weights + Bayesian weights + calibration
+        try:
+            result = await self.tune_ensemble_weights()
+            if result:
+                logger.info(
+                    f"Ensemble weights tuned: {result['weights']} "
+                    f"(accuracies: {result['accuracies']})"
+                )
+        except Exception as e:
+            logger.warning(f"Ensemble weight tuning failed: {e}")
+
+        # 3. EV threshold calibration (persisted to disk)
+        try:
+            self._auto_calibrate_ev_threshold()
+        except Exception as e:
+            logger.warning(f"EV calibration failed: {e}")
+
+        # 4. Retrain ML models if stale
+        max_age = self.config.get("models.ml_retrain_days", 3)
+        if self._ml_models_stale(max_age_days=max_age):
+            stale_info = getattr(self.predictor.ml_models, "trained_at", "never")
+            logger.info(f"ML models stale (last trained: {stale_info}) — retraining")
+            try:
+                from src.data.database import get_db as _get_db_check
+                _db_tmp = _get_db_check()
+                _max = 200 if _db_tmp.is_postgres else 2000
+                await self.train_ml_models(max_samples=_max)
+            except Exception as e:
+                logger.warning(f"ML retraining failed: {e}")
+        else:
+            logger.debug(
+                f"ML models fresh (trained: {self.predictor.ml_models.trained_at}) — skipping retrain"
+            )
+
+        logger.info("Post-settlement learning complete")
 
     def _auto_calibrate_ev_threshold(self):
         """Dynamically adjust min EV threshold based on recent hit rate.
@@ -1564,9 +1579,24 @@ class FootballBettingAgent:
         This prevents over-betting during cold streaks (by demanding higher
         edge) and captures more volume during hot streaks.  Adjustments are
         bounded: min_ev never goes below 1% or above 8%.
+
+        The calibrated threshold is persisted to data/models/ev_threshold.json
+        so it survives across CI runs.
         """
         lookback = self.config.get("models.ev_calibration_lookback", 40)
         base_ev = self.config.betting.get("min_expected_value", 0.03)
+
+        # Load previously persisted threshold as starting point
+        ev_path = Path("data/models/ev_threshold.json")
+        try:
+            if ev_path.exists():
+                saved = json.loads(ev_path.read_text())
+                saved_ev = saved.get("min_ev")
+                if saved_ev and 0.01 <= saved_ev <= 0.08:
+                    self.value_calculator.min_ev = saved_ev
+                    logger.debug(f"Loaded persisted EV threshold: {saved_ev:.1%}")
+        except Exception:
+            pass
 
         try:
             with self.db.get_session() as session:
@@ -1583,9 +1613,6 @@ class FootballBettingAgent:
                 wins = sum(1 for p in recent if p.result == "win")
                 hit_rate = wins / len(recent)
 
-                # Baseline expected hit rate for value bets (~52%)
-                baseline = 0.52
-
                 if hit_rate > 0.60:
                     # Hot streak: tighten — be more selective (raise min EV)
                     # Scale: 60% → +0pp, 75%+ → +2pp
@@ -1597,12 +1624,12 @@ class FootballBettingAgent:
                     penalty = min((0.45 - hit_rate) / 0.15, 1.0) * 0.015
                     new_ev = base_ev - penalty
                 else:
-                    return  # normal range, keep base
+                    new_ev = base_ev  # normal range, keep base
 
                 # Clamp to sane bounds
                 new_ev = max(0.01, min(0.08, round(new_ev, 4)))
 
-                if abs(new_ev - base_ev) > 0.001:
+                if abs(new_ev - self.value_calculator.min_ev) > 0.001:
                     self.value_calculator.min_ev = new_ev
                     direction = "tightened" if new_ev > base_ev else "loosened"
                     logger.info(
@@ -1610,6 +1637,15 @@ class FootballBettingAgent:
                         f"{base_ev:.1%} → {new_ev:.1%} "
                         f"(hit rate={hit_rate:.0%} over last {len(recent)} picks)"
                     )
+
+                # Persist to disk so next CI run starts from this threshold
+                ev_path.parent.mkdir(parents=True, exist_ok=True)
+                ev_path.write_text(json.dumps({
+                    "min_ev": new_ev,
+                    "hit_rate": round(hit_rate, 4),
+                    "n_picks": len(recent),
+                    "updated_at": date.today().isoformat(),
+                }, indent=2))
         except Exception as e:
             logger.warning(f"EV auto-calibration failed: {e}")
 
@@ -2073,6 +2109,12 @@ async def main():
             if settled_picks and agent.telegram.enabled:
                 await agent.telegram.send_settlement_report(settled_picks, stats)
                 print("Settlement report sent to Telegram!")
+
+            # Post-settlement learning: update weights, calibration, retrain if stale
+            if settled_picks:
+                print("Running post-settlement learning...")
+                await agent.learn_from_settled()
+                print("Learning complete — models updated.")
 
         elif command == "--stats":
             await agent.settle_predictions()  # Settle any new results first

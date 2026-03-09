@@ -104,3 +104,55 @@ class TestMLModels:
         avg = pred["ml_average"]
         total = avg["home_win"] + avg["draw"] + avg["away_win"]
         assert abs(total - 1.0) < 0.01
+
+    def test_trained_at_saved(self, tmp_path):
+        """ML models persist trained_at timestamp after save/load."""
+        from src.models.ml_models import MLModels
+        ml = MLModels()
+        np.random.seed(42)
+        X = np.random.randn(100, 5)
+        y = np.random.choice([0, 1, 2], size=100)
+        ml.fit(X, y, feature_names=[f"f{i}" for i in range(5)])
+        ml.save(str(tmp_path))
+        ml2 = MLModels()
+        ml2.load(str(tmp_path))
+        assert ml2.trained_at is not None
+        # Should be a valid ISO datetime
+        from datetime import datetime
+        dt = datetime.fromisoformat(ml2.trained_at)
+        assert dt.year >= 2026
+
+
+class TestEVCalibrationPersistence:
+    """Tests for EV threshold persistence."""
+
+    def test_ev_threshold_persisted(self, tmp_path):
+        """EV calibration writes and reads threshold from JSON."""
+        import json
+        ev_path = tmp_path / "ev_threshold.json"
+        data = {"min_ev": 0.045, "hit_rate": 0.62, "n_picks": 40, "updated_at": "2026-03-09"}
+        ev_path.write_text(json.dumps(data))
+        loaded = json.loads(ev_path.read_text())
+        assert loaded["min_ev"] == 0.045
+        assert 0.01 <= loaded["min_ev"] <= 0.08
+
+    def test_ml_stale_detection(self):
+        """_ml_models_stale returns True when trained_at is None."""
+        from unittest.mock import MagicMock
+        from src.agent.betting_agent import FootballBettingAgent
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        agent.predictor = MagicMock()
+        agent.predictor.ml_models.trained_at = None
+        agent.config = MagicMock()
+        assert agent._ml_models_stale(max_age_days=3) is True
+
+    def test_ml_fresh_detection(self):
+        """_ml_models_stale returns False when trained recently."""
+        from unittest.mock import MagicMock
+        from src.utils.logger import utcnow
+        from src.agent.betting_agent import FootballBettingAgent
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        agent.predictor = MagicMock()
+        agent.predictor.ml_models.trained_at = utcnow().isoformat()
+        agent.config = MagicMock()
+        assert agent._ml_models_stale(max_age_days=3) is False

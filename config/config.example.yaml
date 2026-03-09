@@ -93,11 +93,9 @@ models:
   # Minimum fraction of matches with xG data required before xG-based
   # strengths are used for a team (0.5 = at least 50% of matches need xG).
   poisson_xg_min_coverage: 0.50
-  # League profitability: minimum settled picks per league before
-  # auto-muting unprofitable leagues. Set to 0 to disable.
-  league_profit_min_picks: 15
-  # ROI threshold below which a league is muted from picks (-0.15 = -15% ROI).
-  league_profit_mute_threshold: -0.15
+  # ML model auto-retraining: retrain if models are older than N days.
+  # Triggered automatically after settlement via learn_from_settled().
+  ml_retrain_days: 3
   # Drawdown circuit breaker: reduces stakes during losing streaks.
   drawdown_lookback_picks: 30       # number of recent settled picks to evaluate
   drawdown_reduce_threshold: -0.10  # ROI below this starts reducing stakes
