@@ -72,6 +72,29 @@ class FootballBettingAgent:
 
         logger.info("Football Betting Agent initialized")
 
+    def _get_recently_scraped_leagues(self, minutes: int = 30) -> set:
+        """Return leagues with matches updated within the last N minutes.
+
+        Used to avoid re-scraping leagues that settle_predictions() already
+        scraped in the same CI run.
+        """
+        cutoff = utcnow() - timedelta(minutes=minutes)
+        try:
+            with self.db.get_session() as session:
+                recent = (
+                    session.query(Match.league)
+                    .filter(
+                        Match.updated_at >= cutoff,
+                        Match.home_goals.isnot(None),
+                        Match.league.isnot(None),
+                    )
+                    .distinct()
+                    .all()
+                )
+                return {r[0] for r in recent if r[0]}
+        except Exception:
+            return set()
+
     async def daily_update(self):
         """Run the full daily data collection cycle."""
         logger.info("Starting daily update cycle")
@@ -112,12 +135,23 @@ class FootballBettingAgent:
         _RESULTS_BUDGET_S = 480   # 8 minutes for all results (~80s/league × 13 leagues)
         _FIXTURES_BUDGET_S = 300  # 5 minutes for all fixtures (~15s/league × 13 leagues)
 
+        # Skip leagues that were already scraped by settle_predictions() within
+        # this CI run (checked via recently-updated match timestamps).
+        _recently_scraped = self._get_recently_scraped_leagues(minutes=30)
+        if _recently_scraped:
+            logger.info(
+                f"Skipping {len(_recently_scraped)} leagues already scraped by settle: "
+                f"{', '.join(sorted(_recently_scraped))}"
+            )
+
         try:
             _results_deadline = _timer.monotonic() + _RESULTS_BUDGET_S
             for league in leagues:
                 if _timer.monotonic() > _results_deadline:
                     logger.warning("Flashscore results: time budget exhausted, skipping remaining leagues")
                     break
+                if league in _recently_scraped:
+                    continue
                 try:
                     await asyncio.wait_for(
                         self.scraper.scrape_league_results(league, skip_stats=True),
@@ -536,11 +570,19 @@ class FootballBettingAgent:
         # Hot streak → tighten (be more selective), cold streak → loosen slightly.
         self._auto_calibrate_ev_threshold()
 
-        # Analyze all fixtures concurrently — injury and news lookups are local-DB
-        # queries, so running them in parallel is safe with SQLite WAL mode.
-        logger.info(f"Analyzing {len(fixture_ids)} fixtures concurrently...")
+        # Analyze fixtures with bounded concurrency — feature engineering and
+        # prediction involve synchronous DB queries that block the event loop,
+        # so a semaphore limits how many run at once (3 = good balance between
+        # parallelism and DB connection pressure).
+        _SEM = asyncio.Semaphore(3)
+
+        async def _analyze_with_sem(mid):
+            async with _SEM:
+                return await self.analyze_fixture(mid)
+
+        logger.info(f"Analyzing {len(fixture_ids)} fixtures (concurrency=3)...")
         analyses = await asyncio.gather(
-            *(self.analyze_fixture(mid) for mid in fixture_ids),
+            *(_analyze_with_sem(mid) for mid in fixture_ids),
             return_exceptions=True,
         )
 
@@ -1492,20 +1534,32 @@ class FootballBettingAgent:
         logger.info("ML model training complete")
 
     def _ml_models_stale(self, max_age_days: int = 3) -> bool:
-        """Check if ML models are older than max_age_days and need retraining."""
-        trained_at = getattr(self.predictor.ml_models, "trained_at", None)
-        if not trained_at:
-            return True  # never trained
-        try:
-            trained_dt = datetime.fromisoformat(trained_at)
-            # Make timezone-aware if naive
-            if trained_dt.tzinfo is None:
-                from datetime import timezone
-                trained_dt = trained_dt.replace(tzinfo=timezone.utc)
-            age_days = (utcnow() - trained_dt).days
-            return age_days >= max_age_days
-        except Exception:
-            return True
+        """Check if ML models are older than max_age_days and need retraining.
+
+        Checks both the 1X2 classifier and the GoalsMLModel — if either is
+        stale (or never trained), returns True so both get retrained together.
+        """
+        from datetime import timezone
+
+        for label, model in [
+            ("1X2", self.predictor.ml_models),
+            ("Goals", self.predictor.goals_model),
+        ]:
+            trained_at = getattr(model, "trained_at", None)
+            if not trained_at:
+                logger.debug(f"ML model '{label}' has no trained_at — treating as stale")
+                return True
+            try:
+                trained_dt = datetime.fromisoformat(trained_at)
+                if trained_dt.tzinfo is None:
+                    trained_dt = trained_dt.replace(tzinfo=timezone.utc)
+                age_days = (utcnow() - trained_dt).days
+                if age_days >= max_age_days:
+                    return True
+            except Exception as e:
+                logger.warning(f"ML model '{label}' trained_at parse failed ({trained_at!r}): {e}")
+                return True
+        return False
 
     async def learn_from_settled(self):
         """Post-settlement learning: update all model feedback loops.
@@ -1515,32 +1569,38 @@ class FootballBettingAgent:
         --tune command. This closes the feedback loop so models improve
         workflow-to-workflow.
 
-        Steps:
+        Steps (with dependency awareness):
         1. Fit Poisson/Elo on latest match results
-        2. Tune ensemble weights (accuracy-based + Bayesian + calibration)
+        2. Tune ensemble weights (depends on step 1 — uses fresh Poisson strengths)
         3. Auto-calibrate EV threshold (persisted)
         4. Retrain ML models if stale (>3 days since last training)
         """
         logger.info("Post-settlement learning: updating model feedback loops")
 
         # 1. Refit Poisson/Elo with latest results
+        poisson_ok = False
         try:
             self.predictor.fit()
             self.feature_engineer.elo_ratings = self.predictor.elo.ratings
+            poisson_ok = True
             logger.info("Poisson/Elo refitted with latest results")
         except Exception as e:
             logger.warning(f"Poisson/Elo refit failed: {e}")
 
         # 2. Tune ensemble weights + Bayesian weights + calibration
-        try:
-            result = await self.tune_ensemble_weights()
-            if result:
-                logger.info(
-                    f"Ensemble weights tuned: {result['weights']} "
-                    f"(accuracies: {result['accuracies']})"
-                )
-        except Exception as e:
-            logger.warning(f"Ensemble weight tuning failed: {e}")
+        # Skip if Poisson refit failed — tuning on stale weights would be misleading
+        if poisson_ok:
+            try:
+                result = await self.tune_ensemble_weights()
+                if result:
+                    logger.info(
+                        f"Ensemble weights tuned: {result['weights']} "
+                        f"(accuracies: {result['accuracies']})"
+                    )
+            except Exception as e:
+                logger.warning(f"Ensemble weight tuning failed: {e}")
+        else:
+            logger.warning("Skipping ensemble tuning — Poisson refit failed")
 
         # 3. EV threshold calibration (persisted to disk)
         try:
@@ -1554,9 +1614,7 @@ class FootballBettingAgent:
             stale_info = getattr(self.predictor.ml_models, "trained_at", "never")
             logger.info(f"ML models stale (last trained: {stale_info}) — retraining")
             try:
-                from src.data.database import get_db as _get_db_check
-                _db_tmp = _get_db_check()
-                _max = 200 if _db_tmp.is_postgres else 2000
+                _max = 200 if self.db.is_postgres else 2000
                 await self.train_ml_models(max_samples=_max)
             except Exception as e:
                 logger.warning(f"ML retraining failed: {e}")
@@ -1583,16 +1641,21 @@ class FootballBettingAgent:
         The calibrated threshold is persisted to data/models/ev_threshold.json
         so it survives across CI runs.
         """
+        from src.models.ml_models import MODELS_DIR as _MODELS_DIR
+
         lookback = self.config.get("models.ev_calibration_lookback", 40)
         base_ev = self.config.betting.get("min_expected_value", 0.03)
+        ev_path = _MODELS_DIR / "ev_threshold.json"
 
-        # Load previously persisted threshold as starting point
-        ev_path = Path("data/models/ev_threshold.json")
+        # Load previously persisted threshold (used as starting point for --picks
+        # runs; during learn_from_settled it will be recalculated and re-persisted).
+        prev_ev = base_ev
         try:
             if ev_path.exists():
                 saved = json.loads(ev_path.read_text())
                 saved_ev = saved.get("min_ev")
                 if saved_ev and 0.01 <= saved_ev <= 0.08:
+                    prev_ev = saved_ev
                     self.value_calculator.min_ev = saved_ev
                     logger.debug(f"Loaded persisted EV threshold: {saved_ev:.1%}")
         except Exception:
@@ -1629,7 +1692,7 @@ class FootballBettingAgent:
                 # Clamp to sane bounds
                 new_ev = max(0.01, min(0.08, round(new_ev, 4)))
 
-                if abs(new_ev - self.value_calculator.min_ev) > 0.001:
+                if abs(new_ev - prev_ev) > 0.001:
                     self.value_calculator.min_ev = new_ev
                     direction = "tightened" if new_ev > base_ev else "loosened"
                     logger.info(
@@ -1644,7 +1707,7 @@ class FootballBettingAgent:
                     "min_ev": new_ev,
                     "hit_rate": round(hit_rate, 4),
                     "n_picks": len(recent),
-                    "updated_at": date.today().isoformat(),
+                    "updated_at": utcnow().isoformat(),
                 }, indent=2))
         except Exception as e:
             logger.warning(f"EV auto-calibration failed: {e}")

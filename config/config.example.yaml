@@ -141,7 +141,7 @@ notifications:
   send_live_alerts: false
 
 logging:
-  level: DEBUG
+  level: INFO
   log_file: logs/betting_agent.log
   log_rotation: "1 week"
 

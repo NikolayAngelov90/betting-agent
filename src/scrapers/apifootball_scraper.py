@@ -317,8 +317,9 @@ class APIFootballScraper(BaseScraper):
                     logger.warning("API-Football daily quota exhausted — skipping all further API calls")
                     self._quota_exhausted = True
                 elif "plan" in str(errors).lower():
-                    # Free-tier date restriction — expected, not an error
-                    logger.debug(f"API-Football plan restriction: {errors}")
+                    # Free-tier date/season restriction — warn so it's visible
+                    # in CI INFO logs (helps diagnose wasted budget on backfill)
+                    logger.warning(f"API-Football plan restriction: {errors}")
                 else:
                     logger.error(f"API-Football errors: {errors}")
                 return None
@@ -952,7 +953,7 @@ class APIFootballScraper(BaseScraper):
                         bet_mapping = BET_TYPE_MAP.get(bet_name)
                         if not bet_mapping:
                             if bet_name not in self._logged_unknown_bets:
-                                logger.debug(f"[Odds] Skipping unsupported bet type: '{bet_name}'")
+                                logger.trace(f"[Odds] Skipping unsupported bet type: '{bet_name}'")
                                 self._logged_unknown_bets.add(bet_name)
                             continue
 

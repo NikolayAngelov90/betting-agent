@@ -143,16 +143,91 @@ class TestEVCalibrationPersistence:
         agent = FootballBettingAgent.__new__(FootballBettingAgent)
         agent.predictor = MagicMock()
         agent.predictor.ml_models.trained_at = None
+        agent.predictor.goals_model.trained_at = None
         agent.config = MagicMock()
         assert agent._ml_models_stale(max_age_days=3) is True
 
     def test_ml_fresh_detection(self):
-        """_ml_models_stale returns False when trained recently."""
+        """_ml_models_stale returns False when both models trained recently."""
+        from unittest.mock import MagicMock
+        from src.utils.logger import utcnow
+        from src.agent.betting_agent import FootballBettingAgent
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        agent.predictor = MagicMock()
+        now_str = utcnow().isoformat()
+        agent.predictor.ml_models.trained_at = now_str
+        agent.predictor.goals_model.trained_at = now_str
+        agent.config = MagicMock()
+        assert agent._ml_models_stale(max_age_days=3) is False
+
+    def test_ml_stale_when_goals_model_missing(self):
+        """_ml_models_stale returns True when goals model has no trained_at."""
         from unittest.mock import MagicMock
         from src.utils.logger import utcnow
         from src.agent.betting_agent import FootballBettingAgent
         agent = FootballBettingAgent.__new__(FootballBettingAgent)
         agent.predictor = MagicMock()
         agent.predictor.ml_models.trained_at = utcnow().isoformat()
+        agent.predictor.goals_model.trained_at = None
         agent.config = MagicMock()
-        assert agent._ml_models_stale(max_age_days=3) is False
+        assert agent._ml_models_stale(max_age_days=3) is True
+
+
+class TestLearnFromSettled:
+    """Tests for the learn_from_settled() orchestrator."""
+
+    def test_learn_from_settled_skips_tuning_on_poisson_failure(self):
+        """If Poisson refit fails, ensemble tuning is skipped."""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock
+        from src.agent.betting_agent import FootballBettingAgent
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        agent.predictor = MagicMock()
+        agent.predictor.fit.side_effect = RuntimeError("DB error")
+        agent.predictor.ml_models.trained_at = None
+        agent.predictor.goals_model.trained_at = None
+        agent.feature_engineer = MagicMock()
+        agent.config = MagicMock()
+        agent.config.get.return_value = 3
+        agent.db = MagicMock()
+        agent.db.is_postgres = False
+        agent.value_calculator = MagicMock()
+
+        # tune_ensemble_weights should NOT be called when Poisson fails
+        agent.tune_ensemble_weights = AsyncMock()
+        agent._auto_calibrate_ev_threshold = MagicMock()
+        agent.train_ml_models = AsyncMock()
+
+        asyncio.run(agent.learn_from_settled())
+
+        agent.tune_ensemble_weights.assert_not_called()
+        # But EV calibration and ML retrain should still run
+        agent._auto_calibrate_ev_threshold.assert_called_once()
+
+    def test_learn_from_settled_runs_all_steps(self):
+        """learn_from_settled runs all 4 steps when Poisson succeeds."""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock
+        from src.agent.betting_agent import FootballBettingAgent
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        agent.predictor = MagicMock()
+        agent.predictor.ml_models.trained_at = None
+        agent.predictor.goals_model.trained_at = None
+        agent.feature_engineer = MagicMock()
+        agent.config = MagicMock()
+        agent.config.get.return_value = 3
+        agent.db = MagicMock()
+        agent.db.is_postgres = False
+        agent.value_calculator = MagicMock()
+        agent.tune_ensemble_weights = AsyncMock(return_value={"weights": {}, "accuracies": {}})
+        agent._auto_calibrate_ev_threshold = MagicMock()
+        agent.train_ml_models = AsyncMock()
+
+        asyncio.run(agent.learn_from_settled())
+
+        agent.predictor.fit.assert_called_once()
+        agent.tune_ensemble_weights.assert_called_once()
+        agent._auto_calibrate_ev_threshold.assert_called_once()
+        agent.train_ml_models.assert_called_once()

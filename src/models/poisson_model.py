@@ -254,11 +254,14 @@ class PoissonModel:
             try:
                 result = minimize_scalar(
                     neg_log_likelihood,
-                    bounds=(-0.25, 0.05),
+                    bounds=(-0.25, 0.0),
                     method="bounded",
                 )
                 if result.success:
-                    self._league_rhos[lg] = round(float(result.x), 4)
+                    rho_val = round(float(result.x), 4)
+                    # Clamp to non-positive: DC correction should reduce
+                    # low-score probabilities, not increase them.
+                    self._league_rhos[lg] = min(rho_val, 0.0)
                 else:
                     self._league_rhos[lg] = default_rho
             except Exception:

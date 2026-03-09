@@ -92,7 +92,7 @@ jobs:
         run: python -m src.agent.betting_agent --settle
         continue-on-error: true
 
-      - name: Check DB health before training
+      - name: Check DB health
         run: |
           python << 'PYEOF'
           from src.data.database import get_db
@@ -107,6 +107,13 @@ jobs:
           if completed < 100:
               print('WARNING: fewer than 100 completed matches — ML training may be skipped')
           PYEOF
+
+      - name: Verify ML model cache restored
+        run: |
+          echo "=== ML model cache contents ==="
+          ls -lah data/models/ 2>/dev/null || echo "data/models/ not found"
+          echo "=== Cache file ==="
+          ls -lah data/historical_load_cache.json 2>/dev/null || echo "No cache file"
 
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks

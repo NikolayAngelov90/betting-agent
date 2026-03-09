@@ -1690,7 +1690,7 @@ class FlashscoreScraper(BaseScraper):
             if c_home and c_away:
                 if (self._team_names_similar(c_home.name, match_data["home_team"]) and
                         self._team_names_similar(c_away.name, match_data["away_team"])):
-                    logger.debug(
+                    logger.trace(
                         f"Fuzzy-merged '{match_data['home_team']} vs {match_data['away_team']}'"
                         f" into existing id={candidate.id}"
                         f" ('{c_home.name} vs {c_away.name}', Δt="
