@@ -232,7 +232,7 @@ class FootballBettingAgent:
                 )
                 if _backfill_budget > 0:
                     _budget_before = self.apifootball.remaining_budget()
-                    _bf_seasons = self.config.get("models.backfill_seasons", (2023, 2024, 2025))
+                    _bf_seasons = self.config.get("models.backfill_seasons", (2022, 2023, 2024))
                     _bf_min = self.config.get("models.backfill_min_matches", 10)
                     await self.apifootball.backfill_team_history(
                         min_matches=_bf_min,

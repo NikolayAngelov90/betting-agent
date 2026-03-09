@@ -1022,7 +1022,7 @@ class APIFootballScraper(BaseScraper):
 
         Args:
             min_matches: Skip teams with at least this many completed matches.
-            seasons: API-Football season years to fetch. Defaults to [2023, 2024, 2025].
+            seasons: API-Football season years to fetch. Defaults to [2022, 2023, 2024].
             max_budget: Maximum API requests to spend on backfill.
             min_remaining_budget: Skip backfill if fewer than this many requests
                 remain. Callers that already reserved budget may pass 0.
@@ -1032,7 +1032,7 @@ class APIFootballScraper(BaseScraper):
         Each team × season costs 1 API request.
         """
         if seasons is None:
-            seasons = [2023, 2024, 2025]
+            seasons = [2022, 2023, 2024]
 
         # Guard: skip backfill if the remaining daily budget is too low.
         remaining = self.remaining_budget()

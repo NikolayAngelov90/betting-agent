@@ -56,6 +56,7 @@ class ValueBettingCalculator:
         self.high_ev_min_confidence = 0.45  # hard floor — never go below 45% even with high EV
         self.kelly_fraction = betting.get("kelly_fraction", 0.25)
         self.max_stake_pct = betting.get("max_stake_percentage", 5.0)
+        self.excluded_markets = set(betting.get("excluded_markets", []))
         # Reject picks where Kelly recommends less than this % of bankroll
         # (too marginal to justify the variance — usually <0.5% means near-zero edge)
         self.min_kelly_stake = betting.get("min_kelly_stake", 0.5)
@@ -103,6 +104,8 @@ class ValueBettingCalculator:
         ]
 
         for market, selection, prob, market_key in markets:
+            if market_key in self.excluded_markets:
+                continue
             if prob < self.high_ev_min_confidence:
                 continue  # hard floor — never go below 45%
 
