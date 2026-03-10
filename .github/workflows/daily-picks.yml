@@ -81,6 +81,7 @@ jobs:
 
       - name: Settle yesterday's predictions
         run: python -m src.agent.betting_agent --settle
+        timeout-minutes: 25
         continue-on-error: true
 
       - name: Run daily update

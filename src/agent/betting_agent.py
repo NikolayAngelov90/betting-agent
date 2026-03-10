@@ -1136,10 +1136,22 @@ class FootballBettingAgent:
         """Adjust ensemble weights based on recent prediction accuracy."""
         with self.db.get_session() as session:
             month_ago = date.today() - timedelta(days=30)
-            settled = session.query(SavedPick).filter(
+            rows = session.query(SavedPick).filter(
                 SavedPick.result.isnot(None),
                 SavedPick.pick_date >= month_ago,
             ).all()
+            # Extract all needed attributes inside session to avoid detached-instance errors
+            settled = [
+                {
+                    "match_id": p.match_id,
+                    "market": p.market,
+                    "selection": p.selection,
+                    "actual_home_goals": p.actual_home_goals,
+                    "actual_away_goals": p.actual_away_goals,
+                    "match_date": p.pick_date,
+                }
+                for p in rows
+            ]
 
         if len(settled) < 20:
             logger.info(f"Not enough settled picks for tuning ({len(settled)}, need 20+)")
@@ -1150,12 +1162,12 @@ class FootballBettingAgent:
         model_total = {"poisson": 0, "elo": 0, "ml": 0}
 
         for pick in settled:
-            if pick.market != "1X2":
+            if pick["market"] != "1X2":
                 continue  # Only tune on 1X2 market (where all models contribute)
 
             try:
                 with self.db.get_session() as session:
-                    match = session.get(Match, pick.match_id)
+                    match = session.get(Match, pick["match_id"])
                     if not match:
                         continue
                     home_id = match.home_team_id
@@ -1163,9 +1175,9 @@ class FootballBettingAgent:
                     match_league = match.league or ""
 
                 # Actual result
-                if pick.actual_home_goals > pick.actual_away_goals:
+                if pick["actual_home_goals"] > pick["actual_away_goals"]:
                     actual = "home_win"
-                elif pick.actual_home_goals == pick.actual_away_goals:
+                elif pick["actual_home_goals"] == pick["actual_away_goals"]:
                     actual = "draw"
                 else:
                     actual = "away_win"
@@ -1184,7 +1196,7 @@ class FootballBettingAgent:
                 if self.predictor.ml_models.is_fitted:
                     try:
                         ml_features = await self.feature_engineer.create_features(
-                            pick.match_id, as_of_date=match.match_date,
+                            pick["match_id"], as_of_date=pick["match_date"],
                         )
                         if ml_features:
                             fv = self.feature_engineer.create_feature_vector(ml_features)
@@ -1221,19 +1233,19 @@ class FootballBettingAgent:
         ensemble_correct = 0
         ensemble_total = 0
         for pick in settled:
-            if pick.market != "1X2":
+            if pick["market"] != "1X2":
                 continue
-            if pick.actual_home_goals is None:
+            if pick["actual_home_goals"] is None:
                 continue
-            if pick.actual_home_goals > pick.actual_away_goals:
+            if pick["actual_home_goals"] > pick["actual_away_goals"]:
                 actual = "home_win"
-            elif pick.actual_home_goals == pick.actual_away_goals:
+            elif pick["actual_home_goals"] == pick["actual_away_goals"]:
                 actual = "draw"
             else:
                 actual = "away_win"
             # Check if the ensemble's top selection matches actual
             sel_map = {"Home Win": "home_win", "Draw": "draw", "Away Win": "away_win"}
-            if sel_map.get(pick.selection) == actual:
+            if sel_map.get(pick["selection"]) == actual:
                 ensemble_correct += 1
             ensemble_total += 1
 
@@ -1268,20 +1280,20 @@ class FootballBettingAgent:
             # Collect (predicted_prob, hit) per model from the loop above data
             model_predictions: dict = {"poisson": [], "elo": [], "ml": []}
             for pick in settled:
-                if pick.market != "1X2" or pick.actual_home_goals is None:
+                if pick["market"] != "1X2" or pick["actual_home_goals"] is None:
                     continue
                 try:
                     with self.db.get_session() as session:
-                        match = session.get(Match, pick.match_id)
+                        match = session.get(Match, pick["match_id"])
                         if not match:
                             continue
                         home_id = match.home_team_id
                         away_id = match.away_team_id
                         match_league = match.league or ""
 
-                    if pick.actual_home_goals > pick.actual_away_goals:
+                    if pick["actual_home_goals"] > pick["actual_away_goals"]:
                         actual = "home_win"
-                    elif pick.actual_home_goals == pick.actual_away_goals:
+                    elif pick["actual_home_goals"] == pick["actual_away_goals"]:
                         actual = "draw"
                     else:
                         actual = "away_win"
@@ -1341,30 +1353,29 @@ class FootballBettingAgent:
         # Update Bayesian per-league weight learner from settled 1X2 picks
         bayesian = self.predictor.bayesian_weights
         for pick in settled:
-            if pick.market != "1X2":
+            if pick["market"] != "1X2":
                 continue
             try:
                 with self.db.get_session() as session:
-                    match = session.get(Match, pick.match_id)
+                    match = session.get(Match, pick["match_id"])
                     if not match:
                         continue
                     home_id = match.home_team_id
                     away_id = match.away_team_id
                     match_league = match.league or ""
-                    match_date = match.match_date
 
                 if not match_league:
                     continue
 
                 # Actual result
-                if pick.actual_home_goals > pick.actual_away_goals:
+                if pick["actual_home_goals"] > pick["actual_away_goals"]:
                     actual = "home_win"
-                elif pick.actual_home_goals == pick.actual_away_goals:
+                elif pick["actual_home_goals"] == pick["actual_away_goals"]:
                     actual = "draw"
                 else:
                     actual = "away_win"
 
-                days_ago = (date.today() - pick.pick_date).days if pick.pick_date else 0
+                days_ago = (date.today() - pick["match_date"]).days if pick["match_date"] else 0
 
                 # Poisson
                 poisson_pred = self.predictor.poisson.predict(home_id, away_id, league=match_league)
@@ -1380,7 +1391,7 @@ class FootballBettingAgent:
                 if self.predictor.ml_models.is_fitted:
                     try:
                         ml_features = await self.feature_engineer.create_features(
-                            pick.match_id, as_of_date=match_date,
+                            pick["match_id"], as_of_date=pick["match_date"],
                         )
                         if ml_features:
                             fv = self.feature_engineer.create_feature_vector(ml_features)
@@ -1394,8 +1405,8 @@ class FootballBettingAgent:
                         pass
 
                 # Goals market: track Poisson accuracy on over/under 2.5
-                if pick.actual_home_goals is not None and pick.actual_away_goals is not None:
-                    total_goals = pick.actual_home_goals + pick.actual_away_goals
+                if pick["actual_home_goals"] is not None and pick["actual_away_goals"] is not None:
+                    total_goals = pick["actual_home_goals"] + pick["actual_away_goals"]
                     actual_over25 = total_goals > 2.5
                     poisson_over25 = poisson_pred.get("over_2.5", 0.5) > 0.5
                     bayesian.update(match_league, "poisson", poisson_over25 == actual_over25, days_ago, market="goals")
@@ -1614,7 +1625,7 @@ class FootballBettingAgent:
             stale_info = getattr(self.predictor.ml_models, "trained_at", "never")
             logger.info(f"ML models stale (last trained: {stale_info}) — retraining")
             try:
-                _max = 200 if self.db.is_postgres else 2000
+                _max = 100 if self.db.is_postgres else 2000
                 await self.train_ml_models(max_samples=_max)
             except Exception as e:
                 logger.warning(f"ML retraining failed: {e}")
