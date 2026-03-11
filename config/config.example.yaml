@@ -20,9 +20,10 @@ scraping:
     - europe/champions-league
     - europe/europa-league
     - europe/europa-conference-league
-    # Second divisions & smaller leagues (uncomment for local runs)
-    # - england/championship
-    # - england/league-one
+    # Lower English divisions (Championship & League One have picks;
+    # League Two kept commented — uncomment for broader coverage)
+    - england/championship
+    - england/league-one
     # - england/league-two
     # - spain/laliga2
     # - germany/2-bundesliga

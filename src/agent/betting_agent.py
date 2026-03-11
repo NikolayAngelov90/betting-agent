@@ -132,8 +132,8 @@ class FootballBettingAgent:
         import time as _timer
         leagues = self.config.get("scraping.flashscore_leagues", [])
 
-        _RESULTS_BUDGET_S = 480   # 8 minutes for all results (~80s/league × 13 leagues)
-        _FIXTURES_BUDGET_S = 300  # 5 minutes for all fixtures (~15s/league × 13 leagues)
+        _RESULTS_BUDGET_S = 720   # 12 minutes for all results (~80s/league × 15 leagues)
+        _FIXTURES_BUDGET_S = 360  # 6 minutes for all fixtures (~15s/league × 15 leagues)
 
         # Skip leagues that were already scraped by settle_predictions() within
         # this CI run (checked via recently-updated match timestamps).
@@ -432,6 +432,16 @@ class FootballBettingAgent:
                 query = query.filter(Match.league.in_(leagues))
             fixtures = query.all()
 
+            # Diagnostic: log how many fixtures per league for tracing missing matches
+            league_counts: dict = {}
+            for f in fixtures:
+                league_counts[f.league] = league_counts.get(f.league, 0) + 1
+            logger.info(
+                f"Fixture query: {len(fixtures)} matches for {target} "
+                f"(now={now.strftime('%H:%M')} UTC), "
+                f"by league: {dict(sorted(league_counts.items()))}"
+            )
+
             # Deduplicate fixtures: Flashscore and football-data.org may create
             # separate Match records for the same game (e.g. "Man City" vs
             # "Manchester City"). Keep the record with more odds or with
@@ -485,7 +495,7 @@ class FootballBettingAgent:
         # "Flashscore" display odds), try API-Football if they have an
         # apifootball_id and we have budget remaining (free tier = 100/day).
         if self.apifootball.enabled:
-            _apifb_budget_remaining = min(self.apifootball.remaining_budget(), 20)
+            _apifb_budget_remaining = min(self.apifootball.remaining_budget(), 40)
             with self.db.get_session() as session:
                 apifb_fallback = []
                 for fid in fixture_ids:
@@ -572,15 +582,17 @@ class FootballBettingAgent:
 
         # Analyze fixtures with bounded concurrency — feature engineering and
         # prediction involve synchronous DB queries that block the event loop,
-        # so a semaphore limits how many run at once (3 = good balance between
-        # parallelism and DB connection pressure).
-        _SEM = asyncio.Semaphore(3)
+        # so a semaphore limits how many run at once.  Default 5 keeps weekend
+        # 70-fixture runs within CI timeout; override via ANALYSIS_CONCURRENCY.
+        import os as _os
+        _CONCURRENCY = int(_os.environ.get("ANALYSIS_CONCURRENCY", "5"))
+        _SEM = asyncio.Semaphore(_CONCURRENCY)
 
         async def _analyze_with_sem(mid):
             async with _SEM:
                 return await self.analyze_fixture(mid)
 
-        logger.info(f"Analyzing {len(fixture_ids)} fixtures (concurrency=3)...")
+        logger.info(f"Analyzing {len(fixture_ids)} fixtures (concurrency={_CONCURRENCY})...")
         analyses = await asyncio.gather(
             *(_analyze_with_sem(mid) for mid in fixture_ids),
             return_exceptions=True,
@@ -1466,6 +1478,11 @@ class FootballBettingAgent:
             return
 
         # Build feature matrix and labels — process in parallel batches
+        # Hard time budget prevents ML training from blowing the CI timeout.
+        import time as _timer
+        _ML_TRAIN_BUDGET_S = 600  # 10 minutes
+        _ml_deadline = _timer.monotonic() + _ML_TRAIN_BUDGET_S
+
         X_list = []
         y_list = []        # 1X2: 0=away, 1=draw, 2=home
         y_goals_list = []  # over/under 2.5: 1=over, 0=under/equal
@@ -1476,6 +1493,13 @@ class FootballBettingAgent:
         BATCH_SIZE = 10 if self.db.is_postgres else 50
 
         for batch_start in range(0, len(match_data), BATCH_SIZE):
+            if _timer.monotonic() > _ml_deadline:
+                logger.warning(
+                    f"ML training time budget exhausted ({_ML_TRAIN_BUDGET_S // 60} min) "
+                    f"after {len(X_list)} valid samples — proceeding with partial data"
+                )
+                break
+
             batch = match_data[batch_start:batch_start + BATCH_SIZE]
 
             # Fan out: compute features for all matches in the batch concurrently
@@ -1510,7 +1534,7 @@ class FootballBettingAgent:
                     skipped += 1
 
             processed = min(batch_start + BATCH_SIZE, len(match_data))
-            if processed % 50 == 0 or processed == len(match_data):
+            if processed % 25 == 0 or processed == len(match_data):
                 logger.info(f"Processed {processed}/{len(match_data)} matches ({len(X_list)} valid)...")
 
         if len(X_list) < 100:

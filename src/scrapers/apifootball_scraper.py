@@ -214,6 +214,7 @@ PRIORITY_LEAGUES = [
     "europe/europa-league", "europe/europa-conference-league",
     "netherlands/eredivisie", "portugal/primeira-liga",
     "belgium/jupiler-pro-league", "turkey/super-lig", "scotland/premiership",
+    "england/championship", "england/league-one",
 ]
 
 # API-Football bet type IDs -> our market_type and selection mapping
@@ -470,7 +471,11 @@ class APIFootballScraper(BaseScraper):
                         session.commit()
                 updated += 1
             else:
-                # Create new match
+                # Create new match — log at INFO so we can trace missing fixtures
+                logger.info(
+                    f"API-Football: creating new fixture {home_name} vs {away_name} "
+                    f"({league_key}, {date_str}, afid={fixture_id})"
+                )
                 with self.db.get_session() as session:
                     match = Match(
                         home_team_id=home_team_id,
