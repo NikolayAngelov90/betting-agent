@@ -1483,6 +1483,9 @@ class FootballBettingAgent:
         _ML_TRAIN_BUDGET_S = 600  # 10 minutes
         _ml_deadline = _timer.monotonic() + _ML_TRAIN_BUDGET_S
 
+        # Clear standings cache so monthly-coarsened keys start fresh
+        self.feature_engineer.team_features.clear_standings_cache()
+
         X_list = []
         y_list = []        # 1X2: 0=away, 1=draw, 2=home
         y_goals_list = []  # over/under 2.5: 1=over, 0=under/equal
@@ -1502,9 +1505,13 @@ class FootballBettingAgent:
 
             batch = match_data[batch_start:batch_start + BATCH_SIZE]
 
-            # Fan out: compute features for all matches in the batch concurrently
+            # Fan out: compute features for all matches in the batch concurrently.
+            # for_training=True skips weather/news API calls and coarsens
+            # league standings cache to monthly → ~6x fewer DB queries per match.
             batch_results = await asyncio.gather(
-                *(self.feature_engineer.create_features(md["id"], as_of_date=md["match_date"]) for md in batch),
+                *(self.feature_engineer.create_features(
+                    md["id"], as_of_date=md["match_date"], for_training=True
+                ) for md in batch),
                 return_exceptions=True,
             )
 

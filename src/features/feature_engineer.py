@@ -30,13 +30,18 @@ class FeatureEngineer:
         self._weather_service = None  # lazy-loaded on first use
         self.elo_ratings = None  # set externally from predictor.elo.ratings
 
-    async def create_features(self, match_id: int, as_of_date=None) -> dict:
+    async def create_features(self, match_id: int, as_of_date=None,
+                              for_training: bool = False) -> dict:
         """Build complete feature dictionary for a match.
 
         Args:
             match_id: Match database ID
             as_of_date: Only use data before this date (for training).
                         None = no cutoff (live prediction).
+            for_training: If True, skip external API calls (weather, news)
+                         and coarsen league standings cache to monthly
+                         granularity. This reduces DB queries from ~146
+                         to ~25 per match and eliminates HTTP latency.
 
         Returns:
             Dictionary containing all features for the match
@@ -77,8 +82,14 @@ class FeatureEngineer:
         features.update(self._prefix_dict(away_injuries, "away_injury_"))
 
         # 4. League position features
-        home_pos = self.team_features.get_league_position(home_id, league, as_of_date=as_of_date)
-        away_pos = self.team_features.get_league_position(away_id, league, as_of_date=as_of_date)
+        # For training: coarsen as_of_date to 1st-of-month so standings cache
+        # hits across matches in the same month (~100 matches → ~6 cache keys).
+        # League standings barely change within a month so this is safe.
+        _standings_date = as_of_date
+        if for_training and as_of_date is not None:
+            _standings_date = as_of_date.replace(day=1)
+        home_pos = self.team_features.get_league_position(home_id, league, as_of_date=_standings_date)
+        away_pos = self.team_features.get_league_position(away_id, league, as_of_date=_standings_date)
         features.update(self._prefix_dict(home_pos, "home_league_"))
         features.update(self._prefix_dict(away_pos, "away_league_"))
 
@@ -95,13 +106,19 @@ class FeatureEngineer:
             home_pos.get("title_gap", 0) - away_pos.get("title_gap", 0)
         )
 
-        # 5. News sentiment features
-        home_sentiment = await self.news_scraper.get_team_sentiment(home_id)
-        away_sentiment = await self.news_scraper.get_team_sentiment(away_id)
-        features["home_news_sentiment"] = home_sentiment.get("avg_sentiment", 0)
-        features["away_news_sentiment"] = away_sentiment.get("avg_sentiment", 0)
-        features["home_news_count"] = home_sentiment.get("article_count", 0)
-        features["away_news_count"] = away_sentiment.get("article_count", 0)
+        # 5. News sentiment features (skip during training — stale for historical matches)
+        if for_training:
+            features["home_news_sentiment"] = 0
+            features["away_news_sentiment"] = 0
+            features["home_news_count"] = 0
+            features["away_news_count"] = 0
+        else:
+            home_sentiment = await self.news_scraper.get_team_sentiment(home_id)
+            away_sentiment = await self.news_scraper.get_team_sentiment(away_id)
+            features["home_news_sentiment"] = home_sentiment.get("avg_sentiment", 0)
+            features["away_news_sentiment"] = away_sentiment.get("avg_sentiment", 0)
+            features["home_news_count"] = home_sentiment.get("article_count", 0)
+            features["away_news_count"] = away_sentiment.get("article_count", 0)
 
         # 6. International competition features (CL/EL/ECL form)
         home_intl = self.team_features.get_international_form(home_id, as_of_date=as_of_date)
@@ -199,12 +216,23 @@ class FeatureEngineer:
             features["away_short_rest_count"] = away_sit["short_rest_count"]
 
         # 13. League-specific baseline rates (home advantage, avg goals, BTTS rate, etc.)
-        league_feat = self._get_league_features(league, as_of_date=as_of_date)
+        # Coarsen date for training (same logic as standings — rates are stable within a month)
+        _league_date = _standings_date if for_training else as_of_date
+        league_feat = self._get_league_features(league, as_of_date=_league_date)
         features.update(league_feat)
 
         # 14. Match-day weather (Open-Meteo free API — no key required)
-        weather = self._get_weather_features(_venue, _match_date)
-        features.update(weather)
+        # Skip during training: historical weather is unavailable for most
+        # dates and the HTTP calls add ~300ms per uncached venue.
+        if for_training:
+            features.update({
+                "weather_temp_c": 12.0, "weather_wind_kmh": 10.0,
+                "weather_precip_mm": 0.0, "weather_is_raining": 0,
+                "weather_is_windy": 0, "weather_available": 0,
+            })
+        else:
+            weather = self._get_weather_features(_venue, _match_date)
+            features.update(weather)
 
         logger.debug(f"Generated {len(features)} features for match {match_id}")
         return features
