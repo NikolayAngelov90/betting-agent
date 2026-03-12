@@ -144,9 +144,41 @@ class FootballBettingAgent:
                 f"{', '.join(sorted(_recently_scraped))}"
             )
 
+        # Reorder leagues: prioritize those with today's fixtures (the ones
+        # that actually generate picks) so they always complete before the
+        # time budget expires. Remaining leagues fill in background coverage.
+        _today_leagues: set = set()
+        try:
+            with self.db.get_session() as session:
+                _day_start = datetime.combine(date.today(), datetime.min.time())
+                _day_end = _day_start + timedelta(days=1)
+                _today_rows = (
+                    session.query(Match.league)
+                    .filter(
+                        Match.is_fixture == True,
+                        Match.match_date >= _day_start,
+                        Match.match_date < _day_end,
+                        Match.league.isnot(None),
+                    )
+                    .distinct()
+                    .all()
+                )
+                _today_leagues = {r[0] for r in _today_rows if r[0]}
+        except Exception:
+            pass
+
+        _priority = [l for l in leagues if l in _today_leagues]
+        _rest = [l for l in leagues if l not in _today_leagues]
+        _ordered_leagues = _priority + _rest
+        if _priority:
+            logger.info(
+                f"Prioritized {len(_priority)} leagues with today's fixtures: "
+                f"{', '.join(_priority)}"
+            )
+
         try:
             _results_deadline = _timer.monotonic() + _RESULTS_BUDGET_S
-            for league in leagues:
+            for league in _ordered_leagues:
                 if _timer.monotonic() > _results_deadline:
                     logger.warning("Flashscore results: time budget exhausted, skipping remaining leagues")
                     break
@@ -176,9 +208,10 @@ class FootballBettingAgent:
 
         # Fixtures (today's upcoming matches) — always attempted independently
         # Driver is freshly created here (results session was closed above).
+        # Use same priority order as results.
         try:
             _fixtures_deadline = _timer.monotonic() + _FIXTURES_BUDGET_S
-            for league in leagues:
+            for league in _ordered_leagues:
                 if _timer.monotonic() > _fixtures_deadline:
                     logger.warning("Flashscore fixtures: time budget exhausted, skipping remaining leagues")
                     break

@@ -502,6 +502,10 @@ class APIFootballScraper(BaseScraper):
 
         This is the primary stats enrichment path — much faster than Flashscore
         scraping (~0.5s/match via API vs ~12s/match via browser).
+
+        Each API call has a mandatory 6s rate-limit sleep (free tier: 10/min),
+        so 10 matches = ~70s.  We batch DB writes into a single commit at
+        the end to save ~50ms/match of Neon latency.
         """
         from sqlalchemy import or_
         with self.db.get_session() as session:
@@ -521,6 +525,8 @@ class APIFootballScraper(BaseScraper):
             logger.info(f"Backfilling xG/stats for {len(matches)} recent matches via API-Football")
             match_data = [(m.id, m.apifootball_id) for m in matches]
 
+        # Fetch all stats first, then batch-write to DB in a single commit
+        pending_updates: list = []
         for match_id, fixture_id in match_data:
             if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
                 logger.warning("Approaching API limit, stopping stats backfill")
@@ -528,7 +534,12 @@ class APIFootballScraper(BaseScraper):
 
             stats = await self._fetch_fixture_stats(fixture_id)
             if stats:
-                self._update_match_stats(match_id, stats)
+                pending_updates.append((match_id, stats))
+
+        # Batch commit all updates in a single session
+        if pending_updates:
+            self._batch_update_match_stats(pending_updates)
+            logger.info(f"xG backfill: updated {len(pending_updates)}/{len(match_data)} matches")
 
     async def _fetch_fixture_stats(self, fixture_id: int) -> Optional[Dict]:
         """Fetch detailed statistics for a single fixture."""
@@ -616,6 +627,52 @@ class APIFootballScraper(BaseScraper):
 
             session.commit()
             logger.debug(f"Updated stats for match {match_id} (xG: {home.get('xg')}-{away.get('xg')})")
+
+    def _batch_update_match_stats(self, updates: list):
+        """Write xG and stats for multiple matches in a single DB commit.
+
+        Saves ~50ms of Neon latency per match vs individual commits.
+        """
+        with self.db.get_session() as session:
+            for match_id, stats in updates:
+                match = session.get(Match, match_id)
+                if not match:
+                    continue
+                home = stats.get("home", {})
+                away = stats.get("away", {})
+                if "xg" in home:
+                    match.home_xg = home["xg"]
+                if "xg" in away:
+                    match.away_xg = away["xg"]
+                if match.home_shots is None and "shots" in home:
+                    match.home_shots = home["shots"]
+                if match.away_shots is None and "shots" in away:
+                    match.away_shots = away["shots"]
+                if match.home_shots_on_target is None and "shots_on_target" in home:
+                    match.home_shots_on_target = home["shots_on_target"]
+                if match.away_shots_on_target is None and "shots_on_target" in away:
+                    match.away_shots_on_target = away["shots_on_target"]
+                if match.home_possession is None and "possession" in home:
+                    match.home_possession = home["possession"]
+                if match.away_possession is None and "possession" in away:
+                    match.away_possession = away["possession"]
+                if match.home_corners is None and "corners" in home:
+                    match.home_corners = home["corners"]
+                if match.away_corners is None and "corners" in away:
+                    match.away_corners = away["corners"]
+                if match.home_fouls is None and "fouls" in home:
+                    match.home_fouls = home["fouls"]
+                if match.away_fouls is None and "fouls" in away:
+                    match.away_fouls = away["fouls"]
+                if match.home_yellow_cards is None and "yellow_cards" in home:
+                    match.home_yellow_cards = home["yellow_cards"]
+                if match.away_yellow_cards is None and "yellow_cards" in away:
+                    match.away_yellow_cards = away["yellow_cards"]
+                if match.home_red_cards is None and "red_cards" in home:
+                    match.home_red_cards = home["red_cards"]
+                if match.away_red_cards is None and "red_cards" in away:
+                    match.away_red_cards = away["red_cards"]
+            session.commit()
 
     # Leagues where teams are stored under their domestic league, not the competition.
     # Searching by league="europe/champions-league" would return nothing.
