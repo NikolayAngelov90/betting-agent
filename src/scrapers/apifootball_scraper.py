@@ -284,6 +284,18 @@ class APIFootballScraper(BaseScraper):
         self.db = get_db()
         self._requests_today = 0
         self._daily_limit = 100  # Free tier
+
+        # Only process leagues that are configured in flashscore_leagues.
+        # Prevents creating fixtures/odds for non-configured leagues that
+        # waste API budget and analysis time.
+        _configured = set(self.config.get("scraping.flashscore_leagues", []))
+        if _configured:
+            self._tracked_league_ids = {
+                lid for lid, lkey in ID_TO_LEAGUE.items()
+                if lkey in _configured
+            }
+        else:
+            self._tracked_league_ids = set(ID_TO_LEAGUE.keys())
         self._quota_exhausted = False  # Set True on first quota error; skips all further calls
         self._logged_unknown_bets: set = set()  # Suppress repeated unknown bet type logs
 
@@ -396,8 +408,8 @@ class APIFootballScraper(BaseScraper):
 
         for fix in fixtures:
             league_id = fix.get("league", {}).get("id")
-            if league_id not in ID_TO_LEAGUE:
-                continue  # Skip leagues we don't track
+            if league_id not in self._tracked_league_ids:
+                continue  # Skip leagues not in configured flashscore_leagues
 
             league_key = ID_TO_LEAGUE[league_id]
             fixture_id = fix.get("fixture", {}).get("id")
