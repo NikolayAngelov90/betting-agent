@@ -26,6 +26,25 @@ from src.utils.logger import get_logger, setup_logger, utcnow
 logger = get_logger()
 
 
+def _sync_create_features(feature_engineer, match_id, as_of_date):
+    """Run create_features synchronously in a thread (for ML training).
+
+    create_features is async but with for_training=True all internal work
+    is synchronous DB queries.  Running via run_in_executor lets multiple
+    matches query the DB in parallel threads instead of blocking the
+    event loop sequentially.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            feature_engineer.create_features(
+                match_id, as_of_date=as_of_date, for_training=True
+            )
+        )
+    finally:
+        loop.close()
+
+
 @dataclass
 class MatchAnalysis:
     """Complete analysis result for a single match."""
@@ -70,14 +89,33 @@ class FootballBettingAgent:
         self.value_calculator = ValueBettingCalculator(self.config)
         self.telegram = TelegramNotifier(self.config)
 
+        # Track leagues scraped within this process lifetime (for dedup
+        # between settle and daily_update even when no new results are found).
+        self._scraped_leagues: set = set()
+
         logger.info("Football Betting Agent initialized")
 
-    def _get_recently_scraped_leagues(self, minutes: int = 30) -> set:
-        """Return leagues with matches updated within the last N minutes.
+    _SCRAPED_LEAGUES_FILE = Path("data/scraped_leagues.json")
 
-        Used to avoid re-scraping leagues that settle_predictions() already
-        scraped in the same CI run.
+    def _get_recently_scraped_leagues(self, minutes: int = 30) -> set:
+        """Return leagues scraped within the last N minutes.
+
+        Checks both a marker file (cross-process, written after each
+        successful Flashscore scrape) and DB timestamps as fallback.
         """
+        result: set = set()
+
+        # 1. Marker file (reliable cross-process, written by _mark_league_scraped)
+        try:
+            if self._SCRAPED_LEAGUES_FILE.exists():
+                data = json.loads(self._SCRAPED_LEAGUES_FILE.read_text())
+                ts = datetime.fromisoformat(data.get("timestamp", ""))
+                if (utcnow() - ts).total_seconds() < minutes * 60:
+                    result.update(data.get("leagues", []))
+        except Exception:
+            pass
+
+        # 2. DB timestamp fallback
         cutoff = utcnow() - timedelta(minutes=minutes)
         try:
             with self.db.get_session() as session:
@@ -91,9 +129,31 @@ class FootballBettingAgent:
                     .distinct()
                     .all()
                 )
-                return {r[0] for r in recent if r[0]}
+                result.update(r[0] for r in recent if r[0])
         except Exception:
-            return set()
+            pass
+
+        return result
+
+    def _mark_league_scraped(self, league: str):
+        """Record a successfully scraped league in a marker file.
+
+        Survives across separate process invocations within the same CI run.
+        """
+        self._scraped_leagues.add(league)
+        try:
+            data: dict = {}
+            if self._SCRAPED_LEAGUES_FILE.exists():
+                data = json.loads(self._SCRAPED_LEAGUES_FILE.read_text())
+            existing = set(data.get("leagues", []))
+            existing.add(league)
+            self._SCRAPED_LEAGUES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self._SCRAPED_LEAGUES_FILE.write_text(json.dumps({
+                "timestamp": utcnow().isoformat(),
+                "leagues": sorted(existing),
+            }))
+        except Exception:
+            pass
 
     async def daily_update(self):
         """Run the full daily data collection cycle."""
@@ -132,12 +192,13 @@ class FootballBettingAgent:
         import time as _timer
         leagues = self.config.get("scraping.flashscore_leagues", [])
 
-        _RESULTS_BUDGET_S = 720   # 12 minutes for all results (~80s/league × 15 leagues)
+        _RESULTS_BUDGET_S = 900   # 15 minutes for all results (~60s/league × 15 leagues)
         _FIXTURES_BUDGET_S = 360  # 6 minutes for all fixtures (~15s/league × 15 leagues)
 
         # Skip leagues that were already scraped by settle_predictions() within
-        # this CI run (checked via recently-updated match timestamps).
-        _recently_scraped = self._get_recently_scraped_leagues(minutes=30)
+        # this CI run. Uses _scraped_leagues (set explicitly during settle) +
+        # DB timestamp fallback for cross-process runs.
+        _recently_scraped = self._scraped_leagues | self._get_recently_scraped_leagues(minutes=30)
         if _recently_scraped:
             logger.info(
                 f"Skipping {len(_recently_scraped)} leagues already scraped by settle: "
@@ -189,6 +250,7 @@ class FootballBettingAgent:
                         self.scraper.scrape_league_results(league, skip_stats=True),
                         timeout=60,
                     )
+                    self._mark_league_scraped(league)
                 except asyncio.TimeoutError:
                     logger.warning(f"Flashscore results timeout for {league}, continuing")
                     try:
@@ -463,6 +525,13 @@ class FootballBettingAgent:
             )
             if leagues:
                 query = query.filter(Match.league.in_(leagues))
+            else:
+                # Restrict to configured leagues only — fixtures from non-configured
+                # leagues (created by API-Football's LEAGUE_ID_MAP) waste analysis
+                # time and API budget without having Flashscore enrichment.
+                _configured = self.config.get("scraping.flashscore_leagues", [])
+                if _configured:
+                    query = query.filter(Match.league.in_(_configured))
             fixtures = query.all()
 
             # Diagnostic: log how many fixtures per league for tracing missing matches
@@ -903,6 +972,7 @@ class FootballBettingAgent:
                         self.scraper.scrape_league_results(league, skip_stats=True),
                         timeout=60,
                     )
+                    self._mark_league_scraped(league)
                 except asyncio.TimeoutError:
                     logger.warning(f"Flashscore settle timeout for {league}, skipping")
                     # Close the driver so the still-running background thread's
@@ -1268,7 +1338,9 @@ class FootballBettingAgent:
             if model_total[model] > 0:
                 accuracies[model] = model_correct[model] / model_total[model]
             else:
-                accuracies[model] = 0.25  # Default
+                # ML not fitted → 0 weight (don't pollute ensemble with noise).
+                # Poisson/Elo always produce predictions so this only affects ML.
+                accuracies[model] = 0.0
 
         if sum(accuracies.values()) == 0:
             logger.info("No accuracy data to tune weights")
@@ -1300,6 +1372,9 @@ class FootballBettingAgent:
         # Normalize to get new weights (exclude ensemble from weight calc)
         base_models = {k: v for k, v in accuracies.items() if k != "ensemble"}
         total_acc = sum(base_models.values())
+        if total_acc == 0:
+            logger.info("No accuracy data to tune weights (all models 0)")
+            return
         new_weights = {
             "poisson": round(base_models["poisson"] / total_acc, 3),
             "elo": round(base_models["elo"] / total_acc, 3),
@@ -1541,10 +1616,24 @@ class FootballBettingAgent:
             # Fan out: compute features for all matches in the batch concurrently.
             # for_training=True skips weather/news API calls and coarsens
             # league standings cache to monthly → ~6x fewer DB queries per match.
+            # create_features with for_training=True is effectively synchronous
+            # (no HTTP calls), so we use run_in_executor to parallelize the
+            # synchronous DB queries across threads instead of blocking the
+            # event loop with asyncio.gather on sync work.
+            import functools
+            _loop = asyncio.get_event_loop()
+
+            async def _features_in_thread(md):
+                return await _loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        _sync_create_features,
+                        self.feature_engineer, md["id"], md["match_date"],
+                    ),
+                )
+
             batch_results = await asyncio.gather(
-                *(self.feature_engineer.create_features(
-                    md["id"], as_of_date=md["match_date"], for_training=True
-                ) for md in batch),
+                *(_features_in_thread(md) for md in batch),
                 return_exceptions=True,
             )
 
