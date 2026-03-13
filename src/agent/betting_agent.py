@@ -192,8 +192,8 @@ class FootballBettingAgent:
         import time as _timer
         leagues = self.config.get("scraping.flashscore_leagues", [])
 
-        _RESULTS_BUDGET_S = 900   # 15 minutes for all results (~60s/league × 15 leagues)
-        _FIXTURES_BUDGET_S = 360  # 6 minutes for all fixtures (~15s/league × 15 leagues)
+        _RESULTS_BUDGET_S = 1500  # 25 minutes for all results (~60s/league × 26 leagues)
+        _FIXTURES_BUDGET_S = 480  # 8 minutes for all fixtures (~15s/league × 26 leagues)
 
         # Skip leagues that were already scraped by settle_predictions() within
         # this CI run. Uses _scraped_leagues (set explicitly during settle) +

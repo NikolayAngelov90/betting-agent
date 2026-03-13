@@ -193,7 +193,7 @@ LEAGUE_ID_MAP = {
     "austria/bundesliga": 218,
     "switzerland/super-league": 207,
     "greece/super-league": 197,
-    # "denmark/superliga": 119,  # season ended 2026-03-01; re-enable ~July 2026
+    "denmark/superliga": 119,
     "norway/eliteserien": 103,
     "sweden/allsvenskan": 113,
     "finland/veikkausliiga": 244,
@@ -209,12 +209,18 @@ ID_TO_LEAGUE = {v: k for k, v in LEAGUE_ID_MAP.items()}
 
 # Leagues to fetch odds for first (highest priority)
 PRIORITY_LEAGUES = [
+    # Top 5 + European competitions first
     "england/premier-league", "spain/laliga", "germany/bundesliga",
     "italy/serie-a", "france/ligue-1", "europe/champions-league",
     "europe/europa-league", "europe/europa-conference-league",
+    # Strong European leagues
     "netherlands/eredivisie", "portugal/primeira-liga",
     "belgium/jupiler-pro-league", "turkey/super-lig", "scotland/premiership",
-    "england/championship", "england/league-one",
+    # Lower divisions & smaller leagues
+    "england/championship", "england/league-one", "england/league-two",
+    "spain/laliga2", "germany/2-bundesliga", "italy/serie-b", "france/ligue-2",
+    "austria/bundesliga", "switzerland/super-league", "greece/super-league",
+    "denmark/superliga", "poland/ekstraklasa", "romania/liga-1",
 ]
 
 # API-Football bet type IDs -> our market_type and selection mapping

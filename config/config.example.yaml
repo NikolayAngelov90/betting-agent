@@ -20,21 +20,21 @@ scraping:
     - europe/champions-league
     - europe/europa-league
     - europe/europa-conference-league
-    # Lower English divisions (Championship & League One have picks;
-    # League Two kept commented — uncomment for broader coverage)
+    # Lower English divisions
     - england/championship
     - england/league-one
-    # - england/league-two
-    # - spain/laliga2
-    # - germany/2-bundesliga
-    # - italy/serie-b
-    # - france/ligue-2
-    # - austria/bundesliga
-    # - switzerland/super-league
-    # - greece/super-league
-    # - denmark/superliga
-    # - poland/ekstraklasa
-    # - romania/liga-1
+    - england/league-two
+    # Second divisions & smaller European leagues
+    - spain/laliga2
+    - germany/2-bundesliga
+    - italy/serie-b
+    - france/ligue-2
+    - austria/bundesliga
+    - switzerland/super-league
+    - greece/super-league
+    # - denmark/superliga  # off-season until ~July 2026
+    - poland/ekstraklasa
+    - romania/liga-1
 
   update_interval_hours: 6
   headless: true
