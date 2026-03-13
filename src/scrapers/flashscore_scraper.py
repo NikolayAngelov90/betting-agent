@@ -728,7 +728,7 @@ class FlashscoreScraper(BaseScraper):
 
         return matches
 
-    def _scrape_fixtures_page(self, url: str, max_days_ahead: int = 7) -> List[dict]:
+    def _scrape_fixtures_page(self, url: str, max_days_ahead: int = 1) -> List[dict]:
         """Scrape a fixtures page using Selenium.
 
         Only loads and saves fixtures within `max_days_ahead` days to avoid
@@ -798,29 +798,34 @@ class FlashscoreScraper(BaseScraper):
         selectors in preference order (newest → oldest) so we survive future
         minor CSS-class renames without a full rewrite.
         """
+        def _clean(raw: str) -> str:
+            """Take only the first line and strip — Flashscore DOM sometimes
+            includes child elements (ranking numbers) that produce multiline text."""
+            return raw.split("\n")[0].strip()
+
         # 2026 layout: event__homeParticipant / event__awayParticipant
         try:
-            home = element.find_element(By.CLASS_NAME, "event__homeParticipant").text.strip()
-            away = element.find_element(By.CLASS_NAME, "event__awayParticipant").text.strip()
+            home = _clean(element.find_element(By.CLASS_NAME, "event__homeParticipant").text)
+            away = _clean(element.find_element(By.CLASS_NAME, "event__awayParticipant").text)
             if home and away:
                 return home, away
         except Exception:
             pass
         # 2024-2025 layout: duelParticipant
         try:
-            home = element.find_element(
+            home = _clean(element.find_element(
                 By.CSS_SELECTOR, ".duelParticipant__home .participant__participantName"
-            ).text.strip()
-            away = element.find_element(
+            ).text)
+            away = _clean(element.find_element(
                 By.CSS_SELECTOR, ".duelParticipant__away .participant__participantName"
-            ).text.strip()
+            ).text)
             if home and away:
                 return home, away
         except Exception:
             pass
         # Oldest layout: event__participant--home/away
-        home = element.find_element(By.CLASS_NAME, "event__participant--home").text.strip()
-        away = element.find_element(By.CLASS_NAME, "event__participant--away").text.strip()
+        home = _clean(element.find_element(By.CLASS_NAME, "event__participant--home").text)
+        away = _clean(element.find_element(By.CLASS_NAME, "event__participant--away").text)
         return home, away
 
     @staticmethod

@@ -176,7 +176,7 @@ class FootballBettingAgent:
         # Covers: PL, BL1, La Liga, Serie A, Ligue 1, CL, Eredivisie, Primeira Liga, ELC.
         try:
             fdo_results = await self.footballdataorg.update_results(days_back=1)
-            fdo_fixtures = await self.footballdataorg.sync_fixtures(days_ahead=2)
+            fdo_fixtures = await self.footballdataorg.sync_fixtures(days_ahead=0)
             logger.info(
                 f"football-data.org: {fdo_results} scores updated, "
                 f"{fdo_fixtures} new fixtures added"

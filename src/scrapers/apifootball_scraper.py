@@ -45,7 +45,9 @@ TEAM_NAME_ALIASES: Dict[str, str] = {
     "Inter": "Inter",
     "Hellas Verona": "Verona",
     # France
+    "Paris Saint-Germain": "Paris SG",
     "Paris Saint Germain": "Paris SG",
+    "PSG": "Paris SG",
     "Olympique Marseille": "Marseille",
     "Olympique Lyonnais": "Lyon",
     "AS Monaco": "Monaco",
@@ -67,6 +69,29 @@ TEAM_NAME_ALIASES: Dict[str, str] = {
     "FC Porto": "Porto",
     "SL Benfica": "Benfica",
     "SC Braga": "Sp Braga",
+    "Vitoria Guimaraes": "Guimaraes",
+    "Vitória SC": "Guimaraes",
+    "Vitoria SC": "Guimaraes",
+    "FC Alverca": "FC Alverca",
+    # Netherlands (dedup variants)
+    "Fortuna Sittard": "For Sittard",
+    "Sittard": "For Sittard",
+    "Telstar": "Telstar 1963",
+    # Poland
+    "Bruk-Bet Termalica Nieciecza": "Termalica B-B.",
+    "Nieciecza": "Termalica B-B.",
+    # Germany (dedup)
+    "Borussia Mönchengladbach": "M'gladbach",
+    "Borussia Monchengladbach": "M'gladbach",
+    "FC Bayern München": "Bayern Munich",
+    "Bayern München": "Bayern Munich",
+    # England (dedup)
+    "Sheffield Wednesday": "Sheff Wed",
+    "Oxford United": "Oxford",
+    # France (dedup)
+    "AS Saint-Étienne": "St Etienne",
+    "Saint-Etienne": "St Etienne",
+    "Saint Etienne": "St Etienne",
     # Greece
     "Olympiakos Piraeus": "Olympiakos",
     "Panathinaikos": "Panathinaikos",
