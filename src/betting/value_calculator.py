@@ -54,6 +54,10 @@ class ValueBettingCalculator:
         self.min_ev = betting.get("min_expected_value", 0.03)       # 3% — professional standard
         self.min_confidence = betting.get("min_confidence", 0.58)   # 58% minimum model probability
         self.high_ev_min_confidence = 0.45  # hard floor — never go below 45% even with high EV
+        # Sliding scale: EV × confidence combined score threshold.
+        # Allows slightly sub-threshold confidence when EV compensates (and vice versa).
+        # e.g. 56% conf + 7% EV = 0.039 → passes; 46% conf + 3.5% EV = 0.016 → rejected.
+        self.min_ev_confidence_score = betting.get("min_ev_confidence_score", 0.035)
         self.kelly_fraction = betting.get("kelly_fraction", 0.25)
         self.max_stake_pct = betting.get("max_stake_percentage", 5.0)
         _VALID_MARKET_KEYS = {
@@ -147,9 +151,14 @@ class ValueBettingCalculator:
             if ev < self.min_ev:
                 continue
 
-            # Below min_confidence (58%) is only allowed when EV is exceptional (>10%)
-            if prob < self.min_confidence and ev < 0.10:
-                continue
+            # Sliding scale: allow bets below min_confidence when EV compensates.
+            # EV × confidence must exceed min_ev_confidence_score (default 0.035).
+            # This replaces the old hard 10% EV bypass — now a smooth curve where
+            # high EV compensates for slightly lower confidence and vice versa.
+            if prob < self.min_confidence:
+                ev_conf_score = ev * prob
+                if ev_conf_score < self.min_ev_confidence_score:
+                    continue
 
 
             # Model-market divergence: compute how much our model disagrees
