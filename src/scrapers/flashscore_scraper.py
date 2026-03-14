@@ -1535,8 +1535,31 @@ class FlashscoreScraper(BaseScraper):
             f"(flashscore_id={flashscore_id}): {list(all_odds.keys())}"
         )
 
+    # Canonical team name mappings — prevents duplicate team creation.
+    # Keys are variant names that appear in Flashscore DOM; values are
+    # the canonical name already stored in the database.
+    _TEAM_NAME_MAP: dict = {
+        "G.A. Eagles": "Go Ahead Eagles",
+        "Charlton Athletic FC": "Charlton",
+        "Cambridge Utd": "Cambridge",
+        "Milton Keynes Dons": "MK Dons",
+        "Nottingham": "Nott'm Forest",
+        "WSG Wattens": "Tirol",
+        "WSG Tirol": "Tirol",
+        "Royale Union SG": "St. Gilloise",
+        "Union St.-Gilloise": "St. Gilloise",
+        "Union SG": "St. Gilloise",
+        "AFS": "AVS",
+        "VfL Bochum": "Bochum",
+        "Accrington ST": "Accrington",
+        "Fatih Karagumruk": "Karagumruk",
+        "Atl. Madrid": "Ath Madrid",
+        "Atl Madrid": "Ath Madrid",
+    }
+
     def _get_or_create_team(self, session, team_name: str, league: str) -> Team:
         """Get existing team or create a new one."""
+        team_name = self._TEAM_NAME_MAP.get(team_name, team_name)
         team = session.query(Team).filter_by(name=team_name).first()
         if not team:
             team = Team(name=team_name, league=league)

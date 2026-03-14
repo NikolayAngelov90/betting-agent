@@ -198,6 +198,23 @@ TEAM_NAME_ALIASES: Dict[str, str] = {
     "Fatih Karagümrük": "Karagumruk",
     # England — additional variants
     "Accrington ST": "Accrington",
+    "Charlton Athletic FC": "Charlton",
+    "Cambridge Utd": "Cambridge",
+    "Milton Keynes Dons": "MK Dons",
+    "Nottingham Forest": "Nott'm Forest",
+    # Netherlands
+    "G.A. Eagles": "Go Ahead Eagles",
+    # Austria
+    "WSG Wattens": "Tirol",
+    "WSG Tirol": "Tirol",
+    # Belgium
+    "Royale Union SG": "St. Gilloise",
+    "Union St.-Gilloise": "St. Gilloise",
+    "Union SG": "St. Gilloise",
+    # Portugal
+    "AFS": "AVS",
+    # Germany
+    "VfL Bochum": "Bochum",
 }
 
 # Map our internal league keys to API-Football league IDs

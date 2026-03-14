@@ -181,7 +181,7 @@ TEAM_NAME_MAP: Dict[str, str] = {
     "AZ Alkmaar": "AZ Alkmaar",
     "FC Utrecht": "Utrecht",
     "FC Twente": "Twente",
-    "Go Ahead Eagles": "Go Ahead Eag",
+    "Go Ahead Eagles": "Go Ahead Eagles",
     "NEC Nijmegen": "Nijmegen",
     "Sparta Rotterdam": "Sp Rotterdam",
     "SC Heerenveen": "Heerenveen",
