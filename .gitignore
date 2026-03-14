@@ -21,6 +21,11 @@ data/historical_load_cache.json
 data/models/*.pkl
 data/models_local_backup/
 data/picks_sync.json
+data/processed/
+data/raw/
+data/models/bayesian_weights.json
+data/models/calibration.json
+data/models/ev_threshold.json
 logs/
 
 # CI logs fetched locally
