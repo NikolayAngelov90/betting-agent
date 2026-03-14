@@ -188,12 +188,16 @@ TEAM_NAME_ALIASES: Dict[str, str] = {
     "CFR 1907 Cluj": "CFR Cluj",
     # Norway
     "HamKam": "Ham-Kam",
-    # Turkey (with special characters)
+    # Turkey (with special characters + variants)
     "Fenerbahçe": "Fenerbahce",
     "Galatasaray SK": "Galatasaray",
     "Beşiktaş JK": "Besiktas",
     "Trabzonspor": "Trabzon",
     "Alanyaspor": "Alanyaspor",
+    "Fatih Karagumruk": "Karagumruk",
+    "Fatih Karagümrük": "Karagumruk",
+    # England — additional variants
+    "Accrington ST": "Accrington",
 }
 
 # Map our internal league keys to API-Football league IDs

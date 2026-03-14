@@ -75,11 +75,12 @@ class FeatureEngineer:
         h2h = self.h2h_features.get_h2h_features(home_id, away_id, as_of_date=as_of_date)
         features.update(h2h)
 
-        # 3. Injury features
-        home_injuries = self.injury_features.get_injury_features(home_id)
-        away_injuries = self.injury_features.get_injury_features(away_id)
-        features.update(self._prefix_dict(home_injuries, "home_injury_"))
-        features.update(self._prefix_dict(away_injuries, "away_injury_"))
+        # 3. Injury features (skip during training — no historical injury data)
+        if not for_training:
+            home_injuries = self.injury_features.get_injury_features(home_id)
+            away_injuries = self.injury_features.get_injury_features(away_id)
+            features.update(self._prefix_dict(home_injuries, "home_injury_"))
+            features.update(self._prefix_dict(away_injuries, "away_injury_"))
 
         # 4. League position features
         # For training: coarsen as_of_date to 1st-of-month so standings cache
@@ -222,15 +223,9 @@ class FeatureEngineer:
         features.update(league_feat)
 
         # 14. Match-day weather (Open-Meteo free API — no key required)
-        # Skip during training: historical weather is unavailable for most
-        # dates and the HTTP calls add ~300ms per uncached venue.
-        if for_training:
-            features.update({
-                "weather_temp_c": 12.0, "weather_wind_kmh": 10.0,
-                "weather_precip_mm": 0.0, "weather_is_raining": 0,
-                "weather_is_windy": 0, "weather_available": 0,
-            })
-        else:
+        # Skip during training: historical weather is unavailable and
+        # constant placeholders just become zero-variance noise.
+        if not for_training:
             weather = self._get_weather_features(_venue, _match_date)
             features.update(weather)
 

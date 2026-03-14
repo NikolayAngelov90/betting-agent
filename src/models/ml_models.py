@@ -488,12 +488,13 @@ class GoalsMLModel:
 
         logger.info(f"GoalsMLModel: training with {X.shape[1]} features, {X.shape[0]} samples")
         X_scaled = self.scaler.fit_transform(X)
+        X_df = pd.DataFrame(X_scaled, columns=self.feature_names)
         tscv = TimeSeriesSplit(n_splits=5)
 
         for name, model in self.models.items():
             cv_scores = []
-            for train_idx, val_idx in tscv.split(X_scaled):
-                X_tr, X_vl = X_scaled[train_idx], X_scaled[val_idx]
+            for train_idx, val_idx in tscv.split(X_df):
+                X_tr, X_vl = X_df.iloc[train_idx], X_df.iloc[val_idx]
                 y_tr, y_vl = y[train_idx], y[val_idx]
                 model.fit(X_tr, y_tr)
                 cv_scores.append(accuracy_score(y_vl, model.predict(X_vl)))
@@ -503,10 +504,10 @@ class GoalsMLModel:
         for name, model in self.models.items():
             if name in self._CALIBRATE:
                 cal = CalibratedClassifierCV(model, cv=5, method="isotonic")
-                cal.fit(X_scaled, y)
+                cal.fit(X_df, y)
                 self.calibrated_models[name] = cal
             else:
-                model.fit(X_scaled, y)
+                model.fit(X_df, y)
                 self.calibrated_models[name] = model
 
         self.is_fitted = True

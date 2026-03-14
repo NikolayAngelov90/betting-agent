@@ -1556,9 +1556,11 @@ class FootballBettingAgent:
         """
         logger.info("Starting ML model training...")
 
-        # Fit Poisson/Elo first (needed for feature context)
-        self.predictor.fit()
-        self.feature_engineer.elo_ratings = self.predictor.elo.ratings
+        # Fit Poisson/Elo first (needed for feature context) — skip if already fitted
+        # (e.g. when called from learn_from_settled which fits before calling us)
+        if not self.predictor.poisson._team_strengths:
+            self.predictor.fit()
+            self.feature_engineer.elo_ratings = self.predictor.elo.ratings
 
         # Get most recent completed matches with results
         with self.db.get_session() as session:
@@ -1581,8 +1583,8 @@ class FootballBettingAgent:
 
         logger.info(f"Using {len(match_data)} most recent matches for training")
 
-        if len(match_data) < 100:
-            logger.warning("Not enough matches for ML training (need 100+)")
+        if len(match_data) < 200:
+            logger.warning(f"Not enough matches for ML training ({len(match_data)}, need 200+)")
             return
 
         # Build feature matrix and labels — process in parallel batches
@@ -1666,8 +1668,8 @@ class FootballBettingAgent:
             if processed % 25 == 0 or processed == len(match_data):
                 logger.info(f"Processed {processed}/{len(match_data)} matches ({len(X_list)} valid)...")
 
-        if len(X_list) < 100:
-            logger.warning(f"Only {len(X_list)} valid samples (skipped {skipped}), need 100+")
+        if len(X_list) < 200:
+            logger.warning(f"Only {len(X_list)} valid samples (skipped {skipped}), need 200+")
             return
 
         X = np.array(X_list)
@@ -1778,8 +1780,7 @@ class FootballBettingAgent:
             stale_info = getattr(self.predictor.ml_models, "trained_at", "never")
             logger.info(f"ML models stale (last trained: {stale_info}) — retraining")
             try:
-                _max = 100 if self.db.is_postgres else 2000
-                await self.train_ml_models(max_samples=_max)
+                await self.train_ml_models(max_samples=2000)
             except Exception as e:
                 logger.warning(f"ML retraining failed: {e}")
         else:
