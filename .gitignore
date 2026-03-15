@@ -18,6 +18,7 @@ data/*.db-wal
 data/*.db.bak
 data/*.db.local_backup
 data/historical_load_cache.json
+data/scraped_leagues.json
 data/models/*.pkl
 data/models_local_backup/
 data/picks_sync.json
