@@ -48,8 +48,9 @@ mcp-servers/
 Thumbs.db
 .DS_Store
 
-# BMAD output (generated artifacts)
+# BMAD output and runtime
 _bmad-output/
+_bmad/_memory/
 
 # Testing
 .pytest_cache/
