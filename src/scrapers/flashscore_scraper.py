@@ -1553,8 +1553,22 @@ class FlashscoreScraper(BaseScraper):
         "VfL Bochum": "Bochum",
         "Accrington ST": "Accrington",
         "Fatih Karagumruk": "Karagumruk",
+        "Fatih Karagümrük": "Karagumruk",
         "Atl. Madrid": "Ath Madrid",
         "Atl Madrid": "Ath Madrid",
+        # Turkey
+        "Kasımpaşa": "Kasimpasa",
+        "Kasimpasa SK": "Kasimpasa",
+        "Beşiktaş": "Besiktas",
+        "Beşiktaş JK": "Besiktas",
+        "Fenerbahçe": "Fenerbahce",
+        "Fenerbahçe SK": "Fenerbahce",
+        "Galatasaray SK": "Galatasaray",
+        "Trabzonspor": "Trabzon",
+        "İstanbul Başakşehir": "Basaksehir",
+        "Istanbul Basaksehir": "Basaksehir",
+        "Caykur Rizespor": "Rizespor",
+        "Gaziantep FK": "Gaziantep",
     }
 
     def _get_or_create_team(self, session, team_name: str, league: str) -> Team:

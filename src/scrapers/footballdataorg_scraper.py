@@ -208,6 +208,35 @@ TEAM_NAME_MAP: Dict[str, str] = {
     "GD Chaves": "Chaves",
     "Casa Pia AC": "Casa Pia",
     "AVS Futebol SAD": "AVS",
+    # Turkey — Süper Lig
+    "Kasimpasa": "Kasimpasa",
+    "Kasımpaşa": "Kasimpasa",
+    "Kasimpasa SK": "Kasimpasa",
+    "Besiktas": "Besiktas",
+    "Beşiktaş JK": "Besiktas",
+    "Besiktas JK": "Besiktas",
+    "Galatasaray": "Galatasaray",
+    "Galatasaray SK": "Galatasaray",
+    "Fenerbahce": "Fenerbahce",
+    "Fenerbahçe": "Fenerbahce",
+    "Fenerbahce SK": "Fenerbahce",
+    "Trabzonspor": "Trabzon",
+    "Antalyaspor": "Antalyaspor",
+    "Gaziantep FK": "Gaziantep",
+    "Fatih Karagümrük": "Karagumruk",
+    "Fatih Karagumruk": "Karagumruk",
+    "İstanbul Başakşehir": "Basaksehir",
+    "Istanbul Basaksehir": "Basaksehir",
+    "Sivasspor": "Sivasspor",
+    "Konyaspor": "Konyaspor",
+    "Alanyaspor": "Alanyaspor",
+    "Rizespor": "Rizespor",
+    "Caykur Rizespor": "Rizespor",
+    "Hatayspor": "Hatayspor",
+    "Kayserispor": "Kayserispor",
+    "Adana Demirspor": "Adana Demirspor",
+    "Samsunspor": "Samsunspor",
+    "Pendikspor": "Pendikspor",
 }
 
 # Suffixes to strip when doing fuzzy name matching
@@ -227,11 +256,18 @@ def _normalize(name: str) -> str:
 
 
 def _names_match(a: str, b: str) -> bool:
-    """Return True if two team names refer to the same team."""
+    """Return True if two team names refer to the same team.
+
+    Uses SequenceMatcher instead of substring containment to avoid
+    false positives (e.g. 'Ham' matching 'West Ham').
+    """
     if not a or not b:
         return False
     na, nb = _normalize(a), _normalize(b)
-    return na == nb or na in nb or nb in na
+    if na == nb:
+        return True
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, na, nb).ratio() >= 0.80
 
 
 class FootballDataOrgScraper:

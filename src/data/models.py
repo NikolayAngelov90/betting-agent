@@ -188,7 +188,7 @@ class Odds(Base):
     match = relationship("Match", back_populates="odds")
 
     __table_args__ = (
-        Index('ix_odds_match_bookie_market', 'match_id', 'bookmaker', 'market_type', 'selection'),
+        Index('ix_odds_match_bookie_market', 'match_id', 'bookmaker', 'market_type', 'selection', unique=True),
     )
 
     def __repr__(self):

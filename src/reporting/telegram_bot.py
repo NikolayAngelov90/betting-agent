@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import timezone, timedelta
+from html import escape as html_escape
 from typing import List, Dict
 from itertools import groupby
 
@@ -116,7 +117,7 @@ class TelegramNotifier:
 
         for league_key in sorted(picks_by_league.keys()):
             league_picks = picks_by_league[league_key]
-            league_name = LEAGUE_DISPLAY.get(league_key, league_key)
+            league_name = html_escape(LEAGUE_DISPLAY.get(league_key, league_key))
             lines.append(f"\n<b>{league_name}</b>")
 
             # Group by match within league
@@ -125,6 +126,7 @@ class TelegramNotifier:
                 picks_by_match.setdefault(pick.match, []).append(pick)
 
             for match_name, match_picks in picks_by_match.items():
+                safe_match = html_escape(match_name)
                 for pick in match_picks:
                     pick_num += 1
                     risk_emoji = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(pick.risk_level, "⚪")
@@ -142,14 +144,15 @@ class TelegramNotifier:
                         kickoff_str = f" ⏰ {local_dt.strftime('%H:%M')}"
 
                     # Pick header: number + match name + kickoff
-                    line = f"\n  {risk_emoji} <b>Pick #{pick_num}: {match_name}</b>{kickoff_str}"
+                    line = f"\n  {risk_emoji} <b>Pick #{pick_num}: {safe_match}</b>{kickoff_str}"
 
                     # xG
                     if pick.predicted_xg:
                         line += f"\n      xG: {pick.predicted_xg}"
 
                     # Bet
-                    line += f"\n      Bet: <b>{pick.selection}</b> @ {pick.odds:.2f}"
+                    safe_sel = html_escape(pick.selection)
+                    line += f"\n      Bet: <b>{safe_sel}</b> @ {pick.odds:.2f}"
 
                     # EV / Conf / Risk / Stake
                     line += (
@@ -234,7 +237,7 @@ class TelegramNotifier:
             by_league.setdefault(lg, []).append(pick)
 
         for league_key in sorted(by_league.keys()):
-            league_name = LEAGUE_DISPLAY.get(league_key, league_key)
+            league_name = html_escape(LEAGUE_DISPLAY.get(league_key, league_key))
             league_picks = by_league[league_key]
             lg_wins = sum(1 for p in league_picks if p["result"] == "win")
             lg_total = len(league_picks)
@@ -242,14 +245,16 @@ class TelegramNotifier:
 
             for pick in league_picks:
                 result_emoji = "✅" if pick["result"] == "win" else "❌"
-                score = pick.get("score", "?-?")
+                score = html_escape(str(pick.get("score", "?-?")))
                 xg_str = ""
                 if pick.get("home_xg") is not None and pick.get("away_xg") is not None:
                     xg_str = f" | xG: {pick['home_xg']:.1f}-{pick['away_xg']:.1f}"
 
+                safe_match = html_escape(pick['match_name'])
+                safe_sel = html_escape(pick['selection'])
                 lines.append(
-                    f"  {result_emoji} <b>{pick['match_name']}</b> ({score}){xg_str}\n"
-                    f"      {pick['selection']} @ {pick['odds']:.2f} | Stake: {pick['stake']:.1f}%"
+                    f"  {result_emoji} <b>{safe_match}</b> ({score}){xg_str}\n"
+                    f"      {safe_sel} @ {pick['odds']:.2f} | Stake: {pick['stake']:.1f}%"
                 )
 
         # Add period breakdown (all-time already shown in header)
@@ -308,8 +313,8 @@ class TelegramNotifier:
                     local_dt = leg.match_date.replace(tzinfo=timezone.utc).astimezone(local_tz)
                     kickoff = f" ({local_dt.strftime('%H:%M')})"
                 lines.append(
-                    f"  {leg.match}{kickoff}\n"
-                    f"    {leg.selection} @ {leg.odds:.2f} (conf: {leg.confidence:.0%})"
+                    f"  {html_escape(leg.match)}{kickoff}\n"
+                    f"    {html_escape(leg.selection)} @ {leg.odds:.2f} (conf: {leg.confidence:.0%})"
                 )
             lines.append(
                 f"\n  Combined odds: <b>{parlay['combined_odds']:.2f}</b>"
@@ -369,7 +374,7 @@ class TelegramNotifier:
                 if ms.get("total", 0) >= 5:
                     roi_emoji = "📈" if ms.get("roi", 0) >= 0 else "📉"
                     lines.append(
-                        f"  {market}: {ms['wins']}W-{ms['losses']}L "
+                        f"  {html_escape(market)}: {ms['wins']}W-{ms['losses']}L "
                         f"({ms['win_rate']:.0%}) {roi_emoji} ROI: {ms['roi']:.1%}"
                     )
 
@@ -380,7 +385,7 @@ class TelegramNotifier:
             top = sorted(by_league.items(), key=lambda x: x[1].get("total", 0), reverse=True)[:8]
             for lg_key, ls in top:
                 if ls.get("total", 0) >= 3:
-                    lg_name = LEAGUE_DISPLAY.get(lg_key, lg_key)
+                    lg_name = html_escape(LEAGUE_DISPLAY.get(lg_key, lg_key))
                     roi_emoji = "📈" if ls.get("roi", 0) >= 0 else "📉"
                     lines.append(
                         f"  {lg_name}: {ls['wins']}W-{ls['losses']}L "

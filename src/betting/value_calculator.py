@@ -410,11 +410,12 @@ class ValueBettingCalculator:
             # 1. Poisson
             if poisson:
                 poisson_prob = poisson.get(market_key, 0)
-                # For under/no markets, invert the check
+                # For under/no markets, always derive from the complementary over/yes market
                 if market_key.startswith("under_") or market_key == "btts_no":
-                    poisson_prob = 1.0 - poisson.get(
-                        market_key.replace("under_", "over_").replace("btts_no", "btts_yes"), 0
-                    ) if poisson_prob == 0 else poisson_prob
+                    complement_key = market_key.replace("under_", "over_").replace("btts_no", "btts_yes")
+                    complement_prob = poisson.get(complement_key, 0)
+                    if complement_prob > 0:
+                        poisson_prob = 1.0 - complement_prob
                 if poisson_prob > 0.50:
                     models_for.append("Poisson")
                 else:

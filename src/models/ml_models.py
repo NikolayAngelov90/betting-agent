@@ -6,6 +6,7 @@ import numpy as np
 import os
 import pandas as pd
 import pickle
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -280,7 +281,9 @@ class MLModels:
         for name, model in self.models.items():
             # Use calibrated model if available (RF/XGBoost); otherwise raw (LR)
             cal_model = self.calibrated_models.get(name, model)
-            probs = cal_model.predict_proba(X_named)[0]
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*feature names.*", category=UserWarning)
+                probs = cal_model.predict_proba(X_named)[0]
 
             # Ensure we have 3 classes (away=0, draw=1, home=2)
             if len(probs) == 3:
@@ -549,7 +552,9 @@ class GoalsMLModel:
         for name in self.models:
             cal_model = self.calibrated_models.get(name, self.models[name])
             try:
-                p = cal_model.predict_proba(X_named)[0]
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=".*feature names.*", category=UserWarning)
+                    p = cal_model.predict_proba(X_named)[0]
                 if len(p) >= 2:
                     probs.append(float(p[1]))  # p[1] = P(class=1) = P(over 2.5)
             except Exception:

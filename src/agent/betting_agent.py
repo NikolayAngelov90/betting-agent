@@ -1272,11 +1272,15 @@ class FootballBettingAgent:
             logger.info(f"Not enough settled picks for tuning ({len(settled)}, need 20+)")
             return
 
+        logger.info(f"Tuning on {len(settled)} settled picks")
+
         # Re-predict each settled match with individual models
         model_correct = {"poisson": 0, "elo": 0, "ml": 0}
         model_total = {"poisson": 0, "elo": 0, "ml": 0}
 
-        for pick in settled:
+        for i, pick in enumerate(settled):
+            if i % 20 == 0:
+                logger.info(f"  Accuracy pass: {i}/{len(settled)} picks processed")
             if pick["market"] != "1X2":
                 continue  # Only tune on 1X2 market (where all models contribute)
 
@@ -1399,7 +1403,9 @@ class FootballBettingAgent:
         try:
             # Collect (predicted_prob, hit) per model from the loop above data
             model_predictions: dict = {"poisson": [], "elo": [], "ml": []}
-            for pick in settled:
+            for i, pick in enumerate(settled):
+                if i % 20 == 0:
+                    logger.info(f"  Calibration pass: {i}/{len(settled)} picks processed")
                 if pick["market"] != "1X2" or pick["actual_home_goals"] is None:
                     continue
                 try:
@@ -1472,7 +1478,9 @@ class FootballBettingAgent:
 
         # Update Bayesian per-league weight learner from settled 1X2 picks
         bayesian = self.predictor.bayesian_weights
-        for pick in settled:
+        for i, pick in enumerate(settled):
+            if i % 20 == 0:
+                logger.info(f"  Bayesian pass: {i}/{len(settled)} picks processed")
             if pick["market"] != "1X2":
                 continue
             try:
@@ -1757,12 +1765,18 @@ class FootballBettingAgent:
         # Skip if Poisson refit failed — tuning on stale weights would be misleading
         if poisson_ok:
             try:
-                result = await self.tune_ensemble_weights()
+                logger.info("Starting ensemble weight tuning (may take several minutes)...")
+                result = await asyncio.wait_for(
+                    self.tune_ensemble_weights(),
+                    timeout=600,  # 10 min max — prevent CI hangs
+                )
                 if result:
                     logger.info(
                         f"Ensemble weights tuned: {result['weights']} "
                         f"(accuracies: {result['accuracies']})"
                     )
+            except asyncio.TimeoutError:
+                logger.warning("Ensemble weight tuning timed out after 10 min — skipping")
             except Exception as e:
                 logger.warning(f"Ensemble weight tuning failed: {e}")
         else:

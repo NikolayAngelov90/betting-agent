@@ -297,19 +297,26 @@ class EnsemblePredictor:
                     adjusted_goals[_key] = round(_ceiling + (_v - _ceiling) * 0.30, 4)
                     if _comp:
                         adjusted_goals[_comp] = round(1.0 - adjusted_goals[_key], 4)
-            # Dampen 1X2 probabilities, renormalize, then cap again.
-            # Two passes prevent renormalization from pushing a dampened value
-            # back above the ceiling.
-            for _pass in range(2):
-                for _key in ("home_win", "draw", "away_win"):
-                    _v = ensemble_1x2.get(_key, 0)
-                    if _v > _ceiling:
-                        ensemble_1x2[_key] = round(_ceiling + (_v - _ceiling) * 0.30, 4)
-                _tot1x2 = sum(ensemble_1x2.get(k, 0) for k in ("home_win", "draw", "away_win"))
-                if _tot1x2 > 0:
-                    ensemble_1x2["home_win"] = round(ensemble_1x2["home_win"] / _tot1x2, 4)
-                    ensemble_1x2["draw"] = round(ensemble_1x2["draw"] / _tot1x2, 4)
-                    ensemble_1x2["away_win"] = round(ensemble_1x2["away_win"] / _tot1x2, 4)
+            # Dampen 1X2 probabilities with 30% excess retention, renormalize,
+            # then hard-cap if renormalization pushed anything back above ceiling.
+            for _key in ("home_win", "draw", "away_win"):
+                _v = ensemble_1x2.get(_key, 0)
+                if _v > _ceiling:
+                    ensemble_1x2[_key] = round(_ceiling + (_v - _ceiling) * 0.30, 4)
+            _tot1x2 = sum(ensemble_1x2.get(k, 0) for k in ("home_win", "draw", "away_win"))
+            if _tot1x2 > 0:
+                ensemble_1x2["home_win"] = round(ensemble_1x2["home_win"] / _tot1x2, 4)
+                ensemble_1x2["draw"] = round(ensemble_1x2["draw"] / _tot1x2, 4)
+                ensemble_1x2["away_win"] = round(ensemble_1x2["away_win"] / _tot1x2, 4)
+            # Hard-cap pass: clip anything renormalization pushed back above ceiling
+            for _key in ("home_win", "draw", "away_win"):
+                if ensemble_1x2.get(_key, 0) > _ceiling:
+                    ensemble_1x2[_key] = _ceiling
+            _tot1x2 = sum(ensemble_1x2.get(k, 0) for k in ("home_win", "draw", "away_win"))
+            if _tot1x2 > 0:
+                ensemble_1x2["home_win"] = round(ensemble_1x2["home_win"] / _tot1x2, 4)
+                ensemble_1x2["draw"] = round(ensemble_1x2["draw"] / _tot1x2, 4)
+                ensemble_1x2["away_win"] = round(ensemble_1x2["away_win"] / _tot1x2, 4)
 
         results["ensemble"]["home_xg"] = poisson_pred.get("home_xg", 0)
         results["ensemble"]["away_xg"] = poisson_pred.get("away_xg", 0)
@@ -398,11 +405,14 @@ class EnsemblePredictor:
             away_win += w * ml.get("away_win", 0.33)
             total_weight += w
 
-        # Normalize
+        # Normalize — fall back to uniform if all weights are zero
         if total_weight > 0:
             home_win /= total_weight
             draw /= total_weight
             away_win /= total_weight
+        else:
+            logger.warning("All model weights are zero — using uniform 1X2 distribution")
+            home_win, draw, away_win = 0.3333, 0.3334, 0.3333
 
         return {
             "home_win": round(home_win, 4),
