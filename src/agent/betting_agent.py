@@ -192,7 +192,7 @@ class FootballBettingAgent:
         import time as _timer
         leagues = self.config.get("scraping.flashscore_leagues", [])
 
-        _RESULTS_BUDGET_S = 1500  # 25 minutes for all results (~60s/league × 26 leagues)
+        _RESULTS_BUDGET_S = 900  # 15 minutes for results (~60s/league)
         _FIXTURES_BUDGET_S = 480  # 8 minutes for all fixtures (~15s/league × 26 leagues)
 
         # Skip leagues that were already scraped by settle_predictions() within
@@ -205,10 +205,12 @@ class FootballBettingAgent:
                 f"{', '.join(sorted(_recently_scraped))}"
             )
 
-        # Reorder leagues: prioritize those with today's fixtures (the ones
-        # that actually generate picks) so they always complete before the
-        # time budget expires. Remaining leagues fill in background coverage.
+        # Reorder leagues: prioritize those with today's fixtures or pending
+        # picks (needed for settlement).  Non-priority leagues are scraped only
+        # if time budget allows — this prevents 20+ leagues × 60s from blowing
+        # the daily-update step timeout.
         _today_leagues: set = set()
+        _pending_leagues: set = set()
         try:
             with self.db.get_session() as session:
                 _day_start = datetime.combine(date.today(), datetime.min.time())
@@ -225,15 +227,29 @@ class FootballBettingAgent:
                     .all()
                 )
                 _today_leagues = {r[0] for r in _today_rows if r[0]}
+
+                # Leagues with unsettled picks (need fresh results for settlement)
+                _pending_rows = (
+                    session.query(Match.league)
+                    .join(SavedPick, SavedPick.match_id == Match.id)
+                    .filter(
+                        SavedPick.result.is_(None),
+                        Match.league.isnot(None),
+                    )
+                    .distinct()
+                    .all()
+                )
+                _pending_leagues = {r[0] for r in _pending_rows if r[0]}
         except Exception:
             pass
 
-        _priority = [l for l in leagues if l in _today_leagues]
-        _rest = [l for l in leagues if l not in _today_leagues]
+        _important = _today_leagues | _pending_leagues
+        _priority = [l for l in leagues if l in _important]
+        _rest = [l for l in leagues if l not in _important]
         _ordered_leagues = _priority + _rest
         if _priority:
             logger.info(
-                f"Prioritized {len(_priority)} leagues with today's fixtures: "
+                f"Prioritized {len(_priority)} leagues (fixtures/pending picks): "
                 f"{', '.join(_priority)}"
             )
 
@@ -313,17 +329,21 @@ class FootballBettingAgent:
         # scraping (~12s/match) is unreliable due to Cloudflare blocking in CI.
         self.scraper.close_driver()
 
-        # 4. Injury data
+        # 4. Injury data (cap at 5 min — API-Football calls can be slow)
         try:
-            await self.injury_tracker.update()
+            await asyncio.wait_for(self.injury_tracker.update(), timeout=300)
             logger.info("Injury update complete")
+        except asyncio.TimeoutError:
+            logger.warning("Injury update timed out after 5 minutes")
         except Exception as e:
             logger.error(f"Injury update failed: {e}")
 
-        # 5. News aggregation
+        # 5. News aggregation (cap at 2 min)
         try:
-            await self.news_aggregator.update()
+            await asyncio.wait_for(self.news_aggregator.update(), timeout=120)
             logger.info("News update complete")
+        except asyncio.TimeoutError:
+            logger.warning("News update timed out after 2 minutes")
         except Exception as e:
             logger.error(f"News update failed: {e}")
 
@@ -334,6 +354,25 @@ class FootballBettingAgent:
             logger.info("Models fitted")
         except Exception as e:
             logger.error(f"Model fitting failed: {e}")
+
+        # 6a. Retrain ML models if stale (moved here from learn_from_settled
+        # since --settle runs under a tight 25-min CI timeout).
+        try:
+            max_age = self.config.get("models.ml_retrain_days", 3)
+            if self._ml_models_stale(max_age_days=max_age):
+                stale_info = getattr(self.predictor.ml_models, "trained_at", "never")
+                logger.info(f"ML models stale (last trained: {stale_info}) — retraining")
+                await asyncio.wait_for(
+                    self.train_ml_models(max_samples=2000),
+                    timeout=720,  # 12 min cap
+                )
+                logger.info("ML models retrained")
+            else:
+                logger.debug("ML models fresh — skipping retrain")
+        except asyncio.TimeoutError:
+            logger.warning("ML retrain timed out after 12 minutes — skipping")
+        except Exception as e:
+            logger.warning(f"ML retrain failed: {e}")
 
         # 6b. Targeted backfill for low-coverage teams in today's fixtures.
         try:
@@ -1702,18 +1741,14 @@ class FootballBettingAgent:
         except Exception as e:
             logger.warning(f"EV calibration failed: {e}")
 
-        # 4. Retrain ML models if stale
+        # 4. ML retrain is deferred to --train or --update (takes ~11 min,
+        # too expensive for --settle which runs under a 25-min CI timeout).
         max_age = self.config.get("models.ml_retrain_days", 3)
         if self._ml_models_stale(max_age_days=max_age):
             stale_info = getattr(self.predictor.ml_models, "trained_at", "never")
-            logger.info(f"ML models stale (last trained: {stale_info}) — retraining")
-            try:
-                await self.train_ml_models(max_samples=2000)
-            except Exception as e:
-                logger.warning(f"ML retraining failed: {e}")
-        else:
-            logger.debug(
-                f"ML models fresh (trained: {self.predictor.ml_models.trained_at}) — skipping retrain"
+            logger.info(
+                f"ML models stale (last trained: {stale_info}) — "
+                f"skipping retrain during settle, will retrain on next --train/--update"
             )
 
         logger.info("Post-settlement learning complete")

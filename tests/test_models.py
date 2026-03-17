@@ -230,4 +230,5 @@ class TestLearnFromSettled:
         agent.predictor.fit.assert_called_once()
         agent.tune_ensemble_weights.assert_called_once()
         agent._auto_calibrate_ev_threshold.assert_called_once()
-        agent.train_ml_models.assert_called_once()
+        # ML retrain is deferred to --update (too slow for --settle CI timeout)
+        agent.train_ml_models.assert_not_called()
