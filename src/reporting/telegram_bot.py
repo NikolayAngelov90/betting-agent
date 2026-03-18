@@ -292,39 +292,6 @@ class TelegramNotifier:
         message = "\n".join(lines)
         await self._send_message(message)
 
-    async def send_parlay_suggestions(self, parlays: list):
-        """Send parlay suggestions via Telegram."""
-        if not self.enabled or not parlays:
-            return
-
-        from datetime import date
-        lines = [f"<b>Parlay Suggestions - {date.today().strftime('%d %b %Y')}</b>\n"]
-
-        for i, parlay in enumerate(parlays, 1):
-            lines.append(f"\n<b>Parlay #{i}</b> ({parlay['n_legs']} legs)")
-            for leg in parlay["legs"]:
-                kickoff = ""
-                if leg.match_date:
-                    try:
-                        from zoneinfo import ZoneInfo
-                        local_tz = ZoneInfo("Europe/Kiev")
-                    except Exception:
-                        local_tz = timezone(timedelta(hours=2))
-                    local_dt = leg.match_date.replace(tzinfo=timezone.utc).astimezone(local_tz)
-                    kickoff = f" ({local_dt.strftime('%H:%M')})"
-                lines.append(
-                    f"  {html_escape(leg.match)}{kickoff}\n"
-                    f"    {html_escape(leg.selection)} @ {leg.odds:.2f} (conf: {leg.confidence:.0%})"
-                )
-            lines.append(
-                f"\n  Combined odds: <b>{parlay['combined_odds']:.2f}</b>"
-                f"\n  Prob: {parlay['combined_prob']:.0%} | "
-                f"EV: {parlay['expected_value']:.1%}"
-            )
-
-        lines.append("\n<i>Parlays are informational — singles remain the primary strategy.</i>")
-        await self._send_message("\n".join(lines))
-
     async def send_performance_report(self, stats: dict):
         """Send a comprehensive performance report via Telegram.
 
