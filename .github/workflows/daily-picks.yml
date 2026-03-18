@@ -81,16 +81,17 @@ jobs:
 
       - name: Settle yesterday's predictions
         run: python -m src.agent.betting_agent --settle
-        timeout-minutes: 25
+        timeout-minutes: 10
         continue-on-error: true
 
-      - name: Run daily update
-        run: python -m src.agent.betting_agent --update
-        timeout-minutes: 40
+      - name: Run daily update (scrape + fetch odds)
+        run: python -m src.agent.betting_agent --update --skip-ml-retrain
+        timeout-minutes: 30
         continue-on-error: true
 
-      - name: Re-settle after update (catches API-Football-only matches)
-        run: python -m src.agent.betting_agent --settle
+      - name: Retrain ML models (if stale)
+        run: python -m src.agent.betting_agent --train
+        timeout-minutes: 15
         continue-on-error: true
 
       - name: Check DB health
@@ -108,13 +109,6 @@ jobs:
           if completed < 100:
               print('WARNING: fewer than 100 completed matches — ML training may be skipped')
           PYEOF
-
-      - name: Verify ML model cache restored
-        run: |
-          echo "=== ML model cache contents ==="
-          ls -lah data/models/ 2>/dev/null || echo "data/models/ not found"
-          echo "=== Cache file ==="
-          ls -lah data/historical_load_cache.json 2>/dev/null || echo "No cache file"
 
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks

@@ -155,7 +155,7 @@ class FootballBettingAgent:
         except Exception:
             pass
 
-    async def daily_update(self):
+    async def daily_update(self, skip_ml_retrain: bool = False):
         """Run the full daily data collection cycle."""
         logger.info("Starting daily update cycle")
 
@@ -355,18 +355,22 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"Model fitting failed: {e}")
 
-        # 6a. Retrain ML models if stale (moved here from learn_from_settled
-        # since --settle runs under a tight 25-min CI timeout).
+        # 6a. Retrain ML models if stale.
+        # When --skip-ml-retrain is passed (CI), defer to a dedicated --train step
+        # with its own timeout so scraping + training don't compete for time.
         try:
             max_age = self.config.get("models.ml_retrain_days", 3)
             if self._ml_models_stale(max_age_days=max_age):
                 stale_info = getattr(self.predictor.ml_models, "trained_at", "never")
-                logger.info(f"ML models stale (last trained: {stale_info}) — retraining")
-                await asyncio.wait_for(
-                    self.train_ml_models(max_samples=2000),
-                    timeout=720,  # 12 min cap
-                )
-                logger.info("ML models retrained")
+                if skip_ml_retrain:
+                    logger.info(f"ML models stale (last trained: {stale_info}) — deferred to --train step")
+                else:
+                    logger.info(f"ML models stale (last trained: {stale_info}) — retraining")
+                    await asyncio.wait_for(
+                        self.train_ml_models(max_samples=2000),
+                        timeout=720,  # 12 min cap
+                    )
+                    logger.info("ML models retrained")
             else:
                 logger.debug("ML models fresh — skipping retrain")
         except asyncio.TimeoutError:
@@ -2162,7 +2166,7 @@ async def main():
         print("Usage: python -m src.agent.betting_agent <command>")
         print("\nCommands:")
         print("  --init              Initialize database and collect data")
-        print("  --update            Run daily data update")
+        print("  --update            Run daily data update (--skip-ml-retrain to defer ML training)")
         print("  --picks             Show today's value picks")
         print("  --settle            Settle pending picks with actual results")
         print("  --report            Send comprehensive performance report to Telegram")
@@ -2184,8 +2188,9 @@ async def main():
             print("Initialization complete.")
 
         elif command == "--update":
+            skip_ml = "--skip-ml-retrain" in sys.argv
             print("Running daily update...")
-            await agent.daily_update()
+            await agent.daily_update(skip_ml_retrain=skip_ml)
             print("Update complete.")
 
         elif command == "--train":
