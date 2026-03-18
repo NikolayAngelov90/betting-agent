@@ -2223,10 +2223,6 @@ async def main():
                     if new_picks:
                         stats = agent.get_stats()
                         await agent.telegram.send_daily_picks(new_picks, stats=stats)
-                        # Suggest parlays from today's picks
-                        parlays = agent.suggest_parlays(picks)
-                        if parlays:
-                            await agent.telegram.send_parlay_suggestions(parlays)
                         print(f"\nPicks sent to Telegram! ({len(new_picks)} new)")
                     else:
                         print(f"\nNo new picks — Telegram not re-notified (all {len(picks)} already saved).")
@@ -2274,21 +2270,6 @@ async def main():
                         if pick.used_fallback_odds:
                             print(f"    !! Estimated odds (no bookmaker data)")
                         print(f"    Reasoning: {reasoning}")
-
-                # Parlay suggestions
-                parlays = agent.suggest_parlays(picks)
-                if parlays:
-                    print(f"\n{'='*60}")
-                    print(f"  PARLAY SUGGESTIONS")
-                    print(f"{'='*60}")
-                    for i, parlay in enumerate(parlays, 1):
-                        print(f"\n  Parlay #{i} ({parlay['n_legs']} legs):")
-                        for leg in parlay["legs"]:
-                            leg_name = leg.match.encode("ascii", "replace").decode()
-                            print(f"    - {leg_name}: {leg.selection} @ {leg.odds:.2f} ({leg.confidence:.0%})")
-                        print(f"    Combined odds: {parlay['combined_odds']:.2f}")
-                        print(f"    Combined prob: {parlay['combined_prob']:.0%}")
-                        print(f"    EV: {parlay['expected_value']:.1%}")
 
         elif command == "--settle":
             print("Settling pending picks against actual results...")
