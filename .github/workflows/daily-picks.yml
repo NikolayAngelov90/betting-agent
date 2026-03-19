@@ -86,12 +86,12 @@ jobs:
 
       - name: Run daily update (scrape + fetch odds)
         run: python -m src.agent.betting_agent --update --skip-ml-retrain
-        timeout-minutes: 30
+        timeout-minutes: 35
         continue-on-error: true
 
       - name: Retrain ML models (if stale)
         run: python -m src.agent.betting_agent --train
-        timeout-minutes: 15
+        timeout-minutes: 20
         continue-on-error: true
 
       - name: Check DB health

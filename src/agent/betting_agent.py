@@ -192,8 +192,8 @@ class FootballBettingAgent:
         import time as _timer
         leagues = self.config.get("scraping.flashscore_leagues", [])
 
-        _RESULTS_BUDGET_S = 900  # 15 minutes for results (~60s/league)
-        _FIXTURES_BUDGET_S = 480  # 8 minutes for all fixtures (~15s/league × 26 leagues)
+        _RESULTS_BUDGET_S = 720  # 12 minutes for results (~50s/league)
+        _FIXTURES_BUDGET_S = 300  # 5 minutes for fixtures (only leagues with today's matches)
 
         # Skip leagues that were already scraped by settle_predictions() within
         # this CI run. Uses _scraped_leagues (set explicitly during settle) +
@@ -284,12 +284,22 @@ class FootballBettingAgent:
             except Exception:
                 pass
 
-        # Fixtures (today's upcoming matches) — always attempted independently
-        # Driver is freshly created here (results session was closed above).
-        # Use same priority order as results.
+        # Fixtures (today's upcoming matches) — only scrape leagues that have
+        # today's fixtures OR are priority (pending picks).  Skipping leagues
+        # with 0 fixtures avoids ~5-7s per wasted page load × 20+ leagues.
+        _fixture_leagues = [
+            l for l in _ordered_leagues
+            if l in _important  # has today's fixtures or pending picks
+        ]
+        _skipped_fixture_leagues = len(_ordered_leagues) - len(_fixture_leagues)
+        if _skipped_fixture_leagues:
+            logger.info(
+                f"Fixtures: scraping {len(_fixture_leagues)} leagues with fixtures/pending, "
+                f"skipping {_skipped_fixture_leagues} without"
+            )
         try:
             _fixtures_deadline = _timer.monotonic() + _FIXTURES_BUDGET_S
-            for league in _ordered_leagues:
+            for league in _fixture_leagues:
                 if _timer.monotonic() > _fixtures_deadline:
                     logger.warning("Flashscore fixtures: time budget exhausted, skipping remaining leagues")
                     break
@@ -1548,14 +1558,14 @@ class FootballBettingAgent:
 
         logger.info(f"Using {len(match_data)} most recent matches for training")
 
-        if len(match_data) < 200:
-            logger.warning(f"Not enough matches for ML training ({len(match_data)}, need 200+)")
+        if len(match_data) < 50:
+            logger.warning(f"Not enough matches for ML training ({len(match_data)}, need 50+)")
             return
 
         # Build feature matrix and labels — process in parallel batches
         # Hard time budget prevents ML training from blowing the CI timeout.
         import time as _timer
-        _ML_TRAIN_BUDGET_S = 600  # 10 minutes
+        _ML_TRAIN_BUDGET_S = 780  # 13 minutes (fits in 15-min CI step timeout)
         _ml_deadline = _timer.monotonic() + _ML_TRAIN_BUDGET_S
 
         # Clear standings cache so monthly-coarsened keys start fresh
@@ -1633,8 +1643,8 @@ class FootballBettingAgent:
             if processed % 25 == 0 or processed == len(match_data):
                 logger.info(f"Processed {processed}/{len(match_data)} matches ({len(X_list)} valid)...")
 
-        if len(X_list) < 200:
-            logger.warning(f"Only {len(X_list)} valid samples (skipped {skipped}), need 200+")
+        if len(X_list) < 50:
+            logger.warning(f"Only {len(X_list)} valid samples (skipped {skipped}), need 50+")
             return
 
         X = np.array(X_list)
