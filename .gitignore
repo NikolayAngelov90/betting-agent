@@ -20,6 +20,8 @@ data/*.db.local_backup
 data/historical_load_cache.json
 data/scraped_leagues.json
 data/models/*.pkl
+data/models/*.sig
+data/models/ensemble_weights.json
 data/models_local_backup/
 data/picks_sync.json
 data/processed/
