@@ -32,7 +32,10 @@ scraping:
     - austria/bundesliga
     - switzerland/super-league
     - greece/super-league
-    # - denmark/superliga  # off-season until ~July 2026
+    - denmark/superliga
+    # Nordic leagues (off-season Nov-Mar)
+    - norway/eliteserien
+    - sweden/allsvenskan
     - poland/ekstraklasa
     - romania/liga-1
 

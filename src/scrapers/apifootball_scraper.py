@@ -283,7 +283,8 @@ PRIORITY_LEAGUES = [
     "england/championship", "england/league-one", "england/league-two",
     "spain/laliga2", "germany/2-bundesliga", "italy/serie-b", "france/ligue-2",
     "austria/bundesliga", "switzerland/super-league", "greece/super-league",
-    "denmark/superliga", "poland/ekstraklasa", "romania/liga-1",
+    "denmark/superliga", "norway/eliteserien", "sweden/allsvenskan",
+    "poland/ekstraklasa", "romania/liga-1",
 ]
 
 # API-Football bet type IDs -> our market_type and selection mapping
