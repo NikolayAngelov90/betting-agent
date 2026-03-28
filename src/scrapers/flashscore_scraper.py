@@ -179,23 +179,63 @@ class FlashscoreScraper(BaseScraper):
                     import shutil as _shutil
                     _chrome_version = None
                     _chrome_binary = None
-                    for _cmd in (
-                        ["google-chrome", "--version"],
-                        ["google-chrome-stable", "--version"],
-                        ["chromium-browser", "--version"],
-                        ["chromium", "--version"],
-                    ):
-                        try:
-                            _out = _subprocess.run(
-                                _cmd, capture_output=True, text=True, timeout=5
-                            ).stdout
-                            _m = _re.search(r"(\d+)\.", _out)
-                            if _m:
-                                _chrome_version = int(_m.group(1))
-                                _chrome_binary = _shutil.which(_cmd[0])
-                                break
-                        except Exception:
-                            continue
+                    if _platform.system() == "Windows":
+                        # On Windows, detect Chrome version via registry or filesystem
+                        _win_chrome_paths = [
+                            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                        ]
+                        import os as _os
+                        _local = _os.environ.get("LOCALAPPDATA", "")
+                        if _local:
+                            _win_chrome_paths.append(_os.path.join(_local, r"Google\Chrome\Application\chrome.exe"))
+                        for _path in _win_chrome_paths:
+                            if _os.path.exists(_path):
+                                _chrome_binary = _path
+                                try:
+                                    # Read version from registry (fastest)
+                                    import winreg as _winreg
+                                    _key = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER, r"Software\Google\Chrome\BLBeacon")
+                                    _ver_str, _ = _winreg.QueryValueEx(_key, "version")
+                                    _winreg.CloseKey(_key)
+                                    _m = _re.search(r"^(\d+)", _ver_str)
+                                    if _m:
+                                        _chrome_version = int(_m.group(1))
+                                except Exception:
+                                    pass
+                                if _chrome_version is None:
+                                    try:
+                                        # Fallback: PowerShell file version info
+                                        _ps_out = _subprocess.run(
+                                            ["powershell", "-Command",
+                                             f"(Get-Item '{_path}').VersionInfo.ProductVersion"],
+                                            capture_output=True, text=True, timeout=5
+                                        ).stdout.strip()
+                                        _m = _re.search(r"^(\d+)", _ps_out)
+                                        if _m:
+                                            _chrome_version = int(_m.group(1))
+                                    except Exception:
+                                        pass
+                                if _chrome_version:
+                                    break
+                    else:
+                        for _cmd in (
+                            ["google-chrome", "--version"],
+                            ["google-chrome-stable", "--version"],
+                            ["chromium-browser", "--version"],
+                            ["chromium", "--version"],
+                        ):
+                            try:
+                                _out = _subprocess.run(
+                                    _cmd, capture_output=True, text=True, timeout=5
+                                ).stdout
+                                _m = _re.search(r"(\d+)\.", _out)
+                                if _m:
+                                    _chrome_version = int(_m.group(1))
+                                    _chrome_binary = _shutil.which(_cmd[0])
+                                    break
+                            except Exception:
+                                continue
 
                     # Pin binary_location so ChromeDriver uses the exact same
                     # Chrome build that version_main was detected from.
