@@ -2081,6 +2081,7 @@ async def main():
         print("  --backfill-history  Fetch historical data for low-coverage teams")
         print("  --telegram-setup    Setup Telegram bot notifications")
         print("  --telegram-test     Send a test Telegram message")
+        print("  --telegram-welcome  Send group welcome/info message to Telegram")
         return
 
     command = sys.argv[1]
@@ -2401,6 +2402,13 @@ async def main():
                     "Telegram notifications are working!"
                 )
                 print("Test message sent! Check your Telegram.")
+
+        elif command == "--telegram-welcome":
+            if not agent.telegram.enabled:
+                print("Telegram is not enabled. Run --telegram-setup first.")
+            else:
+                await agent.telegram.send_welcome_message()
+                print("Welcome message sent to Telegram group!")
 
         else:
             print(f"Unknown command: {command}")

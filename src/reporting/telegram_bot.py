@@ -389,6 +389,44 @@ class TelegramNotifier:
         message = "\n".join(lines)
         await self._send_chunked(message, header)
 
+    async def send_welcome_message(self):
+        """Send a welcome/info message describing the group and the betting agent."""
+        if not self.enabled:
+            return
+
+        msg = (
+            "👋 <b>Welcome to the Football Betting Picks Group!</b>\n\n"
+            "This group is powered by an <b>AI-driven football betting agent</b> that "
+            "analyses matches daily and posts value bets with positive expected value (+EV).\n\n"
+            "<b>🤖 How it works</b>\n"
+            "The agent uses an ensemble of statistical models:\n"
+            "• <b>Poisson model</b> — Dixon-Coles corrected goal prediction with time decay\n"
+            "• <b>Elo ratings</b> — team strength based on historical results\n"
+            "• <b>ML models</b> — XGBoost + Random Forest trained on 30 000+ matches\n"
+            "• <b>Bookmaker blend</b> — implied market probabilities as a calibration anchor\n"
+            "• <b>Bayesian weights</b> — per-league adaptive weighting based on past accuracy\n\n"
+            "<b>📋 What gets posted each day</b>\n"
+            "• ✅ <b>Daily picks</b> — posted every morning with match, bet type, odds, EV%, stake size\n"
+            "• 📊 <b>Settlement report</b> — results of the previous day's picks (win/loss/push)\n"
+            "• 📈 <b>Performance report</b> — periodic stats: win rate, ROI, CLV, Brier score\n\n"
+            "<b>📌 Pick format explained</b>\n"
+            "Each pick shows:\n"
+            "  <code>Match</code> — home vs away team\n"
+            "  <code>Bet</code> — market (Home Win / Over 2.5 / BTTS etc.) @ odds\n"
+            "  <code>EV</code> — expected value (higher = more edge)\n"
+            "  <code>Conf</code> — model confidence %\n"
+            "  <code>Stake</code> — recommended % of bankroll (Kelly-based)\n"
+            "  <code>Models</code> — 🎯 unanimous / ✊ majority / ⚠️ split\n\n"
+            "<b>⚠️ Disclaimer</b>\n"
+            "These are <b>model-generated suggestions</b>, not financial advice. "
+            "Bet responsibly and only what you can afford to lose. "
+            "Past performance does not guarantee future results.\n\n"
+            "<b>📊 Current stats</b>\n"
+            "Track our live performance in the pinned message or ask for <code>/stats</code>.\n\n"
+            "Good luck! 🍀"
+        )
+        await self._send_message(msg)
+
     async def send_alert(self, text: str):
         """Send a generic alert message."""
         if not self.enabled:
