@@ -20,6 +20,7 @@
 | `--backfill-history` | Fetch historical data for low-coverage teams |
 | `--telegram-setup` | Interactive Telegram bot configuration |
 | `--telegram-test` | Send a test message to verify Telegram |
+| `--telegram-welcome` | Send group welcome/info message for new members |
 
 ---
 
@@ -246,6 +247,7 @@
 | **Settlement Report** | W-L record, hit rate, ROI, per-market and per-league breakdown |
 | **Performance Report** | Weekly comprehensive stats (Sunday) — calibration, Brier, CLV |
 | **Parlay Suggestions** | 2-3 leg combinations with combined odds/probability |
+| **Welcome Message** | Group info message for new members (`--telegram-welcome`) |
 | **Failure Alert** | CI run URL on workflow failure |
 
 **Features:** HTML formatting, league flag emojis, contrarian signal indicator, 4096-char chunking
@@ -360,7 +362,7 @@ logging:
 
 ---
 
-## Leagues (26 active)
+## Leagues (29 active)
 
 ### Top 5
 - england/premier-league, spain/laliga, germany/bundesliga, italy/serie-a, france/ligue-1
@@ -371,11 +373,11 @@ logging:
 ### Strong European
 - netherlands/eredivisie, portugal/primeira-liga, belgium/jupiler-pro-league, turkey/super-lig, scotland/premiership
 
+### Nordic
+- denmark/superliga, norway/eliteserien, sweden/allsvenskan
+
 ### Lower Divisions & Smaller Leagues
 - england/championship, england/league-one, england/league-two
 - spain/laliga2, germany/2-bundesliga, italy/serie-b, france/ligue-2
 - austria/bundesliga, switzerland/super-league, greece/super-league
 - poland/ekstraklasa, romania/liga-1
-
-### Off-Season
-- denmark/superliga (until ~July 2026)
