@@ -448,7 +448,7 @@ class TelegramNotifier:
             "Bet responsibly and only what you can afford to lose. "
             "Past performance does not guarantee future results.\n\n"
             "<b>📊 Current stats</b>\n"
-            "Track our live performance in the pinned message or ask for <code>/stats</code>.\n\n"
+            "Track our live performance in the pinned message above.\n\n"
             "Good luck! 🍀"
         )
         await self._send_message(msg)
