@@ -2054,6 +2054,48 @@ class FootballBettingAgent:
         logger.info("Agent shutdown complete")
 
 
+async def _run_telegram_bot(agent: "BettingAgent"):
+    """Run a polling Telegram bot that responds to /stats and /help in the group."""
+    try:
+        from telegram.ext import Application, CommandHandler, MessageHandler, filters
+        from telegram import Update
+        from telegram.ext import ContextTypes
+    except ImportError:
+        print("python-telegram-bot not installed.")
+        return
+
+    bot_token = agent.telegram.bot_token
+    chat_id = str(agent.telegram.chat_id)
+
+    async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        # Only respond in the configured group
+        if str(update.effective_chat.id) != chat_id:
+            return
+        await update.message.reply_text("⏳ Fetching stats...")
+        try:
+            stats = agent.get_stats()
+            await agent.telegram.send_performance_report(stats)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error fetching stats: {e}")
+
+    async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        if str(update.effective_chat.id) != chat_id:
+            return
+        await update.message.reply_text(
+            "<b>Available commands:</b>\n"
+            "/stats — current performance report\n"
+            "/help — show this message",
+            parse_mode="HTML",
+        )
+
+    app = Application.builder().token(bot_token).build()
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("help", cmd_help))
+
+    print("Telegram bot running. Listening for /stats and /help. Press Ctrl+C to stop.")
+    await app.run_polling(allowed_updates=["message"])
+
+
 async def main():
     """CLI entry point."""
     import sys
@@ -2082,6 +2124,7 @@ async def main():
         print("  --telegram-setup    Setup Telegram bot notifications")
         print("  --telegram-test     Send a test Telegram message")
         print("  --telegram-welcome  Send group welcome/info message to Telegram")
+        print("  --telegram-bot      Run interactive bot (responds to /stats in group)")
         return
 
     command = sys.argv[1]
@@ -2409,6 +2452,12 @@ async def main():
             else:
                 await agent.telegram.send_welcome_message()
                 print("Welcome message sent to Telegram group!")
+
+        elif command == "--telegram-bot":
+            if not agent.telegram.enabled:
+                print("Telegram is not enabled. Run --telegram-setup first.")
+            else:
+                await _run_telegram_bot(agent)
 
         else:
             print(f"Unknown command: {command}")

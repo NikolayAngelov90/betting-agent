@@ -387,7 +387,20 @@ class TelegramNotifier:
             lines.append(f"\n⏳ {pending} picks still pending")
 
         message = "\n".join(lines)
-        await self._send_chunked(message, header)
+        sent = await self._send_chunked(message, header)
+
+        # Pin the report so it stays visible at the top of the group
+        bot = self._get_bot()
+        if bot and self.chat_id and sent:
+            try:
+                await bot.pin_chat_message(
+                    chat_id=self.chat_id,
+                    message_id=sent.message_id,
+                    disable_notification=True,
+                )
+                logger.info("Performance report pinned in Telegram group")
+            except Exception as e:
+                logger.debug(f"Could not pin performance report: {e}")
 
     async def send_welcome_message(self):
         """Send a welcome/info message describing the group and the betting agent."""
@@ -447,41 +460,45 @@ class TelegramNotifier:
         await self._send_message(text)
 
     async def _send_chunked(self, message: str, header: str = ""):
-        """Send a message, splitting into chunks if over Telegram's 4096 char limit."""
+        """Send a message, splitting into chunks if over Telegram's 4096 char limit.
+        Returns the last sent Message object."""
         if len(message) <= 4000:
-            await self._send_message(message)
-            return
+            return await self._send_message(message)
 
         # Split by double newline (paragraph breaks)
         paragraphs = message.split("\n\n")
         chunk = ""
+        last_msg = None
         for para in paragraphs:
             if len(chunk) + len(para) + 2 > 3800:
                 if chunk.strip():
-                    await self._send_message(chunk)
+                    last_msg = await self._send_message(chunk)
                 chunk = para
             else:
                 chunk = chunk + "\n\n" + para if chunk else para
 
         if chunk.strip():
-            await self._send_message(chunk)
+            last_msg = await self._send_message(chunk)
+        return last_msg
 
     async def _send_message(self, text: str):
-        """Send a message via Telegram using HTML parse mode."""
+        """Send a message via Telegram using HTML parse mode. Returns the sent Message object."""
         bot = self._get_bot()
         if not bot or not self.chat_id:
             logger.debug("Telegram not configured, skipping message")
-            return
+            return None
 
         try:
-            await bot.send_message(
+            msg = await bot.send_message(
                 chat_id=self.chat_id,
                 text=text,
                 parse_mode="HTML",
             )
             logger.info("Telegram message sent")
+            return msg
         except Exception as e:
             logger.error(f"Failed to send Telegram message: {e}")
+            return None
 
 
 def _agreement_icon(agreement: str) -> str:
