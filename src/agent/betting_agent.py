@@ -13,6 +13,7 @@ from src.scrapers.injury_scraper import InjuryScraper
 from src.scrapers.historical_loader import HistoricalDataLoader
 from src.scrapers.apifootball_scraper import APIFootballScraper
 from src.scrapers.footballdataorg_scraper import FootballDataOrgScraper
+from src.scrapers.theodds_scraper import TheOddsScraper
 from src.features.feature_engineer import FeatureEngineer
 from src.models.ensemble import EnsemblePredictor
 from src.betting.value_calculator import ValueBettingCalculator, BetRecommendation
@@ -81,6 +82,7 @@ class FootballBettingAgent:
         self.apifootball = APIFootballScraper(self.config)
         self.injury_tracker = InjuryScraper(self.config, apifootball=self.apifootball)
         self.footballdataorg = FootballDataOrgScraper(self.config)
+        self.theodds = TheOddsScraper(self.config)
         self.feature_engineer = FeatureEngineer()
         self.predictor = EnsemblePredictor(self.config)
         self.value_calculator = ValueBettingCalculator(self.config)
@@ -329,6 +331,17 @@ class FootballBettingAgent:
             logger.warning("API-Football update timed out after 10 minutes")
         except Exception as e:
             logger.error(f"API-Football update failed: {e}")
+
+        # 2c. The Odds API — supplemental odds for leagues with today's fixtures.
+        # Free tier: 500 credits/month (~1 credit/league call). Only calls leagues
+        # that actually have fixtures today to minimise credit burn.
+        try:
+            theodds_written = await asyncio.wait_for(self.theodds.update(), timeout=120)
+            logger.info(f"The Odds API update complete: {theodds_written} odds rows written")
+        except asyncio.TimeoutError:
+            logger.warning("The Odds API update timed out after 2 minutes")
+        except Exception as e:
+            logger.warning(f"The Odds API update failed (non-critical): {e}")
 
         # 2d. Flashscore per-match stats enrichment — DISABLED.
         # API-Football (BUDGET_XG=30) is the primary stats source now and covers
@@ -2025,6 +2038,7 @@ class FootballBettingAgent:
         await self.apifootball.close()
         await self.injury_tracker.close()
         await self.historical_loader.close()
+        await self.theodds.close()
         logger.info("Agent shutdown complete")
 
 
