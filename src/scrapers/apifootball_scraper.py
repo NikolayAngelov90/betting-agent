@@ -368,6 +368,7 @@ class APIFootballScraper(BaseScraper):
             self._tracked_league_ids = set(ID_TO_LEAGUE.keys())
         self._quota_exhausted = False  # Set True on first quota error; skips all further calls
         self._logged_unknown_bets: set = set()  # Suppress repeated unknown bet type logs
+        self._today_fixture_count = 0  # Updated after _fetch_fixtures_by_date(today)
 
     def remaining_budget(self) -> int:
         """Return remaining API requests available (excluding safety reserve)."""
@@ -415,7 +416,12 @@ class APIFootballScraper(BaseScraper):
             return None
 
     async def update(self):
-        """Run the full API-Football update: yesterday results + today fixtures + xG + odds.
+        """Run the full API-Football update: yesterday results + today fixtures + odds + xG.
+
+        Step order is deliberately odds-first so time-sensitive bookmaker odds for
+        today's fixtures are prioritised over historical xG backfill on busy days
+        (Sat/Sun 80-90 fixtures).  xG uses whatever budget remains after odds and
+        the injury-scraper reserve.
 
         Only fetches today's fixtures and odds (the CI pipeline runs daily, so
         tomorrow's matches will be fetched when tomorrow's run executes).
@@ -430,14 +436,20 @@ class APIFootballScraper(BaseScraper):
         await self.fetch_recent_results(days_back=1)
 
         # 2. Fetch today's fixtures only (CI runs daily — tomorrow handled next run)
+        # Also populates self._today_fixture_count for dynamic budget allocation below.
         today = date.today()
         await self._fetch_fixtures_by_date(today)
 
-        # 3. Backfill xG for recent completed matches that don't have it (7 days back)
-        await self._backfill_xg()
-
-        # 4. Fetch real bookmaker odds for today's fixtures
+        # 3. Fetch real bookmaker odds for today's fixtures (time-sensitive — expires today).
+        # Budget is dynamic: total remaining minus injury-scraper reserve so we never
+        # starve the injury step.  On Sat/Sun with 80+ fixtures this yields ~49 odds
+        # requests vs the old fixed cap of 20.
         await self.fetch_upcoming_odds()
+
+        # 4. Backfill xG for historical matches (not time-sensitive — uses leftover budget).
+        # On high-fixture weekends the injury reserve leaves 0 for xG; it resumes next
+        # weekday.  On quiet weekdays it gets the full BUDGET_XG=25 allocation.
+        await self._backfill_xg()
 
         # 5. Historical backfill — DISABLED for CI speed.
         # backfill_team_history used 40 requests + 30 min on obscure teams (Pescara,
@@ -578,6 +590,18 @@ class APIFootballScraper(BaseScraper):
                 created += 1
 
         logger.info(f"API-Football fixtures {date_str}: {created} created, {updated} updated")
+        if target_date == date.today():
+            # Track how many tracked fixtures are on today's slate so odds and
+            # xG backfill steps can allocate budget dynamically.
+            with self.db.get_session() as session:
+                today_start = datetime.combine(target_date, datetime.min.time())
+                today_end = today_start + timedelta(days=1)
+                self._today_fixture_count = session.query(Match).filter(
+                    Match.is_fixture == True,
+                    Match.apifootball_id.isnot(None),
+                    Match.match_date >= today_start,
+                    Match.match_date < today_end,
+                ).count()
 
     async def _backfill_xg(self, days_back: int = 365):
         """Fetch xG and stats for recent matches missing xG OR match stats.
@@ -589,6 +613,17 @@ class APIFootballScraper(BaseScraper):
         so 25 matches = ~175s.  We batch DB writes into a single commit at
         the end to save ~50ms/match of Neon latency.
         """
+        # Compute available budget: reserve room for injury-scraper that runs after this.
+        injury_reserve = min(40, self._today_fixture_count + 10)
+        xg_budget = self._daily_limit - self._requests_today - self.BUDGET_RESERVE - injury_reserve
+        xg_budget = max(0, min(xg_budget, self.BUDGET_XG))
+        if xg_budget == 0:
+            logger.debug(
+                f"xG backfill skipped — no budget left after odds+injury reserve "
+                f"({self._today_fixture_count} fixtures today)"
+            )
+            return
+
         from sqlalchemy import or_
         with self.db.get_session() as session:
             cutoff = datetime.utcnow() - timedelta(days=days_back)
@@ -598,7 +633,7 @@ class APIFootballScraper(BaseScraper):
                 Match.apifootball_id.isnot(None),
                 Match.match_date >= cutoff,
                 or_(Match.home_xg.is_(None), Match.home_shots.is_(None)),
-            ).order_by(Match.match_date.desc()).limit(self.BUDGET_XG).all()
+            ).order_by(Match.match_date.desc()).limit(xg_budget).all()
 
             if not matches:
                 logger.debug("No matches need stats backfill")
@@ -951,8 +986,14 @@ class APIFootballScraper(BaseScraper):
         if not self.enabled:
             return 0
 
-        odds_budget = self._daily_limit - self._requests_today - self.BUDGET_RESERVE
-        odds_budget = min(odds_budget, self.BUDGET_ODDS)
+        # Dynamic budget: reserve room for the injury-scraper step that runs after us.
+        # On Sat/Sun with 80+ fixtures this is much larger than the fixed BUDGET_ODDS=20.
+        # injury_reserve = 1 request per fixture (fixture-level) + 10 team fallback, max 40.
+        injury_reserve = min(40, self._today_fixture_count + 10)
+        odds_budget = self._daily_limit - self._requests_today - self.BUDGET_RESERVE - injury_reserve
+        # Allow up to fixture_count odds requests (one per match), min is old fixed cap.
+        odds_cap = max(self.BUDGET_ODDS, self._today_fixture_count)
+        odds_budget = max(0, min(odds_budget, odds_cap))
 
         if odds_budget <= 0:
             logger.warning("No API budget remaining for odds fetching")
