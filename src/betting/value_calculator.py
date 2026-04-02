@@ -28,7 +28,6 @@ class BetRecommendation:
     injury_impact: str = ""
     h2h_insight: str = ""
     form_insight: str = ""
-    news_insight: str = ""
     used_fallback_odds: bool = False
     league: str = ""
     # Enhanced decision support fields
@@ -240,7 +239,6 @@ class ValueBettingCalculator:
                 injury_impact=context.get("injury_impact", ""),
                 h2h_insight=context.get("h2h_insight", ""),
                 form_insight=context.get("form_insight", ""),
-                news_insight=context.get("news_insight", ""),
                 used_fallback_odds=is_fallback,
                 league=league,
                 model_agreement=agreement_info.get("agreement", ""),

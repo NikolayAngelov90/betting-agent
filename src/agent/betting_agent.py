@@ -10,7 +10,6 @@ from typing import List, Optional, Dict
 
 from src.scrapers.flashscore_scraper import FlashscoreScraper
 from src.scrapers.injury_scraper import InjuryScraper
-from src.scrapers.news_scraper import NewsScraper
 from src.scrapers.historical_loader import HistoricalDataLoader
 from src.scrapers.apifootball_scraper import APIFootballScraper
 from src.scrapers.footballdataorg_scraper import FootballDataOrgScraper
@@ -56,7 +55,6 @@ class MatchAnalysis:
     predictions: Dict
     recommendations: List[BetRecommendation]
     injury_report: Dict
-    news_summary: Dict
 
 
 class FootballBettingAgent:
@@ -79,7 +77,6 @@ class FootballBettingAgent:
         # Initialize components
         self.db = init_db()
         self.scraper = FlashscoreScraper(self.config)
-        self.news_aggregator = NewsScraper(self.config)
         self.historical_loader = HistoricalDataLoader(self.config)
         self.apifootball = APIFootballScraper(self.config)
         self.injury_tracker = InjuryScraper(self.config, apifootball=self.apifootball)
@@ -348,16 +345,7 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"Injury update failed: {e}")
 
-        # 5. News aggregation (cap at 2 min)
-        try:
-            await asyncio.wait_for(self.news_aggregator.update(), timeout=120)
-            logger.info("News update complete")
-        except asyncio.TimeoutError:
-            logger.warning("News update timed out after 2 minutes")
-        except Exception as e:
-            logger.error(f"News update failed: {e}")
-
-        # 6. Fit/update prediction models
+        # 5. Fit/update prediction models
         try:
             self.predictor.fit()
             self.feature_engineer.elo_ratings = self.predictor.elo.ratings
@@ -493,7 +481,7 @@ class FootballBettingAgent:
             return MatchAnalysis(
                 match_id=match_id, match_name=match_name, match_date=match_date,
                 league=league, features={}, predictions={}, recommendations=[],
-                injury_report={}, news_summary={},
+                injury_report={},
             )
 
         # Generate features
@@ -506,21 +494,15 @@ class FootballBettingAgent:
                                              feature_names=feature_names,
                                              league=league)
 
-        # Fetch injury and news data in parallel — all four are local-DB reads
-        (
-            home_injuries, away_injuries,
-            home_sentiment, away_sentiment,
-        ) = await asyncio.gather(
+        # Fetch injury data in parallel — local-DB reads
+        home_injuries, away_injuries = await asyncio.gather(
             self.injury_tracker.get_injury_summary(home_id),
             self.injury_tracker.get_injury_summary(away_id),
-            self.news_aggregator.get_team_sentiment(home_id),
-            self.news_aggregator.get_team_sentiment(away_id),
         )
         injury_report = {"home": home_injuries, "away": away_injuries}
-        news_summary = {"home": home_sentiment, "away": away_sentiment}
 
         # Build context for reasoning
-        context = self._build_context(features, injury_report, news_summary)
+        context = self._build_context(features, injury_report)
 
         # Find value bets
         recommendations = self.value_calculator.find_value_bets(
@@ -540,7 +522,6 @@ class FootballBettingAgent:
             predictions=predictions,
             recommendations=recommendations,
             injury_report=injury_report,
-            news_summary=news_summary,
         )
 
     async def get_daily_picks(self, target_date: date = None,
@@ -1999,8 +1980,7 @@ class FootballBettingAgent:
             logger.warning(f"Drawdown circuit breaker check failed: {e}")
             return 1.0
 
-    def _build_context(self, features: Dict, injury_report: Dict,
-                       news_summary: Dict) -> Dict:
+    def _build_context(self, features: Dict, injury_report: Dict) -> Dict:
         """Build context strings for bet reasoning."""
         context = {}
 
@@ -2027,11 +2007,6 @@ class FootballBettingAgent:
                 f"Injuries: home {home_injured} out, away {away_injured} out."
             )
 
-        # News
-        home_trend = news_summary.get("home", {}).get("trend", "neutral")
-        away_trend = news_summary.get("away", {}).get("trend", "neutral")
-        context["news_insight"] = f"News sentiment: home={home_trend}, away={away_trend}."
-
         # xG data for decision support
         context["home_xg_avg"] = features.get("home_xg_avg", 0.0)
         context["away_xg_avg"] = features.get("away_xg_avg", 0.0)
@@ -2049,7 +2024,6 @@ class FootballBettingAgent:
         await self.scraper.close()
         await self.apifootball.close()
         await self.injury_tracker.close()
-        await self.news_aggregator.close()
         await self.historical_loader.close()
         logger.info("Agent shutdown complete")
 

@@ -10,7 +10,6 @@ from sqlalchemy import or_
 from src.features.team_features import TeamFeatures
 from src.features.h2h_features import H2HFeatures
 from src.features.injury_features import InjuryFeatures
-from src.scrapers.news_scraper import NewsScraper
 from src.data.models import Match, Odds
 from src.data.database import get_db
 from src.utils.logger import get_logger
@@ -25,7 +24,6 @@ class FeatureEngineer:
         self.team_features = TeamFeatures()
         self.h2h_features = H2HFeatures()
         self.injury_features = InjuryFeatures()
-        self.news_scraper = NewsScraper()
         self.db = get_db()
         self._weather_service = None  # lazy-loaded on first use
         self.elo_ratings = None  # set externally from predictor.elo.ratings
@@ -107,21 +105,7 @@ class FeatureEngineer:
             home_pos.get("title_gap", 0) - away_pos.get("title_gap", 0)
         )
 
-        # 5. News sentiment features (skip during training — stale for historical matches)
-        if for_training:
-            features["home_news_sentiment"] = 0
-            features["away_news_sentiment"] = 0
-            features["home_news_count"] = 0
-            features["away_news_count"] = 0
-        else:
-            home_sentiment = await self.news_scraper.get_team_sentiment(home_id)
-            away_sentiment = await self.news_scraper.get_team_sentiment(away_id)
-            features["home_news_sentiment"] = home_sentiment.get("avg_sentiment", 0)
-            features["away_news_sentiment"] = away_sentiment.get("avg_sentiment", 0)
-            features["home_news_count"] = home_sentiment.get("article_count", 0)
-            features["away_news_count"] = away_sentiment.get("article_count", 0)
-
-        # 6. International competition features (CL/EL/ECL form)
+        # 5. International competition features (CL/EL/ECL form)
         home_intl = self.team_features.get_international_form(home_id, as_of_date=as_of_date)
         away_intl = self.team_features.get_international_form(away_id, as_of_date=as_of_date)
         features.update(self._prefix_dict(home_intl, "home_"))

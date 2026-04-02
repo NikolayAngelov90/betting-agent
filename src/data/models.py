@@ -31,7 +31,6 @@ class Team(Base):
     away_matches = relationship("Match", foreign_keys="Match.away_team_id", back_populates="away_team")
     players = relationship("Player", back_populates="team")
     injuries = relationship("Injury", back_populates="team")
-    news = relationship("News", back_populates="team")
 
     def __repr__(self):
         return f"<Team(name='{self.name}', league='{self.league}')>"
@@ -193,28 +192,6 @@ class Odds(Base):
 
     def __repr__(self):
         return f"<Odds({self.bookmaker}, {self.market_type}: {self.selection} @ {self.odds_value})>"
-
-
-class News(Base):
-    """News model."""
-
-    __tablename__ = 'news'
-
-    id = Column(Integer, primary_key=True)
-    team_id = Column(Integer, ForeignKey('teams.id'))
-    headline = Column(Text)
-    content = Column(Text)
-    source = Column(String(100))
-    url = Column(String(500))
-    sentiment_score = Column(Float)  # -1 to +1
-    published_at = Column(DateTime)
-    created_at = Column(DateTime, default=utcnow)
-
-    # Relationships
-    team = relationship("Team", back_populates="news")
-
-    def __repr__(self):
-        return f"<News({self.headline[:50]}..., {self.source})>"
 
 
 class SavedPick(Base):

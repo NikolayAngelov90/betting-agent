@@ -334,11 +334,11 @@ class APIFootballScraper(BaseScraper):
     """Fetches xG, match statistics, fixtures, and odds from API-Football."""
 
     # Request budget allocation (out of 100/day free tier).
-    # Static total: 4+2+10+20+9 = 45.  Remaining 55 shared dynamically
+    # Static total: 4+2+25+20+9 = 60.  Remaining 40 shared dynamically
     # between injuries (1 per fixture) and targeted backfill.
     BUDGET_RESULTS = 4    # settlement for leagues not in football-data.org
     BUDGET_FIXTURES = 2   # fixture ids needed for odds lookup
-    BUDGET_XG = 10        # xG backfill — API-Football is the sole xG source
+    BUDGET_XG = 25        # xG backfill — API-Football is the sole xG source
     BUDGET_ODDS = 20      # odds from top 3 bookmakers (fast DB writes)
     BUDGET_RESERVE = 9    # safety margin
     # Note: no static BUDGET_INJURIES — computed dynamically as
@@ -579,14 +579,14 @@ class APIFootballScraper(BaseScraper):
 
         logger.info(f"API-Football fixtures {date_str}: {created} created, {updated} updated")
 
-    async def _backfill_xg(self, days_back: int = 14):
+    async def _backfill_xg(self, days_back: int = 365):
         """Fetch xG and stats for recent matches missing xG OR match stats.
 
         This is the primary stats enrichment path — much faster than Flashscore
         scraping (~0.5s/match via API vs ~12s/match via browser).
 
         Each API call has a mandatory 6s rate-limit sleep (free tier: 10/min),
-        so 10 matches = ~70s.  We batch DB writes into a single commit at
+        so 25 matches = ~175s.  We batch DB writes into a single commit at
         the end to save ~50ms/match of Neon latency.
         """
         from sqlalchemy import or_

@@ -27,7 +27,6 @@ class MatchReportGenerator:
             self._xg_analysis(analysis),
             self._h2h_section(analysis),
             self._injury_report(analysis),
-            self._news_sentiment(analysis),
             self._predictions(analysis),
             self._value_bets(analysis),
         ]
@@ -172,21 +171,6 @@ class MatchReportGenerator:
                     )
 
         return "\n".join(lines)
-
-    def _news_sentiment(self, analysis) -> str:
-        news = analysis.news_summary
-        home_s = news.get("home", {})
-        away_s = news.get("away", {})
-
-        return (
-            f"## News & Sentiment\n"
-            f"- Home team: {home_s.get('trend', 'neutral')} "
-            f"(score: {home_s.get('avg_sentiment', 0):.2f}, "
-            f"{home_s.get('article_count', 0)} articles)\n"
-            f"- Away team: {away_s.get('trend', 'neutral')} "
-            f"(score: {away_s.get('avg_sentiment', 0):.2f}, "
-            f"{away_s.get('article_count', 0)} articles)"
-        )
 
     def _predictions(self, analysis) -> str:
         ens = analysis.predictions.get("ensemble", {})
