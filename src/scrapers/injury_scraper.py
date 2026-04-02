@@ -91,6 +91,7 @@ class InjuryScraper:
 
         fetched = 0
         total_saved = 0
+        zero_injury_fixtures = []  # track fixtures with no data for team-level fallback
         for match_id, fixture_id, home_team_id, away_team_id in fixture_list:
             if fetched >= injury_budget:
                 break
@@ -100,8 +101,34 @@ class InjuryScraper:
                 )
                 total_saved += count
                 fetched += 1
+                if count == 0:
+                    zero_injury_fixtures.append((home_team_id, away_team_id))
             except Exception as e:
                 logger.warning(f"Injury fetch failed for fixture {fixture_id}: {e}")
+
+        # Team-level fallback: fixture endpoint returns nothing for lower leagues.
+        # Try /injuries?team={id}&season=YEAR for each team that had 0 injuries.
+        # Each team costs 1 request; cap total fallback to leave budget for picks.
+        if zero_injury_fixtures and self.apifootball.remaining_budget() > 0:
+            current_year = date.today().year
+            team_budget = min(self.apifootball.remaining_budget(), len(zero_injury_fixtures) * 2, 10)
+            team_fetched = 0
+            seen_teams: set = set()
+            for home_id, away_id in zero_injury_fixtures:
+                for team_db_id in (home_id, away_id):
+                    if team_fetched >= team_budget:
+                        break
+                    if team_db_id in seen_teams:
+                        continue
+                    seen_teams.add(team_db_id)
+                    try:
+                        count = await self._fetch_team_injuries(team_db_id, current_year)
+                        total_saved += count
+                        team_fetched += 1
+                    except Exception as e:
+                        logger.debug(f"Team injury fallback failed for team {team_db_id}: {e}")
+            if team_fetched:
+                logger.debug(f"Team injury fallback: {team_fetched} teams queried, {total_saved} total saved")
 
         logger.info(f"Injury update: saved {total_saved} injuries from {fetched} fixtures")
 
@@ -196,6 +223,76 @@ class InjuryScraper:
                     logger.debug(f"Error parsing injury entry: {e}")
                     continue
 
+            session.commit()
+        return saved
+
+    async def _fetch_team_injuries(self, team_db_id: int, season: int) -> int:
+        """Fallback: fetch injuries for a team by season from API-Football.
+
+        Used when the fixture-level endpoint returns nothing (common for lower
+        leagues).  Queries /injuries?team={apifootball_id}&season={year}.
+
+        Returns number of new injuries saved.
+        """
+        # Look up the API-Football team ID
+        with self.db.get_session() as session:
+            team = session.query(Team).filter_by(id=team_db_id).first()
+            if not team or not team.apifootball_team_id:
+                return 0
+            api_team_id = team.apifootball_team_id
+
+        data = await self.apifootball._api_get(
+            "/injuries", {"team": api_team_id, "season": season}
+        )
+        if not data:
+            return 0
+        response = data.get("response", [])
+        if not response:
+            return 0
+
+        saved = 0
+        with self.db.get_session() as session:
+            for entry in response:
+                try:
+                    player_info = entry.get("player", {})
+                    player_name = player_info.get("name", "")
+                    reason = player_info.get("reason", "Unknown")
+                    player_type = player_info.get("type", "")
+
+                    if not player_name:
+                        continue
+
+                    status = "out"
+                    if player_type and "doubtful" in player_type.lower():
+                        status = "doubtful"
+
+                    player = session.query(Player).filter_by(
+                        name=player_name, team_id=team_db_id
+                    ).first()
+                    if not player:
+                        player = Player(name=player_name, team_id=team_db_id, position="")
+                        session.add(player)
+                        session.flush()
+
+                    existing = session.query(Injury).filter_by(
+                        player_id=player.id, injury_type=reason
+                    ).first()
+                    if existing:
+                        existing.status = status
+                        existing.updated_at = datetime.utcnow()
+                    else:
+                        session.add(Injury(
+                            player_id=player.id,
+                            team_id=team_db_id,
+                            injury_type=reason,
+                            start_date=date.today(),
+                            status=status,
+                            source="api-football",
+                        ))
+                        saved += 1
+                except Exception as e:
+                    logger.debug(f"Error parsing team injury entry: {e}")
+                    continue
             session.commit()
         return saved
 

@@ -103,6 +103,10 @@ class ValueBettingCalculator:
         context = context or {}
         ensemble = predictions.get("ensemble", {})
         recommendations = []
+        _rejected: dict = {}  # reason → count for INFO-level summary
+
+        def _reject(reason: str):
+            _rejected[reason] = _rejected.get(reason, 0) + 1
 
         # Define markets to check
         markets = [
@@ -126,6 +130,7 @@ class ValueBettingCalculator:
             if market_key in self.excluded_markets:
                 continue
             if prob < self.high_ev_min_confidence:
+                _reject("prob<45%")
                 continue  # hard floor — never go below 45%
 
             # Find best odds for this market/selection
@@ -142,13 +147,16 @@ class ValueBettingCalculator:
                     f"No real odds for {match_name} {selection} "
                     f"(prob={prob:.0%}) — skipping (no bookmaker data)"
                 )
+                _reject("no odds")
                 continue
 
             if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
+                _reject("odds out of range")
                 continue
 
             ev = self.calculate_expected_value(prob, best_odds)
             if ev < self.min_ev:
+                _reject("low EV")
                 continue
 
             # Sliding scale: allow bets below min_confidence when EV compensates.
@@ -158,8 +166,8 @@ class ValueBettingCalculator:
             if prob < self.min_confidence:
                 ev_conf_score = ev * prob
                 if ev_conf_score < self.min_ev_confidence_score:
+                    _reject("low EV×conf")
                     continue
-
 
             # Model-market divergence: compute how much our model disagrees
             # with the bookmaker.  Used as both a guard (reject >2x) and as a
@@ -171,6 +179,7 @@ class ValueBettingCalculator:
                     f"Rejecting {match_name} {selection}: model {prob:.0%} vs "
                     f"market {implied_prob:.0%} ({divergence:.1f}x divergence > 2.0x)"
                 )
+                _reject("divergence>2x")
                 continue
 
             # Model agreement analysis (before Kelly so we can scale stake)
@@ -188,6 +197,7 @@ class ValueBettingCalculator:
                     f"Rejecting {match_name} {selection}: split models + "
                     f"confidence {prob:.0%} < {self.min_confidence:.0%}"
                 )
+                _reject("split+low conf")
                 continue
 
             # Uncertainty-aware Kelly: scale stake by model agreement
@@ -202,6 +212,7 @@ class ValueBettingCalculator:
                     f"Skipping {match_name} {selection}: "
                     f"Kelly {kelly_pct:.2f}% < min {self.min_kelly_stake}%"
                 )
+                _reject("low Kelly")
                 continue
             risk = self._assess_risk(prob, best_odds, ev)
 
@@ -252,6 +263,9 @@ class ValueBettingCalculator:
             * _agreement_bonus.get(r.model_agreement, 1.0),
             reverse=True,
         )
+        if _rejected and not recommendations:
+            _summary = ", ".join(f"{v} {k}" for k, v in sorted(_rejected.items(), key=lambda x: -x[1]))
+            logger.info(f"  {match_name}: 0 picks — rejected: {_summary}")
         return recommendations
 
     @staticmethod
