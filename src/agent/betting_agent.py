@@ -663,24 +663,41 @@ class FootballBettingAgent:
         if self.apifootball.enabled:
             _apifb_budget_remaining = min(self.apifootball.remaining_budget(), 40)
             with self.db.get_session() as session:
+                # Tier-1: matches with zero real bookmaker odds (highest priority)
                 apifb_fallback = []
+                # Tier-2: matches that have TheOddsAPI 1X2/2.5 odds but are
+                # missing Over 1.5 (TheOddsAPI never provides that line)
+                apifb_missing_over15 = []
                 for fid in fixture_ids:
                     m = session.get(Match, fid)
                     if m and m.apifootball_id:
+                        ht = m.home_team.name if m.home_team else str(m.home_team_id)
+                        at = m.away_team.name if m.away_team else str(m.away_team_id)
                         # Count only REAL bookmaker odds (exclude "Flashscore" display odds)
                         real_odds = session.query(Odds).filter(
                             Odds.match_id == fid,
                             Odds.bookmaker != "Flashscore",
                         ).count()
                         if real_odds == 0:
-                            ht = m.home_team.name if m.home_team else str(m.home_team_id)
-                            at = m.away_team.name if m.away_team else str(m.away_team_id)
                             apifb_fallback.append((fid, m.apifootball_id, ht, at))
+                        else:
+                            # Has some odds but check if Over 1.5 is missing
+                            has_over15 = session.query(Odds).filter(
+                                Odds.match_id == fid,
+                                Odds.market_type == "over_under",
+                                Odds.selection == "Over 1.5",
+                            ).count()
+                            if not has_over15:
+                                apifb_missing_over15.append((fid, m.apifootball_id, ht, at))
+
+                # Combine: zero-odds tier first, then missing-Over-1.5 tier
+                apifb_fallback = apifb_fallback + apifb_missing_over15
             if apifb_fallback:
                 capped = apifb_fallback[:_apifb_budget_remaining]
                 logger.info(
-                    f"Fetching API-Football odds for {len(capped)}/{len(apifb_fallback)} "
-                    f"fixtures missing real bookmaker odds "
+                    f"Fetching API-Football odds for {len(capped)}/{len(apifb_fallback)} fixtures "
+                    f"({len(apifb_fallback) - len(apifb_missing_over15)} no-odds + "
+                    f"{len(apifb_missing_over15)} missing Over 1.5) "
                     f"(budget: {_apifb_budget_remaining} requests left)"
                 )
                 import time as _timer
