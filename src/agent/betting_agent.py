@@ -1155,6 +1155,13 @@ class FootballBettingAgent:
 
             for pick in pending:
                 match = session.get(Match, pick.match_id)
+
+                # Skip picks for matches that haven't started yet — the match record
+                # still has is_fixture=True and no goals. Don't fall through to the
+                # fuzzy fallback which could find yesterday's completed match.
+                if match and match.is_fixture:
+                    continue
+
                 # Fallback: if the primary match_id has no result, scan same league+date
                 # by team-name similarity (handles cross-source name mismatches)
                 if (not match or match.home_goals is None or match.away_goals is None) and pick.match_name:
@@ -1164,8 +1171,11 @@ class FootballBettingAgent:
                         ref_date = ref_match.match_date if ref_match else None
                         if ref_date:
                             from datetime import timedelta as _td
-                            window_start = ref_date - _td(hours=24)
-                            window_end = ref_date + _td(hours=24)
+                            # Narrow window: 4h back (UTC offset tolerance) + 12h forward
+                            # (score reporting delay).  ±24h was too wide — it reached
+                            # yesterday's completed matches and settled today's unplayed picks.
+                            window_start = ref_date - _td(hours=4)
+                            window_end = ref_date + _td(hours=12)
                             # Filter by league (from pick) to avoid false cross-league matches
                             _league_filter = [Match.league == pick.league] if pick.league else []
                             candidates = (
