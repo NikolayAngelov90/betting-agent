@@ -9,7 +9,7 @@ on:
 jobs:
   daily-picks:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
 
     env:
       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
@@ -86,9 +86,9 @@ jobs:
         timeout-minutes: 10
         continue-on-error: true
 
-      - name: Run daily update (scrape + fetch odds)
+      - name: Run daily update (fixtures + odds, no Flashscore results)
         run: python -m src.agent.betting_agent --update --skip-ml-retrain
-        timeout-minutes: 50
+        timeout-minutes: 30
         continue-on-error: true
 
       - name: Retrain ML models (if stale)
@@ -115,6 +115,11 @@ jobs:
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks
         timeout-minutes: 45
+
+      - name: Scrape Flashscore results for all leagues (post-picks)
+        run: python -m src.agent.betting_agent --update-results
+        timeout-minutes: 30
+        continue-on-error: true
 
       - name: Send weekly performance report (Sundays only)
         if: success()

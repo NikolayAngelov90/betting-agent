@@ -154,8 +154,17 @@ class FootballBettingAgent:
         except Exception:
             pass
 
-    async def daily_update(self, skip_ml_retrain: bool = False):
-        """Run the full daily data collection cycle."""
+    async def daily_update(self, skip_ml_retrain: bool = False, skip_flashscore_results: bool = False):
+        """Run the full daily data collection cycle.
+
+        Args:
+            skip_flashscore_results: When True, skip the Flashscore browser results
+                scraping block entirely.  Use this in CI so the time-critical
+                fixtures/odds/picks path isn't blocked by a 20-min Chrome session.
+                Scores for all leagues are already covered by API-Football's
+                yesterday-fixtures fetch.  Run --update-results in a separate CI
+                step after picks to backfill Flashscore stats/coverage.
+        """
         logger.info("Starting daily update cycle")
 
         # 0. Prune old odds to keep DB size under control (Neon 500MB free tier)
@@ -191,7 +200,14 @@ class FootballBettingAgent:
         import time as _timer
         leagues = self.config.get("scraping.flashscore_leagues", [])
 
-        _RESULTS_BUDGET_S = 720   # 12 minutes for results (~60s/league, covers ~10-12 leagues)
+        if skip_flashscore_results:
+            logger.info(
+                "Flashscore results scraping skipped (--skip-flashscore-results). "
+                "Scores are covered by API-Football; run --update-results after picks "
+                "for full Flashscore coverage."
+            )
+
+        _RESULTS_BUDGET_S = 1500  # 25 minutes for results (~60s/league, covers all 27 leagues)
         _FIXTURES_BUDGET_S = 300  # 5 minutes for fixtures (only leagues with today's matches)
 
         # Skip leagues that were already scraped by settle_predictions() within
@@ -252,36 +268,37 @@ class FootballBettingAgent:
                 f"{', '.join(_priority)}"
             )
 
-        try:
-            _results_deadline = _timer.monotonic() + _RESULTS_BUDGET_S
-            for league in _ordered_leagues:
-                if _timer.monotonic() > _results_deadline:
-                    logger.warning("Flashscore results: time budget exhausted, skipping remaining leagues")
-                    break
-                if league in _recently_scraped:
-                    continue
-                try:
-                    await asyncio.wait_for(
-                        self.scraper.scrape_league_results(league, skip_stats=True),
-                        timeout=60,
-                    )
-                    self._mark_league_scraped(league)
-                except asyncio.TimeoutError:
-                    logger.warning(f"Flashscore results timeout for {league}, continuing")
-                    try:
-                        self.scraper.close_driver()  # reset Chrome for next league
-                    except Exception:
-                        pass
-                except Exception as e:
-                    logger.debug(f"Flashscore results error for {league}: {e}")
-            logger.info("Flashscore results update complete")
-        except Exception as e:
-            logger.error(f"Flashscore results update failed: {e}")
-        finally:
+        if not skip_flashscore_results:
             try:
-                self.scraper.close_driver()
-            except Exception:
-                pass
+                _results_deadline = _timer.monotonic() + _RESULTS_BUDGET_S
+                for league in _ordered_leagues:
+                    if _timer.monotonic() > _results_deadline:
+                        logger.warning("Flashscore results: time budget exhausted, skipping remaining leagues")
+                        break
+                    if league in _recently_scraped:
+                        continue
+                    try:
+                        await asyncio.wait_for(
+                            self.scraper.scrape_league_results(league, skip_stats=True),
+                            timeout=60,
+                        )
+                        self._mark_league_scraped(league)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Flashscore results timeout for {league}, continuing")
+                        try:
+                            self.scraper.close_driver()  # reset Chrome for next league
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.debug(f"Flashscore results error for {league}: {e}")
+                logger.info("Flashscore results update complete")
+            except Exception as e:
+                logger.error(f"Flashscore results update failed: {e}")
+            finally:
+                try:
+                    self.scraper.close_driver()
+                except Exception:
+                    pass
 
         # Fixtures (today's upcoming matches) — only scrape leagues that have
         # today's fixtures OR are priority (pending picks).  Skipping leagues
@@ -952,6 +969,75 @@ class FootballBettingAgent:
             session.commit()
             logger.info(f"Saved {len(new_picks)} new picks to database (skipped {len(picks) - len(new_picks)} duplicates)")
         return new_picks
+
+    async def scrape_results(self, budget_seconds: int = 1500):
+        """Scrape Flashscore results for all configured leagues.
+
+        Intended to run as a separate CI step AFTER picks so the time-critical
+        fixtures/odds/picks path is not blocked.  Covers all 27 leagues with a
+        25-minute budget (~55s/league), giving the ensemble full historical
+        coverage for tomorrow's predictions.
+        """
+        import time as _timer
+
+        logger.info("Starting Flashscore results scrape (all leagues)")
+        leagues = self.config.get("scraping.flashscore_leagues", [])
+        _recently_scraped = self._scraped_leagues | self._get_recently_scraped_leagues(minutes=60)
+
+        # Priority: leagues with pending picks first (important for settlement)
+        _pending_leagues: set = set()
+        try:
+            with self.db.get_session() as session:
+                _pending_rows = (
+                    session.query(Match.league)
+                    .join(SavedPick, SavedPick.match_id == Match.id)
+                    .filter(SavedPick.result.is_(None), Match.league.isnot(None))
+                    .distinct()
+                    .all()
+                )
+                _pending_leagues = {r[0] for r in _pending_rows if r[0]}
+        except Exception:
+            pass
+
+        _priority = [l for l in leagues if l in _pending_leagues]
+        _rest = [l for l in leagues if l not in _pending_leagues]
+        _ordered = _priority + _rest
+
+        scraped, skipped = 0, 0
+        deadline = _timer.monotonic() + budget_seconds
+        try:
+            for league in _ordered:
+                if _timer.monotonic() > deadline:
+                    logger.warning(
+                        f"Flashscore results budget exhausted after {budget_seconds}s, "
+                        f"{len(_ordered) - scraped - skipped} leagues not reached"
+                    )
+                    break
+                if league in _recently_scraped:
+                    skipped += 1
+                    continue
+                try:
+                    await asyncio.wait_for(
+                        self.scraper.scrape_league_results(league, skip_stats=True),
+                        timeout=60,
+                    )
+                    self._mark_league_scraped(league)
+                    scraped += 1
+                except asyncio.TimeoutError:
+                    logger.warning(f"Flashscore results timeout for {league}, continuing")
+                    try:
+                        self.scraper.close_driver()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.debug(f"Flashscore results error for {league}: {e}")
+        finally:
+            try:
+                self.scraper.close_driver()
+            except Exception:
+                pass
+
+        logger.info(f"Flashscore results scrape complete: {scraped} scraped, {skipped} skipped (already done)")
 
     async def settle_predictions(self):
         """Fetch recent results and settle pending picks.
@@ -2059,7 +2145,8 @@ async def main():
         print("Usage: python -m src.agent.betting_agent <command>")
         print("\nCommands:")
         print("  --init              Initialize database and collect data")
-        print("  --update            Run daily data update (--skip-ml-retrain to defer ML training)")
+        print("  --update            Run daily data update, skipping Flashscore results (--skip-ml-retrain to defer ML)")
+        print("  --update-results    Scrape Flashscore results for all leagues (run after --picks in CI)")
         print("  --picks             Show today's value picks")
         print("  --settle            Settle pending picks with actual results")
         print("  --report            Send comprehensive performance report to Telegram")
@@ -2083,9 +2170,14 @@ async def main():
 
         elif command == "--update":
             skip_ml = "--skip-ml-retrain" in sys.argv
-            print("Running daily update...")
-            await agent.daily_update(skip_ml_retrain=skip_ml)
+            print("Running daily update (Flashscore results deferred to --update-results)...")
+            await agent.daily_update(skip_ml_retrain=skip_ml, skip_flashscore_results=True)
             print("Update complete.")
+
+        elif command == "--update-results":
+            print("Scraping Flashscore results for all leagues...")
+            await agent.scrape_results()
+            print("Results scrape complete.")
 
         elif command == "--train":
             print("Training ML models on historical data...")
