@@ -24,38 +24,38 @@ logger = get_logger()
 # ---------------------------------------------------------------------------
 LEAGUE_TO_THEODDS_SPORT: Dict[str, str] = {
     # Top 5
-    "england/premier-league":       "soccer_england_league1",
-    "spain/laliga":                 "soccer_spain_la_liga",
-    "germany/bundesliga":           "soccer_germany_bundesliga1",
-    "italy/serie-a":                "soccer_italy_serie_a",
-    "france/ligue-1":               "soccer_france_ligue_one",
+    "england/premier-league":          "soccer_epl",
+    "spain/laliga":                    "soccer_spain_la_liga",
+    "germany/bundesliga":              "soccer_germany_bundesliga",
+    "italy/serie-a":                   "soccer_italy_serie_a",
+    "france/ligue-1":                  "soccer_france_ligue_one",
     # Strong European
-    "netherlands/eredivisie":       "soccer_netherlands_eredivisie",
-    "portugal/primeira-liga":       "soccer_portugal_primeira_liga",
-    "belgium/jupiler-pro-league":   "soccer_belgium_first_div",
-    "turkey/super-lig":             "soccer_turkey_super_league",
-    "scotland/premiership":         "soccer_scotland_premiership",
+    "netherlands/eredivisie":          "soccer_netherlands_eredivisie",
+    "portugal/primeira-liga":          "soccer_portugal_primeira_liga",
+    "belgium/jupiler-pro-league":      "soccer_belgium_first_div",
+    "turkey/super-lig":                "soccer_turkey_super_league",
+    "scotland/premiership":            "soccer_spl",
     # European Competitions
-    "europe/champions-league":      "soccer_uefa_champs_league",
-    "europe/europa-league":         "soccer_uefa_europa_league",
+    "europe/champions-league":         "soccer_uefa_champs_league",
+    "europe/europa-league":            "soccer_uefa_europa_league",
     "europe/europa-conference-league": "soccer_uefa_europa_conference_league",
     # English lower divisions
-    "england/championship":         "soccer_england_championship",
-    "england/league-one":           "soccer_england_league1",   # League One uses same key suffix
-    "england/league-two":           "soccer_england_league2",
+    "england/championship":            "soccer_efl_champ",
+    "england/league-one":              "soccer_england_league1",
+    "england/league-two":              "soccer_england_league2",
     # Second divisions
-    "spain/laliga2":                "soccer_spain_segunda_division",
-    "germany/2-bundesliga":         "soccer_germany_bundesliga2",
-    "italy/serie-b":                "soccer_italy_serie_b",
-    "france/ligue-2":               "soccer_france_ligue_deux",
-    "austria/bundesliga":           "soccer_austria_bundesliga",
-    "switzerland/super-league":     "soccer_swiss_super_league",
-    "greece/super-league":          "soccer_greece_super_league",
-    "denmark/superliga":            "soccer_denmark_superliga",
+    "spain/laliga2":                   "soccer_spain_segunda_division",
+    "germany/2-bundesliga":            "soccer_germany_bundesliga2",
+    "italy/serie-b":                   "soccer_italy_serie_b",
+    "france/ligue-2":                  "soccer_france_ligue_two",
+    "austria/bundesliga":              "soccer_austria_bundesliga",
+    "switzerland/super-league":        "soccer_switzerland_superleague",
+    "greece/super-league":             "soccer_greece_super_league",
+    "denmark/superliga":               "soccer_denmark_superliga",
     # Nordic / Eastern
-    "norway/eliteserien":           "soccer_norway_eliteserien",
-    "sweden/allsvenskan":           "soccer_sweden_allsvenskan",
-    "poland/ekstraklasa":           "soccer_poland_ekstraklasa",
+    "norway/eliteserien":              "soccer_norway_eliteserien",
+    "sweden/allsvenskan":              "soccer_sweden_allsvenskan",
+    "poland/ekstraklasa":              "soccer_poland_ekstraklasa",
     # romania/liga-1 intentionally omitted — not available on The Odds API
 }
 

@@ -191,7 +191,7 @@ class FootballBettingAgent:
         import time as _timer
         leagues = self.config.get("scraping.flashscore_leagues", [])
 
-        _RESULTS_BUDGET_S = 1200  # 20 minutes for results (~50s/league, covers ~22 leagues)
+        _RESULTS_BUDGET_S = 720   # 12 minutes for results (~60s/league, covers ~10-12 leagues)
         _FIXTURES_BUDGET_S = 300  # 5 minutes for fixtures (only leagues with today's matches)
 
         # Skip leagues that were already scraped by settle_predictions() within
@@ -325,7 +325,7 @@ class FootballBettingAgent:
 
         # 2b. API-Football (fixtures, xG, advanced stats, odds).
         try:
-            await asyncio.wait_for(self.apifootball.update(), timeout=600)  # 10 min cap
+            await asyncio.wait_for(self.apifootball.update(), timeout=1080)  # 18 min cap
             logger.info("API-Football update complete")
         except asyncio.TimeoutError:
             logger.warning("API-Football update timed out after 10 minutes")
