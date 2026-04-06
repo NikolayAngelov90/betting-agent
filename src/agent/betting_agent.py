@@ -763,6 +763,33 @@ class FootballBettingAgent:
         # Hot streak → tighten (be more selective), cold streak → loosen slightly.
         self._auto_calibrate_ev_threshold()
 
+        # Pre-filter: skip fixtures with no real bookmaker odds.
+        # Feature engineering costs ~1s × 146 DB queries on Neon.  Fixtures with
+        # zero odds can never produce an EV bet — skip them before analysis to avoid
+        # wasting the full 45-minute CI budget on a large Sunday fixture slate.
+        with self.db.get_session() as session:
+            odds_fixture_ids = []
+            no_odds_count = 0
+            for fid in fixture_ids:
+                has_real_odds = session.query(Odds).filter(
+                    Odds.match_id == fid,
+                    Odds.bookmaker != "Flashscore",
+                ).count() > 0
+                if has_real_odds:
+                    odds_fixture_ids.append(fid)
+                else:
+                    no_odds_count += 1
+            if no_odds_count:
+                logger.info(
+                    f"Skipping {no_odds_count} fixtures with no real bookmaker odds "
+                    f"({len(odds_fixture_ids)} remaining for analysis)"
+                )
+            fixture_ids = odds_fixture_ids
+
+        if not fixture_ids:
+            logger.info("No fixtures with bookmaker odds for analysis")
+            return []
+
         # Analyze fixtures with bounded concurrency — feature engineering and
         # prediction involve synchronous DB queries that block the event loop,
         # so a semaphore limits how many run at once.  Default 5 keeps weekend
@@ -1108,39 +1135,12 @@ class FootballBettingAgent:
             f"{len(leagues_with_pending)} leagues with pending picks"
         )
 
-        # 2. PRIMARY: Flashscore — first-page results only, no quota needed.
-        # skip_stats=True means no load_more clicks and no detail page scraping,
-        # so the first page (~10-20 latest results) loads in ~10-15s per league.
-        if leagues_with_pending:
-            logger.info(
-                f"Flashscore settle: fetching results for "
-                f"{len(leagues_with_pending)} leagues"
-            )
-            for league in leagues_with_pending:
-                try:
-                    await asyncio.wait_for(
-                        self.scraper.scrape_league_results(league, skip_stats=True),
-                        timeout=60,
-                    )
-                    self._mark_league_scraped(league)
-                except asyncio.TimeoutError:
-                    logger.warning(f"Flashscore settle timeout for {league}, skipping")
-                    # Close the driver so the still-running background thread's
-                    # session is terminated before the next league starts.
-                    try:
-                        self.scraper.close_driver()
-                    except Exception:
-                        pass
-                except Exception as e:
-                    logger.debug(f"Flashscore settle error for {league}: {e}")
-            # Final close after the full loop (no-op if already closed above).
-            try:
-                self.scraper.close_driver()
-            except Exception:
-                pass
-
-        # Flashscore is the sole results source — API-Football free plan only
-        # allows today±1, so calling it here causes plan-restriction errors.
+        # 2. Settle uses DB results only — --update runs before --settle in the
+        # workflow, so API-Football + football-data.org have already populated
+        # yesterday's scores.  Flashscore is scraped post-picks via --update-results.
+        logger.info(
+            f"Settling against DB results (no inline scraping — run --update-results after picks)"
+        )
 
         settled = []
 

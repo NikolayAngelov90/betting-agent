@@ -55,6 +55,8 @@ class FeatureEngineer:
             league = match.league or ""
             referee = match.referee or ""
 
+        import asyncio as _asyncio
+
         features = {}
 
         # 1. Team form features (overall, home, away) — all windows at 10 games
@@ -69,6 +71,11 @@ class FeatureEngineer:
         features.update(self._prefix_dict(away_form_all, "away_overall_"))
         features.update(self._prefix_dict(away_form_away, "away_away_"))
 
+        # Yield event loop so other coroutines (other fixtures) can interleave.
+        # Without this, asyncio.gather(concurrency=5) is effectively sequential
+        # because synchronous DB calls never yield control.
+        await _asyncio.sleep(0)
+
         # 2. H2H features
         h2h = self.h2h_features.get_h2h_features(home_id, away_id, as_of_date=as_of_date)
         features.update(h2h)
@@ -80,13 +87,18 @@ class FeatureEngineer:
             features.update(self._prefix_dict(home_injuries, "home_injury_"))
             features.update(self._prefix_dict(away_injuries, "away_injury_"))
 
+        await _asyncio.sleep(0)
+
         # 4. League position features
-        # For training: coarsen as_of_date to 1st-of-month so standings cache
-        # hits across matches in the same month (~100 matches → ~6 cache keys).
-        # League standings barely change within a month so this is safe.
+        # Coarsen the standings date to the 1st of the current month so that the
+        # standings cache hits across all fixtures in the same league on the same day
+        # (multiple fixtures → same cache key → one DB query per league, not N²).
+        # League standings barely change within a month so this is accurate enough.
+        # Applies to both training (as_of_date set) and live prediction (as_of_date None).
         _standings_date = as_of_date
-        if for_training and as_of_date is not None:
-            _standings_date = as_of_date.replace(day=1)
+        from datetime import date as _date
+        _effective_date = _standings_date if _standings_date is not None else _date.today()
+        _standings_date = _effective_date.replace(day=1)
         home_pos = self.team_features.get_league_position(home_id, league, as_of_date=_standings_date)
         away_pos = self.team_features.get_league_position(away_id, league, as_of_date=_standings_date)
         features.update(self._prefix_dict(home_pos, "home_league_"))
@@ -148,6 +160,8 @@ class FeatureEngineer:
         features["away_offsides_avg"] = away_off
         features["offsides_diff"] = home_off - away_off  # proxy for pressing line height
 
+        await _asyncio.sleep(0)
+
         # 9. Referee features (from Flashscore — if referee is known for this fixture)
         ref_features = self._get_referee_features(referee, as_of_date=as_of_date)
         features.update(ref_features)
@@ -159,6 +173,8 @@ class FeatureEngineer:
         features.update(self._prefix_dict(away_mom, "away_"))
         features["rsi_diff"] = home_mom["rsi"] - away_mom["rsi"]
         features["macd_diff"] = home_mom["macd"] - away_mom["macd"]
+
+        await _asyncio.sleep(0)
 
         # 11. Bookmaker implied probability (Bet365/Pinnacle 1X2 odds already in DB)
         bk_features = self._get_bookmaker_features(match_id)
@@ -201,9 +217,9 @@ class FeatureEngineer:
             features["away_short_rest_count"] = away_sit["short_rest_count"]
 
         # 13. League-specific baseline rates (home advantage, avg goals, BTTS rate, etc.)
-        # Coarsen date for training (same logic as standings — rates are stable within a month)
-        _league_date = _standings_date if for_training else as_of_date
-        league_feat = self._get_league_features(league, as_of_date=_league_date)
+        # Use the coarsened standings date for both training and live prediction so
+        # the league-rates cache hits across all fixtures in the same league on the same day.
+        league_feat = self._get_league_features(league, as_of_date=_standings_date)
         features.update(league_feat)
 
         # 14. Match-day weather (Open-Meteo free API — no key required)

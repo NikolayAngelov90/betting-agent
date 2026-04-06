@@ -81,14 +81,14 @@ jobs:
         run: python -m pytest tests/ -v --tb=short
         continue-on-error: true
 
-      - name: Settle yesterday's predictions
-        run: python -m src.agent.betting_agent --settle
-        timeout-minutes: 10
-        continue-on-error: true
-
       - name: Run daily update (fixtures + odds, no Flashscore results)
         run: python -m src.agent.betting_agent --update --skip-ml-retrain
         timeout-minutes: 30
+        continue-on-error: true
+
+      - name: Settle yesterday's predictions
+        run: python -m src.agent.betting_agent --settle
+        timeout-minutes: 5
         continue-on-error: true
 
       - name: Retrain ML models (if stale)
@@ -117,6 +117,7 @@ jobs:
         timeout-minutes: 45
 
       - name: Scrape Flashscore results for all leagues (post-picks)
+        if: always()
         run: python -m src.agent.betting_agent --update-results
         timeout-minutes: 30
         continue-on-error: true

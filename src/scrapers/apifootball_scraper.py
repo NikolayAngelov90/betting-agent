@@ -488,6 +488,18 @@ class APIFootballScraper(BaseScraper):
         created = 0
         updated = 0
 
+        # Pre-load all existing apifootball_id → match_id for this date in one query.
+        # This avoids a per-fixture DB round-trip (1s Neon latency) for existing fixtures.
+        day_start = datetime.combine(target_date, datetime.min.time())
+        day_end = day_start + timedelta(days=1)
+        with self.db.get_session() as session:
+            existing_rows = session.query(Match.id, Match.apifootball_id).filter(
+                Match.apifootball_id.isnot(None),
+                Match.match_date >= day_start,
+                Match.match_date < day_end,
+            ).all()
+        _afid_to_match_id = {row.apifootball_id: row.id for row in existing_rows}
+
         for fix in fixtures:
             league_id = fix.get("league", {}).get("id")
             if league_id not in self._tracked_league_ids:
@@ -510,6 +522,30 @@ class APIFootballScraper(BaseScraper):
             if not match_dt:
                 continue
 
+            goals = fix.get("goals", {})
+            home_goals = goals.get("home")
+            away_goals = goals.get("away")
+            is_finished = status_short in ("FT", "AET", "PEN")
+            is_fixture = status_short in ("NS", "TBD", "")
+
+            # Fast path: fixture already known by apifootball_id (pre-loaded cache).
+            # Only update score/referee — skip all team lookups and fuzzy matching.
+            if fixture_id in _afid_to_match_id:
+                match_id = _afid_to_match_id[fixture_id]
+                if is_finished and home_goals is not None:
+                    with self.db.get_session() as session:
+                        match = session.get(Match, match_id)
+                        if match:
+                            match.home_goals = home_goals
+                            match.away_goals = away_goals
+                            match.is_fixture = False
+                            if referee and not match.referee:
+                                match.referee = referee
+                            session.commit()
+                updated += 1
+                continue
+
+            # Slow path: new fixture — get/create teams and find/create match record.
             # Get or create teams — also saves API-Football team IDs for future backfill
             home_team_id = self._get_or_create_team_id(
                 home_name, league_key, apifootball_team_id=home_api_id
@@ -518,18 +554,9 @@ class APIFootballScraper(BaseScraper):
                 away_name, league_key, apifootball_team_id=away_api_id
             )
 
-            # Check for existing match — first by apifootball_id (most reliable),
-            # then by team DB IDs, then fuzzy name search.
-            match_id = None
-            with self.db.get_session() as session:
-                existing = session.query(Match).filter(
-                    Match.apifootball_id == fixture_id
-                ).first()
-                if existing:
-                    match_id = existing.id
-
-            if match_id is None:
-                match_id = self._find_match_id(home_team_id, away_team_id, match_dt)
+            # Check for existing match — by team DB IDs then fuzzy name search
+            # (apifootball_id lookup already handled by the pre-loaded cache above).
+            match_id = self._find_match_id(home_team_id, away_team_id, match_dt)
 
             # Fallback: team-ID match failed (name mismatch created a different team
             # record, or fixture came from Flashscore/FDO under a slightly different name).
@@ -544,14 +571,8 @@ class APIFootballScraper(BaseScraper):
                         f"({league_key}) to existing fixture {match_id}"
                     )
 
-            goals = fix.get("goals", {})
-            home_goals = goals.get("home")
-            away_goals = goals.get("away")
-            is_finished = status_short in ("FT", "AET", "PEN")
-            is_fixture = status_short in ("NS", "TBD", "")
-
             if match_id:
-                # Update existing match
+                # Update existing match (linked by team IDs or fuzzy match)
                 with self.db.get_session() as session:
                     match = session.get(Match, match_id)
                     if match:
@@ -563,6 +584,7 @@ class APIFootballScraper(BaseScraper):
                             match.away_goals = away_goals
                             match.is_fixture = False
                         session.commit()
+                _afid_to_match_id[fixture_id] = match_id  # warm cache for future use
                 updated += 1
             else:
                 # Create new match — log at INFO so we can trace missing fixtures
