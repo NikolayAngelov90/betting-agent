@@ -368,20 +368,35 @@ class ValueBettingCalculator:
 
         valid_markets = market_map.get(market, [market])
 
-        # Bookmakers excluded from EV odds: Flashscore stores display/fair odds,
-        # not real betting lines — using them inflates EV calculations.
-        _EXCLUDED_BOOKMAKERS = {"Flashscore"}
+        # Flashscore 1X2 odds are composite/display prices — exclude from EV.
+        # Flashscore over_under odds ARE real bookmaker prices (best available
+        # from their comparison page) — allow them as a fallback when no API
+        # bookmaker (Bet365/Pinnacle/1xBet) provides the line (e.g. Over 1.5).
+        _OVER_UNDER_MARKETS = {"over_under", "totals"}
+
+        # Two-pass: first collect real bookmaker odds, then fall back to Flashscore
+        # over_under only if nothing was found.
+        real_best = 0.0
+        flashscore_ou_best = 0.0
 
         for odds_record in odds_data:
-            if odds_record.get("bookmaker", "") in _EXCLUDED_BOOKMAKERS:
-                continue
+            bookie = odds_record.get("bookmaker", "")
             record_market = odds_record.get("market_type", "")
             record_selection = odds_record.get("selection", "")
             record_odds = odds_record.get("odds_value", 0)
 
-            if record_market in valid_markets and record_selection in valid_selections:
-                best = max(best, record_odds)
+            if record_market not in valid_markets or record_selection not in valid_selections:
+                continue
 
+            if bookie == "Flashscore":
+                # Only usable as fallback, and only for over/under market
+                if record_market in _OVER_UNDER_MARKETS:
+                    flashscore_ou_best = max(flashscore_ou_best, record_odds)
+            else:
+                real_best = max(real_best, record_odds)
+
+        # Use real bookmaker odds; fall back to Flashscore over/under when absent
+        best = real_best if real_best > 0 else flashscore_ou_best
         return best
 
     def _assess_risk(self, probability: float, odds: float, ev: float) -> str:
