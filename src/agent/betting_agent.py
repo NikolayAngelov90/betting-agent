@@ -2098,7 +2098,7 @@ class FootballBettingAgent:
                 multiplier = (roi - pause_at) / (reduce_at - pause_at)
                 logger.info(
                     f"Drawdown breaker: ROI={roi:.1%} over last "
-                    f"{len(recent)} picks → stake multiplier={multiplier:.2f}"
+                    f"{len(recent)} picks -> stake multiplier={multiplier:.2f}"
                 )
                 return round(multiplier, 2)
 
