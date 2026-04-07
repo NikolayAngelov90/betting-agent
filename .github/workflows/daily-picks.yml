@@ -34,6 +34,14 @@ jobs:
           restore-keys: |
             betting-models-
 
+      - name: Restore camoufox binary cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local/share/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            camoufox-${{ runner.os }}-
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -60,7 +68,10 @@ jobs:
           python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
 
       - name: Download camoufox Firefox binary
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m camoufox fetch
+        continue-on-error: true
 
       - name: Create directories
         run: mkdir -p data/models logs
@@ -141,6 +152,13 @@ jobs:
             data/models/
             data/historical_load_cache.json
           key: betting-models-${{ github.run_number }}
+
+      - name: Save camoufox binary cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.local/share/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
 
       - name: Upload logs on failure
         if: failure()
