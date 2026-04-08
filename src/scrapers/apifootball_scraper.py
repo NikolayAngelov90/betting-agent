@@ -95,6 +95,9 @@ TEAM_NAME_ALIASES: Dict[str, str] = {
     # Greece
     "Olympiakos Piraeus": "Olympiakos",
     "Panathinaikos": "Panathinaikos",
+    "Larisa": "AEL Larissa",
+    "AEL Larissa FC": "AEL Larissa",
+    "Larissa": "AEL Larissa",
     # Turkey
     "Galatasaray": "Galatasaray",
     "Fenerbahce": "Fenerbahce",
