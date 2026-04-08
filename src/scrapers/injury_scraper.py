@@ -95,6 +95,9 @@ class InjuryScraper:
         for match_id, fixture_id, home_team_id, away_team_id in fixture_list:
             if fetched >= injury_budget:
                 break
+            if self.apifootball._plan_restricted:
+                logger.debug("Skipping injury fetch — API-Football plan restriction active")
+                break
             try:
                 count = await self._fetch_fixture_injuries(
                     fixture_id, home_team_id, away_team_id
@@ -109,7 +112,7 @@ class InjuryScraper:
         # Team-level fallback: fixture endpoint returns nothing for lower leagues.
         # Try /injuries?team={id}&season=YEAR for each team that had 0 injuries.
         # Each team costs 1 request; cap total fallback to leave budget for picks.
-        if zero_injury_fixtures and self.apifootball.remaining_budget() > 0:
+        if zero_injury_fixtures and self.apifootball.remaining_budget() > 0 and not self.apifootball._plan_restricted:
             current_year = date.today().year
             team_budget = min(self.apifootball.remaining_budget(), len(zero_injury_fixtures) * 2, 10)
             team_fetched = 0

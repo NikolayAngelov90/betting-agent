@@ -37,7 +37,7 @@ jobs:
       - name: Restore camoufox binary cache
         uses: actions/cache/restore@v4
         with:
-          path: ~/.local/share/camoufox
+          path: ~/.cache/camoufox
           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             camoufox-${{ runner.os }}-
@@ -104,7 +104,7 @@ jobs:
 
       - name: Retrain ML models (if stale)
         run: python -m src.agent.betting_agent --train
-        timeout-minutes: 20
+        timeout-minutes: 30
         continue-on-error: true
 
       - name: Check DB health
@@ -130,7 +130,7 @@ jobs:
       - name: Scrape Flashscore results for all leagues (post-picks)
         if: always()
         run: python -m src.agent.betting_agent --update-results
-        timeout-minutes: 30
+        timeout-minutes: 45
         continue-on-error: true
 
       - name: Send weekly performance report (Sundays only)
@@ -157,7 +157,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ~/.local/share/camoufox
+          path: ~/.cache/camoufox
           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
 
       - name: Upload logs on failure

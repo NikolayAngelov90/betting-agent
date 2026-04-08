@@ -353,10 +353,10 @@ class FootballBettingAgent:
         # Free tier: 500 credits/month (~1 credit/league call). Only calls leagues
         # that actually have fixtures today to minimise credit burn.
         try:
-            theodds_written = await asyncio.wait_for(self.theodds.update(), timeout=120)
+            theodds_written = await asyncio.wait_for(self.theodds.update(), timeout=240)
             logger.info(f"The Odds API update complete: {theodds_written} odds rows written")
         except asyncio.TimeoutError:
-            logger.warning("The Odds API update timed out after 2 minutes")
+            logger.warning("The Odds API update timed out after 4 minutes")
         except Exception as e:
             logger.warning(f"The Odds API update failed (non-critical): {e}")
 
@@ -1014,12 +1014,12 @@ class FootballBettingAgent:
             logger.info(f"Saved {len(new_picks)} new picks to database (skipped {len(picks) - len(new_picks)} duplicates)")
         return new_picks
 
-    async def scrape_results(self, budget_seconds: int = 1500):
+    async def scrape_results(self, budget_seconds: int = 2400):
         """Scrape Flashscore results for all configured leagues.
 
         Intended to run as a separate CI step AFTER picks so the time-critical
         fixtures/odds/picks path is not blocked.  Covers all 27 leagues with a
-        25-minute budget (~55s/league), giving the ensemble full historical
+        40-minute budget (~88s/league), giving the ensemble full historical
         coverage for tomorrow's predictions.
         """
         import time as _timer
@@ -1063,8 +1063,8 @@ class FootballBettingAgent:
                 try:
                     await asyncio.wait_for(
                         self.scraper.scrape_league_results(league, skip_stats=True),
-                        timeout=60,
-                    )
+                        timeout=600,  # 10 min — Chrome scraping is blocking so asyncio timeout
+                    )                # is a last-resort guard, not a strict per-league cap
                     self._mark_league_scraped(league)
                     scraped += 1
                 except asyncio.TimeoutError:
@@ -1672,7 +1672,7 @@ class FootballBettingAgent:
         # Build feature matrix and labels — process in parallel batches
         # Hard time budget prevents ML training from blowing the CI timeout.
         import time as _timer
-        _ML_TRAIN_BUDGET_S = 780  # 13 minutes (fits in 15-min CI step timeout)
+        _ML_TRAIN_BUDGET_S = 1200  # 20 minutes (fits in 30-min CI step timeout)
         _ml_deadline = _timer.monotonic() + _ML_TRAIN_BUDGET_S
 
         # Clear standings cache so monthly-coarsened keys start fresh

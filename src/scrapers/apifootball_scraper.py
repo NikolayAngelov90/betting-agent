@@ -367,6 +367,7 @@ class APIFootballScraper(BaseScraper):
         else:
             self._tracked_league_ids = set(ID_TO_LEAGUE.keys())
         self._quota_exhausted = False  # Set True on first quota error; skips all further calls
+        self._plan_restricted = False  # Set True on first plan error; skips season-restricted endpoints
         self._logged_unknown_bets: set = set()  # Suppress repeated unknown bet type logs
         self._today_fixture_count = 0  # Updated after _fetch_fixtures_by_date(today)
 
@@ -401,9 +402,10 @@ class APIFootballScraper(BaseScraper):
                     logger.warning("API-Football daily quota exhausted — skipping all further API calls")
                     self._quota_exhausted = True
                 elif "plan" in str(errors).lower():
-                    # Free-tier date/season restriction — warn so it's visible
-                    # in CI INFO logs (helps diagnose wasted budget on backfill)
-                    logger.warning(f"API-Football plan restriction: {errors}")
+                    # Free-tier season restriction — skip all further restricted calls
+                    if not self._plan_restricted:
+                        logger.warning(f"API-Football plan restriction: {errors} — skipping further restricted endpoints")
+                        self._plan_restricted = True
                 else:
                     logger.error(f"API-Football errors: {errors}")
                 return None
