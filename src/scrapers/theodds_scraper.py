@@ -83,6 +83,7 @@ def _team_names_similar(name_a: str, name_b: str) -> bool:
         return True
 
     _ALIASES: Dict[str, str] = {
+        # England
         "man city": "manchester city",
         "man united": "manchester united",
         "man utd": "manchester united",
@@ -96,19 +97,92 @@ def _team_names_similar(name_a: str, name_b: str) -> bool:
         "brighton": "brighton & hove albion",
         "brighton hove albion": "brighton & hove albion",
         "sheffield utd": "sheffield united",
-        "sheffield wednesday": "sheffield wednesday",
-        "brentford": "brentford",
+        "nottingham": "nottingham forest",
+        "nott'm forest": "nottingham forest",
+        "nott'm f": "nottingham forest",
+        # Spain
         "ath bilbao": "athletic bilbao",
         "ath madrid": "atletico madrid",
         "atl. madrid": "atletico madrid",
         "atl madrid": "atletico madrid",
+        "atletico de madrid": "atletico madrid",
+        "real betis balompie": "real betis",
+        "rcd espanyol": "espanyol",
+        "deportivo alaves": "alaves",
+        # Italy
+        "inter milan": "inter",
+        "internazionale": "inter",
+        "internazionale milano": "inter",
+        "ac milan": "milan",
+        "juventus fc": "juventus",
+        "as roma": "roma",
+        "ss lazio": "lazio",
+        "acf fiorentina": "fiorentina",
+        "hellas verona": "verona",
+        # Germany
+        "borussia m'gladbach": "borussia monchengladbach",
+        "m'gladbach": "monchengladbach",
+        "bayer leverkusen": "leverkusen",
+        "hertha bsc": "hertha",
+        "vfb stuttgart": "stuttgart",
+        "tsg hoffenheim": "hoffenheim",
+        "sc freiburg": "freiburg",
+        "rb leipzig": "leipzig",
+        "eintracht frankfurt": "frankfurt",
+        "1. fc koln": "koln",
+        "1. fc union berlin": "union berlin",
+        "sv werder bremen": "werder bremen",
+        # France
         "paris sg": "paris saint-germain",
         "psg": "paris saint-germain",
+        "paris saint germain": "paris saint-germain",
+        "olympique de marseille": "marseille",
+        "olympique lyonnais": "lyon",
+        "as monaco fc": "monaco",
+        "ogc nice": "nice",
+        "stade rennais": "rennes",
+        "stade brestois": "brest",
+        "stade de reims": "reims",
+        # Netherlands
+        "psv eindhoven": "psv",
+        "ajax amsterdam": "ajax",
+        "az alkmaar": "az",
+        "feyenoord rotterdam": "feyenoord",
+        "fc twente": "twente",
+        "sc heerenveen": "heerenveen",
+        # Portugal
+        "sporting cp": "sporting",
+        "sporting clube de portugal": "sporting",
+        "sl benfica": "benfica",
+        "fc porto": "porto",
+        "sc braga": "braga",
+        # Turkey
+        "galatasaray sk": "galatasaray",
+        "fenerbahce sk": "fenerbahce",
+        "besiktas jk": "besiktas",
+        "trabzonspor as": "trabzonspor",
+        # Greece
         "olympiakos": "olympiacos piraeus",
         "olympiacos": "olympiacos piraeus",
         "olympiakos piraeus": "olympiacos piraeus",
+        "paok salonika": "paok",
+        "paok thessaloniki": "paok",
+        # Romania
         "din. bucuresti": "dinamo bucuresti",
         "din bucuresti": "dinamo bucuresti",
+        "fcsb": "steaua bucuresti",
+        "fc steaua bucuresti": "steaua bucuresti",
+        # European cups (common TheOdds API variants)
+        "rb salzburg": "salzburg",
+        "red bull salzburg": "salzburg",
+        "shakhtar donetsk": "shakhtar",
+        "bsc young boys": "young boys",
+        "fc celtic": "celtic",
+        "celtic fc": "celtic",
+        "rangers fc": "rangers",
+        "sporting lisbon": "sporting",
+        "benfica": "benfica",
+        "porto": "porto",
     }
 
     def _strip_accents(s: str) -> str:
@@ -421,6 +495,7 @@ class TheOddsScraper:
         total_written = 0
         matched_games = 0
         unmatched_games = 0
+        unmatched_details: List[str] = []  # collect for single WARNING summary
 
         for league in leagues:
             sport_key = LEAGUE_TO_THEODDS_SPORT[league]
@@ -433,6 +508,7 @@ class TheOddsScraper:
             if not games:
                 continue
 
+            league_unmatched = 0
             saved_match_ids: List[str] = []
             for game in games:
                 api_home = game.get("home_team", "")
@@ -441,10 +517,8 @@ class TheOddsScraper:
 
                 if match_id is None:
                     unmatched_games += 1
-                    logger.debug(
-                        f"TheOddsAPI: no DB match for '{api_home} vs {api_away}' "
-                        f"in '{league}'"
-                    )
+                    league_unmatched += 1
+                    unmatched_details.append(f"  [{league}] '{api_home}' vs '{api_away}'")
                     continue
 
                 matched_games += 1
@@ -455,9 +529,17 @@ class TheOddsScraper:
                     f"{n} odds rows written"
                 )
 
+            if league_unmatched:
+                logger.debug(f"TheOddsAPI: {league_unmatched} unmatched in '{league}'")
+
         logger.info(
             f"TheOddsAPI update complete: {total_written} odds rows written, "
             f"{matched_games} games matched, {unmatched_games} unmatched "
             f"(credits remaining: {self._remaining_requests})"
         )
+        if unmatched_details:
+            logger.warning(
+                f"TheOddsAPI: {unmatched_games} games could not be matched to DB fixtures "
+                f"(team name mismatch) — add aliases to fix:\n" + "\n".join(unmatched_details)
+            )
         return total_written

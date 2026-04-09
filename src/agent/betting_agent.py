@@ -1014,13 +1014,19 @@ class FootballBettingAgent:
             logger.info(f"Saved {len(new_picks)} new picks to database (skipped {len(picks) - len(new_picks)} duplicates)")
         return new_picks
 
-    async def scrape_results(self, budget_seconds: int = 2400):
+    async def scrape_results(self, budget_seconds: int = 2880):
         """Scrape Flashscore results for all configured leagues.
 
         Intended to run as a separate CI step AFTER picks so the time-critical
-        fixtures/odds/picks path is not blocked.  Covers all 27 leagues with a
-        40-minute budget (~88s/league), giving the ensemble full historical
-        coverage for tomorrow's predictions.
+        fixtures/odds/picks path is not blocked.  Covers all leagues with a
+        48-minute budget, giving the ensemble full historical coverage for
+        tomorrow's predictions.
+
+        Ordering:
+          1. Leagues with unsettled picks (settlement-critical)
+          2. All remaining domestic/mid-size leagues
+          3. Large slow tournaments (UCL/UEL/ECL) last — these have the most
+             match rows and consistently take 3-5 min each in CI
         """
         import time as _timer
 
@@ -1043,15 +1049,29 @@ class FootballBettingAgent:
         except Exception:
             pass
 
+        # Deprioritize large tournaments within _rest: they have the most rows
+        # and take 3-5 min each, crowding out faster domestic leagues.
+        # Only applies when they have NO pending picks (if they do, they're priority).
+        _SLOW_LEAGUES = {
+            "europe/champions-league",
+            "europe/europa-league",
+            "europe/europa-conference-league",
+        }
         _priority = [l for l in leagues if l in _pending_leagues]
-        _rest = [l for l in leagues if l not in _pending_leagues]
-        _ordered = _priority + _rest
+        _rest_normal = [l for l in leagues if l not in _pending_leagues and l not in _SLOW_LEAGUES]
+        _rest_slow   = [l for l in leagues if l not in _pending_leagues and l in _SLOW_LEAGUES]
+        _ordered = _priority + _rest_normal + _rest_slow
+
+        if _priority:
+            logger.info(f"scrape_results priority order: {len(_priority)} pending-pick leagues first, "
+                        f"{len(_rest_slow)} slow tournaments last")
 
         scraped, skipped = 0, 0
         deadline = _timer.monotonic() + budget_seconds
         try:
             for league in _ordered:
-                if _timer.monotonic() > deadline:
+                remaining_s = deadline - _timer.monotonic()
+                if remaining_s <= 0:
                     logger.warning(
                         f"Flashscore results budget exhausted after {budget_seconds}s, "
                         f"{len(_ordered) - scraped - skipped} leagues not reached"
@@ -1060,15 +1080,24 @@ class FootballBettingAgent:
                 if league in _recently_scraped:
                     skipped += 1
                     continue
+                _league_start = _timer.monotonic()
                 try:
                     await asyncio.wait_for(
                         self.scraper.scrape_league_results(league, skip_stats=True),
-                        timeout=600,  # 10 min — Chrome scraping is blocking so asyncio timeout
-                    )                # is a last-resort guard, not a strict per-league cap
+                        timeout=300,  # 5 min hard cap per league — Chrome is blocking so this
+                    )               # is a last-resort guard; normal scrape is 60-150s
                     self._mark_league_scraped(league)
                     scraped += 1
+                    _elapsed = _timer.monotonic() - _league_start
+                    logger.info(
+                        f"[update-results] {league}: {_elapsed:.0f}s "
+                        f"({deadline - _timer.monotonic():.0f}s budget remaining)"
+                    )
                 except asyncio.TimeoutError:
-                    logger.warning(f"Flashscore results timeout for {league}, continuing")
+                    _elapsed = _timer.monotonic() - _league_start
+                    logger.warning(
+                        f"Flashscore results timeout for {league} after {_elapsed:.0f}s, continuing"
+                    )
                     try:
                         self.scraper.close_driver()
                     except Exception:
@@ -1931,15 +1960,21 @@ class FootballBettingAgent:
                     bonus = min((hit_rate - 0.60) / 0.15, 1.0) * 0.02
                     new_ev = base_ev + bonus
                 elif hit_rate < 0.45:
-                    # Cold streak: loosen — lower min EV to capture more volume
-                    # Scale: 45% → -0pp, 30%- → -1.5pp
-                    penalty = min((0.45 - hit_rate) / 0.15, 1.0) * 0.015
+                    # Cold streak: loosen slightly — lower min EV by at most 0.5pp.
+                    # Capped tightly because loosening on a bad run admits more poor
+                    # bets and accelerates the drawdown. Primary protection is the
+                    # drawdown circuit breaker; EV floor is a secondary guard.
+                    # Scale: 45% → -0pp, 30%- → -0.5pp
+                    penalty = min((0.45 - hit_rate) / 0.15, 1.0) * 0.005
                     new_ev = base_ev - penalty
                 else:
                     new_ev = base_ev  # normal range, keep base
 
-                # Clamp to sane bounds
-                new_ev = max(0.01, min(0.08, round(new_ev, 4)))
+                # Clamp to sane bounds.
+                # Floor = base_ev - 0.5pp to prevent runaway loosening on cold streaks
+                # (previously 0.01 allowed threshold to fall to 1%, far below useful range).
+                ev_floor = max(base_ev - 0.005, 0.01)
+                new_ev = max(ev_floor, min(0.08, round(new_ev, 4)))
 
                 if abs(new_ev - prev_ev) > 0.001:
                     self.value_calculator.min_ev = new_ev
