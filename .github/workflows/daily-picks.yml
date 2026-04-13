@@ -9,7 +9,7 @@ on:
 jobs:
   daily-picks:
     runs-on: ubuntu-latest
-    timeout-minutes: 160
+    timeout-minutes: 170
 
     env:
       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
@@ -104,7 +104,7 @@ jobs:
 
       - name: Retrain ML models (if stale)
         run: python -m src.agent.betting_agent --train
-        timeout-minutes: 30
+        timeout-minutes: 35
         continue-on-error: true
 
       - name: Check DB health
@@ -131,6 +131,12 @@ jobs:
         if: always()
         run: python -m src.agent.betting_agent --update-results
         timeout-minutes: 50
+        continue-on-error: true
+
+      - name: Settle late results (post update-results)
+        if: always()
+        run: python -m src.agent.betting_agent --settle
+        timeout-minutes: 5
         continue-on-error: true
 
       - name: Send weekly performance report (Sundays only)

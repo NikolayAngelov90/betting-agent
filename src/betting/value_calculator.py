@@ -187,6 +187,22 @@ class ValueBettingCalculator:
                 features_dict=context.get("features_dict"),
             )
 
+            # Extra guard: high-EV picks with below-threshold confidence require
+            # unanimous model agreement.  This prevents miscalibrated outliers
+            # (e.g. 49% prob × 3.64 odds = 78% EV) from slipping through — such
+            # combinations typically signal data sparsity or model disagreement,
+            # not a genuine edge. Genuine high-EV bets from confident predictions
+            # will have unanimous support and are unaffected.
+            if prob < self.min_confidence and ev > 0.50:
+                if agreement_info.get("agreement") != "unanimous":
+                    logger.debug(
+                        f"Rejecting {match_name} {selection}: high EV ({ev:.0%}) "
+                        f"but prob {prob:.0%} < min_confidence and agreement="
+                        f"{agreement_info.get('agreement')} (not unanimous)"
+                    )
+                    _reject("high_ev_low_conf_not_unanimous")
+                    continue
+
             # Reject split-model picks that are also below minimum confidence.
             # High EV alone is not sufficient when models disagree AND confidence
             # is weak — this combination typically indicates miscalibration or

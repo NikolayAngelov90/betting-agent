@@ -920,9 +920,17 @@ class FootballBettingAgent:
                     "(drawdown exceeds pause threshold)"
                 )
                 return [], []
+            # Tighten EV threshold proportionally with drawdown severity so
+            # fewer marginal picks pass when we're in a losing run.
+            # Formula: +2pp at full pause threshold (multiplier→0), +0pp at no drawdown.
+            # Example: multiplier=0.55 → +0.9pp (3%→3.9%)
+            dd_ev_boost = round((1.0 - dd_multiplier) * 0.02, 4)
+            tightened_ev = round(self.value_calculator.min_ev + dd_ev_boost, 4)
+            self.value_calculator.min_ev = tightened_ev
             logger.info(
                 f"Drawdown circuit breaker: scaling stakes to "
-                f"{dd_multiplier:.0%} of normal"
+                f"{dd_multiplier:.0%} of normal; "
+                f"tightened EV threshold to {tightened_ev:.1%} (+{dd_ev_boost:.1%})"
             )
             for rec in all_recommendations:
                 rec.kelly_stake_percentage = round(
@@ -1701,7 +1709,7 @@ class FootballBettingAgent:
         # Build feature matrix and labels — process in parallel batches
         # Hard time budget prevents ML training from blowing the CI timeout.
         import time as _timer
-        _ML_TRAIN_BUDGET_S = 1200  # 20 minutes (fits in 30-min CI step timeout)
+        _ML_TRAIN_BUDGET_S = 1440  # 24 minutes (fits in 35-min CI step timeout)
         _ml_deadline = _timer.monotonic() + _ML_TRAIN_BUDGET_S
 
         # Clear standings cache so monthly-coarsened keys start fresh
