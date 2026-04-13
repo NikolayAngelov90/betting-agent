@@ -1186,11 +1186,42 @@ class FootballBettingAgent:
                 SavedPick.result.is_(None),
             ).all()
 
-            if not pending:
+            # Also re-evaluate recently settled picks where the stored score
+            # differs from the current match score — catches cases where the
+            # scraper first captured a live/partial score, settled the pick,
+            # and a later scrape wrote the correct final score.
+            from datetime import timedelta as _td2
+            correction_window = utcnow() - _td2(days=3)
+            already_settled = (
+                session.query(SavedPick)
+                .filter(
+                    SavedPick.result.isnot(None),
+                    SavedPick.settled_at >= correction_window,
+                    SavedPick.actual_home_goals.isnot(None),
+                )
+                .all()
+            )
+            needs_correction = []
+            for sp in already_settled:
+                m = session.get(Match, sp.match_id)
+                if (m and m.home_goals is not None
+                        and (m.home_goals != sp.actual_home_goals
+                             or m.away_goals != sp.actual_away_goals)):
+                    logger.warning(
+                        f"Score mismatch on settled pick ID={sp.id} "
+                        f"({sp.match_name} {sp.selection}): "
+                        f"settled with {sp.actual_home_goals}-{sp.actual_away_goals}, "
+                        f"match now shows {m.home_goals}-{m.away_goals} — re-settling"
+                    )
+                    needs_correction.append(sp)
+            # Combine: pending first, then corrections
+            all_picks_to_process = list(pending) + needs_correction
+
+            if not all_picks_to_process:
                 logger.info("No pending picks to settle")
                 return settled
 
-            for pick in pending:
+            for pick in all_picks_to_process:
                 match = session.get(Match, pick.match_id)
 
                 # Skip picks for matches that haven't started yet — the match record

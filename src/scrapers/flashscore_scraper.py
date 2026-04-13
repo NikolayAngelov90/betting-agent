@@ -1730,10 +1730,25 @@ class FlashscoreScraper(BaseScraper):
 
         def _apply_update(existing):
             """Sync mutable fields onto an existing Match record."""
-            if existing.is_fixture and not is_fixture and "home_goals" in match_data:
-                existing.home_goals = match_data.get("home_goals")
-                existing.away_goals = match_data.get("away_goals")
-                existing.is_fixture = False
+            new_hg = match_data.get("home_goals")
+            new_ag = match_data.get("away_goals")
+            if "home_goals" in match_data and new_hg is not None and not is_fixture:
+                if existing.is_fixture:
+                    # Normal fixture → result transition
+                    existing.home_goals = new_hg
+                    existing.away_goals = new_ag
+                    existing.is_fixture = False
+                elif existing.home_goals != new_hg or existing.away_goals != new_ag:
+                    # Score correction: a previous scrape stored a wrong/partial score
+                    # (e.g. live mid-match score). Overwrite with the latest value and
+                    # log so it can be investigated.
+                    logger.warning(
+                        f"Score correction for match id={existing.id} "
+                        f"({match_data.get('home_team')} vs {match_data.get('away_team')}): "
+                        f"{existing.home_goals}-{existing.away_goals} → {new_hg}-{new_ag}"
+                    )
+                    existing.home_goals = new_hg
+                    existing.away_goals = new_ag
             if not existing.flashscore_id and match_data.get("flashscore_id"):
                 existing.flashscore_id = match_data["flashscore_id"]
             return existing
