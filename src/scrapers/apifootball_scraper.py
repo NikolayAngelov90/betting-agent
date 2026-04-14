@@ -405,9 +405,14 @@ class APIFootballScraper(BaseScraper):
                     logger.warning("API-Football daily quota exhausted — skipping all further API calls")
                     self._quota_exhausted = True
                 elif "plan" in str(errors).lower():
-                    # Free-tier season restriction — skip all further restricted calls
+                    # Free-tier season restriction (expected on free plan — not an error).
+                    # Logs once at INFO level so it's visible but not alarming.
                     if not self._plan_restricted:
-                        logger.warning(f"API-Football plan restriction: {errors} — skipping further restricted endpoints")
+                        logger.info(
+                            "API-Football free-plan: current season stats unavailable "
+                            "(plan allows 2022-2024 only). "
+                            "Skipping restricted endpoints for this run."
+                        )
                         self._plan_restricted = True
                 else:
                     logger.error(f"API-Football errors: {errors}")
@@ -652,6 +657,11 @@ class APIFootballScraper(BaseScraper):
             return
 
         from sqlalchemy import or_
+        # API-Football free plan only allows stats for seasons up to 2024.
+        # The 2025/2026 season starts July 2025 — any fixture on or after that
+        # date returns a plan-restriction error, wasting a quota request.
+        # Cap the upper bound to June 30 2025 so we only backfill allowed data.
+        _FREE_PLAN_SEASON_CUTOFF = datetime(2025, 7, 1)
         with self.db.get_session() as session:
             cutoff = datetime.utcnow() - timedelta(days=days_back)
             matches = session.query(Match).filter(
@@ -659,6 +669,7 @@ class APIFootballScraper(BaseScraper):
                 Match.home_goals.isnot(None),
                 Match.apifootball_id.isnot(None),
                 Match.match_date >= cutoff,
+                Match.match_date < _FREE_PLAN_SEASON_CUTOFF,
                 or_(Match.home_xg.is_(None), Match.home_shots.is_(None)),
             ).order_by(Match.match_date.desc()).limit(xg_budget).all()
 

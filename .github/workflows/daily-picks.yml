@@ -35,6 +35,7 @@ jobs:
             betting-models-
 
       - name: Restore camoufox binary cache
+        id: restore-camoufox
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/camoufox
@@ -160,7 +161,7 @@ jobs:
           key: betting-models-${{ github.run_number }}
 
       - name: Save camoufox binary cache
-        if: always()
+        if: always() && steps.restore-camoufox.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.cache/camoufox
