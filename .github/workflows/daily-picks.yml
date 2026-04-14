@@ -9,7 +9,7 @@ on:
 jobs:
   daily-picks:
     runs-on: ubuntu-latest
-    timeout-minutes: 170
+    timeout-minutes: 180
 
     env:
       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
@@ -130,7 +130,7 @@ jobs:
       - name: Scrape Flashscore results for all leagues (post-picks)
         if: always()
         run: python -m src.agent.betting_agent --update-results
-        timeout-minutes: 50
+        timeout-minutes: 60
         continue-on-error: true
 
       - name: Settle late results (post update-results)

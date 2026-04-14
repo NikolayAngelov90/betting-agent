@@ -353,7 +353,7 @@ class FootballBettingAgent:
         # Free tier: 500 credits/month (~1 credit/league call). Only calls leagues
         # that actually have fixtures today to minimise credit burn.
         try:
-            theodds_written = await asyncio.wait_for(self.theodds.update(), timeout=240)
+            theodds_written = await asyncio.wait_for(self.theodds.update(), timeout=300)
             logger.info(f"The Odds API update complete: {theodds_written} odds rows written")
         except asyncio.TimeoutError:
             logger.warning("The Odds API update timed out after 4 minutes")
@@ -964,7 +964,11 @@ class FootballBettingAgent:
                 )
                 all_recommendations = capped
 
-        logger.info(f"Found {len(all_recommendations)} high-confidence picks for {target}")
+        logger.info(
+            f"Found {len(all_recommendations)} high-confidence picks for {target} "
+            f"(EV threshold: {self.value_calculator.min_ev:.1%}, "
+            f"dd_multiplier: {dd_multiplier:.2f})"
+        )
 
         # Save picks; get back only the ones new this run (for Telegram deduplication)
         new_picks = self._save_picks(all_recommendations, target)
@@ -1022,7 +1026,7 @@ class FootballBettingAgent:
             logger.info(f"Saved {len(new_picks)} new picks to database (skipped {len(picks) - len(new_picks)} duplicates)")
         return new_picks
 
-    async def scrape_results(self, budget_seconds: int = 2880):
+    async def scrape_results(self, budget_seconds: int = 3300):
         """Scrape Flashscore results for all configured leagues.
 
         Intended to run as a separate CI step AFTER picks so the time-critical
@@ -1088,12 +1092,17 @@ class FootballBettingAgent:
                 if league in _recently_scraped:
                     skipped += 1
                     continue
+                # Slow cup competitions (UCL/UEL/ECL) render 100+ rows on the
+                # first page even without load_more, making Chrome take 3-5 min.
+                # Cap them at 150s so Chrome thread cleanup fits in the budget.
+                # Normal leagues are capped at 280s (generous for slow CI days).
+                _per_league_cap = 150 if league in _SLOW_LEAGUES else 280
                 _league_start = _timer.monotonic()
                 try:
                     await asyncio.wait_for(
                         self.scraper.scrape_league_results(league, skip_stats=True),
-                        timeout=300,  # 5 min hard cap per league — Chrome is blocking so this
-                    )               # is a last-resort guard; normal scrape is 60-150s
+                        timeout=_per_league_cap,
+                    )
                     self._mark_league_scraped(league)
                     scraped += 1
                     _elapsed = _timer.monotonic() - _league_start
@@ -1104,7 +1113,8 @@ class FootballBettingAgent:
                 except asyncio.TimeoutError:
                     _elapsed = _timer.monotonic() - _league_start
                     logger.warning(
-                        f"Flashscore results timeout for {league} after {_elapsed:.0f}s, continuing"
+                        f"Flashscore results timeout for {league} after {_elapsed:.0f}s "
+                        f"(cap={_per_league_cap}s), continuing"
                     )
                     try:
                         self.scraper.close_driver()
