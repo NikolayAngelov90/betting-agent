@@ -2,8 +2,8 @@ name: Daily Betting Picks
 
 on:
   schedule:
-    # Scheduled at 06:30 UTC → ~09:30 Kyiv summer (UTC+3) / ~08:30 Kyiv winter (UTC+2)
-    # - cron: '30 06 * * *'
+    # 06:00 UTC = 09:00 Kyiv summer (UTC+3)
+    - cron: '0 6 * * *'
   workflow_dispatch: # Allow manual trigger
 
 jobs:
