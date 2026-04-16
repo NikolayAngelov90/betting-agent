@@ -510,15 +510,36 @@ class TheOddsScraper:
 
             league_unmatched = 0
             saved_match_ids: List[str] = []
+            today_start = datetime.combine(date.today(), datetime.min.time())
+            today_end = today_start + timedelta(days=1)
             for game in games:
                 api_home = game.get("home_team", "")
                 api_away = game.get("away_team", "")
+
+                # TheOdds API returns ALL upcoming games for the league, not just
+                # today's.  Only attempt to match — and count as unmatched — games
+                # whose commence_time falls today; future/past games are expected
+                # to have no DB fixture and should be silently skipped.
+                commence_raw = game.get("commence_time", "")
+                is_today = False
+                if commence_raw:
+                    try:
+                        from datetime import timezone as _tz
+                        ct = datetime.fromisoformat(commence_raw.replace("Z", "+00:00"))
+                        ct_naive = ct.astimezone(_tz.utc).replace(tzinfo=None)
+                        is_today = today_start <= ct_naive < today_end
+                    except Exception:
+                        is_today = True  # parse failure → assume today, let matching handle it
+
                 match_id = self._find_matching_fixture(api_home, api_away, db_fixtures)
 
                 if match_id is None:
-                    unmatched_games += 1
-                    league_unmatched += 1
-                    unmatched_details.append(f"  [{league}] '{api_home}' vs '{api_away}'")
+                    if is_today:
+                        # A today-game we couldn't match → likely a real alias gap
+                        unmatched_games += 1
+                        league_unmatched += 1
+                        unmatched_details.append(f"  [{league}] '{api_home}' vs '{api_away}'")
+                    # else: future/past game — silently skip, not a problem
                     continue
 
                 matched_games += 1

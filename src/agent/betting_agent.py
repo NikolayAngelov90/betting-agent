@@ -1061,13 +1061,17 @@ class FootballBettingAgent:
         except Exception:
             pass
 
-        # Deprioritize large tournaments within _rest: they have the most rows
-        # and take 3-5 min each, crowding out faster domestic leagues.
-        # Only applies when they have NO pending picks (if they do, they're priority).
+        # Leagues that consistently render 100-400+ rows on the first page and
+        # take 3-7 min per run in CI.  Deprioritized to end of queue (when no
+        # pending picks) AND given a higher minimum-budget gate so they are
+        # skipped rather than started when remaining budget is too low to finish.
+        # Austria/Denmark added after run #93 showed them at 367s/408s.
         _SLOW_LEAGUES = {
             "europe/champions-league",
             "europe/europa-league",
             "europe/europa-conference-league",
+            "austria/bundesliga",
+            "denmark/superliga",
         }
         _priority = [l for l in leagues if l in _pending_leagues]
         _rest_normal = [l for l in leagues if l not in _pending_leagues and l not in _SLOW_LEAGUES]
@@ -1078,25 +1082,36 @@ class FootballBettingAgent:
             logger.info(f"scrape_results priority order: {len(_priority)} pending-pick leagues first, "
                         f"{len(_rest_slow)} slow tournaments last")
 
+        # Minimum budget required before even attempting a league.
+        # Slow leagues (400-500s typical) need more runway or they'll breach
+        # the CI step wall.  Normal leagues need ~150s for Chrome spin-up.
+        # If remaining budget is below the gate, skip rather than start.
+        _MIN_BUDGET = {
+            "slow": 550,   # slow leagues: 500s typical + 50s safety margin
+            "normal": 150, # normal leagues: ~80s typical + 70s safety margin
+        }
+
         scraped, skipped = 0, 0
         deadline = _timer.monotonic() + budget_seconds
+        loop = asyncio.get_event_loop()
         try:
             for league in _ordered:
                 remaining_s = deadline - _timer.monotonic()
-                if remaining_s <= 0:
+                min_needed = _MIN_BUDGET["slow"] if league in _SLOW_LEAGUES else _MIN_BUDGET["normal"]
+                if remaining_s < min_needed:
                     logger.warning(
-                        f"Flashscore results budget exhausted after {budget_seconds}s, "
+                        f"Skipping {league}: only {remaining_s:.0f}s budget left "
+                        f"(needs ≥{min_needed}s) — "
                         f"{len(_ordered) - scraped - skipped} leagues not reached"
                     )
                     break
                 if league in _recently_scraped:
                     skipped += 1
                     continue
-                # Slow cup competitions (UCL/UEL/ECL) render 100+ rows on the
-                # first page even without load_more, making Chrome take 3-5 min.
-                # Cap them at 150s so Chrome thread cleanup fits in the budget.
-                # Normal leagues are capped at 280s (generous for slow CI days).
-                _per_league_cap = 150 if league in _SLOW_LEAGUES else 280
+                # asyncio.wait_for is a best-effort guard; with run_in_executor
+                # the Chrome thread may outlive the asyncio timeout.
+                # The real protection is the budget gate above.
+                _per_league_cap = 450 if league in _SLOW_LEAGUES else 280
                 _league_start = _timer.monotonic()
                 try:
                     await asyncio.wait_for(
@@ -1116,15 +1131,23 @@ class FootballBettingAgent:
                         f"Flashscore results timeout for {league} after {_elapsed:.0f}s "
                         f"(cap={_per_league_cap}s), continuing"
                     )
+                    # Run close_driver in an executor so it can't block the event loop
+                    # (driver.quit() and camoufox teardown can themselves take 30-60s).
                     try:
-                        self.scraper.close_driver()
+                        await asyncio.wait_for(
+                            loop.run_in_executor(None, self.scraper.close_driver),
+                            timeout=30,
+                        )
                     except Exception:
                         pass
                 except Exception as e:
                     logger.debug(f"Flashscore results error for {league}: {e}")
         finally:
             try:
-                self.scraper.close_driver()
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, self.scraper.close_driver),
+                    timeout=30,
+                )
             except Exception:
                 pass
 

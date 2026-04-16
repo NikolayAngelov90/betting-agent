@@ -546,6 +546,18 @@ class APIFootballScraper(BaseScraper):
                     with self.db.get_session() as session:
                         match = session.get(Match, match_id)
                         if match:
+                            # Guard: if the existing score differs from what
+                            # API-Football reports, log it so oscillations between
+                            # data sources (e.g. Flashscore corrected → API-Football
+                            # reverts) are visible and can be investigated.
+                            if (match.home_goals is not None
+                                    and (match.home_goals != home_goals
+                                         or match.away_goals != away_goals)):
+                                logger.warning(
+                                    f"API-Football score differs from DB for match "
+                                    f"id={match_id}: DB={match.home_goals}-{match.away_goals} "
+                                    f"API={home_goals}-{away_goals} — keeping API value"
+                                )
                             match.home_goals = home_goals
                             match.away_goals = away_goals
                             match.is_fixture = False
