@@ -356,7 +356,7 @@ class FootballBettingAgent:
             theodds_written = await asyncio.wait_for(self.theodds.update(), timeout=300)
             logger.info(f"The Odds API update complete: {theodds_written} odds rows written")
         except asyncio.TimeoutError:
-            logger.warning("The Odds API update timed out after 4 minutes")
+            logger.warning("The Odds API update timed out after 5 minutes")
         except Exception as e:
             logger.warning(f"The Odds API update failed (non-critical): {e}")
 
@@ -1112,10 +1112,18 @@ class FootballBettingAgent:
                 # the Chrome thread may outlive the asyncio timeout.
                 # The real protection is the budget gate above.
                 _per_league_cap = 450 if league in _SLOW_LEAGUES else 280
+                # Slow tournaments (UCL/UEL/ECL/Austria/Denmark) can return 100+
+                # results.  The synchronous DB upsert loop has no await points so
+                # asyncio.wait_for cannot interrupt it mid-loop.  Limiting to the
+                # 25 most-recent matches keeps wall time under ~180s even on high-
+                # latency Neon days (25 × ~7s = ~175s).
+                _max_results = 25 if league in _SLOW_LEAGUES else None
                 _league_start = _timer.monotonic()
                 try:
                     await asyncio.wait_for(
-                        self.scraper.scrape_league_results(league, skip_stats=True),
+                        self.scraper.scrape_league_results(
+                            league, skip_stats=True, max_results=_max_results
+                        ),
                         timeout=_per_league_cap,
                     )
                     self._mark_league_scraped(league)

@@ -546,20 +546,23 @@ class APIFootballScraper(BaseScraper):
                     with self.db.get_session() as session:
                         match = session.get(Match, match_id)
                         if match:
-                            # Guard: if the existing score differs from what
-                            # API-Football reports, log it so oscillations between
-                            # data sources (e.g. Flashscore corrected → API-Football
-                            # reverts) are visible and can be investigated.
+                            # If the DB already has a Flashscore-verified score
+                            # (flashscore_id is set), trust Flashscore over
+                            # API-Football to stop the oscillation where AF reverts
+                            # a corrected score every run.
                             if (match.home_goals is not None
+                                    and match.flashscore_id
                                     and (match.home_goals != home_goals
                                          or match.away_goals != away_goals)):
-                                logger.warning(
-                                    f"API-Football score differs from DB for match "
-                                    f"id={match_id}: DB={match.home_goals}-{match.away_goals} "
-                                    f"API={home_goals}-{away_goals} — keeping API value"
+                                logger.info(
+                                    f"API-Football score differs from Flashscore-verified "
+                                    f"DB for match id={match_id}: "
+                                    f"DB(FS)={match.home_goals}-{match.away_goals} "
+                                    f"API={home_goals}-{away_goals} — keeping Flashscore value"
                                 )
-                            match.home_goals = home_goals
-                            match.away_goals = away_goals
+                            else:
+                                match.home_goals = home_goals
+                                match.away_goals = away_goals
                             match.is_fixture = False
                             if referee and not match.referee:
                                 match.referee = referee
@@ -602,8 +605,13 @@ class APIFootballScraper(BaseScraper):
                         if referee and not match.referee:
                             match.referee = referee
                         if is_finished and home_goals is not None:
-                            match.home_goals = home_goals
-                            match.away_goals = away_goals
+                            # Prefer Flashscore-verified score over API-Football
+                            if not (match.home_goals is not None
+                                    and match.flashscore_id
+                                    and (match.home_goals != home_goals
+                                         or match.away_goals != away_goals)):
+                                match.home_goals = home_goals
+                                match.away_goals = away_goals
                             match.is_fixture = False
                         session.commit()
                 _afid_to_match_id[fixture_id] = match_id  # warm cache for future use

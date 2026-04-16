@@ -495,7 +495,8 @@ class FlashscoreScraper(BaseScraper):
         logger.info("Flashscore update cycle complete")
 
     async def scrape_league_results(self, league: str, num_pages: int = 1,
-                                    skip_stats: bool = False):
+                                    skip_stats: bool = False,
+                                    max_results: int = None):
         """Scrape recent match results for a league.
 
         After saving basic scores, fetches extended statistics (shots, possession,
@@ -507,6 +508,10 @@ class FlashscoreScraper(BaseScraper):
             skip_stats: When True, skip the per-match detail page enrichment.
                         Scores are still saved; only extended stats are omitted.
                         Use in time-sensitive contexts (e.g. daily_update).
+            max_results: When set, only the first N scraped matches are persisted
+                         to the DB.  Use for slow tournaments (UCL/UEL/ECL) where
+                         Flashscore returns 100+ rows and the synchronous DB upsert
+                         loop can run for 800+ seconds on high-latency Neon days.
         """
         url = f"{FLASHSCORE_BASE_URL}/football/{league}/results/"
         logger.info(f"Scraping results: {league}")
@@ -518,6 +523,16 @@ class FlashscoreScraper(BaseScraper):
         matches = await loop.run_in_executor(
             None, self._scrape_results_page, url, not skip_stats
         )
+
+        # Limit DB writes for slow/large leagues to prevent the synchronous upsert
+        # loop from consuming the entire CI budget.  Most-recent results come first
+        # from Flashscore, so slicing keeps the freshest data.
+        if max_results is not None and len(matches) > max_results:
+            logger.info(
+                f"[Flashscore] {league}: {len(matches)} results scraped, "
+                f"limiting DB upsert to most recent {max_results}"
+            )
+            matches = matches[:max_results]
 
         db = get_db()
         # Save basic scores and collect (match_id, match_url, match_date) for
