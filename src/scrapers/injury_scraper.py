@@ -41,9 +41,12 @@ class InjuryScraper:
 
         # Dynamic budget: use remaining requests, capped to fixture count and
         # a configurable max to leave room for targeted backfill after injuries.
-        max_injury = 30
+        # Keep budget at ≤15 so the sequential API+DB loop finishes within
+        # the 5-minute (300s) asyncio timeout.  26 fixtures × ~11s each = ~299s
+        # which always times out; 15 × 11s = ~165s which always completes.
+        max_injury = 15
         if hasattr(self.config, 'get'):
-            max_injury = self.config.get("models.max_injury_budget", 30)
+            max_injury = self.config.get("models.max_injury_budget", 15)
         injury_budget = min(self.apifootball.remaining_budget(), max_injury)
         if injury_budget <= 0:
             logger.debug("No API budget remaining for injuries")

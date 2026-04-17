@@ -1183,6 +1183,14 @@ class APIFootballScraper(BaseScraper):
         count = 0
 
         with self.db.get_session() as session:
+            # Preload all existing Odds rows for this match in one query instead
+            # of one SELECT per row — reduces Neon roundtrips from N_rows to 1.
+            existing_rows = session.query(Odds).filter_by(match_id=match_id).all()
+            existing_index = {
+                (r.bookmaker, r.market_type, r.selection): r
+                for r in existing_rows
+            }
+
             for entry in odds_response:
                 bookmakers = entry.get("bookmakers", [])
                 for bookie in bookmakers:
@@ -1219,14 +1227,8 @@ class APIFootballScraper(BaseScraper):
                             if odds_value <= 1.0:
                                 continue
 
-                            # Skip duplicate
-                            existing = session.query(Odds).filter_by(
-                                match_id=match_id,
-                                bookmaker=bookie_name,
-                                market_type=market_type,
-                                selection=selection,
-                            ).first()
-
+                            key = (bookie_name, market_type, selection)
+                            existing = existing_index.get(key)
                             if existing:
                                 # Update if odds changed; preserve opening_odds
                                 if existing.odds_value != odds_value:
@@ -1245,6 +1247,7 @@ class APIFootballScraper(BaseScraper):
                                 opening_odds=odds_value,
                             )
                             session.add(odds)
+                            existing_index[key] = odds  # prevent re-insert on dup
                             count += 1
 
             session.commit()

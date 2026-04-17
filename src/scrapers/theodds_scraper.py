@@ -6,6 +6,7 @@ in the DB, using https://api.the-odds-api.com/v4.
 Free tier: 500 credits/month (1 credit per league request).
 """
 
+import asyncio
 import os
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Set
@@ -380,8 +381,13 @@ class TheOddsScraper:
                 return fix["match_id"]
         return None
 
-    def _save_game_odds(self, game: Dict, match_id: int, saved: List[str]) -> int:
+    def _save_game_odds(self, game: Dict, match_id: int, saved: List[str],
+                        session=None) -> int:
         """Parse one API game object and upsert odds rows into DB.
+
+        When `session` is provided the caller owns the transaction and is
+        responsible for committing.  When None (legacy), opens its own session
+        and commits once per game (not once per row as before).
 
         Returns count of odds rows written.
         """
@@ -390,20 +396,17 @@ class TheOddsScraper:
         if not bookmakers:
             return 0
 
-        with self.db.get_session() as session:
+        def _process(sess):
+            nonlocal written
             for bm in bookmakers:
                 bm_key = f"{BOOKMAKER_PREFIX}-{bm['key']}"
                 for market in bm.get("markets", []):
                     market_key = market["key"]  # "h2h" or "totals"
 
                     if market_key == "h2h":
-                        # h2h outcomes: [{name: "Team A", price: 2.10}, {name: "Draw", ...}]
-                        outcomes = market.get("outcomes", [])
-                        # Identify which outcome is home / draw / away
                         home_name = game.get("home_team", "")
                         away_name = game.get("away_team", "")
-
-                        for outcome in outcomes:
+                        for outcome in market.get("outcomes", []):
                             oname = outcome.get("name", "")
                             oprice = outcome.get("price")
                             if oprice is None:
@@ -415,24 +418,35 @@ class TheOddsScraper:
                             elif _team_names_similar(oname, away_name):
                                 selection = "Away"
                             else:
-                                continue  # unknown outcome
-
+                                continue
                             written += self._upsert_odds(
-                                session, match_id, bm_key, "1X2", selection, oprice
+                                sess, match_id, bm_key, "1X2", selection, oprice
                             )
 
                     elif market_key == "totals":
-                        # totals outcomes: [{name: "Over", price: 1.8, point: 2.5}, ...]
                         for outcome in market.get("outcomes", []):
-                            direction = outcome.get("name", "")  # "Over" or "Under"
+                            direction = outcome.get("name", "")
                             point = outcome.get("point")
                             oprice = outcome.get("price")
                             if direction not in ("Over", "Under") or point is None or oprice is None:
                                 continue
                             selection = f"{direction} {point}"
                             written += self._upsert_odds(
-                                session, match_id, bm_key, "over_under", selection, oprice
+                                sess, match_id, bm_key, "over_under", selection, oprice
                             )
+
+        if session is not None:
+            _process(session)
+        else:
+            # Legacy path: own session, single commit per game (not per row)
+            with self.db.get_session() as sess:
+                try:
+                    _process(sess)
+                    sess.commit()
+                except Exception as e:
+                    sess.rollback()
+                    logger.debug(f"TheOddsAPI game save failed for match_id={match_id}: {e}")
+                    return 0
 
         return written
 
@@ -445,7 +459,10 @@ class TheOddsScraper:
         selection: str,
         odds_value: float,
     ) -> int:
-        """Insert-or-update a single Odds row. Returns 1 if written, 0 otherwise."""
+        """Insert-or-update a single Odds row. Returns 1 if written, 0 otherwise.
+
+        Does NOT commit — caller is responsible for a single commit per game/league.
+        """
         try:
             existing = (
                 session.query(Odds)
@@ -471,15 +488,19 @@ class TheOddsScraper:
                         opening_odds=odds_value,
                     )
                 )
-            session.commit()
             return 1
         except Exception as e:
-            session.rollback()
             logger.debug(f"TheOddsAPI upsert failed ({bookmaker} / {market_type} / {selection}): {e}")
             return 0
 
     async def update(self) -> int:
         """Fetch odds for all leagues with today's fixtures.
+
+        Performance optimisations vs the old sequential approach:
+        - All HTTP requests are fired concurrently (asyncio.gather).
+        - DB writes use one session per league with a single commit, instead
+          of one session and one commit per odds row (the old hot path had
+          90+ commits per game × 14 leagues = ~1,000+ Neon roundtrips).
 
         Returns total count of odds rows written.
         """
@@ -492,63 +513,90 @@ class TheOddsScraper:
             logger.info("TheOddsAPI: no leagues with today's fixtures — skipping")
             return 0
 
+        # Gather DB fixtures for all leagues up front (sequential — fast, no HTTP)
+        league_fixtures: Dict[str, List[Dict]] = {}
+        for league in leagues:
+            fixtures = self._get_today_fixtures(league)
+            if fixtures:
+                league_fixtures[league] = fixtures
+            else:
+                logger.debug(f"TheOddsAPI: no DB fixtures for '{league}', skipping API call")
+
+        if not league_fixtures:
+            return 0
+
+        # Fire all HTTP requests concurrently — reduces wall time from
+        # 14× single-request latency to ~1× single-request latency.
+        sport_keys = [LEAGUE_TO_THEODDS_SPORT[l] for l in league_fixtures]
+        raw_results = await asyncio.gather(
+            *[self._fetch_league_odds(sk) for sk in sport_keys],
+            return_exceptions=True,
+        )
+        league_games: Dict[str, Optional[List[Dict]]] = {}
+        for league, result in zip(league_fixtures, raw_results):
+            if isinstance(result, Exception):
+                logger.warning(f"TheOddsAPI: fetch failed for '{league}': {result}")
+                league_games[league] = None
+            else:
+                league_games[league] = result
+
         total_written = 0
         matched_games = 0
         unmatched_games = 0
-        unmatched_details: List[str] = []  # collect for single WARNING summary
+        unmatched_details: List[str] = []
 
-        for league in leagues:
-            sport_key = LEAGUE_TO_THEODDS_SPORT[league]
-            db_fixtures = self._get_today_fixtures(league)
-            if not db_fixtures:
-                logger.debug(f"TheOddsAPI: no DB fixtures for '{league}', skipping API call")
-                continue
+        today_start = datetime.combine(date.today(), datetime.min.time())
+        today_end = today_start + timedelta(days=1)
 
-            games = await self._fetch_league_odds(sport_key)
+        for league, games in league_games.items():
             if not games:
                 continue
 
+            db_fixtures = league_fixtures[league]
             league_unmatched = 0
             saved_match_ids: List[str] = []
-            today_start = datetime.combine(date.today(), datetime.min.time())
-            today_end = today_start + timedelta(days=1)
-            for game in games:
-                api_home = game.get("home_team", "")
-                api_away = game.get("away_team", "")
 
-                # TheOdds API returns ALL upcoming games for the league, not just
-                # today's.  Only attempt to match — and count as unmatched — games
-                # whose commence_time falls today; future/past games are expected
-                # to have no DB fixture and should be silently skipped.
-                commence_raw = game.get("commence_time", "")
-                is_today = False
-                if commence_raw:
-                    try:
-                        from datetime import timezone as _tz
-                        ct = datetime.fromisoformat(commence_raw.replace("Z", "+00:00"))
-                        ct_naive = ct.astimezone(_tz.utc).replace(tzinfo=None)
-                        is_today = today_start <= ct_naive < today_end
-                    except Exception:
-                        is_today = True  # parse failure → assume today, let matching handle it
+            # One DB session for the entire league — single commit at the end
+            with self.db.get_session() as session:
+                try:
+                    for game in games:
+                        api_home = game.get("home_team", "")
+                        api_away = game.get("away_team", "")
 
-                match_id = self._find_matching_fixture(api_home, api_away, db_fixtures)
+                        commence_raw = game.get("commence_time", "")
+                        is_today = False
+                        if commence_raw:
+                            try:
+                                from datetime import timezone as _tz
+                                ct = datetime.fromisoformat(commence_raw.replace("Z", "+00:00"))
+                                ct_naive = ct.astimezone(_tz.utc).replace(tzinfo=None)
+                                is_today = today_start <= ct_naive < today_end
+                            except Exception:
+                                is_today = True
 
-                if match_id is None:
-                    if is_today:
-                        # A today-game we couldn't match → likely a real alias gap
-                        unmatched_games += 1
-                        league_unmatched += 1
-                        unmatched_details.append(f"  [{league}] '{api_home}' vs '{api_away}'")
-                    # else: future/past game — silently skip, not a problem
-                    continue
+                        match_id = self._find_matching_fixture(api_home, api_away, db_fixtures)
 
-                matched_games += 1
-                n = self._save_game_odds(game, match_id, saved_match_ids)
-                total_written += n
-                logger.debug(
-                    f"TheOddsAPI: {api_home} vs {api_away} → match_id={match_id}, "
-                    f"{n} odds rows written"
-                )
+                        if match_id is None:
+                            if is_today:
+                                unmatched_games += 1
+                                league_unmatched += 1
+                                unmatched_details.append(
+                                    f"  [{league}] '{api_home}' vs '{api_away}'"
+                                )
+                            continue
+
+                        matched_games += 1
+                        n = self._save_game_odds(game, match_id, saved_match_ids, session=session)
+                        total_written += n
+                        logger.debug(
+                            f"TheOddsAPI: {api_home} vs {api_away} → match_id={match_id}, "
+                            f"{n} odds rows staged"
+                        )
+
+                    session.commit()
+                except Exception as e:
+                    session.rollback()
+                    logger.warning(f"TheOddsAPI: DB write failed for league '{league}': {e}")
 
             if league_unmatched:
                 logger.debug(f"TheOddsAPI: {league_unmatched} unmatched in '{league}'")
