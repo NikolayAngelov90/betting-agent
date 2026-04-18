@@ -816,6 +816,11 @@ class FootballBettingAgent:
             logger.info("No fixtures with bookmaker odds for analysis")
             return []
 
+        # Bulk-preload all DB data for the fixture loop in a single batch.
+        # preload_batch() catches its own exceptions and sets _preload_cache = None
+        # on failure, so the per-fixture fallback path activates automatically.
+        self.feature_engineer.preload_batch(fixture_ids)
+
         # Analyze fixtures with bounded concurrency — feature engineering and
         # prediction involve synchronous DB queries that block the event loop,
         # so a semaphore limits how many run at once.  Default 5 keeps weekend
@@ -833,6 +838,7 @@ class FootballBettingAgent:
             *(_analyze_with_sem(mid) for mid in fixture_ids),
             return_exceptions=True,
         )
+        self.feature_engineer._preload_cache = None  # free memory after analysis
 
         all_recommendations = []
         for mid, result in zip(fixture_ids, analyses):

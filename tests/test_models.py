@@ -232,3 +232,130 @@ class TestLearnFromSettled:
         agent._auto_calibrate_ev_threshold.assert_called_once()
         # ML retrain is deferred to --update (too slow for --settle CI timeout)
         agent.train_ml_models.assert_not_called()
+
+
+class TestGetDailyPicksPreload:
+    """Story 1.3: verify preload_batch() is wired into get_daily_picks()."""
+
+    def _make_agent(self, fixture_ids=(42,), odds_counts=None):
+        """Build a minimally-mocked FootballBettingAgent that can run through
+        get_daily_picks() to the preload_batch call site.
+
+        fixture_ids: ids returned by the fixture DB query (after dedup).
+        odds_counts: list of count() return values for pre-filter loop;
+                     defaults to [1] * len(fixture_ids) (all have odds).
+        """
+        import asyncio
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import MagicMock, AsyncMock
+        from src.agent.betting_agent import FootballBettingAgent
+
+        if odds_counts is None:
+            odds_counts = [1] * len(fixture_ids)
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+
+        # --- DB session mock ---
+        session = MagicMock()
+        session.__enter__ = lambda s: s
+        session.__exit__ = MagicMock(return_value=False)
+        agent.db = MagicMock()
+        agent.db.get_session.return_value = session
+
+        # Fixture query returns mock fixtures (spaced >2h apart to avoid dedup)
+        now = datetime.now(timezone.utc)
+        mock_fixtures = []
+        for i, fid in enumerate(fixture_ids):
+            f = MagicMock()
+            f.id = fid
+            f.league = f"league-{i}"   # unique leagues → dedup never triggers
+            f.home_team_id = fid * 10
+            f.away_team_id = fid * 10 + 1
+            f.match_date = now + timedelta(hours=2 + i * 8)
+            f.apifootball_id = None
+            mock_fixtures.append(f)
+
+        # .all() is called twice:
+        #   1st: fixture query → mock_fixtures
+        #   2nd: SavedPick pre-population query → [] (no existing picks)
+        session.query.return_value.filter.return_value.all.side_effect = [
+            mock_fixtures, []
+        ]
+        # Pre-filter: count() called once per fixture — side_effect drives per-fixture result
+        session.query.return_value.filter.return_value.count.side_effect = list(odds_counts)
+
+        # session.get() is used for Team (needs .name) and Match (needs .league=None
+        # to avoid MagicMock ending up in uncovered_leagues string-join path)
+        mock_obj = MagicMock()
+        mock_obj.name = "Team"
+        mock_obj.league = None  # prevents uncovered_leagues TypeError
+        session.get.return_value = mock_obj
+
+        # --- Config: return each key's default so numeric comparisons don't break ---
+        agent.config = MagicMock()
+        agent.config.get.side_effect = lambda key, default=None: default
+
+        # --- AF odds fallback disabled ---
+        agent.apifootball = MagicMock()
+        agent.apifootball.enabled = False
+
+        # --- Coverage check ---
+        agent.predictor = MagicMock()
+        agent.predictor.check_coverage.return_value = {"score": 1.0}
+
+        # --- EV calibration ---
+        agent._auto_calibrate_ev_threshold = MagicMock()
+        agent.value_calculator = MagicMock()
+        agent.value_calculator.min_ev = 0.05
+
+        # --- Feature engineer ---
+        agent.feature_engineer = MagicMock()
+        agent.feature_engineer._preload_cache = None
+
+        # --- analyze_fixture returns empty analysis ---
+        agent.analyze_fixture = AsyncMock(
+            return_value=MagicMock(recommendations=[])
+        )
+
+        return agent
+
+    def test_preload_batch_called_before_analyze(self):
+        """preload_batch must be called once with odds-filtered fixture IDs."""
+        import asyncio
+        agent = self._make_agent(fixture_ids=(42,))
+
+        asyncio.run(agent.get_daily_picks())
+
+        agent.feature_engineer.preload_batch.assert_called_once_with([42])
+        agent.analyze_fixture.assert_called_once_with(42)
+
+    def test_preload_failure_does_not_lose_picks(self):
+        """When preload_batch sets _preload_cache=None (exception path),
+        analyze_fixture must still be called — no picks are lost."""
+        import asyncio
+        agent = self._make_agent(fixture_ids=(42,))
+
+        def _failed_preload(ids):
+            agent.feature_engineer._preload_cache = None
+
+        agent.feature_engineer.preload_batch.side_effect = _failed_preload
+
+        asyncio.run(agent.get_daily_picks())
+
+        agent.feature_engineer.preload_batch.assert_called_once()  # wiring exists
+        agent.analyze_fixture.assert_called_once_with(42)  # analysis proceeds
+
+    def test_preload_called_with_odds_filtered_ids(self):
+        """preload_batch must receive only the odds-filtered fixture list,
+        not the raw fixture list. Fixture 99 has no real odds and is skipped."""
+        import asyncio
+        agent = self._make_agent(
+            fixture_ids=(42, 99),
+            odds_counts=[1, 0],  # 42 has odds, 99 does not
+        )
+
+        asyncio.run(agent.get_daily_picks())
+
+        agent.feature_engineer.preload_batch.assert_called_once_with([42])
+        # Only fixture 42 should be analyzed
+        agent.analyze_fixture.assert_called_once_with(42)
