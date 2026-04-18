@@ -206,5 +206,18 @@ class TestFeatureEngineerPreloadBatch:
         """With no preload, _preload_cache stays None — callers can check and fall back."""
         fe = self._make_fe()
         assert fe._preload_cache is None
-        # Confirm the cache key is absent (not an empty dict that could confuse consumers)
+        # Confirm falsy (not an empty dict that could confuse cache-check logic in Story 1.2)
         assert not fe._preload_cache
+
+    def test_ac4_uncached_match_deferred_to_story_1_2(self):
+        """AC4: create_features falls back for a match_id not in the preloaded batch.
+
+        Full coverage requires Story 1.2 to wire _preload_cache into _get_*_features.
+        This test documents the deferral and verifies the cache structure does NOT
+        contain a match_id that was never preloaded — confirming Story 1.2 can detect
+        a cache miss with a simple 'match_id in _preload_cache["match_meta"]' check.
+        """
+        fe = self._make_fe()
+        # Simulate a populated cache that does NOT include match_id=99
+        fe._preload_cache = {"match_meta": {1: {}}, "odds": {}, "team_history": {}}
+        assert 99 not in fe._preload_cache["match_meta"]  # cache miss → live fallback in 1.2

@@ -2,7 +2,7 @@
 
 import numpy as np
 from collections import defaultdict
-from datetime import timedelta
+from datetime import date as _date, timedelta
 from typing import Optional
 
 from sqlalchemy import or_
@@ -37,18 +37,19 @@ class FeatureEngineer:
           2. All Odds rows for all match_ids (1 query)
           3. Completed match history for all involved teams (1 query)
 
-        After this call, create_features() reads from self._preload_cache instead
-        of issuing live DB queries for each fixture.  Calling preload_batch is
-        optional — if not called (or if it raises), create_features() falls back
-        to per-fixture live queries with zero behaviour change.
+        Once Story 1.2 wires the cache into the _get_*_features helpers,
+        create_features() will read from self._preload_cache instead of issuing
+        live DB queries for each fixture.  Calling preload_batch is optional —
+        if not called (or if it raises), create_features() falls back to
+        per-fixture live queries with zero behaviour change.
         """
         if not match_ids:
             return
 
-        self._preload_cache = {"match_meta": {}, "odds": {}, "team_history": {}}
-
         try:
-            from datetime import date as _date, timedelta as _td
+            # Init inside try so a mid-query exception never leaves a partial cache
+            # that Story 1.2 consumers could incorrectly read.
+            self._preload_cache = {"match_meta": {}, "odds": {}, "team_history": {}}
 
             # ── Query 1: match metadata ───────────────────────────────────────
             with self.db.get_session() as session:
@@ -88,7 +89,12 @@ class FeatureEngineer:
 
             # ── Query 3: team history (one bulk query for all teams) ──────────
             if all_team_ids:
-                cutoff = _date.today() - _td(days=365)
+                # 365-day window; results ordered desc so first N per team are newest.
+                # Cap at 60 per team: largest window used by any feature method is 30
+                # (referee stats), and venue-specific windows need ~2× the total to
+                # find 10 home/away matches each — 60 covers all cases with headroom.
+                _TEAM_HISTORY_CAP = 60
+                cutoff = _date.today() - timedelta(days=365)
                 with self.db.get_session() as session:
                     history_rows = session.query(Match).filter(
                         Match.is_fixture == False,
@@ -101,6 +107,7 @@ class FeatureEngineer:
                     ).order_by(Match.match_date.desc()).all()
 
                     team_history: dict = defaultdict(list)
+                    team_counts: dict = defaultdict(int)
                     for m in history_rows:
                         row_data = {
                             "id": m.id,
@@ -122,10 +129,14 @@ class FeatureEngineer:
                             "regulation_home_goals": m.regulation_home_goals,
                             "regulation_away_goals": m.regulation_away_goals,
                         }
-                        if m.home_team_id in all_team_ids:
+                        if (m.home_team_id in all_team_ids
+                                and team_counts[m.home_team_id] < _TEAM_HISTORY_CAP):
                             team_history[m.home_team_id].append(row_data)
-                        if m.away_team_id in all_team_ids:
+                            team_counts[m.home_team_id] += 1
+                        if (m.away_team_id in all_team_ids
+                                and team_counts[m.away_team_id] < _TEAM_HISTORY_CAP):
                             team_history[m.away_team_id].append(row_data)
+                            team_counts[m.away_team_id] += 1
 
                     self._preload_cache["team_history"] = dict(team_history)
 
