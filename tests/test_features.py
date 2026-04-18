@@ -221,3 +221,230 @@ class TestFeatureEngineerPreloadBatch:
         # Simulate a populated cache that does NOT include match_id=99
         fe._preload_cache = {"match_meta": {1: {}}, "odds": {}, "team_history": {}}
         assert 99 not in fe._preload_cache["match_meta"]  # cache miss → live fallback in 1.2
+
+
+# ---------------------------------------------------------------------------
+# Story 1.2 — Cache-Aware Feature Computation
+# ---------------------------------------------------------------------------
+
+class TestCacheAwareFeatures:
+    """Tests that private _get_* methods read from _preload_cache, not the DB."""
+
+    def _make_fe(self):
+        from src.features.feature_engineer import FeatureEngineer
+        fe = FeatureEngineer.__new__(FeatureEngineer)
+        fe._preload_cache = None
+        fe._league_features_cache = {}
+        return fe
+
+    # ── _get_bookmaker_features ───────────────────────────────────────────
+
+    def test_bookmaker_features_uses_cache_not_db(self):
+        """With odds in cache, _get_bookmaker_features must NOT open a DB session."""
+        from unittest.mock import MagicMock
+        fe = self._make_fe()
+        fe._preload_cache = {
+            "match_meta": {},
+            "odds": {
+                42: [
+                    {"market_type": "1X2", "bookmaker": "Bet365", "selection": "Home",
+                     "odds_value": 2.0, "opening_odds": 2.1},
+                    {"market_type": "1X2", "bookmaker": "Bet365", "selection": "Draw",
+                     "odds_value": 3.5, "opening_odds": 3.4},
+                    {"market_type": "1X2", "bookmaker": "Bet365", "selection": "Away",
+                     "odds_value": 4.0, "opening_odds": 3.9},
+                ]
+            },
+            "team_history": {},
+        }
+        mock_db = MagicMock()
+        fe.db = mock_db
+
+        result = fe._get_bookmaker_features(42)
+
+        mock_db.get_session.assert_not_called()
+        assert result["bookmaker_available"] == 1
+        assert result["home_implied_prob"] > 0
+
+    def test_bookmaker_features_fallback_when_no_cache(self):
+        """With _preload_cache=None, _get_bookmaker_features falls back to DB."""
+        from unittest.mock import MagicMock
+        fe = self._make_fe()
+        fe._preload_cache = None
+
+        mock_session = MagicMock()
+        mock_session.__enter__ = lambda s: s
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        fe.db = MagicMock()
+        fe.db.get_session.return_value = mock_session
+
+        result = fe._get_bookmaker_features(42)
+        fe.db.get_session.assert_called_once()
+        assert result["bookmaker_available"] == 0
+
+    def test_bookmaker_features_cache_miss_falls_back(self):
+        """Cache populated but match_id not in odds → DB fallback."""
+        from unittest.mock import MagicMock
+        fe = self._make_fe()
+        fe._preload_cache = {"match_meta": {}, "odds": {99: []}, "team_history": {}}
+
+        mock_session = MagicMock()
+        mock_session.__enter__ = lambda s: s
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        fe.db = MagicMock()
+        fe.db.get_session.return_value = mock_session
+
+        fe._get_bookmaker_features(42)   # 42 not in odds cache
+        fe.db.get_session.assert_called_once()
+
+    # ── _get_odds_movement_features ───────────────────────────────────────
+
+    def test_odds_movement_uses_cache_not_db(self):
+        from unittest.mock import MagicMock
+        fe = self._make_fe()
+        fe._preload_cache = {
+            "match_meta": {},
+            "odds": {
+                42: [
+                    {"market_type": "1X2", "bookmaker": "Bet365", "selection": "Home",
+                     "odds_value": 1.90, "opening_odds": 2.00},
+                    {"market_type": "1X2", "bookmaker": "Bet365", "selection": "Away",
+                     "odds_value": 4.20, "opening_odds": 4.00},
+                ]
+            },
+            "team_history": {},
+        }
+        fe.db = MagicMock()
+
+        result = fe._get_odds_movement_features(42)
+
+        fe.db.get_session.assert_not_called()
+        assert result["home_odds_movement"] != 0.0
+
+    # ── _get_xg_features ─────────────────────────────────────────────────
+
+    def test_xg_features_uses_cache_not_db(self):
+        from unittest.mock import MagicMock
+        from datetime import date
+        fe = self._make_fe()
+        fe._preload_cache = {
+            "match_meta": {},
+            "odds": {},
+            "team_history": {
+                1: [
+                    {"id": 10, "match_date": date(2026, 3, 1),
+                     "home_team_id": 1, "away_team_id": 2,
+                     "home_goals": 2, "away_goals": 1,
+                     "home_xg": 1.8, "away_xg": 0.9,
+                     "home_yellow_cards": 1, "away_yellow_cards": 0,
+                     "home_red_cards": 0, "away_red_cards": 0,
+                     "home_fouls": 10, "away_fouls": 8,
+                     "regulation_home_goals": 2, "regulation_away_goals": 1,
+                     "league": "epl", "referee": "Dean"},
+                ]
+            },
+        }
+        fe.db = MagicMock()
+
+        result = fe._get_xg_features(1, "home", as_of_date=None)
+
+        fe.db.get_session.assert_not_called()
+        assert result["xg_avg"] == 1.8
+        assert result["xg_against_avg"] == 0.9
+        assert result["xg_matches"] == 1
+
+    def test_xg_features_skips_cache_when_as_of_date_set(self):
+        """Training path (as_of_date set) must always use live DB, never cache."""
+        from unittest.mock import MagicMock
+        from datetime import date
+        fe = self._make_fe()
+        fe._preload_cache = {"match_meta": {}, "odds": {}, "team_history": {1: []}}
+
+        mock_session = MagicMock()
+        mock_session.__enter__ = lambda s: s
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_session.query.return_value.filter.return_value.filter.return_value \
+            .filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+        fe.db = MagicMock()
+        fe.db.get_session.return_value = mock_session
+
+        fe._get_xg_features(1, "home", as_of_date=date(2025, 1, 1))
+        fe.db.get_session.assert_called_once()
+
+    # ── _get_referee_features ─────────────────────────────────────────────
+
+    def test_referee_features_uses_cache_not_db(self):
+        from unittest.mock import MagicMock
+        from datetime import date
+        row = {"id": 5, "match_date": date(2026, 3, 10),
+               "home_team_id": 1, "away_team_id": 2,
+               "home_goals": 2, "away_goals": 2,
+               "home_xg": 1.5, "away_xg": 1.5,
+               "home_yellow_cards": 3, "away_yellow_cards": 2,
+               "home_red_cards": 0, "away_red_cards": 1,
+               "home_fouls": 12, "away_fouls": 11,
+               "regulation_home_goals": 2, "regulation_away_goals": 2,
+               "league": "epl", "referee": "Mike Dean"}
+        fe = self._make_fe()
+        fe._preload_cache = {
+            "match_meta": {},
+            "odds": {},
+            "team_history": {1: [row], 2: [row]},  # same match under both teams
+        }
+        fe.db = MagicMock()
+
+        result = fe._get_referee_features("Mike Dean", as_of_date=None)
+
+        fe.db.get_session.assert_not_called()
+        assert result["referee_matches"] == 1  # deduplication: counted once despite 2 teams
+
+    def test_referee_features_skips_cache_when_as_of_date_set(self):
+        """Training path (as_of_date set) must always use live DB, never cache."""
+        from unittest.mock import MagicMock
+        from datetime import date
+        fe = self._make_fe()
+        fe._preload_cache = {"match_meta": {}, "odds": {}, "team_history": {1: []}}
+
+        mock_session = MagicMock()
+        mock_session.__enter__ = lambda s: s
+        mock_session.__exit__ = MagicMock(return_value=False)
+        mock_session.query.return_value.filter.return_value.filter.return_value \
+            .order_by.return_value.limit.return_value.all.return_value = []
+        fe.db = MagicMock()
+        fe.db.get_session.return_value = mock_session
+
+        fe._get_referee_features("Mike Dean", as_of_date=date(2025, 1, 1))
+        fe.db.get_session.assert_called_once()
+
+    # ── _get_situational_features ─────────────────────────────────────────
+
+    def test_situational_features_uses_cache_not_db(self):
+        from unittest.mock import MagicMock
+        from datetime import date
+        fe = self._make_fe()
+        fe._preload_cache = {
+            "match_meta": {},
+            "odds": {},
+            "team_history": {
+                1: [
+                    {"id": 10, "match_date": date(2026, 4, 10),
+                     "home_team_id": 1, "away_team_id": 2,
+                     "home_goals": 1, "away_goals": 0,
+                     "home_xg": 1.2, "away_xg": 0.7,
+                     "home_yellow_cards": 1, "away_yellow_cards": 1,
+                     "home_red_cards": 0, "away_red_cards": 0,
+                     "home_fouls": 9, "away_fouls": 8,
+                     "regulation_home_goals": None, "regulation_away_goals": None,
+                     "league": "epl", "referee": "Dean"},
+                ]
+            },
+        }
+        fe.db = MagicMock()
+
+        result = fe._get_situational_features(1, date(2026, 4, 19))
+
+        fe.db.get_session.assert_not_called()
+        assert result["rest_days"] == 9
+        assert result["matches_14d"] == 1

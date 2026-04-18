@@ -37,11 +37,9 @@ class FeatureEngineer:
           2. All Odds rows for all match_ids (1 query)
           3. Completed match history for all involved teams (1 query)
 
-        Once Story 1.2 wires the cache into the _get_*_features helpers,
-        create_features() will read from self._preload_cache instead of issuing
-        live DB queries for each fixture.  Calling preload_batch is optional —
-        if not called (or if it raises), create_features() falls back to
-        per-fixture live queries with zero behaviour change.
+        Calling preload_batch is optional — if not called (or if it raises),
+        create_features() falls back to per-fixture live queries with zero
+        behaviour change.
         """
         if not match_ids:
             return
@@ -166,16 +164,23 @@ class FeatureEngineer:
         Returns:
             Dictionary containing all features for the match
         """
-        with self.db.get_session() as session:
-            match = session.get(Match, match_id)
-            if not match:
-                logger.error(f"Match {match_id} not found")
-                return {}
+        _meta = (self._preload_cache or {}).get("match_meta", {}).get(match_id)
+        if _meta is not None:
+            home_id = _meta["home_team_id"]
+            away_id = _meta["away_team_id"]
+            league = _meta["league"]
+            referee = _meta["referee"]
+        else:
+            with self.db.get_session() as session:
+                match = session.get(Match, match_id)
+                if not match:
+                    logger.error(f"Match {match_id} not found")
+                    return {}
 
-            home_id = match.home_team_id
-            away_id = match.away_team_id
-            league = match.league or ""
-            referee = match.referee or ""
+                home_id = match.home_team_id
+                away_id = match.away_team_id
+                league = match.league or ""
+                referee = match.referee or ""
 
         import asyncio as _asyncio
 
@@ -308,17 +313,24 @@ class FeatureEngineer:
 
         # 12. Situational context: rest days + midweek flag
         _venue = None
-        with self.db.get_session() as session:
-            match_obj = session.get(Match, match_id)
-            if match_obj:
-                _match_date = match_obj.match_date
-                _home_id = match_obj.home_team_id
-                _away_id = match_obj.away_team_id
-                _venue = match_obj.venue
-            else:
-                _match_date = None
-                _home_id = home_id
-                _away_id = away_id
+        _meta2 = (self._preload_cache or {}).get("match_meta", {}).get(match_id)
+        if _meta2 is not None:
+            _match_date = _meta2["match_date"]
+            _home_id = _meta2["home_team_id"]
+            _away_id = _meta2["away_team_id"]
+            _venue = _meta2["venue"]
+        else:
+            with self.db.get_session() as session:
+                match_obj = session.get(Match, match_id)
+                if match_obj:
+                    _match_date = match_obj.match_date
+                    _home_id = match_obj.home_team_id
+                    _away_id = match_obj.away_team_id
+                    _venue = match_obj.venue
+                else:
+                    _match_date = None
+                    _home_id = home_id
+                    _away_id = away_id
         if _match_date:
             home_sit = self._get_situational_features(_home_id, _match_date)
             away_sit = self._get_situational_features(_away_id, _match_date)
@@ -393,6 +405,40 @@ class FeatureEngineer:
             "xg_overperformance": 0.0, "xg_matches": 0,
         }
 
+        if self._preload_cache is not None and as_of_date is None:
+            cached_rows = self._preload_cache.get("team_history", {}).get(team_id, [])
+            filtered = [
+                m for m in cached_rows
+                if m["home_xg"] is not None
+                and (venue != "home" or m["home_team_id"] == team_id)
+                and (venue != "away" or m["away_team_id"] == team_id)
+            ]
+            matches_data = filtered[:num_matches]
+            if matches_data:
+                xg_for_list = []
+                xg_against_list = []
+                goals_for_list = []
+                for m in matches_data:
+                    is_home = m["home_team_id"] == team_id
+                    if is_home:
+                        xg_for_list.append(m["home_xg"] or 0)
+                        xg_against_list.append(m["away_xg"] or 0)
+                        goals_for_list.append(m["home_goals"] or 0)
+                    else:
+                        xg_for_list.append(m["away_xg"] or 0)
+                        xg_against_list.append(m["home_xg"] or 0)
+                        goals_for_list.append(m["away_goals"] or 0)
+                xg_avg = sum(xg_for_list) / len(xg_for_list)
+                xg_against_avg = sum(xg_against_list) / len(xg_against_list)
+                goals_avg = sum(goals_for_list) / len(goals_for_list)
+                return {
+                    "xg_avg": round(xg_avg, 3),
+                    "xg_against_avg": round(xg_against_avg, 3),
+                    "xg_overperformance": round(goals_avg - xg_avg, 3),
+                    "xg_matches": len(xg_for_list),
+                }
+            return empty
+
         with self.db.get_session() as session:
             query = session.query(Match).filter(
                 Match.is_fixture == False,
@@ -462,11 +508,58 @@ class FeatureEngineer:
         if not referee:
             return empty
 
+        if self._preload_cache is not None and as_of_date is None:
+            seen_ids: set = set()
+            matches_data = []
+            for team_rows in self._preload_cache.get("team_history", {}).values():
+                for m in team_rows:
+                    if m["id"] not in seen_ids and m.get("referee") == referee and m["home_goals"] is not None:
+                        matches_data.append(m)
+                        seen_ids.add(m["id"])
+            matches_data.sort(key=lambda m: m["match_date"], reverse=True)
+            matches_data = matches_data[:30]
+            if matches_data:
+                cards_list = []
+                yellow_list = []
+                red_list = []
+                fouls_total = 0
+                fouls_matches = 0
+                goals_list = []
+                over25_count = 0
+                for m in matches_data:
+                    yc = (m["home_yellow_cards"] or 0) + (m["away_yellow_cards"] or 0)
+                    rc = (m["home_red_cards"] or 0) + (m["away_red_cards"] or 0)
+                    cards_list.append(yc + rc)
+                    yellow_list.append(yc)
+                    red_list.append(rc)
+                    total_goals = (m["home_goals"] or 0) + (m["away_goals"] or 0)
+                    goals_list.append(total_goals)
+                    if total_goals > 2.5:
+                        over25_count += 1
+                    hf = m["home_fouls"] or 0
+                    af = m["away_fouls"] or 0
+                    if hf > 0 or af > 0:
+                        fouls_total += hf + af
+                        fouls_matches += 1
+                n = len(matches_data)
+                return {
+                    "referee_cards_per_match_avg": round(sum(cards_list) / n, 2),
+                    "referee_fouls_per_match_avg": round(fouls_total / fouls_matches, 2) if fouls_matches else 0.0,
+                    "referee_goals_per_match_avg": round(sum(goals_list) / n, 2),
+                    "referee_over25_rate": round(over25_count / n, 3),
+                    "referee_avg_yellow_cards": round(sum(yellow_list) / n, 2),
+                    "referee_avg_red_cards": round(sum(red_list) / n, 2),
+                    "referee_matches": n,
+                }
+            return empty
+
         with self.db.get_session() as session:
+            _ref_cutoff = _date.today() - timedelta(days=365)
             query = session.query(Match).filter(
                 Match.referee == referee,
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
+                Match.match_date >= _ref_cutoff,
             )
             if as_of_date is not None:
                 query = query.filter(Match.match_date < as_of_date)
@@ -546,19 +639,27 @@ class FeatureEngineer:
         }
         try:
             # Group: {(market_type, bookmaker): {selection: odds_value}}
-            # Extract all data inside the session to avoid detached-instance errors.
             bk_data: dict = defaultdict(dict)
-            with self.db.get_session() as session:
-                rows = session.query(Odds).filter(
-                    Odds.match_id == match_id,
-                    Odds.market_type.in_(["1X2", "over_under", "btts", "team_goals"]),
-                ).all()
-
-                if not rows:
+            _cached_odds = (self._preload_cache or {}).get("odds", {}).get(match_id)
+            if _cached_odds is not None:
+                _markets = {"1X2", "over_under", "btts", "team_goals"}
+                for row in _cached_odds:
+                    if row["market_type"] in _markets:
+                        bk_data[(row["market_type"], row["bookmaker"])][row["selection"]] = row["odds_value"]
+                if not bk_data:
                     return defaults
+            else:
+                with self.db.get_session() as session:
+                    rows = session.query(Odds).filter(
+                        Odds.match_id == match_id,
+                        Odds.market_type.in_(["1X2", "over_under", "btts", "team_goals"]),
+                    ).all()
 
-                for row in rows:
-                    bk_data[(row.market_type, row.bookmaker)][row.selection] = row.odds_value
+                    if not rows:
+                        return defaults
+
+                    for row in rows:
+                        bk_data[(row.market_type, row.bookmaker)][row.selection] = row.odds_value
 
             result = dict(defaults)
 
@@ -678,48 +779,65 @@ class FeatureEngineer:
             "movement_direction": 0.0,
         }
         try:
-            with self.db.get_session() as session:
-                rows = session.query(Odds).filter(
-                    Odds.match_id == match_id,
-                    Odds.opening_odds.isnot(None),
-                    Odds.bookmaker != "Flashscore",
-                ).all()
+            _cached_odds = (self._preload_cache or {}).get("odds", {}).get(match_id)
+            if _cached_odds is not None:
+                rows = [
+                    r for r in _cached_odds
+                    if r.get("opening_odds") is not None and r["bookmaker"] != "Flashscore"
+                ]
+            else:
+                with self.db.get_session() as session:
+                    db_rows = session.query(Odds).filter(
+                        Odds.match_id == match_id,
+                        Odds.opening_odds.isnot(None),
+                        Odds.bookmaker != "Flashscore",
+                    ).all()
+                    rows = [
+                        {
+                            "market_type": r.market_type, "selection": r.selection,
+                            "odds_value": r.odds_value, "opening_odds": r.opening_odds,
+                            "bookmaker": r.bookmaker,
+                        }
+                        for r in db_rows
+                    ]
 
-                if not rows:
-                    return defaults
+            if not rows:
+                return defaults
 
-                # Find movements for key selections
-                movements = {}
-                for row in rows:
-                    if row.opening_odds and row.opening_odds > 0 and row.odds_value > 0:
-                        pct_change = (row.odds_value - row.opening_odds) / row.opening_odds
-                        key = (row.market_type, row.selection)
-                        # Keep the one from the preferred bookmaker (first seen wins)
-                        if key not in movements:
-                            movements[key] = round(pct_change, 4)
+            # Find movements for key selections
+            movements = {}
+            for row in rows:
+                opening = row["opening_odds"]
+                current = row["odds_value"]
+                if opening and opening > 0 and current > 0:
+                    pct_change = (current - opening) / opening
+                    key = (row["market_type"], row["selection"])
+                    # Keep the one from the preferred bookmaker (first seen wins)
+                    if key not in movements:
+                        movements[key] = round(pct_change, 4)
 
-                result = dict(defaults)
+            result = dict(defaults)
 
-                home_mv = movements.get(("1X2", "Home"), 0)
-                away_mv = movements.get(("1X2", "Away"), 0)
-                over25_mv = movements.get(("over_under", "Over 2.5"), 0)
+            home_mv = movements.get(("1X2", "Home"), 0)
+            away_mv = movements.get(("1X2", "Away"), 0)
+            over25_mv = movements.get(("over_under", "Over 2.5"), 0)
 
-                result["home_odds_movement"] = home_mv
-                result["away_odds_movement"] = away_mv
-                result["over25_odds_movement"] = over25_mv
+            result["home_odds_movement"] = home_mv
+            result["away_odds_movement"] = away_mv
+            result["over25_odds_movement"] = over25_mv
 
-                all_mvs = [abs(v) for v in movements.values() if v != 0]
-                result["max_abs_movement"] = max(all_mvs) if all_mvs else 0.0
+            all_mvs = [abs(v) for v in movements.values() if v != 0]
+            result["max_abs_movement"] = max(all_mvs) if all_mvs else 0.0
 
-                # Direction: negative home_mv means home odds dropped = sharp on home
-                if home_mv < -0.02 and away_mv > 0.02:
-                    result["movement_direction"] = 1.0  # sharp on home
-                elif away_mv < -0.02 and home_mv > 0.02:
-                    result["movement_direction"] = -1.0  # sharp on away
-                else:
-                    result["movement_direction"] = 0.0
+            # Direction: negative home_mv means home odds dropped = sharp on home
+            if home_mv < -0.02 and away_mv > 0.02:
+                result["movement_direction"] = 1.0  # sharp on home
+            elif away_mv < -0.02 and home_mv > 0.02:
+                result["movement_direction"] = -1.0  # sharp on away
+            else:
+                result["movement_direction"] = 0.0
 
-                return result
+            return result
         except Exception as e:
             logger.warning(f"Odds movement features failed for match {match_id}: {e}")
             return defaults
@@ -810,6 +928,53 @@ class FeatureEngineer:
             "fatigue_index": 0.0, "short_rest_count": 0,
         }
         try:
+            if self._preload_cache is not None:
+                cached_rows = self._preload_cache.get("team_history", {}).get(team_id, [])
+                recent_cached = [m for m in cached_rows if m["match_date"] < match_date][:10]
+                if recent_cached:
+                    prev = recent_cached[0]
+                    delta = (match_date - prev["match_date"]).days
+                    rest_days = min(delta, 21)
+                    midweek_flag = 1 if prev["match_date"].weekday() in (1, 2, 3) else 0
+                    matches_14d = matches_21d = matches_30d = 0
+                    short_rest_count = 0
+                    extra_time_recent = 0
+                    match_dates = []
+                    for m in recent_cached:
+                        days_before = (match_date - m["match_date"]).days
+                        if days_before <= 14:
+                            matches_14d += 1
+                        if days_before <= 21:
+                            matches_21d += 1
+                        if days_before <= 30:
+                            matches_30d += 1
+                        match_dates.append(m["match_date"])
+                        if (m["regulation_home_goals"] is not None
+                                and m["home_goals"] is not None
+                                and (m["regulation_home_goals"] != m["home_goals"]
+                                     or m["regulation_away_goals"] != m["away_goals"])):
+                            if days_before <= 14:
+                                extra_time_recent += 1
+                    for i in range(len(match_dates) - 1):
+                        gap = (match_dates[i] - match_dates[i + 1]).days
+                        if gap < 4:
+                            short_rest_count += 1
+                    fatigue_index = (
+                        min(matches_14d / 5.0, 1.0) * 0.50
+                        + min(short_rest_count / 3.0, 1.0) * 0.30
+                        + min(extra_time_recent, 1) * 0.20
+                    )
+                    return {
+                        "rest_days": rest_days,
+                        "midweek_flag": midweek_flag,
+                        "matches_14d": matches_14d,
+                        "matches_21d": matches_21d,
+                        "matches_30d": matches_30d,
+                        "fatigue_index": round(fatigue_index, 3),
+                        "short_rest_count": short_rest_count,
+                    }
+                return defaults
+
             with self.db.get_session() as session:
                 # Fetch last 10 matches (enough to cover 30 days for busy teams)
                 recent = session.query(Match).filter(
