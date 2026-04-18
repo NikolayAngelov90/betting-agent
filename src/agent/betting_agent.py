@@ -662,11 +662,37 @@ class FootballBettingAgent:
         # apifootball_id and we have budget remaining (free tier = 100/day).
         if self.apifootball.enabled:
             _apifb_budget_remaining = min(self.apifootball.remaining_budget(), 40)
+
+            # Over 1.5 is never provided by TheOdds API so we fall back to AF
+            # for it — but only for top leagues where market liquidity is high
+            # and AF odds quality is reliable.  Skipping lower divisions saves
+            # ~25 requests/day (from ~39 to ~12) on busy fixtures days.
+            _over15_leagues = set(self.config.get(
+                "betting.over15_priority_leagues",
+                [
+                    "england/premier-league",
+                    "england/championship",
+                    "spain/laliga",
+                    "germany/bundesliga",
+                    "italy/serie-a",
+                    "france/ligue-1",
+                    "netherlands/eredivisie",
+                    "portugal/primeira-liga",
+                    "belgium/jupiler-pro-league",
+                    "turkey/super-lig",
+                    "scotland/premiership",
+                    "europe/champions-league",
+                    "europe/europa-league",
+                    "europe/europa-conference-league",
+                ],
+            ))
+
             with self.db.get_session() as session:
                 # Tier-1: matches with zero real bookmaker odds (highest priority)
                 apifb_fallback = []
                 # Tier-2: matches that have TheOddsAPI 1X2/2.5 odds but are
-                # missing Over 1.5 (TheOddsAPI never provides that line)
+                # missing Over 1.5 (TheOddsAPI never provides that line).
+                # Limited to priority leagues to preserve the 100/day AF quota.
                 apifb_missing_over15 = []
                 for fid in fixture_ids:
                     m = session.get(Match, fid)
@@ -680,7 +706,7 @@ class FootballBettingAgent:
                         ).count()
                         if real_odds == 0:
                             apifb_fallback.append((fid, m.apifootball_id, ht, at))
-                        else:
+                        elif m.league in _over15_leagues:
                             # Has some odds but check if Over 1.5 is missing
                             has_over15 = session.query(Odds).filter(
                                 Odds.match_id == fid,
@@ -1691,8 +1717,21 @@ class FootballBettingAgent:
         # Apply immediately
         self.predictor.weights = new_weights
 
-        # Model Confidence Calibration from data collected above
+        # Model Confidence Calibration from data collected above.
+        # Floors at 0.85 (max 15% weight reduction) and requires ≥5 samples/bin
+        # to avoid noisy estimates from sparse data.  New factors are blended
+        # 70/30 with the previous run's factors (EMA) to prevent jumpy adjustments
+        # when a single bad streak skews a bin.
         try:
+            cal_path = Path("data/models/calibration.json")
+            # Load previous factors for EMA smoothing
+            prev_cal: dict = {}
+            try:
+                if cal_path.exists():
+                    prev_cal = json.loads(cal_path.read_text())
+            except Exception:
+                pass
+
             cal_factors = {}
             for model, data in model_predictions.items():
                 if len(data) < 15:
@@ -1703,7 +1742,7 @@ class FootballBettingAgent:
                 n_bins_used = 0
                 for lo, hi in bins:
                     in_bin = [(p, h) for p, h in data if lo <= p < hi]
-                    if len(in_bin) < 3:
+                    if len(in_bin) < 5:  # require ≥5 samples for a reliable bin estimate
                         continue
                     mean_pred = sum(p for p, _ in in_bin) / len(in_bin)
                     mean_hit = sum(h for _, h in in_bin) / len(in_bin)
@@ -1711,11 +1750,16 @@ class FootballBettingAgent:
                     n_bins_used += 1
                 if n_bins_used > 0:
                     avg_cal_error = total_error / n_bins_used
-                    cal_factors[model] = round(max(0.6, 1.0 - avg_cal_error), 3)
+                    # Floor at 0.85 — cap max weight reduction at 15% so sparse
+                    # data can't drive models to near-zero influence.
+                    raw_factor = round(max(0.85, 1.0 - avg_cal_error), 3)
+                    # EMA: blend 70% new estimate with 30% previous to dampen
+                    # run-to-run volatility from small sample noise.
+                    prev = prev_cal.get(model, raw_factor)
+                    cal_factors[model] = round(0.7 * raw_factor + 0.3 * prev, 3)
                 else:
                     cal_factors[model] = 1.0
 
-            cal_path = Path("data/models/calibration.json")
             cal_path.parent.mkdir(parents=True, exist_ok=True)
             cal_path.write_text(json.dumps(cal_factors, indent=2))
             self.predictor.calibration_factors.update(cal_factors)
@@ -1781,7 +1825,7 @@ class FootballBettingAgent:
         # Build feature matrix and labels — process in parallel batches
         # Hard time budget prevents ML training from blowing the CI timeout.
         import time as _timer
-        _ML_TRAIN_BUDGET_S = 1440  # 24 minutes (fits in 35-min CI step timeout)
+        _ML_TRAIN_BUDGET_S = 1800  # 30 minutes (fits in 35-min CI step timeout)
         _ml_deadline = _timer.monotonic() + _ML_TRAIN_BUDGET_S
 
         # Clear standings cache so monthly-coarsened keys start fresh

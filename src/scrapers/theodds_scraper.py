@@ -382,12 +382,15 @@ class TheOddsScraper:
         return None
 
     def _save_game_odds(self, game: Dict, match_id: int, saved: List[str],
-                        session=None) -> int:
+                        session=None, existing_index: Optional[dict] = None) -> int:
         """Parse one API game object and upsert odds rows into DB.
 
         When `session` is provided the caller owns the transaction and is
         responsible for committing.  When None (legacy), opens its own session
         and commits once per game (not once per row as before).
+
+        `existing_index` (keyed by (match_id, bm, market, selection)) is passed
+        to _upsert_odds to avoid per-row SELECT queries when provided.
 
         Returns count of odds rows written.
         """
@@ -420,7 +423,8 @@ class TheOddsScraper:
                             else:
                                 continue
                             written += self._upsert_odds(
-                                sess, match_id, bm_key, "1X2", selection, oprice
+                                sess, match_id, bm_key, "1X2", selection, oprice,
+                                existing_index=existing_index,
                             )
 
                     elif market_key == "totals":
@@ -432,7 +436,8 @@ class TheOddsScraper:
                                 continue
                             selection = f"{direction} {point}"
                             written += self._upsert_odds(
-                                sess, match_id, bm_key, "over_under", selection, oprice
+                                sess, match_id, bm_key, "over_under", selection, oprice,
+                                existing_index=existing_index,
                             )
 
         if session is not None:
@@ -458,36 +463,46 @@ class TheOddsScraper:
         market_type: str,
         selection: str,
         odds_value: float,
+        existing_index: Optional[dict] = None,
     ) -> int:
         """Insert-or-update a single Odds row. Returns 1 if written, 0 otherwise.
+
+        When `existing_index` is provided (keyed by (match_id, bookmaker,
+        market_type, selection)) the existence check is done in-memory instead
+        of firing a SELECT per row — reduces Neon roundtrips from N_rows to 0.
 
         Does NOT commit — caller is responsible for a single commit per game/league.
         """
         try:
-            existing = (
-                session.query(Odds)
-                .filter_by(
-                    match_id=match_id,
-                    bookmaker=bookmaker,
-                    market_type=market_type,
-                    selection=selection,
-                )
-                .first()
-            )
-            if existing:
-                existing.odds_value = odds_value
-                existing.timestamp = datetime.utcnow()
+            key = (match_id, bookmaker, market_type, selection)
+            if existing_index is not None:
+                existing = existing_index.get(key)
             else:
-                session.add(
-                    Odds(
+                existing = (
+                    session.query(Odds)
+                    .filter_by(
                         match_id=match_id,
                         bookmaker=bookmaker,
                         market_type=market_type,
                         selection=selection,
-                        odds_value=odds_value,
-                        opening_odds=odds_value,
                     )
+                    .first()
                 )
+            if existing:
+                existing.odds_value = odds_value
+                existing.timestamp = datetime.utcnow()
+            else:
+                new_row = Odds(
+                    match_id=match_id,
+                    bookmaker=bookmaker,
+                    market_type=market_type,
+                    selection=selection,
+                    odds_value=odds_value,
+                    opening_odds=odds_value,
+                )
+                session.add(new_row)
+                if existing_index is not None:
+                    existing_index[key] = new_row  # prevent re-insert on dup
             return 1
         except Exception as e:
             logger.debug(f"TheOddsAPI upsert failed ({bookmaker} / {market_type} / {selection}): {e}")
@@ -553,12 +568,24 @@ class TheOddsScraper:
                 continue
 
             db_fixtures = league_fixtures[league]
+            match_ids = [fix["match_id"] for fix in db_fixtures]
             league_unmatched = 0
             saved_match_ids: List[str] = []
 
             # One DB session for the entire league — single commit at the end
             with self.db.get_session() as session:
                 try:
+                    # Preload ALL existing odds for this league's matches in one
+                    # query instead of one SELECT per row — reduces Neon roundtrips
+                    # from N_odds_rows to 1 per league.
+                    existing_rows = session.query(Odds).filter(
+                        Odds.match_id.in_(match_ids)
+                    ).all()
+                    existing_index = {
+                        (r.match_id, r.bookmaker, r.market_type, r.selection): r
+                        for r in existing_rows
+                    }
+
                     for game in games:
                         api_home = game.get("home_team", "")
                         api_away = game.get("away_team", "")
@@ -586,7 +613,10 @@ class TheOddsScraper:
                             continue
 
                         matched_games += 1
-                        n = self._save_game_odds(game, match_id, saved_match_ids, session=session)
+                        n = self._save_game_odds(
+                            game, match_id, saved_match_ids,
+                            session=session, existing_index=existing_index,
+                        )
                         total_written += n
                         logger.debug(
                             f"TheOddsAPI: {api_home} vs {api_away} → match_id={match_id}, "
@@ -600,6 +630,10 @@ class TheOddsScraper:
 
             if league_unmatched:
                 logger.debug(f"TheOddsAPI: {league_unmatched} unmatched in '{league}'")
+
+            # Cooperative yield — lets asyncio.wait_for(timeout=300) fire between
+            # leagues rather than being blocked by the synchronous DB write loop.
+            await asyncio.sleep(0)
 
         logger.info(
             f"TheOddsAPI update complete: {total_written} odds rows written, "

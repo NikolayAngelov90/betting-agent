@@ -546,19 +546,17 @@ class APIFootballScraper(BaseScraper):
                     with self.db.get_session() as session:
                         match = session.get(Match, match_id)
                         if match:
-                            # If the DB already has a Flashscore-verified score
-                            # (flashscore_id is set), trust Flashscore over
-                            # API-Football to stop the oscillation where AF reverts
-                            # a corrected score every run.
+                            # Never overwrite a score that was already stored —
+                            # the first source to set the score wins.  Flashscore
+                            # runs later and will correct if the AF score is wrong;
+                            # this guard prevents AF from re-reverting that fix.
                             if (match.home_goals is not None
-                                    and match.flashscore_id
                                     and (match.home_goals != home_goals
                                          or match.away_goals != away_goals)):
-                                logger.info(
-                                    f"API-Football score differs from Flashscore-verified "
-                                    f"DB for match id={match_id}: "
-                                    f"DB(FS)={match.home_goals}-{match.away_goals} "
-                                    f"API={home_goals}-{away_goals} — keeping Flashscore value"
+                                logger.debug(
+                                    f"API-Football score ignored for match id={match_id}: "
+                                    f"DB={match.home_goals}-{match.away_goals} "
+                                    f"API={home_goals}-{away_goals} — keeping existing score"
                                 )
                             else:
                                 match.home_goals = home_goals
@@ -605,9 +603,8 @@ class APIFootballScraper(BaseScraper):
                         if referee and not match.referee:
                             match.referee = referee
                         if is_finished and home_goals is not None:
-                            # Prefer Flashscore-verified score over API-Football
+                            # Never overwrite an existing score — first source wins.
                             if not (match.home_goals is not None
-                                    and match.flashscore_id
                                     and (match.home_goals != home_goals
                                          or match.away_goals != away_goals)):
                                 match.home_goals = home_goals

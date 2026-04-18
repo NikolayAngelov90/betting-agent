@@ -126,7 +126,8 @@ jobs:
 
       - name: Generate and send picks
         run: python -m src.agent.betting_agent --picks
-        timeout-minutes: 45
+        timeout-minutes: 60
+        continue-on-error: true
 
       - name: Scrape Flashscore results for all leagues (post-picks)
         if: always()
