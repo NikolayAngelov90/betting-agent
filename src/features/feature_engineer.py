@@ -27,6 +27,117 @@ class FeatureEngineer:
         self.db = get_db()
         self._weather_service = None  # lazy-loaded on first use
         self.elo_ratings = None  # set externally from predictor.elo.ratings
+        self._preload_cache: Optional[dict] = None
+
+    def preload_batch(self, match_ids: list) -> None:
+        """Bulk-preload all DB data needed for a list of fixtures into memory.
+
+        Replaces O(N) per-fixture DB round-trips with three bulk queries:
+          1. Match metadata for all match_ids (1 query)
+          2. All Odds rows for all match_ids (1 query)
+          3. Completed match history for all involved teams (1 query)
+
+        After this call, create_features() reads from self._preload_cache instead
+        of issuing live DB queries for each fixture.  Calling preload_batch is
+        optional — if not called (or if it raises), create_features() falls back
+        to per-fixture live queries with zero behaviour change.
+        """
+        if not match_ids:
+            return
+
+        self._preload_cache = {"match_meta": {}, "odds": {}, "team_history": {}}
+
+        try:
+            from datetime import date as _date, timedelta as _td
+
+            # ── Query 1: match metadata ───────────────────────────────────────
+            with self.db.get_session() as session:
+                fixture_rows = session.query(Match).filter(
+                    Match.id.in_(match_ids)
+                ).all()
+
+                all_team_ids: set = set()
+                for m in fixture_rows:
+                    self._preload_cache["match_meta"][m.id] = {
+                        "home_team_id": m.home_team_id,
+                        "away_team_id": m.away_team_id,
+                        "league": m.league or "",
+                        "referee": m.referee or "",
+                        "match_date": m.match_date,
+                        "venue": m.venue,
+                    }
+                    all_team_ids.add(m.home_team_id)
+                    all_team_ids.add(m.away_team_id)
+
+            # ── Query 2: odds for all fixtures ────────────────────────────────
+            with self.db.get_session() as session:
+                odds_rows = session.query(Odds).filter(
+                    Odds.match_id.in_(match_ids)
+                ).all()
+
+                odds_by_match: dict = defaultdict(list)
+                for row in odds_rows:
+                    odds_by_match[row.match_id].append({
+                        "market_type": row.market_type,
+                        "bookmaker": row.bookmaker,
+                        "selection": row.selection,
+                        "odds_value": row.odds_value,
+                        "opening_odds": row.opening_odds,
+                    })
+                self._preload_cache["odds"] = dict(odds_by_match)
+
+            # ── Query 3: team history (one bulk query for all teams) ──────────
+            if all_team_ids:
+                cutoff = _date.today() - _td(days=365)
+                with self.db.get_session() as session:
+                    history_rows = session.query(Match).filter(
+                        Match.is_fixture == False,
+                        Match.home_goals.isnot(None),
+                        Match.match_date >= cutoff,
+                        or_(
+                            Match.home_team_id.in_(all_team_ids),
+                            Match.away_team_id.in_(all_team_ids),
+                        ),
+                    ).order_by(Match.match_date.desc()).all()
+
+                    team_history: dict = defaultdict(list)
+                    for m in history_rows:
+                        row_data = {
+                            "id": m.id,
+                            "match_date": m.match_date,
+                            "home_team_id": m.home_team_id,
+                            "away_team_id": m.away_team_id,
+                            "league": m.league,
+                            "referee": m.referee,
+                            "home_goals": m.home_goals,
+                            "away_goals": m.away_goals,
+                            "home_xg": m.home_xg,
+                            "away_xg": m.away_xg,
+                            "home_yellow_cards": m.home_yellow_cards,
+                            "away_yellow_cards": m.away_yellow_cards,
+                            "home_red_cards": m.home_red_cards,
+                            "away_red_cards": m.away_red_cards,
+                            "home_fouls": m.home_fouls,
+                            "away_fouls": m.away_fouls,
+                            "regulation_home_goals": m.regulation_home_goals,
+                            "regulation_away_goals": m.regulation_away_goals,
+                        }
+                        if m.home_team_id in all_team_ids:
+                            team_history[m.home_team_id].append(row_data)
+                        if m.away_team_id in all_team_ids:
+                            team_history[m.away_team_id].append(row_data)
+
+                    self._preload_cache["team_history"] = dict(team_history)
+
+            logger.debug(
+                f"preload_batch: {len(self._preload_cache['match_meta'])} fixtures, "
+                f"{sum(len(v) for v in self._preload_cache['odds'].values())} odds rows, "
+                f"{len(self._preload_cache.get('team_history', {}))} teams of history"
+            )
+
+        except Exception as exc:
+            logger.warning(f"preload_batch failed — falling back to per-fixture queries: {exc}")
+            self._preload_cache = None
 
     async def create_features(self, match_id: int, as_of_date=None,
                               for_training: bool = False) -> dict:

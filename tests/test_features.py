@@ -92,3 +92,119 @@ class TestTeamFeatures:
         assert tf._calculate_unbeaten_run(["W", "D", "W", "L", "W"]) == 3
         assert tf._calculate_unbeaten_run(["L", "W", "D"]) == 0
         assert tf._calculate_unbeaten_run(["W", "W", "W"]) == 3
+
+
+class TestFeatureEngineerPreloadBatch:
+    """Tests for FeatureEngineer.preload_batch() — Story 1.1."""
+
+    def _make_fe(self):
+        """Return a FeatureEngineer instance without touching the DB."""
+        from src.features.feature_engineer import FeatureEngineer
+        fe = FeatureEngineer.__new__(FeatureEngineer)
+        fe._preload_cache = None
+        return fe
+
+    def test_cache_is_none_by_default(self):
+        fe = self._make_fe()
+        assert fe._preload_cache is None
+
+    def test_empty_match_ids_is_noop(self):
+        fe = self._make_fe()
+        fe.preload_batch([])
+        assert fe._preload_cache is None
+
+    def test_cache_populated_with_correct_keys(self):
+        from src.features.feature_engineer import FeatureEngineer
+        from unittest.mock import MagicMock, patch
+        from datetime import date
+
+        fe = self._make_fe()
+
+        # Build mock Match row for the fixture
+        fixture = MagicMock()
+        fixture.id = 42
+        fixture.home_team_id = 1
+        fixture.away_team_id = 2
+        fixture.league = "england/premier-league"
+        fixture.referee = "Mike Dean"
+        fixture.match_date = date(2026, 4, 20)
+        fixture.venue = "Old Trafford"
+
+        # Build a mock history match
+        hist = MagicMock()
+        hist.id = 10
+        hist.home_team_id = 1
+        hist.away_team_id = 3
+        hist.match_date = date(2026, 4, 5)
+        hist.league = "england/premier-league"
+        hist.referee = "Mike Dean"
+        hist.home_goals = 2
+        hist.away_goals = 1
+        hist.home_xg = 1.8
+        hist.away_xg = 0.9
+        hist.home_yellow_cards = 1
+        hist.away_yellow_cards = 2
+        hist.home_red_cards = 0
+        hist.away_red_cards = 0
+        hist.home_fouls = 10
+        hist.away_fouls = 8
+        hist.regulation_home_goals = 2
+        hist.regulation_away_goals = 1
+
+        # Build a mock Odds row
+        odds_row = MagicMock()
+        odds_row.match_id = 42
+        odds_row.market_type = "1X2"
+        odds_row.bookmaker = "Bet365"
+        odds_row.selection = "Home"
+        odds_row.odds_value = 1.80
+        odds_row.opening_odds = 1.85
+
+        mock_db = MagicMock()
+
+        # The three sessions return the three query results in order
+        session_q1 = MagicMock()
+        session_q1.__enter__ = lambda s: s
+        session_q1.__exit__ = MagicMock(return_value=False)
+        session_q1.query.return_value.filter.return_value.all.return_value = [fixture]
+
+        session_q2 = MagicMock()
+        session_q2.__enter__ = lambda s: s
+        session_q2.__exit__ = MagicMock(return_value=False)
+        session_q2.query.return_value.filter.return_value.all.return_value = [odds_row]
+
+        session_q3 = MagicMock()
+        session_q3.__enter__ = lambda s: s
+        session_q3.__exit__ = MagicMock(return_value=False)
+        session_q3.query.return_value.filter.return_value.order_by.return_value \
+            .all.return_value = [hist]
+
+        mock_db.get_session.side_effect = [session_q1, session_q2, session_q3]
+        fe.db = mock_db
+
+        fe.preload_batch([42])
+
+        assert fe._preload_cache is not None
+        assert 42 in fe._preload_cache["match_meta"]
+        assert fe._preload_cache["match_meta"][42]["home_team_id"] == 1
+        assert fe._preload_cache["match_meta"][42]["league"] == "england/premier-league"
+        assert 42 in fe._preload_cache["odds"]
+        assert fe._preload_cache["odds"][42][0]["bookmaker"] == "Bet365"
+        assert 1 in fe._preload_cache["team_history"]
+
+    def test_exception_sets_cache_to_none(self):
+        fe = self._make_fe()
+
+        mock_db = MagicMock()
+        mock_db.get_session.side_effect = RuntimeError("DB connection lost")
+        fe.db = mock_db
+
+        fe.preload_batch([99])
+        assert fe._preload_cache is None
+
+    def test_cache_absent_does_not_break_feature_lookup(self):
+        """With no preload, _preload_cache stays None — callers can check and fall back."""
+        fe = self._make_fe()
+        assert fe._preload_cache is None
+        # Confirm the cache key is absent (not an empty dict that could confuse consumers)
+        assert not fe._preload_cache
