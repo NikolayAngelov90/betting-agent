@@ -184,56 +184,59 @@ class MLModels:
         else:
             self._corr_drop_mask = None
 
-        logger.info(f"Training with {X.shape[1]} features, {n_samples} samples")
+        # ── Chronological hold-out: last 20% reserved before ANY fitting (AC1) ─
+        split_idx = int(len(X) * 0.80)
+        X_train_raw, X_val_raw = X[:split_idx], X[split_idx:]
+        y_train, y_val = y[:split_idx], y[split_idx:]
 
-        # Scale features — use DataFrame with column names so LightGBM/XGBoost
-        # store correct feature names (avoids sklearn UserWarning at predict time)
-        X_scaled = self.scaler.fit_transform(X)
-        X_df = pd.DataFrame(X_scaled, columns=self.feature_names)
+        logger.info(
+            f"Training with {X.shape[1]} features, "
+            f"{len(X_train_raw)} train / {len(X_val_raw)} val samples "
+            f"(total {n_samples})"
+        )
 
-        # Time-series cross-validation
+        # Scale on training split only; apply same transform to validation (AC1)
+        X_train_scaled = self.scaler.fit_transform(X_train_raw)
+        X_val_scaled = self.scaler.transform(X_val_raw)
+        X_train_df = pd.DataFrame(X_train_scaled, columns=self.feature_names)
+        X_val_df = pd.DataFrame(X_val_scaled, columns=self.feature_names)
+
+        # Time-series cross-validation on training split only
         tscv = TimeSeriesSplit(n_splits=5)
 
         for name, model in self.models.items():
             logger.info(f"Training {name}...")
 
             cv_scores = []
-            for train_idx, val_idx in tscv.split(X_df):
-                X_train, X_val = X_df.iloc[train_idx], X_df.iloc[val_idx]
-                y_train, y_val = y[train_idx], y[val_idx]
+            for train_idx, val_idx in tscv.split(X_train_df):
+                X_cv_tr, X_cv_val = X_train_df.iloc[train_idx], X_train_df.iloc[val_idx]
+                y_cv_tr, y_cv_val = y_train[train_idx], y_train[val_idx]
 
-                model.fit(X_train, y_train)
-                val_pred = model.predict(X_val)
-                cv_scores.append(accuracy_score(y_val, val_pred))
+                model.fit(X_cv_tr, y_cv_tr)
+                val_pred = model.predict(X_cv_val)
+                cv_scores.append(accuracy_score(y_cv_val, val_pred))
 
             avg_cv = np.mean(cv_scores)
             logger.info(f"{name} CV accuracy: {avg_cv:.4f}")
 
-        # ── Calibrated final fit ─────────────────────────────────────────────
-        # Use 5-fold cross-calibration (sklearn >= 1.4 removed cv='prefit').
-        # CalibratedClassifierCV with cv=5 fits the base estimator on 4 folds
-        # and the isotonic calibrator on the held-out fold, then averages all
-        # five calibrated models at prediction time — more robust than a single
-        # holdout split and compatible with all sklearn versions.
-        # LR is already probability-calibrated by its log-loss objective.
+        # ── First-pass calibrated fit on training split only (AC2) ───────────
         self.calibrated_models = {}
         for name, model in self.models.items():
             if name in self._CALIBRATE_MODELS:
                 cal = CalibratedClassifierCV(model, cv=5, method="isotonic")
-                cal.fit(X_df, y)
+                cal.fit(X_train_df, y_train)
                 self.calibrated_models[name] = cal
                 logger.info(
-                    f"{name}: isotonic calibration with 5-fold CV on {len(X_df)} samples"
+                    f"{name}: isotonic calibration with 5-fold CV on {len(X_train_df)} samples"
                 )
             else:
-                # LR: train on all data (already probability-calibrated)
-                model.fit(X_df, y)
+                model.fit(X_train_df, y_train)
                 self.calibrated_models[name] = model
 
         self.is_fitted = True
-        logger.info("All ML models trained successfully")
+        logger.info("First-pass ML models trained on training split")
 
-        # Log top 10 most important features
+        # Log top 10 most important features (from training-split models only, AC2)
         importance = self.get_feature_importance()
         for model_name, imp_list in importance.items():
             top_10 = imp_list[:10]
@@ -241,7 +244,8 @@ class MLModels:
             logger.info(f"{model_name} top features: {top_str}")
 
         # ── Feature importance pruning ────────────────────────────────────────
-        # Average XGB + RF importances; re-train on top ML_FEATURE_COUNT features.
+        # Importances from training-split models only (AC2).
+        # Second-pass re-fit also on training split only (AC3).
         if importance and len(self.feature_names) > self.ML_FEATURE_COUNT:
             avg_scores = {fn: 0.0 for fn in self.feature_names}
             n_imp_models = 0
@@ -260,7 +264,8 @@ class MLModels:
             top_set = set(top_names)
             selected_idx = [i for i, fn in enumerate(self.feature_names) if fn in top_set]
 
-            X_top = X[:, selected_idx]
+            X_train_pruned = X_train_raw[:, selected_idx]
+            X_val_pruned = X_val_raw[:, selected_idx]
             self.feature_names = [self.feature_names[i] for i in selected_idx]
 
             logger.info(
@@ -272,27 +277,28 @@ class MLModels:
             MODELS_DIR.mkdir(parents=True, exist_ok=True)
             _feat_path.write_text(json.dumps(self.feature_names))
 
-            # Re-fit scaler + re-train calibrated models on reduced feature set
+            # Re-fit scaler + re-train on reduced training split (AC3)
             self._init_models()
-            X_scaled_top = self.scaler.fit_transform(X_top)
-            X_df_top = pd.DataFrame(X_scaled_top, columns=self.feature_names)
+            X_train_scaled_top = self.scaler.fit_transform(X_train_pruned)
+            X_val_scaled_top = self.scaler.transform(X_val_pruned)
+            X_train_df_top = pd.DataFrame(X_train_scaled_top, columns=self.feature_names)
+            X_val_df_top = pd.DataFrame(X_val_scaled_top, columns=self.feature_names)
 
             self.calibrated_models = {}
             for name, model in self.models.items():
                 if name in self._CALIBRATE_MODELS:
                     cal = CalibratedClassifierCV(model, cv=5, method="isotonic")
-                    cal.fit(X_df_top, y)
+                    cal.fit(X_train_df_top, y_train)
                     self.calibrated_models[name] = cal
                 else:
-                    model.fit(X_df_top, y)
+                    model.fit(X_train_df_top, y_train)
                     self.calibrated_models[name] = model
 
-            X_df = X_df_top  # point to reduced df for validation below
+            X_val_df = X_val_df_top  # point to pruned val df for validation
 
-        # ── Validation accuracy on last 20% of samples (AC4) ─────────────────
-        n_val = max(1, int(len(X_df) * 0.20))
-        X_val_df = X_df.iloc[-n_val:]
-        y_val = y[-n_val:]
+        logger.info("All ML models trained successfully")
+
+        # ── Validation on TRUE chronological hold-out 20% (AC3) ──────────────
         val_preds = []
         for name in self.models:
             cal_model = self.calibrated_models.get(name, self.models[name])
@@ -307,6 +313,11 @@ class MLModels:
             )
             val_acc = accuracy_score(y_val, majority)
             logger.info(f"ML validation accuracy: {val_acc:.1%}")
+            if val_acc > 0.85:
+                logger.critical(
+                    f"CRITICAL: val accuracy {val_acc:.1%} on 3-class target — "
+                    "possible label leakage, inspect training data"
+                )
 
     def predict(self, X: np.ndarray, feature_names: List[str] = None) -> Dict:
         """Get predictions from all models.
@@ -568,16 +579,26 @@ class GoalsMLModel:
                 self.feature_names = [f for f, k in zip(self.feature_names, keep_corr) if k]
                 self._corr_drop_mask = keep_corr
 
-        logger.info(f"GoalsMLModel: training with {X.shape[1]} features, {X.shape[0]} samples")
-        X_scaled = self.scaler.fit_transform(X)
-        X_df = pd.DataFrame(X_scaled, columns=self.feature_names)
+        # ── Chronological hold-out: last 20% before any fitting ──────────────
+        split_idx = int(len(X) * 0.80)
+        X_train_raw, X_val_raw = X[:split_idx], X[split_idx:]
+        y_train, y_val = y[:split_idx], y[split_idx:]
+
+        logger.info(
+            f"GoalsMLModel: training with {X.shape[1]} features, "
+            f"{len(X_train_raw)} train / {len(X_val_raw)} val samples"
+        )
+        X_train_scaled = self.scaler.fit_transform(X_train_raw)
+        X_val_scaled = self.scaler.transform(X_val_raw)
+        X_train_df = pd.DataFrame(X_train_scaled, columns=self.feature_names)
+        X_val_df = pd.DataFrame(X_val_scaled, columns=self.feature_names)
         tscv = TimeSeriesSplit(n_splits=5)
 
         for name, model in self.models.items():
             cv_scores = []
-            for train_idx, val_idx in tscv.split(X_df):
-                X_tr, X_vl = X_df.iloc[train_idx], X_df.iloc[val_idx]
-                y_tr, y_vl = y[train_idx], y[val_idx]
+            for train_idx, val_idx in tscv.split(X_train_df):
+                X_tr, X_vl = X_train_df.iloc[train_idx], X_train_df.iloc[val_idx]
+                y_tr, y_vl = y_train[train_idx], y_train[val_idx]
                 model.fit(X_tr, y_tr)
                 cv_scores.append(accuracy_score(y_vl, model.predict(X_vl)))
             logger.info(f"GoalsMLModel {name} CV accuracy: {np.mean(cv_scores):.4f}")
@@ -586,13 +607,35 @@ class GoalsMLModel:
         for name, model in self.models.items():
             if name in self._CALIBRATE:
                 cal = CalibratedClassifierCV(model, cv=5, method="isotonic")
-                cal.fit(X_df, y)
+                cal.fit(X_train_df, y_train)
                 self.calibrated_models[name] = cal
             else:
-                model.fit(X_df, y)
+                model.fit(X_train_df, y_train)
                 self.calibrated_models[name] = model
 
         self.is_fitted = True
+
+        # ── Validate on held-out chronological 20% ────────────────────────────
+        val_preds = []
+        for name in self.models:
+            cal_model = self.calibrated_models.get(name, self.models[name])
+            try:
+                val_preds.append(cal_model.predict(X_val_df))
+            except Exception:
+                pass
+        if val_preds:
+            votes = np.array(val_preds)
+            majority = np.apply_along_axis(
+                lambda col: np.bincount(col.astype(int)).argmax(), 0, votes
+            )
+            val_acc = accuracy_score(y_val, majority)
+            logger.info(f"GoalsMLModel validation accuracy: {val_acc:.1%}")
+            if val_acc > 0.90:
+                logger.critical(
+                    f"CRITICAL: GoalsMLModel val accuracy {val_acc:.1%} on binary target — "
+                    "possible label leakage, inspect training data"
+                )
+
         logger.info("GoalsMLModel training complete")
 
     def predict_proba_over25(self, X: np.ndarray,

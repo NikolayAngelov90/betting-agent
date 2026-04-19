@@ -7,7 +7,7 @@ players when generating picks.  Each fixture costs 1 API request.
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 
-from src.data.models import Player, Injury, Team, Match
+from src.data.models import Player, Injury, Team, Match, Odds
 from src.data.database import get_db
 from src.utils.logger import get_logger
 
@@ -52,17 +52,25 @@ class InjuryScraper:
             logger.debug("No API budget remaining for injuries")
             return
 
-        # Get today's fixtures with apifootball_id
+        # Get upcoming fixtures that have odds (skip fixtures with no market interest)
         today_start = datetime.combine(date.today(), datetime.min.time())
-        today_end = today_start + timedelta(days=1)
+        upcoming_cutoff = today_start + timedelta(days=3)
 
         with self.db.get_session() as session:
-            fixtures = session.query(Match).filter(
-                Match.is_fixture == True,
-                Match.apifootball_id.isnot(None),
-                Match.match_date >= today_start,
-                Match.match_date < today_end,
-            ).all()
+            # Only fetch injury data for fixtures with at least one odds record —
+            # fixtures without odds have no pick interest and don't need injury context.
+            fixtures = (
+                session.query(Match)
+                .join(Odds, Match.id == Odds.match_id)
+                .filter(
+                    Match.is_fixture == True,
+                    Match.apifootball_id.isnot(None),
+                    Match.match_date >= today_start,
+                    Match.match_date < upcoming_cutoff,
+                )
+                .distinct()
+                .all()
+            )
             fixture_list = [
                 (m.id, m.apifootball_id, m.home_team_id, m.away_team_id)
                 for m in fixtures
@@ -137,6 +145,13 @@ class InjuryScraper:
                 logger.debug(f"Team injury fallback: {team_fetched} teams queried, {total_saved} total saved")
 
         logger.info(f"Injury update: saved {total_saved} injuries from {fetched} fixtures")
+
+        # Log fixture IDs skipped due to budget exhaustion (AC3 of Story 5.1)
+        skipped_ids = [match_id for match_id, _, _, _ in fixture_list[fetched:]]
+        if skipped_ids:
+            logger.info(f"Injury data missing for fixture IDs (budget cutoff): {skipped_ids}")
+        elif fixture_list:
+            logger.info(f"Injury data complete for all {len(fixture_list)} fixtures")
 
     async def _fetch_fixture_injuries(
         self, fixture_id: int, home_team_id: int, away_team_id: int

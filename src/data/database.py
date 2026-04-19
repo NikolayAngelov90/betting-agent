@@ -241,9 +241,16 @@ def init_db():
 
     For SQLite: if the cached DB file is malformed, it is deleted and recreated.
     For PostgreSQL: tables are created if they don't exist.
+
+    When the env var TABLES_CREATED=1 is set (CI: set after the first invocation),
+    create_tables() is skipped to avoid redundant Neon cold-start + DDL overhead.
     """
+    import os as _os
     global _db_manager
     db = get_db()
+    if _os.environ.get("TABLES_CREATED") == "1":
+        logger.debug("Skipping create_tables — TABLES_CREATED env var set")
+        return db
     try:
         db.create_tables()
     except Exception as e:

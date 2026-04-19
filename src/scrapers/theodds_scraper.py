@@ -184,6 +184,13 @@ def _team_names_similar(name_a: str, name_b: str) -> bool:
         "sporting lisbon": "sporting",
         "benfica": "benfica",
         "porto": "porto",
+        # Belgium — Jupiler Pro League (TheOdds API uses full name; DB stores "St. Gilloise")
+        "union saint-gilloise": "st. gilloise",
+        "royale union saint-gilloise": "st. gilloise",
+        "union sg": "st. gilloise",
+        # Poland — Ekstraklasa (TheOdds API uses short name; DB stores API-Football display name)
+        "nieciecza": "termalica b-b.",
+        "bruk-bet termalica nieciecza": "termalica b-b.",
     }
 
     def _strip_accents(s: str) -> str:

@@ -19,6 +19,7 @@ jobs:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      PYTHONIOENCODING: utf-8
 
     steps:
       - name: Checkout repository
@@ -66,6 +67,8 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+          # Remove GPU libraries pulled as XGBoost transitive deps on CPU-only runner
+          pip uninstall -y nvidia-nccl-cu12 2>/dev/null || true
           python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
 
       - name: Download camoufox Firefox binary
@@ -88,6 +91,9 @@ jobs:
           assert db.health_check(), 'Database health check failed'
           print('Database connection OK (PostgreSQL/Neon)')
           "
+
+      - name: Mark DB tables as created
+        run: echo "TABLES_CREATED=1" >> $GITHUB_ENV
 
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short
@@ -146,7 +152,7 @@ jobs:
         run: |
           if [ "$(date +%w)" = "0" ]; then
             echo "Sunday — sending weekly performance report"
-            python -m src.agent.betting_agent --report
+            python -m src.agent.betting_agent --report --no-settle
           else
             echo "Not Sunday (day=$(date +%w)) — skipping weekly report"
           fi

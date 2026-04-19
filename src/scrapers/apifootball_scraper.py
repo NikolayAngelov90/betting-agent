@@ -374,6 +374,7 @@ class APIFootballScraper(BaseScraper):
         self._plan_restricted = False  # Set True on first plan error; skips season-restricted endpoints
         self._logged_unknown_bets: set = set()  # Suppress repeated unknown bet type logs
         self._today_fixture_count = 0  # Updated after _fetch_fixtures_by_date(today)
+        self._rate_limit_retries = 0  # Count 429-triggered retries for telemetry
 
     def remaining_budget(self) -> int:
         """Return remaining API requests available (excluding safety reserve)."""
@@ -400,6 +401,7 @@ class APIFootballScraper(BaseScraper):
             errors = data.get("errors", {})
             if errors:
                 if "rateLimit" in errors:
+                    self._rate_limit_retries += 1
                     logger.debug("API-Football rate limited, waiting 12s")
                     await asyncio.sleep(12)
                 elif "requests" in errors:
@@ -1132,13 +1134,24 @@ class APIFootballScraper(BaseScraper):
             min(self.ODDS_CONCURRENCY, odds_budget), len(fixture_list)
         )
 
-        coros = [
-            self._fetch_odds_guarded(sem, match_id, fixture_id, league)
-            for match_id, fixture_id, league in fixture_list[:odds_budget]
-        ]
+        _DISPATCH_DELAY_S = 0.5  # max 2 requests/sec to prevent 429 bursts
+
+        async def _rate_limited_gather():
+            tasks = []
+            for i, (match_id, fixture_id, league) in enumerate(fixture_list[:odds_budget]):
+                if i > 0:
+                    await asyncio.sleep(_DISPATCH_DELAY_S)
+                tasks.append(
+                    asyncio.create_task(
+                        self._fetch_odds_guarded(sem, match_id, fixture_id, league)
+                    )
+                )
+            return await asyncio.gather(*tasks, return_exceptions=True)
+
+        _retries_before = getattr(self, "_rate_limit_retries", 0)
         try:
             results = await asyncio.wait_for(
-                asyncio.gather(*coros, return_exceptions=True),
+                _rate_limited_gather(),
                 timeout=_ODDS_TIME_BUDGET_S,
             )
         except asyncio.TimeoutError:
@@ -1146,6 +1159,11 @@ class APIFootballScraper(BaseScraper):
                 f"Odds fetch time budget exhausted ({_ODDS_TIME_BUDGET_S // 60} min)"
             )
             results = []
+        new_retries = getattr(self, "_rate_limit_retries", 0) - _retries_before
+        if new_retries > 0:
+            logger.warning(f"API-Football retries: {new_retries} (target: 0)")
+        else:
+            logger.debug("API-Football retries: 0 (target: 0)")
 
         fetched = 0
         for result in results:

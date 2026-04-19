@@ -366,12 +366,12 @@ class FootballBettingAgent:
         # scraping (~12s/match) is unreliable due to Cloudflare blocking in CI.
         self.scraper.close_driver()
 
-        # 4. Injury data (cap at 5 min — API-Football calls can be slow)
+        # 4. Injury data (cap at 8 min — API-Football calls can be slow; increased from 5)
         try:
-            await asyncio.wait_for(self.injury_tracker.update(), timeout=300)
+            await asyncio.wait_for(self.injury_tracker.update(), timeout=480)
             logger.info("Injury update complete")
         except asyncio.TimeoutError:
-            logger.warning("Injury update timed out after 5 minutes")
+            logger.warning("Injury update timed out after 8 minutes")
         except Exception as e:
             logger.error(f"Injury update failed: {e}")
 
@@ -1768,6 +1768,18 @@ class FootballBettingAgent:
 
             self._apply_ml_calibration_gate(accuracies, cal_factors, prev_cal)
 
+            # Alert operators via Telegram when ML is excluded (AC1 of Story 4.2)
+            if cal_factors.get("ml", 1.0) == 0.0:
+                ml_acc = accuracies.get("ml", 0.0)
+                try:
+                    await self.telegram.send_alert(
+                        f"⚠️ ML training produced a below-threshold model "
+                        f"(accuracy {ml_acc:.1%}). "
+                        f"ML excluded from ensemble — check training data quality."
+                    )
+                except Exception as _tg_err:
+                    logger.warning(f"Failed to send ML training failure Telegram alert: {_tg_err}")
+
             cal_path.parent.mkdir(parents=True, exist_ok=True)
             cal_path.write_text(json.dumps(cal_factors, indent=2))
             self.predictor.calibration_factors.update(cal_factors)
@@ -1833,8 +1845,9 @@ class FootballBettingAgent:
         # Build feature matrix and labels — process in parallel batches
         # Hard time budget prevents ML training from blowing the CI timeout.
         import time as _timer
-        _ML_TRAIN_BUDGET_S = 1800  # 30 minutes (fits in 35-min CI step timeout)
-        _ml_deadline = _timer.monotonic() + _ML_TRAIN_BUDGET_S
+        _ML_TRAIN_BUDGET_S = 2700  # 45 minutes (raised from 30 to allow full 500-sample runs)
+        _ml_start = _timer.monotonic()
+        _ml_deadline = _ml_start + _ML_TRAIN_BUDGET_S
 
         # Clear standings cache so monthly-coarsened keys start fresh
         self.feature_engineer.team_features.clear_standings_cache()
@@ -1848,8 +1861,10 @@ class FootballBettingAgent:
         # to avoid connection pool exhaustion. SQLite is local so 50 is fine.
         BATCH_SIZE = 10 if self.db.is_postgres else 50
 
+        _budget_exhausted = False
         for batch_start in range(0, len(match_data), BATCH_SIZE):
             if _timer.monotonic() > _ml_deadline:
+                _budget_exhausted = True
                 logger.warning(
                     f"ML training time budget exhausted ({_ML_TRAIN_BUDGET_S // 60} min) "
                     f"after {len(X_list)} valid samples — proceeding with partial data"
@@ -1910,6 +1925,26 @@ class FootballBettingAgent:
             processed = min(batch_start + BATCH_SIZE, len(match_data))
             if processed % 25 == 0 or processed == len(match_data):
                 logger.info(f"Processed {processed}/{len(match_data)} matches ({len(X_list)} valid)...")
+
+        # Throughput summary (AC2 of Story 4.3)
+        _elapsed_min = (_timer.monotonic() - _ml_start) / 60
+        _rate = len(X_list) / _elapsed_min if _elapsed_min > 0 else 0
+        logger.info(
+            f"Training throughput: {len(X_list)} samples in {_elapsed_min:.1f}min "
+            f"({_rate:.1f} samples/min)"
+        )
+        if _budget_exhausted:
+            _target = len(match_data)
+            _pct = len(X_list) / _target * 100 if _target > 0 else 0
+            _alert_msg = (
+                f"⚠️ ML training budget exhausted at {len(X_list)}/{_target} samples "
+                f"({_pct:.0f}%). Throughput: {_rate:.1f} samples/min."
+            )
+            logger.warning(_alert_msg)
+            try:
+                await self.telegram.send_alert(_alert_msg)
+            except Exception as _tg_err:
+                logger.warning(f"Failed to send training budget alert: {_tg_err}")
 
         if len(X_list) < 50:
             logger.warning(f"Only {len(X_list)} valid samples (skipped {skipped}), need 50+")
@@ -2346,8 +2381,16 @@ class FootballBettingAgent:
 
 async def main():
     """CLI entry point."""
+    import io
     import sys
     from pathlib import Path
+
+    # Ensure UTF-8 stdout/stderr in CI environments (fixes non-ASCII team name corruption)
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "buffer"):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
     try:
         from dotenv import load_dotenv
         load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -2579,7 +2622,9 @@ async def main():
 
         elif command == "--report":
             print("Generating performance report...")
-            await agent.settle_predictions()
+            no_settle = "--no-settle" in sys.argv
+            if not no_settle:
+                await agent.settle_predictions()
             stats = agent.get_stats()
             if agent.telegram.enabled:
                 await agent.telegram.send_performance_report(stats)
