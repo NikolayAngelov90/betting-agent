@@ -346,6 +346,7 @@ class APIFootballScraper(BaseScraper):
     BUDGET_RESERVE = 9    # safety margin
     # Note: no static BUDGET_INJURIES — computed dynamically as
     # min(fixture_count, remaining_after_static_steps) in injury_scraper.
+    ODDS_CONCURRENCY = 3  # max concurrent fixture-odds HTTP requests (3×~10s ≈ 170s for 49 fixtures)
 
     def __init__(self, config=None):
         super().__init__(config)
@@ -1032,6 +1033,18 @@ class APIFootballScraper(BaseScraper):
 
     # ---- Odds fetching ----
 
+    def _make_odds_semaphore(self, remaining_budget: int, n_fixtures: int) -> asyncio.Semaphore:
+        capacity = max(1, min(remaining_budget, n_fixtures))
+        return asyncio.Semaphore(capacity)
+
+    async def _fetch_odds_guarded(self, sem, match_id: int, fixture_id: int, league: str) -> tuple:
+        async with sem:
+            if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
+                logger.debug(f"Quota limit reached — skipping odds for fixture {fixture_id}")
+                return (match_id, None, league)
+            odds_data = await self._fetch_fixture_odds(fixture_id)
+            return (match_id, odds_data, league)
+
     async def fetch_upcoming_odds(self):
         """Fetch real bookmaker odds for today's fixtures from API-Football.
 
@@ -1113,35 +1126,41 @@ class APIFootballScraper(BaseScraper):
 
         fixture_list.sort(key=sort_key)
 
-        import time as _t
         _ODDS_TIME_BUDGET_S = 600  # 10-minute hard cap on odds fetching
-        _odds_deadline = _t.monotonic() + _ODDS_TIME_BUDGET_S
+
+        sem = self._make_odds_semaphore(
+            min(self.ODDS_CONCURRENCY, odds_budget), len(fixture_list)
+        )
+
+        coros = [
+            self._fetch_odds_guarded(sem, match_id, fixture_id, league)
+            for match_id, fixture_id, league in fixture_list[:odds_budget]
+        ]
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*coros, return_exceptions=True),
+                timeout=_ODDS_TIME_BUDGET_S,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Odds fetch time budget exhausted ({_ODDS_TIME_BUDGET_S // 60} min)"
+            )
+            results = []
 
         fetched = 0
-        for match_id, fixture_id, league in fixture_list:
-            if fetched >= odds_budget:
-                logger.info(f"Odds budget exhausted after {fetched} fixtures")
-                break
-            if _t.monotonic() > _odds_deadline:
-                logger.warning(
-                    f"Odds time budget exhausted ({_ODDS_TIME_BUDGET_S // 60} min) "
-                    f"after {fetched} fixtures"
-                )
-                break
-
-            odds_data = await self._fetch_fixture_odds(fixture_id)
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.warning(f"Odds fetch error (fixture skipped): {result}")
+                continue
+            match_id, odds_data, league = result
             if odds_data:
                 count = self._save_fixture_odds(match_id, odds_data)
                 if count > 0:
                     fetched += 1
-                    logger.debug(
-                        f"Saved {count} odds for fixture {fixture_id} "
-                        f"(match {match_id}, {league})"
-                    )
+                    logger.debug(f"Saved {count} odds for match {match_id} ({league})")
                 else:
                     logger.debug(
-                        f"No odds from top bookmakers for fixture {fixture_id} "
-                        f"(match {match_id}, {league}) — bookmakers may not cover this market"
+                        f"No top-bookmaker odds for match {match_id} ({league})"
                     )
 
         logger.info(f"Fetched odds for {fetched} upcoming fixtures ({self._requests_today} API requests used)")
