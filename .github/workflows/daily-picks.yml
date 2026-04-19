@@ -1,202 +1,202 @@
-# name: Daily Betting Picks
+name: Daily Betting Picks
 
-# on:
-#   schedule:
-#     # 06:00 UTC = 09:00 Kyiv summer (UTC+3)
-#     - cron: '0 6 * * *'
-#   workflow_dispatch: # Allow manual trigger
+on:
+  schedule:
+    # 06:00 UTC = 09:00 Kyiv summer (UTC+3)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Allow manual trigger
 
-# jobs:
-#   daily-picks:
-#     runs-on: ubuntu-latest
-#     timeout-minutes: 180
+jobs:
+  daily-picks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
 
-#     env:
-#       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-#       FOOTBALL_DATA_ORG_KEY: ${{ secrets.FOOTBALL_DATA_ORG_KEY }}
-#       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-#       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-#       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-#       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-#       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    env:
+      API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+      FOOTBALL_DATA_ORG_KEY: ${{ secrets.FOOTBALL_DATA_ORG_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-#     steps:
-#       - name: Checkout repository
-#         uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-#       - name: Restore ML models cache
-#         uses: actions/cache/restore@v4
-#         with:
-#           path: |
-#             data/models/
-#             data/historical_load_cache.json
-#           key: betting-models-${{ github.run_number }}
-#           restore-keys: |
-#             betting-models-
+      - name: Restore ML models cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/models/
+            data/historical_load_cache.json
+          key: betting-models-${{ github.run_number }}
+          restore-keys: |
+            betting-models-
 
-#       - name: Restore camoufox binary cache
-#         id: restore-camoufox
-#         uses: actions/cache/restore@v4
-#         with:
-#           path: ~/.cache/camoufox
-#           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
-#           restore-keys: |
-#             camoufox-${{ runner.os }}-
+      - name: Restore camoufox binary cache
+        id: restore-camoufox
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            camoufox-${{ runner.os }}-
 
-#       - name: Set up Python 3.11
-#         uses: actions/setup-python@v5
-#         with:
-#           python-version: '3.11'
-#           cache: 'pip'
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
 
-#       - name: Install Chrome (stable) and Xvfb
-#         run: |
-#           wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-#           sudo apt-get install -y ./google-chrome-stable_current_amd64.deb xvfb
-#           google-chrome --version
+      - name: Install Chrome (stable) and Xvfb
+        run: |
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb xvfb
+          google-chrome --version
 
-#       - name: Start virtual display (Xvfb)
-#         run: |
-#           Xvfb :99 -screen 0 1920x1080x24 -ac 2>/dev/null &
-#           echo "DISPLAY=:99" >> $GITHUB_ENV
-#           sleep 1
-#           echo "Virtual display started on :99"
+      - name: Start virtual display (Xvfb)
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 -ac 2>/dev/null &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          sleep 1
+          echo "Virtual display started on :99"
 
-#       - name: Install dependencies
-#         run: |
-#           pip install --upgrade pip
-#           pip install -r requirements.txt
-#           python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
 
-#       - name: Download camoufox Firefox binary
-#         env:
-#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-#         run: python -m camoufox fetch
-#         continue-on-error: true
+      - name: Download camoufox Firefox binary
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m camoufox fetch
+        continue-on-error: true
 
-#       - name: Create directories
-#         run: mkdir -p data/models logs
+      - name: Create directories
+        run: mkdir -p data/models logs
 
-#       - name: Create config from example
-#         run: cp config/config.example.yaml config/config.yaml
+      - name: Create config from example
+        run: cp config/config.example.yaml config/config.yaml
 
-#       - name: Verify database connection
-#         run: |
-#           python -c "
-#           from src.data.database import init_db
-#           db = init_db()
-#           assert db.health_check(), 'Database health check failed'
-#           print('Database connection OK (PostgreSQL/Neon)')
-#           "
+      - name: Verify database connection
+        run: |
+          python -c "
+          from src.data.database import init_db
+          db = init_db()
+          assert db.health_check(), 'Database health check failed'
+          print('Database connection OK (PostgreSQL/Neon)')
+          "
 
-#       - name: Run tests
-#         run: python -m pytest tests/ -v --tb=short
-#         continue-on-error: true
+      - name: Run tests
+        run: python -m pytest tests/ -v --tb=short
+        continue-on-error: true
 
-#       - name: Run daily update (fixtures + odds, no Flashscore results)
-#         run: python -m src.agent.betting_agent --update --skip-ml-retrain
-#         timeout-minutes: 30
-#         continue-on-error: true
+      - name: Run daily update (fixtures + odds, no Flashscore results)
+        run: python -m src.agent.betting_agent --update --skip-ml-retrain
+        timeout-minutes: 30
+        continue-on-error: true
 
-#       - name: Settle yesterday's predictions
-#         run: python -m src.agent.betting_agent --settle
-#         timeout-minutes: 5
-#         continue-on-error: true
+      - name: Settle yesterday's predictions
+        run: python -m src.agent.betting_agent --settle
+        timeout-minutes: 5
+        continue-on-error: true
 
-#       - name: Retrain ML models (if stale)
-#         run: python -m src.agent.betting_agent --train
-#         timeout-minutes: 35
-#         continue-on-error: true
+      - name: Retrain ML models (if stale)
+        run: python -m src.agent.betting_agent --train
+        timeout-minutes: 35
+        continue-on-error: true
 
-#       - name: Check DB health
-#         run: |
-#           python << 'PYEOF'
-#           from src.data.database import get_db
-#           from src.data.models import Match, SavedPick
-#           db = get_db()
-#           with db.get_session() as session:
-#               completed = session.query(Match).filter(Match.home_goals.isnot(None)).count()
-#               fixtures = session.query(Match).filter(Match.is_fixture == True).count()
-#               picks = session.query(SavedPick).count()
-#               pending = session.query(SavedPick).filter(SavedPick.result.is_(None)).count()
-#           print(f'DB health: {completed} completed matches | {fixtures} fixtures | {picks} total picks ({pending} pending)')
-#           if completed < 100:
-#               print('WARNING: fewer than 100 completed matches — ML training may be skipped')
-#           PYEOF
+      - name: Check DB health
+        run: |
+          python << 'PYEOF'
+          from src.data.database import get_db
+          from src.data.models import Match, SavedPick
+          db = get_db()
+          with db.get_session() as session:
+              completed = session.query(Match).filter(Match.home_goals.isnot(None)).count()
+              fixtures = session.query(Match).filter(Match.is_fixture == True).count()
+              picks = session.query(SavedPick).count()
+              pending = session.query(SavedPick).filter(SavedPick.result.is_(None)).count()
+          print(f'DB health: {completed} completed matches | {fixtures} fixtures | {picks} total picks ({pending} pending)')
+          if completed < 100:
+              print('WARNING: fewer than 100 completed matches — ML training may be skipped')
+          PYEOF
 
-#       - name: Generate and send picks
-#         run: python -m src.agent.betting_agent --picks
-#         timeout-minutes: 60
-#         continue-on-error: true
+      - name: Generate and send picks
+        run: python -m src.agent.betting_agent --picks
+        timeout-minutes: 60
+        continue-on-error: true
 
-#       - name: Scrape Flashscore results for all leagues (post-picks)
-#         if: always()
-#         run: python -m src.agent.betting_agent --update-results
-#         timeout-minutes: 60
-#         continue-on-error: true
+      - name: Scrape Flashscore results for all leagues (post-picks)
+        if: always()
+        run: python -m src.agent.betting_agent --update-results
+        timeout-minutes: 60
+        continue-on-error: true
 
-#       - name: Settle late results (post update-results)
-#         if: always()
-#         run: python -m src.agent.betting_agent --settle
-#         timeout-minutes: 5
-#         continue-on-error: true
+      - name: Settle late results (post update-results)
+        if: always()
+        run: python -m src.agent.betting_agent --settle
+        timeout-minutes: 5
+        continue-on-error: true
 
-#       - name: Send weekly performance report (Sundays only)
-#         if: success()
-#         run: |
-#           if [ "$(date +%w)" = "0" ]; then
-#             echo "Sunday — sending weekly performance report"
-#             python -m src.agent.betting_agent --report
-#           else
-#             echo "Not Sunday (day=$(date +%w)) — skipping weekly report"
-#           fi
-#         continue-on-error: true
+      - name: Send weekly performance report (Sundays only)
+        if: success()
+        run: |
+          if [ "$(date +%w)" = "0" ]; then
+            echo "Sunday — sending weekly performance report"
+            python -m src.agent.betting_agent --report
+          else
+            echo "Not Sunday (day=$(date +%w)) — skipping weekly report"
+          fi
+        continue-on-error: true
 
-#       - name: Save ML models cache
-#         if: always()
-#         uses: actions/cache/save@v4
-#         with:
-#           path: |
-#             data/models/
-#             data/historical_load_cache.json
-#           key: betting-models-${{ github.run_number }}
+      - name: Save ML models cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/models/
+            data/historical_load_cache.json
+          key: betting-models-${{ github.run_number }}
 
-#       - name: Save camoufox binary cache
-#         if: always() && steps.restore-camoufox.outputs.cache-hit != 'true'
-#         uses: actions/cache/save@v4
-#         with:
-#           path: ~/.cache/camoufox
-#           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+      - name: Save camoufox binary cache
+        if: always() && steps.restore-camoufox.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
 
-#       - name: Upload logs on failure
-#         if: failure()
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: workflow-logs-${{ github.run_number }}
-#           path: logs/
-#           retention-days: 7
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 7
 
-#       - name: Notify Telegram on failure
-#         if: failure()
-#         run: |
-#           python << 'PYEOF'
-#           import os, urllib.request, json
-#           token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-#           chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
-#           if token and chat_id:
-#               run_url = 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-#               msg = f'Daily picks workflow FAILED (run #${{ github.run_number }})\nLogs: {run_url}'
-#               data = json.dumps({'chat_id': chat_id, 'text': msg}).encode()
-#               req = urllib.request.Request(
-#                   f'https://api.telegram.org/bot{token}/sendMessage',
-#                   data=data,
-#                   headers={'Content-Type': 'application/json'}
-#               )
-#               try:
-#                   urllib.request.urlopen(req, timeout=10)
-#                   print('Failure notification sent to Telegram')
-#               except Exception as e:
-#                   print(f'Could not send Telegram notification: {e}')
-#           else:
-#               print('TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — skipping notification')
-#           PYEOF
+      - name: Notify Telegram on failure
+        if: failure()
+        run: |
+          python << 'PYEOF'
+          import os, urllib.request, json
+          token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+          chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
+          if token and chat_id:
+              run_url = 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+              msg = f'Daily picks workflow FAILED (run #${{ github.run_number }})\nLogs: {run_url}'
+              data = json.dumps({'chat_id': chat_id, 'text': msg}).encode()
+              req = urllib.request.Request(
+                  f'https://api.telegram.org/bot{token}/sendMessage',
+                  data=data,
+                  headers={'Content-Type': 'application/json'}
+              )
+              try:
+                  urllib.request.urlopen(req, timeout=10)
+                  print('Failure notification sent to Telegram')
+              except Exception as e:
+                  print(f'Could not send Telegram notification: {e}')
+          else:
+              print('TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — skipping notification')
+          PYEOF

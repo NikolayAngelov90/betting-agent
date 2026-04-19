@@ -359,3 +359,207 @@ class TestGetDailyPicksPreload:
         agent.feature_engineer.preload_batch.assert_called_once_with([42])
         # Only fixture 42 should be analyzed
         agent.analyze_fixture.assert_called_once_with(42)
+
+
+class TestMLTrainingSampleCap:
+    """Story 3.1: verify Postgres training sample cap raised from 200 to 500."""
+
+    def _make_agent_for_training(self, n_matches):
+        """Minimal FootballBettingAgent mock whose train_ml_models() exercises the DB query."""
+        from datetime import date, timedelta
+        from unittest.mock import MagicMock
+        from src.agent.betting_agent import FootballBettingAgent
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+
+        session = MagicMock()
+        session.__enter__ = lambda s: s
+        session.__exit__ = MagicMock(return_value=False)
+
+        mock_matches = []
+        for i in range(n_matches):
+            m = MagicMock()
+            m.id = i + 1
+            m.home_goals = 1
+            m.away_goals = 0
+            m.match_date = date(2024, 1, 1) + timedelta(days=i)
+            mock_matches.append(m)
+
+        session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = mock_matches
+
+        agent.db = MagicMock()
+        agent.db.get_session.return_value = session
+        agent.db.is_postgres = True
+
+        agent.predictor = MagicMock()
+        agent.predictor.poisson._team_strengths = {"Arsenal": 1.0}
+
+        fe = MagicMock()
+        fe.team_features = MagicMock()
+        agent.feature_engineer = fe
+
+        return agent, session
+
+    def test_train_postgres_cap_raised_to_500(self):
+        """--train handler uses max_samples=500 for Postgres, not 200."""
+        import inspect
+        import src.agent.betting_agent as mod
+        src_text = inspect.getsource(mod)
+        assert "500 if _db_tmp.is_postgres" in src_text
+        assert "200 if _db_tmp.is_postgres" not in src_text
+
+    def test_train_ml_models_respects_max_samples(self):
+        """train_ml_models(max_samples=N) passes N as DB limit() argument."""
+        import asyncio
+
+        agent, session = self._make_agent_for_training(n_matches=0)
+
+        asyncio.run(agent.train_ml_models(max_samples=500))
+
+        limit_call = session.query.return_value.filter.return_value.order_by.return_value.limit.call_args
+        assert limit_call[0][0] == 500
+
+    def test_train_ml_models_skips_on_insufficient_data(self):
+        """train_ml_models logs warning and returns early when fewer than 50 matches."""
+        import asyncio
+        from unittest.mock import patch
+
+        agent, session = self._make_agent_for_training(n_matches=30)
+
+        with patch("src.agent.betting_agent.logger") as mock_logger:
+            asyncio.run(agent.train_ml_models(max_samples=500))
+
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("Not enough matches" in w for w in warning_calls)
+
+
+class TestFeatureImportancePruning:
+    """Story 3.2: verify importance-based feature pruning in MLModels.fit()."""
+
+    def test_feature_list_json_written_after_fit(self, tmp_path):
+        """feature_list.json persisted after fit() when n_features > ML_FEATURE_COUNT."""
+        import json
+        from unittest.mock import patch
+        from src.models.ml_models import MLModels
+
+        ml = MLModels()
+        np.random.seed(0)
+        n_features = ml.ML_FEATURE_COUNT + 10
+        X = np.random.randn(100, n_features)
+        y = np.random.choice([0, 1, 2], size=100)
+        feature_names = [f"feat_{i}" for i in range(n_features)]
+
+        with patch("src.models.ml_models.MODELS_DIR", tmp_path):
+            ml.fit(X, y, feature_names=feature_names)
+
+        feat_path = tmp_path / "feature_list.json"
+        assert feat_path.exists()
+        selected = json.loads(feat_path.read_text())
+        assert len(selected) == ml.ML_FEATURE_COUNT
+        assert all(isinstance(s, str) for s in selected)
+
+    def test_model_retrained_on_reduced_feature_set(self, tmp_path):
+        """After importance pruning, model uses ML_FEATURE_COUNT features at predict time."""
+        from unittest.mock import patch
+        from src.models.ml_models import MLModels
+
+        ml = MLModels()
+        np.random.seed(1)
+        n_features = ml.ML_FEATURE_COUNT + 15
+        X = np.random.randn(100, n_features)
+        y = np.random.choice([0, 1, 2], size=100)
+        feature_names = [f"f{i}" for i in range(n_features)]
+
+        with patch("src.models.ml_models.MODELS_DIR", tmp_path):
+            ml.fit(X, y, feature_names=feature_names)
+
+            assert len(ml.feature_names) == ml.ML_FEATURE_COUNT
+
+            pred = ml.predict(np.random.randn(n_features), feature_names=feature_names)
+        avg = pred["ml_average"]
+        assert abs(avg["home_win"] + avg["draw"] + avg["away_win"] - 1.0) < 0.01
+
+    def test_predict_warns_when_feature_list_missing(self, tmp_path):
+        """predict() logs WARNING and returns valid result when feature_list.json absent."""
+        from unittest.mock import patch
+        from src.models.ml_models import MLModels
+
+        ml = MLModels()
+        np.random.seed(2)
+        X = np.random.randn(100, 5)
+        y = np.random.choice([0, 1, 2], size=100)
+        feature_names = [f"f{i}" for i in range(5)]
+
+        with patch("src.models.ml_models.MODELS_DIR", tmp_path):
+            ml.fit(X, y, feature_names=feature_names)
+            feat_path = tmp_path / "feature_list.json"
+            if feat_path.exists():
+                feat_path.unlink()
+
+            with patch("src.models.ml_models.logger") as mock_logger:
+                pred = ml.predict(np.random.randn(5), feature_names=feature_names)
+
+        assert "ml_average" in pred
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("feature_list.json" in w for w in warning_calls)
+
+
+class TestMLAccuracySafetyGate:
+    """Story 3.3: verify ML calibration safety gate in tune_ensemble_weights()."""
+
+    def test_gate_zeros_ml_when_below_threshold(self):
+        """When ML accuracy < 0.35, calibration factor set to 0.0 and WARNING logged."""
+        from unittest.mock import patch
+        from src.agent.betting_agent import FootballBettingAgent
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        cal_factors = {}
+        prev_cal = {}
+
+        with patch("src.agent.betting_agent.logger") as mock_logger:
+            agent._apply_ml_calibration_gate({"ml": 0.25}, cal_factors, prev_cal)
+
+        assert cal_factors["ml"] == 0.0
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("ML excluded from ensemble" in w for w in warning_calls)
+
+    def test_gate_restores_ml_when_accuracy_recovers(self):
+        """When accuracy recovers ≥ 0.35 after being gated, ML is restored to 1.0."""
+        from unittest.mock import patch
+        from src.agent.betting_agent import FootballBettingAgent
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        cal_factors = {}
+        prev_cal = {"ml": 0.0}  # previously gated
+
+        with patch("src.agent.betting_agent.logger") as mock_logger:
+            agent._apply_ml_calibration_gate({"ml": 0.42}, cal_factors, prev_cal)
+
+        assert cal_factors["ml"] == 1.0
+        info_calls = [str(c) for c in mock_logger.info.call_args_list]
+        assert any("re-entering ensemble" in c for c in info_calls)
+
+    def test_weighted_average_excludes_ml_when_cal_zero(self):
+        """With ml calibration=0.0, Poisson+Elo renormalize correctly; probs sum to 1.0."""
+        from unittest.mock import MagicMock
+        from src.models.ensemble import EnsemblePredictor
+
+        ep = EnsemblePredictor.__new__(EnsemblePredictor)
+        ep.calibration_factors = {"poisson": 1.0, "elo": 1.0, "ml": 0.0}
+        ep.bayesian_weights = MagicMock()
+        ep.bayesian_weights.get_weights.return_value = {
+            "poisson": 0.25, "elo": 0.20, "ml": 0.55
+        }
+
+        poisson = {"home_win": 0.50, "draw": 0.25, "away_win": 0.25}
+        elo = {"home_win": 0.45, "draw": 0.30, "away_win": 0.25}
+        ml = {"home_win": 0.33, "draw": 0.33, "away_win": 0.34}
+
+        result = ep._weighted_average_1x2(
+            poisson, elo, ml, league="england/premier-league"
+        )
+
+        total = result["home_win"] + result["draw"] + result["away_win"]
+        assert abs(total - 1.0) < 0.001
+        # With ML zeroed, result is pulled toward Poisson+Elo (high home_win), not uniform
+        assert result["home_win"] > 0.40

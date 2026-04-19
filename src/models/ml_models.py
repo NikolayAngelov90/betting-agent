@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 import numpy as np
 import os
 import pandas as pd
@@ -73,6 +74,8 @@ class MLModels:
     # Models that need isotonic calibration (RF, XGBoost, LightGBM are overconfident;
     # Logistic Regression is already calibrated by its loss function)
     _CALIBRATE_MODELS = {"random_forest", "xgboost", "lightgbm"}
+
+    ML_FEATURE_COUNT = 50  # top features retained after importance pruning
 
     def __init__(self):
         self.scaler = StandardScaler()
@@ -237,6 +240,74 @@ class MLModels:
             top_str = ", ".join(f"{name}({score:.3f})" for name, score in top_10)
             logger.info(f"{model_name} top features: {top_str}")
 
+        # ── Feature importance pruning ────────────────────────────────────────
+        # Average XGB + RF importances; re-train on top ML_FEATURE_COUNT features.
+        if importance and len(self.feature_names) > self.ML_FEATURE_COUNT:
+            avg_scores = {fn: 0.0 for fn in self.feature_names}
+            n_imp_models = 0
+            for imp_list in importance.values():
+                for feat_name, score in imp_list:
+                    if feat_name in avg_scores:
+                        avg_scores[feat_name] += score
+                n_imp_models += 1
+            if n_imp_models:
+                for k in avg_scores:
+                    avg_scores[k] /= n_imp_models
+
+            top_names = sorted(avg_scores, key=lambda k: avg_scores[k], reverse=True)[
+                : self.ML_FEATURE_COUNT
+            ]
+            top_set = set(top_names)
+            selected_idx = [i for i, fn in enumerate(self.feature_names) if fn in top_set]
+
+            X_top = X[:, selected_idx]
+            self.feature_names = [self.feature_names[i] for i in selected_idx]
+
+            logger.info(
+                f"Feature importance pruning: retained top {len(self.feature_names)} "
+                f"of {len(avg_scores)} features"
+            )
+
+            _feat_path = MODELS_DIR / "feature_list.json"
+            MODELS_DIR.mkdir(parents=True, exist_ok=True)
+            _feat_path.write_text(json.dumps(self.feature_names))
+
+            # Re-fit scaler + re-train calibrated models on reduced feature set
+            self._init_models()
+            X_scaled_top = self.scaler.fit_transform(X_top)
+            X_df_top = pd.DataFrame(X_scaled_top, columns=self.feature_names)
+
+            self.calibrated_models = {}
+            for name, model in self.models.items():
+                if name in self._CALIBRATE_MODELS:
+                    cal = CalibratedClassifierCV(model, cv=5, method="isotonic")
+                    cal.fit(X_df_top, y)
+                    self.calibrated_models[name] = cal
+                else:
+                    model.fit(X_df_top, y)
+                    self.calibrated_models[name] = model
+
+            X_df = X_df_top  # point to reduced df for validation below
+
+        # ── Validation accuracy on last 20% of samples (AC4) ─────────────────
+        n_val = max(1, int(len(X_df) * 0.20))
+        X_val_df = X_df.iloc[-n_val:]
+        y_val = y[-n_val:]
+        val_preds = []
+        for name in self.models:
+            cal_model = self.calibrated_models.get(name, self.models[name])
+            try:
+                val_preds.append(cal_model.predict(X_val_df))
+            except Exception:
+                pass
+        if val_preds:
+            votes = np.array(val_preds)
+            majority = np.apply_along_axis(
+                lambda col: np.bincount(col.astype(int)).argmax(), 0, votes
+            )
+            val_acc = accuracy_score(y_val, majority)
+            logger.info(f"ML validation accuracy: {val_acc:.1%}")
+
     def predict(self, X: np.ndarray, feature_names: List[str] = None) -> Dict:
         """Get predictions from all models.
 
@@ -262,6 +333,14 @@ class MLModels:
         # Apply same feature pruning mask used during training
         if getattr(self, "_kept_feature_mask", None) is not None and X.shape[1] > expected_count:
             X = X[:, self._kept_feature_mask]
+
+        # AC3: warn if feature_list.json absent (old model or pre-importance-pruning run)
+        _feat_path = MODELS_DIR / "feature_list.json"
+        if not _feat_path.exists():
+            logger.warning(
+                "feature_list.json not found — using all available features. "
+                "Run --train to generate feature importance list."
+            )
 
         try:
             X_scaled = self.scaler.transform(X)

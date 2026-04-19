@@ -1766,6 +1766,8 @@ class FootballBettingAgent:
                 else:
                     cal_factors[model] = 1.0
 
+            self._apply_ml_calibration_gate(accuracies, cal_factors, prev_cal)
+
             cal_path.parent.mkdir(parents=True, exist_ok=True)
             cal_path.write_text(json.dumps(cal_factors, indent=2))
             self.predictor.calibration_factors.update(cal_factors)
@@ -2032,6 +2034,27 @@ class FootballBettingAgent:
             )
 
         logger.info("Post-settlement learning complete")
+
+    def _apply_ml_calibration_gate(
+        self, accuracies: dict, cal_factors: dict, prev_cal: dict
+    ) -> None:
+        """Zero-out ML calibration when accuracy is below-random; restore when recovered.
+
+        Modifies cal_factors in-place. Called from tune_ensemble_weights() after
+        the Poisson/Elo calibration loop and before saving calibration.json.
+        """
+        ml_acc = accuracies.get("ml", 0.0)
+        if ml_acc < 0.35:
+            cal_factors["ml"] = 0.0
+            logger.warning(
+                f"ML accuracy {ml_acc:.1%} below threshold — ML excluded from ensemble"
+            )
+        else:
+            if prev_cal.get("ml", 1.0) == 0.0:
+                logger.info(
+                    f"ML accuracy {ml_acc:.1%} recovered — ML re-entering ensemble"
+                )
+            cal_factors["ml"] = 1.0
 
     def _auto_calibrate_ev_threshold(self):
         """Dynamically adjust min EV threshold based on recent hit rate.
@@ -2377,7 +2400,7 @@ async def main():
             # to avoid 30K+ network round-trips for feature extraction.
             from src.data.database import get_db as _get_db_check
             _db_tmp = _get_db_check()
-            _max = 200 if _db_tmp.is_postgres else 2000
+            _max = 500 if _db_tmp.is_postgres else 2000
             await agent.train_ml_models(max_samples=_max)
             print("ML training complete.")
 
