@@ -23,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Restore ML models cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             data/models/
@@ -37,7 +37,7 @@ jobs:
 
       - name: Restore camoufox binary cache
         id: restore-camoufox
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ~/.cache/camoufox
           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
@@ -160,7 +160,7 @@ jobs:
 
       - name: Save ML models cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             data/models/
@@ -169,7 +169,7 @@ jobs:
 
       - name: Save camoufox binary cache
         if: always() && steps.restore-camoufox.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: ~/.cache/camoufox
           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
