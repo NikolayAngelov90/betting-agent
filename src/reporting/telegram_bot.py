@@ -223,7 +223,10 @@ class TelegramNotifier:
         # Send (split if needed)
         message = "\n".join(lines)
         await self._send_chunked(message, header)
-        _mark_picks_sent_today()
+        try:
+            _mark_picks_sent_today()
+        except Exception as _mse:
+            logger.warning(f"Could not write picks-sent state file: {_mse}")
 
     async def send_settlement_report(self, settled_picks: list, stats: dict = None):
         """Send settlement results for yesterday's picks via Telegram."""
