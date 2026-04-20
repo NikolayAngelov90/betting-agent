@@ -29,6 +29,7 @@ data/raw/
 data/models/bayesian_weights.json
 data/models/calibration.json
 data/models/ev_threshold.json
+data/models/picks_sent_date.txt
 logs/
 
 # CI logs fetched locally
