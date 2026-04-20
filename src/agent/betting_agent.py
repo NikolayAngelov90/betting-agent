@@ -654,7 +654,7 @@ class FootballBettingAgent:
 
         if not fixture_ids:
             logger.info(f"No fixtures found for {target}")
-            return []
+            return [], [], []
 
         # ── API-Football odds fallback ─────────────────────────────────────────
         # For fixtures that have NO real bookmaker odds (zero odds, or only
@@ -814,7 +814,7 @@ class FootballBettingAgent:
 
         if not fixture_ids:
             logger.info("No fixtures with bookmaker odds for analysis")
-            return []
+            return [], [], []
 
         # Bulk-preload all DB data for the fixture loop in a single batch.
         # preload_batch() catches its own exceptions and sets _preload_cache = None
@@ -954,7 +954,7 @@ class FootballBettingAgent:
                     "Drawdown circuit breaker TRIGGERED — skipping all picks "
                     "(drawdown exceeds pause threshold)"
                 )
-                return [], []
+                return [], [], []
             # Tighten EV threshold proportionally with drawdown severity so
             # fewer marginal picks pass when we're in a losing run.
             # Formula: +2pp at full pause threshold (multiplier→0), +0pp at no drawdown.
