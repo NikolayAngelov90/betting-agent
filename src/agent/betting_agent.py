@@ -556,7 +556,8 @@ class FootballBettingAgent:
 
     async def get_daily_picks(self, target_date: date = None,
                               max_picks_per_match: int = 2,
-                              leagues: List[str] = None) -> List[BetRecommendation]:
+                              leagues: List[str] = None,
+                              force: bool = False) -> List[BetRecommendation]:
         """Get high-confidence value betting picks for a specific date.
 
         EV and confidence thresholds are read from config (betting.min_expected_value /
@@ -566,11 +567,26 @@ class FootballBettingAgent:
             target_date: Date to get picks for (defaults to today)
             max_picks_per_match: Maximum picks allowed per single match (default 2)
             leagues: Optional list of league keys to restrict picks to
+            force: If True, skip idempotency check and regenerate even if today's picks exist
 
         Returns:
-            List of BetRecommendation sorted by EV × confidence × model-agreement bonus
+            Tuple of (picks, new_picks, dropped_picks)
         """
         target = target_date or date.today()
+
+        # Idempotency guard — skip if today's picks already exist (AC1 Story 8.3)
+        if not force:
+            with self.db.get_session() as _isess:
+                _existing = _isess.query(SavedPick).filter(
+                    SavedPick.pick_date == target
+                ).count()
+            if _existing > 0:
+                logger.info(
+                    f"Today's picks already generated ({_existing} picks). "
+                    f"Use --force to regenerate."
+                )
+                return [], [], []
+
         league_label = f" (leagues: {', '.join(leagues)})" if leagues else ""
         logger.info(f"Getting daily picks for {target}{league_label}")
 
@@ -2531,15 +2547,18 @@ async def main():
             print("ML training complete.")
 
         elif command == "--picks":
-            # Parse optional --leagues filter: --picks --leagues eng1,eng2
+            # Parse optional --leagues filter and --force flag
             league_filter = None
+            force_picks = "--force" in sys.argv
             for i, arg in enumerate(sys.argv[2:], start=2):
                 if arg == "--leagues" and i + 1 < len(sys.argv):
                     league_filter = [l.strip() for l in sys.argv[i + 1].split(",")]
                     break
             agent.predictor.fit()
             agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
-            picks, new_picks, dropped_picks = await agent.get_daily_picks(leagues=league_filter)
+            picks, new_picks, dropped_picks = await agent.get_daily_picks(
+                leagues=league_filter, force=force_picks
+            )
             if not picks:
                 print("No value picks found for today.")
             else:

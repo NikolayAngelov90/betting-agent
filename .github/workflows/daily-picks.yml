@@ -152,7 +152,7 @@ jobs:
           PYEOF
 
       - name: Generate and send picks
-        run: python -m src.agent.betting_agent --picks
+        run: python -m src.agent.betting_agent --picks --force
         timeout-minutes: 60
         continue-on-error: true
 

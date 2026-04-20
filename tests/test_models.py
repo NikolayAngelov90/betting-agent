@@ -281,8 +281,9 @@ class TestGetDailyPicksPreload:
         session.query.return_value.filter.return_value.all.side_effect = [
             mock_fixtures, []
         ]
-        # Pre-filter: count() called once per fixture — side_effect drives per-fixture result
-        session.query.return_value.filter.return_value.count.side_effect = list(odds_counts)
+        # First count() is the Story 8.3 idempotency check (0 = no today picks → proceed).
+        # Subsequent count() calls are per-fixture odds counts.
+        session.query.return_value.filter.return_value.count.side_effect = [0] + list(odds_counts)
 
         # session.get() is used for Team (needs .name) and Match (needs .league=None
         # to avoid MagicMock ending up in uncovered_leagues string-join path)
@@ -997,3 +998,89 @@ class TestSupplementHeader:
         combined = " ".join(notifier._sent_messages)
         assert "Supplement" not in combined
         assert "Daily Value Picks" in combined
+
+
+class TestPicksIdempotencyGuard:
+    """Story 8.3: --picks skips generation if today's picks exist unless --force."""
+
+    def _make_agent(self, existing_pick_count=0):
+        """Minimal agent mock for idempotency guard tests."""
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock
+        from src.agent.betting_agent import FootballBettingAgent
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+
+        session = MagicMock()
+        session.__enter__ = lambda s: s
+        session.__exit__ = MagicMock(return_value=False)
+        agent.db = MagicMock()
+        agent.db.get_session.return_value = session
+
+        # count() returns existing_pick_count
+        session.query.return_value.filter.return_value.count.return_value = existing_pick_count
+        # all() returns empty (no fixtures needed — guard fires first)
+        session.query.return_value.filter.return_value.all.return_value = []
+
+        agent.config = MagicMock()
+        agent.config.get.side_effect = lambda key, default=None: default
+        agent.apifootball = MagicMock()
+        agent.apifootball.enabled = False
+        agent.predictor = MagicMock()
+        agent.predictor.calibration_factors = {}
+        agent.predictor.check_coverage.return_value = {"score": 1.0}
+        agent.value_calculator = MagicMock()
+        agent.value_calculator.min_ev = 0.05
+        agent.feature_engineer = MagicMock()
+        agent.feature_engineer._preload_cache = None
+        agent.telegram = MagicMock()
+        agent._auto_calibrate_ev_threshold = MagicMock()
+        agent.analyze_fixture = AsyncMock(return_value=MagicMock(recommendations=[]))
+
+        return agent
+
+    def test_skips_when_picks_exist_no_force(self):
+        """AC1 — skips pick generation and returns empty lists when today's picks exist."""
+        import asyncio
+        agent = self._make_agent(existing_pick_count=5)
+        picks, new_picks, dropped = asyncio.run(agent.get_daily_picks(force=False))
+        assert picks == []
+        assert new_picks == []
+        assert dropped == []
+        # analyze_fixture must NOT have been called (guard fired before fixture loop)
+        agent.analyze_fixture.assert_not_called()
+
+    def test_skips_logs_info_message(self):
+        """AC1 — INFO log includes count and --force hint."""
+        import asyncio
+        from loguru import logger as _lu
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="INFO", format="{message}")
+        try:
+            agent = self._make_agent(existing_pick_count=3)
+            asyncio.run(agent.get_daily_picks(force=False))
+        finally:
+            _lu.remove(sink_id)
+        assert any("already generated" in m and "3" in m for m in messages)
+
+    def test_force_bypasses_guard(self):
+        """AC2 — --force proceeds past idempotency check even when picks exist."""
+        import asyncio
+        from loguru import logger as _lu
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="INFO", format="{message}")
+        try:
+            agent = self._make_agent(existing_pick_count=5)
+            asyncio.run(agent.get_daily_picks(force=True))
+        finally:
+            _lu.remove(sink_id)
+        # Guard did NOT fire — "already generated" message must be absent
+        assert not any("already generated" in m for m in messages)
+
+    def test_no_picks_today_proceeds_normally(self):
+        """AC3 — when no today's picks exist, proceeds normally (no --force needed)."""
+        import asyncio
+        agent = self._make_agent(existing_pick_count=0)
+        picks, new_picks, dropped = asyncio.run(agent.get_daily_picks(force=False))
+        # Guard did not fire — function ran through normally (no fixtures → empty picks)
+        assert picks == [] and new_picks == [] and dropped == []
