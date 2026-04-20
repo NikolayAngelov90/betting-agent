@@ -806,3 +806,102 @@ class TestMLZeroWeightEscalation:
         # File created with count=1
         assert zero_path.exists()
         assert json.loads(zero_path.read_text())["count"] == 1
+
+
+class TestExposedDroppedPicks:
+    """Story 8.1: verify dropped picks are logged and surfaced in Telegram."""
+
+    def _make_rec(self, match="Team A vs Team B", market="Over 2.5", odds=1.9, kelly=12.0):
+        from src.betting.value_calculator import BetRecommendation
+        return BetRecommendation(
+            match=match,
+            match_id=1,
+            market=market,
+            selection="Over 2.5",
+            odds=odds,
+            predicted_probability=0.60,
+            expected_value=0.10,
+            confidence=0.65,
+            kelly_stake_percentage=kelly,
+            recommended_stake=kelly,
+            reasoning="test",
+            risk_level="low",
+        )
+
+    def _make_agent(self):
+        from unittest.mock import MagicMock
+        from src.agent.betting_agent import FootballBettingAgent
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        return agent
+
+    # ---------- _apply_exposure_cap tests ----------
+
+    def test_cap_returns_capped_and_dropped(self):
+        """High-Kelly picks exceeding the cap produce a non-empty dropped list."""
+        agent = self._make_agent()
+        picks = [self._make_rec(kelly=15.0), self._make_rec(kelly=14.0), self._make_rec(kelly=13.0)]
+        capped, dropped = agent._apply_exposure_cap(picks, max_pct=25.0)
+        assert len(capped) + len(dropped) == 3
+        assert len(dropped) >= 1
+        assert sum(r.kelly_stake_percentage for r in capped) <= 25.0
+
+    def test_no_drops_when_under_cap(self):
+        """When total Kelly is under the cap, dropped list is empty."""
+        agent = self._make_agent()
+        picks = [self._make_rec(kelly=5.0), self._make_rec(kelly=5.0)]
+        capped, dropped = agent._apply_exposure_cap(picks, max_pct=50.0)
+        assert dropped == []
+        assert len(capped) == 2
+
+    def test_dropped_picks_are_logged(self):
+        """AC1 — each dropped pick is logged at INFO with match, market, odds, Kelly."""
+        from loguru import logger as _lu
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="INFO", format="{message}")
+        try:
+            agent = self._make_agent()
+            picks = [
+                self._make_rec(match="Arsenal vs Chelsea", market="Over 2.5", odds=1.90, kelly=15.0),
+                self._make_rec(match="Real Madrid vs Barca", market="1X2", odds=2.10, kelly=20.0),
+            ]
+            _, dropped = agent._apply_exposure_cap(picks, max_pct=10.0)
+        finally:
+            _lu.remove(sink_id)
+        assert len(dropped) >= 1
+        assert any("Dropped by exposure cap:" in m for m in messages)
+
+    # ---------- send_daily_picks skipped-cap section ----------
+
+    def _make_notifier(self):
+        from unittest.mock import MagicMock, AsyncMock
+        from src.reporting.telegram_bot import TelegramNotifier
+        notifier = TelegramNotifier.__new__(TelegramNotifier)
+        notifier.enabled = True
+        notifier._bot = MagicMock()
+        notifier._sent_messages = []
+
+        async def _fake_send(text):
+            notifier._sent_messages.append(text)
+        notifier._send_message = _fake_send
+        notifier._send_chunked = AsyncMock(side_effect=lambda msg, header="": notifier._sent_messages.append(msg))
+        return notifier
+
+    def test_skipped_cap_section_in_telegram(self):
+        """AC2 — 'Skipped (cap)' section present when dropped_picks provided."""
+        import asyncio
+        notifier = self._make_notifier()
+        pick = self._make_rec()
+        dropped = [self._make_rec(match="Dropped FC vs Capped FC", market="1X2")]
+        asyncio.run(notifier.send_daily_picks([pick], dropped_picks=dropped))
+        combined = " ".join(notifier._sent_messages)
+        assert "Skipped (cap)" in combined
+        assert "Dropped FC vs Capped FC" in combined
+
+    def test_no_skipped_section_without_drops(self):
+        """AC3 — no 'Skipped (cap)' section when dropped_picks is empty/None."""
+        import asyncio
+        notifier = self._make_notifier()
+        pick = self._make_rec()
+        asyncio.run(notifier.send_daily_picks([pick], dropped_picks=[]))
+        combined = " ".join(notifier._sent_messages)
+        assert "Skipped (cap)" not in combined

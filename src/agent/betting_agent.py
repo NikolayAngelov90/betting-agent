@@ -975,29 +975,20 @@ class FootballBettingAgent:
         # Daily exposure limit: cap total Kelly stake across all picks to
         # prevent over-betting even when many value picks are found.
         max_daily_exposure = self.config.get("betting.max_total_kelly_pct", 40.0)
+        dropped_picks_cap: List[BetRecommendation] = []
         if max_daily_exposure > 0 and all_recommendations:
             # Already sorted by EV×conf×agreement — trim from the bottom
             total_exposure = sum(r.kelly_stake_percentage for r in all_recommendations)
             if total_exposure > max_daily_exposure:
-                capped = []
-                running = 0.0
-                for rec in all_recommendations:
-                    if running + rec.kelly_stake_percentage > max_daily_exposure:
-                        # If we haven't added any yet, add this one scaled down
-                        if not capped:
-                            rec.kelly_stake_percentage = round(max_daily_exposure, 2)
-                            capped.append(rec)
-                        break
-                    running += rec.kelly_stake_percentage
-                    capped.append(rec)
-                trimmed = len(all_recommendations) - len(capped)
+                all_recommendations, dropped_picks_cap = self._apply_exposure_cap(
+                    all_recommendations, max_daily_exposure
+                )
                 logger.info(
                     f"Daily exposure cap: {total_exposure:.1f}% → "
-                    f"{sum(r.kelly_stake_percentage for r in capped):.1f}% "
-                    f"(dropped {trimmed} lowest-ranked picks, "
+                    f"{sum(r.kelly_stake_percentage for r in all_recommendations):.1f}% "
+                    f"(dropped {len(dropped_picks_cap)} lowest-ranked picks, "
                     f"cap={max_daily_exposure:.0f}%)"
                 )
-                all_recommendations = capped
 
         logger.info(
             f"Found {len(all_recommendations)} high-confidence picks for {target} "
@@ -1008,7 +999,35 @@ class FootballBettingAgent:
         # Save picks; get back only the ones new this run (for Telegram deduplication)
         new_picks = self._save_picks(all_recommendations, target)
 
-        return all_recommendations, new_picks
+        return all_recommendations, new_picks, dropped_picks_cap
+
+    def _apply_exposure_cap(
+        self, recommendations: List[BetRecommendation], max_pct: float
+    ) -> tuple:
+        """Trim recommendations to the daily Kelly exposure cap.
+
+        Returns (capped, dropped) where capped sums to ≤ max_pct.
+        Each dropped pick is logged at INFO with match, market, odds, and Kelly stake.
+        The first pick is never dropped (scaled down to max_pct if it alone exceeds cap).
+        """
+        capped: List[BetRecommendation] = []
+        running = 0.0
+        for rec in recommendations:
+            if running + rec.kelly_stake_percentage > max_pct:
+                if not capped:
+                    rec.kelly_stake_percentage = round(max_pct, 2)
+                    capped.append(rec)
+                break
+            running += rec.kelly_stake_percentage
+            capped.append(rec)
+        dropped = recommendations[len(capped):]
+        for dp in dropped:
+            logger.info(
+                f"Dropped by exposure cap: {dp.match} "
+                f"— {dp.market} @ {dp.odds:.2f} "
+                f"(Kelly {dp.kelly_stake_percentage:.1%})"
+            )
+        return capped, dropped
 
     def _save_picks(self, picks: List[BetRecommendation], pick_date: date) -> List[BetRecommendation]:
         """Save picks to database for result tracking.
@@ -2520,7 +2539,7 @@ async def main():
                     break
             agent.predictor.fit()
             agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
-            picks, new_picks = await agent.get_daily_picks(leagues=league_filter)
+            picks, new_picks, dropped_picks = await agent.get_daily_picks(leagues=league_filter)
             if not picks:
                 print("No value picks found for today.")
             else:
@@ -2530,7 +2549,9 @@ async def main():
                 if agent.telegram.enabled:
                     if new_picks:
                         stats = agent.get_stats()
-                        await agent.telegram.send_daily_picks(new_picks, stats=stats)
+                        await agent.telegram.send_daily_picks(
+                            new_picks, stats=stats, dropped_picks=dropped_picks
+                        )
                         print(f"\nPicks sent to Telegram! ({len(new_picks)} new)")
                     else:
                         print(f"\nNo new picks — Telegram not re-notified (all {len(picks)} already saved).")
