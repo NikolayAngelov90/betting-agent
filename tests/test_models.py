@@ -905,3 +905,95 @@ class TestExposedDroppedPicks:
         asyncio.run(notifier.send_daily_picks([pick], dropped_picks=[]))
         combined = " ".join(notifier._sent_messages)
         assert "Skipped (cap)" not in combined
+
+
+class TestSupplementHeader:
+    """Story 8.2: same-day re-send uses supplement header."""
+
+    def _make_rec(self):
+        from src.betting.value_calculator import BetRecommendation
+        return BetRecommendation(
+            match="Home vs Away", match_id=1, market="Over 2.5",
+            selection="Over 2.5", odds=1.9,
+            predicted_probability=0.60, expected_value=0.10,
+            confidence=0.65, kelly_stake_percentage=5.0,
+            recommended_stake=5.0, reasoning="test", risk_level="low",
+        )
+
+    def _make_notifier(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock, AsyncMock
+        from src.reporting.telegram_bot import TelegramNotifier
+        import src.reporting.telegram_bot as tb_module
+        from pathlib import Path
+
+        notifier = TelegramNotifier.__new__(TelegramNotifier)
+        notifier.enabled = True
+        notifier._bot = MagicMock()
+        notifier._sent_messages = []
+
+        async def _fake_send(text):
+            notifier._sent_messages.append(text)
+
+        notifier._send_message = _fake_send
+        notifier._send_chunked = AsyncMock(
+            side_effect=lambda msg, header="": notifier._sent_messages.append(msg)
+        )
+
+        state_file = tmp_path / "picks_sent_date.txt"
+        monkeypatch.setattr(tb_module, "_PICKS_SENT_STATE", state_file)
+        return notifier
+
+    def test_normal_header_on_first_send(self, tmp_path, monkeypatch):
+        """AC2 — first send of the day uses the normal date header."""
+        import asyncio
+        notifier = self._make_notifier(tmp_path, monkeypatch)
+        asyncio.run(notifier.send_daily_picks([self._make_rec()]))
+        combined = " ".join(notifier._sent_messages)
+        assert "Supplement" not in combined
+        assert "Daily Value Picks" in combined
+
+    def test_supplement_header_on_second_send(self, tmp_path, monkeypatch):
+        """AC1 — second send same day uses supplement header with count."""
+        import asyncio
+        from datetime import date
+        import src.reporting.telegram_bot as tb_module
+        state_file = tmp_path / "picks_sent_date.txt"
+        monkeypatch.setattr(tb_module, "_PICKS_SENT_STATE", state_file)
+        # Simulate a prior send today
+        state_file.write_text(date.today().isoformat())
+
+        notifier = self._make_notifier(tmp_path, monkeypatch)
+        picks = [self._make_rec(), self._make_rec()]
+        asyncio.run(notifier.send_daily_picks(picks))
+        combined = " ".join(notifier._sent_messages)
+        assert "Supplement" in combined
+        assert "2 additional" in combined
+
+    def test_state_file_written_after_send(self, tmp_path, monkeypatch):
+        """State file is written with today's date after successful send."""
+        import asyncio
+        from datetime import date
+        notifier = self._make_notifier(tmp_path, monkeypatch)
+        state_file = tmp_path / "picks_sent_date.txt"
+        assert not state_file.exists()
+
+        asyncio.run(notifier.send_daily_picks([self._make_rec()]))
+
+        assert state_file.exists()
+        assert state_file.read_text().strip() == date.today().isoformat()
+
+    def test_fallback_to_normal_header_on_error(self, tmp_path, monkeypatch):
+        """AC3 — if state file check raises, falls back to normal header."""
+        import asyncio
+        from unittest.mock import patch
+        import src.reporting.telegram_bot as tb_module
+
+        notifier = self._make_notifier(tmp_path, monkeypatch)
+
+        # Force _picks_sent_today to raise
+        with patch.object(tb_module, "_picks_sent_today", side_effect=OSError("disk error")):
+            asyncio.run(notifier.send_daily_picks([self._make_rec()]))
+
+        combined = " ".join(notifier._sent_messages)
+        assert "Supplement" not in combined
+        assert "Daily Value Picks" in combined

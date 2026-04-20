@@ -1,8 +1,9 @@
 """Telegram notification bot for betting picks."""
 
 import asyncio
-from datetime import timezone, timedelta
+from datetime import date, timezone, timedelta
 from html import escape as html_escape
+from pathlib import Path
 from typing import List, Dict
 from itertools import groupby
 
@@ -11,6 +12,22 @@ from src.utils.config import get_config
 from src.utils.logger import get_logger
 
 logger = get_logger()
+
+# State file tracking whether picks were already sent today (Story 8.2)
+_PICKS_SENT_STATE = Path("data/models/picks_sent_date.txt")
+
+
+def _picks_sent_today() -> bool:
+    """Return True if picks were already sent to Telegram today."""
+    if _PICKS_SENT_STATE.exists():
+        return _PICKS_SENT_STATE.read_text().strip() == date.today().isoformat()
+    return False
+
+
+def _mark_picks_sent_today() -> None:
+    """Write today's date to the state file after a successful Telegram send."""
+    _PICKS_SENT_STATE.parent.mkdir(parents=True, exist_ok=True)
+    _PICKS_SENT_STATE.write_text(date.today().isoformat())
 
 # League display names for clean formatting
 LEAGUE_DISPLAY = {
@@ -81,9 +98,21 @@ class TelegramNotifier:
             await self._send_message("No value picks found for today.")
             return
 
-        from datetime import date
-        header = f"<b>Daily Value Picks - {date.today().strftime('%d %b %Y')}</b>\n"
-        header += f"<i>{len(picks)} picks found</i>\n"
+        # Supplement header when picks were already sent earlier today (AC1/AC2 — Story 8.2)
+        try:
+            is_supplement = _picks_sent_today()
+        except Exception as _e:
+            logger.warning(f"Could not check prior pick sends: {_e}")
+            is_supplement = False
+
+        if is_supplement:
+            header = (
+                f"<b>📋 Supplement to today's picks ({len(picks)} additional):</b>\n"
+                f"<i>{date.today().strftime('%d %b %Y')}</i>\n"
+            )
+        else:
+            header = f"<b>Daily Value Picks - {date.today().strftime('%d %b %Y')}</b>\n"
+            header += f"<i>{len(picks)} picks found</i>\n"
 
         # Add stats summary if available — always show all-time, add shorter periods
         # only when they differ (avoids showing the same number three times when the
@@ -194,6 +223,7 @@ class TelegramNotifier:
         # Send (split if needed)
         message = "\n".join(lines)
         await self._send_chunked(message, header)
+        _mark_picks_sent_today()
 
     async def send_settlement_report(self, settled_picks: list, stats: dict = None):
         """Send settlement results for yesterday's picks via Telegram."""
