@@ -684,20 +684,32 @@ class APIFootballScraper(BaseScraper):
         _FREE_PLAN_SEASON_CUTOFF = datetime(2025, 7, 1)
         with self.db.get_session() as session:
             cutoff = datetime.utcnow() - timedelta(days=days_back)
-            matches = session.query(Match).filter(
+            base_filters = [
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
                 Match.apifootball_id.isnot(None),
                 Match.match_date >= cutoff,
                 Match.match_date < _FREE_PLAN_SEASON_CUTOFF,
+            ]
+            # Count total in window (with or without xG) to report skipped
+            all_in_window = session.query(Match).filter(
+                *base_filters,
+            ).order_by(Match.match_date.desc()).limit(xg_budget).all()
+            total_in_window = len(all_in_window)
+
+            # Only fetch matches actually missing xG or stats
+            matches = session.query(Match).filter(
+                *base_filters,
                 or_(Match.home_xg.is_(None), Match.home_shots.is_(None)),
             ).order_by(Match.match_date.desc()).limit(xg_budget).all()
 
             if not matches:
-                logger.debug("No matches need stats backfill")
+                logger.debug("xG backfill: all recent matches have xG data, skipping")
                 return
 
-            logger.info(f"Backfilling xG/stats for {len(matches)} recent matches via API-Football")
+            needed = len(matches)
+            skipped = total_in_window - needed
+            logger.info(f"Backfilling xG/stats for {needed} recent matches via API-Football ({skipped} already complete)")
             match_data = [(m.id, m.apifootball_id) for m in matches]
 
         # Fetch all stats first, then batch-write to DB in a single commit
@@ -714,7 +726,7 @@ class APIFootballScraper(BaseScraper):
         # Batch commit all updates in a single session
         if pending_updates:
             self._batch_update_match_stats(pending_updates)
-            logger.info(f"xG backfill: updated {len(pending_updates)}/{len(match_data)} matches")
+            logger.info(f"xG backfill: {len(pending_updates)}/{needed} matches updated ({skipped} already complete)")
 
     async def _fetch_fixture_stats(self, fixture_id: int) -> Optional[Dict]:
         """Fetch detailed statistics for a single fixture."""
