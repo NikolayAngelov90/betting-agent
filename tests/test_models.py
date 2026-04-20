@@ -1084,3 +1084,356 @@ class TestPicksIdempotencyGuard:
         picks, new_picks, dropped = asyncio.run(agent.get_daily_picks(force=False))
         # Guard did not fire — function ran through normally (no fixtures → empty picks)
         assert picks == [] and new_picks == [] and dropped == []
+
+
+class TestSmartXGBackfill:
+    """Story 9.1: _backfill_xg() skips when all have xG, logs dynamic counts."""
+
+    def _make_scraper(self, matches_needing=0, total_in_window=10, api_budget=25):
+        """Minimal ApiFootballScraper mock for _backfill_xg tests."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper._daily_limit = 100
+        scraper._requests_today = 0
+        scraper.BUDGET_RESERVE = 10
+        scraper.BUDGET_XG = api_budget
+        scraper._today_fixture_count = 5
+
+        # DB mock
+        session = MagicMock()
+        session.__enter__ = lambda s: s
+        session.__exit__ = MagicMock(return_value=False)
+        scraper.db = MagicMock()
+        scraper.db.get_session.return_value = session
+
+        # First .all() → total in window (all_in_window query, no xG filter)
+        # Second .all() → matches needing xG (filtered query)
+        mock_matches = [MagicMock(id=i, apifootball_id=1000 + i) for i in range(matches_needing)]
+        mock_all_window = [MagicMock(id=i) for i in range(total_in_window)]
+        session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.side_effect = [
+            mock_all_window,  # total_in_window query (first)
+            mock_matches,     # matches_needing query (second)
+        ]
+
+        scraper._fetch_fixture_stats = AsyncMock(return_value={"home_xg": 1.2})
+        scraper._batch_update_match_stats = MagicMock()
+
+        return scraper
+
+    def test_skips_when_all_have_xg(self):
+        """AC1 — logs correct DEBUG message and returns immediately when 0 need xG."""
+        import asyncio
+        from loguru import logger as _lu
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="DEBUG", format="{message}")
+        try:
+            scraper = self._make_scraper(matches_needing=0, total_in_window=10)
+            asyncio.run(scraper._backfill_xg())
+        finally:
+            _lu.remove(sink_id)
+        assert any("all recent matches have xG data, skipping" in m for m in messages)
+        scraper._fetch_fixture_stats.assert_not_called()
+
+    def test_completion_log_includes_skipped_count(self):
+        """AC4 — completion log shows processed/needed/skipped format."""
+        import asyncio
+        from loguru import logger as _lu
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="INFO", format="{message}")
+        try:
+            scraper = self._make_scraper(matches_needing=3, total_in_window=10)
+            asyncio.run(scraper._backfill_xg())
+        finally:
+            _lu.remove(sink_id)
+        info_logs = [m for m in messages if "xG backfill:" in m and "already complete" in m]
+        assert len(info_logs) >= 1, f"Expected completion log, got: {messages}"
+        log = info_logs[0]
+        assert "3" in log       # needed
+        assert "7" in log       # skipped (10 - 3)
+
+    def test_dynamic_count_processes_only_needed(self):
+        """AC2 — only N matches processed when N < 25."""
+        import asyncio
+        scraper = self._make_scraper(matches_needing=5, total_in_window=25)
+        asyncio.run(scraper._backfill_xg())
+        # Only 5 fixture stats fetched (not 25)
+        assert scraper._fetch_fixture_stats.call_count == 5
+
+    def test_cap_preserved_when_all_stale(self):
+        """AC3 — when all matches lack xG and exceed budget, cap limits to xg_budget."""
+        import asyncio
+        # api_budget=10 means xg_budget will be capped at 10; all 10 in window need xG
+        scraper = self._make_scraper(matches_needing=10, total_in_window=10, api_budget=10)
+        asyncio.run(scraper._backfill_xg())
+        # Exactly 10 fetches — no more than the budget cap
+        assert scraper._fetch_fixture_stats.call_count == 10
+
+
+class TestEmptyLeagueFixtureAlert:
+    """Story 9.2: Flashscore empty-league WARNING and Telegram alert."""
+
+    def _make_agent(self, off_season=None):
+        from unittest.mock import MagicMock, AsyncMock
+        from src.agent.betting_agent import FootballBettingAgent
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        _cfg = {"scraping.off_season_leagues": off_season or []}
+        agent.config = MagicMock()
+        agent.config.get = lambda key, default=None: _cfg.get(key, default)
+        agent.telegram = MagicMock()
+        agent.telegram.enabled = True
+        agent.telegram.send_alert = AsyncMock()
+        return agent
+
+    def test_scraper_warns_on_zero_fixtures(self):
+        """AC1 — FlashscoreScraper logs WARNING when a league returns 0 fixtures."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from loguru import logger as _lu
+        from src.scrapers.flashscore_scraper import FlashscoreScraper
+        scraper = FlashscoreScraper.__new__(FlashscoreScraper)
+        scraper.config = MagicMock()
+        scraper.config.get = lambda key, default=None: (
+            [] if key == "scraping.off_season_leagues" else default
+        )
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="WARNING", format="{message}")
+        try:
+            mock_db = MagicMock()
+            session = MagicMock()
+            session.__enter__ = lambda s: s
+            session.__exit__ = MagicMock(return_value=False)
+            mock_db.get_session.return_value = session
+            with patch("src.scrapers.flashscore_scraper.get_db", return_value=mock_db), \
+                 patch.object(scraper, "_scrape_fixtures_page", return_value=[]):
+                asyncio.run(scraper.scrape_league_fixtures("germany/bundesliga"))
+        finally:
+            _lu.remove(sink_id)
+        assert any("0 fixtures" in m and "germany/bundesliga" in m for m in messages), \
+            f"Expected WARNING for 0 fixtures, got: {messages}"
+
+    def test_check_sends_alert_for_empty_leagues(self):
+        """AC2 — Telegram alert sent listing all empty leagues."""
+        import asyncio
+        agent = self._make_agent()
+        asyncio.run(agent._check_empty_fixture_leagues(
+            {"germany/bundesliga": [], "england/championship": []}
+        ))
+        agent.telegram.send_alert.assert_called_once()
+        msg = agent.telegram.send_alert.call_args[0][0]
+        assert "germany/bundesliga" in msg
+        assert "england/championship" in msg
+        assert "⚠️" in msg
+
+    def test_check_no_alert_when_all_leagues_have_fixtures(self):
+        """AC3 — no alert when all leagues return ≥1 fixture."""
+        import asyncio
+        from unittest.mock import MagicMock
+        agent = self._make_agent()
+        asyncio.run(agent._check_empty_fixture_leagues(
+            {"germany/bundesliga": [MagicMock()]}
+        ))
+        agent.telegram.send_alert.assert_not_called()
+
+    def test_off_season_league_excluded_from_alert(self):
+        """AC4 — off-season leagues not included in empty-league alert."""
+        import asyncio
+        agent = self._make_agent(off_season=["norway/eliteserien"])
+        asyncio.run(agent._check_empty_fixture_leagues({"norway/eliteserien": []}))
+        agent.telegram.send_alert.assert_not_called()
+
+    def test_scraper_no_warning_for_off_season_league(self):
+        """AC4 — WARNING log suppressed in scraper for off-season leagues."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        from loguru import logger as _lu
+        from src.scrapers.flashscore_scraper import FlashscoreScraper
+        scraper = FlashscoreScraper.__new__(FlashscoreScraper)
+        scraper.config = MagicMock()
+        scraper.config.get = lambda key, default=None: (
+            ["norway/eliteserien"] if key == "scraping.off_season_leagues" else default
+        )
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="WARNING", format="{message}")
+        try:
+            mock_db = MagicMock()
+            session = MagicMock()
+            session.__enter__ = lambda s: s
+            session.__exit__ = MagicMock(return_value=False)
+            mock_db.get_session.return_value = session
+            with patch("src.scrapers.flashscore_scraper.get_db", return_value=mock_db), \
+                 patch.object(scraper, "_scrape_fixtures_page", return_value=[]):
+                asyncio.run(scraper.scrape_league_fixtures("norway/eliteserien"))
+        finally:
+            _lu.remove(sink_id)
+        assert not any("0 fixtures" in m and "norway/eliteserien" in m for m in messages), \
+            f"Expected no WARNING for off-season league, got: {messages}"
+
+
+class TestEVPriorityInjuryFetch:
+    """Story 9.3: EV-priority injury ordering, per-fixture timing, zero-injury pick warning."""
+
+    def _make_injury_scraper(self, fixture_list=None):
+        """Minimal InjuryScraper mock for update() tests."""
+        from unittest.mock import MagicMock, AsyncMock
+        from src.scrapers.injury_scraper import InjuryScraper
+        scraper = InjuryScraper.__new__(InjuryScraper)
+        scraper.config = {}
+        mock_api = MagicMock()
+        mock_api.enabled = True
+        mock_api.remaining_budget.return_value = 20
+        mock_api._plan_restricted = False
+        mock_api._api_get = AsyncMock(return_value=None)  # no injuries returned
+        scraper.apifootball = mock_api
+
+        mock_db = MagicMock()
+        session = MagicMock()
+        session.__enter__ = lambda s: s
+        session.__exit__ = MagicMock(return_value=False)
+        # First session: fixture query; second: clear stale
+        session.query.return_value.join.return_value.filter.return_value.distinct.return_value.all.return_value = [
+            MagicMock(id=fid, apifootball_id=1000 + fid, home_team_id=fid * 10, away_team_id=fid * 10 + 1)
+            for fid in (fixture_list or [1, 2, 3])
+        ]
+        session.query.return_value.filter.return_value.count.return_value = 0
+        session.query.return_value.filter.return_value.delete.return_value = 0
+        mock_db.get_session.return_value = session
+        scraper.db = mock_db
+        return scraper
+
+    def test_priority_fixtures_fetched_first(self):
+        """AC1 — fixtures with open picks are reordered to the front."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from src.scrapers.injury_scraper import InjuryScraper
+        scraper = self._make_injury_scraper(fixture_list=[1, 2, 3])
+        fetch_order = []
+
+        async def _fake_fetch(fixture_id, home_id, away_id):
+            fetch_order.append(fixture_id)
+            return 0
+
+        scraper._fetch_fixture_injuries = _fake_fetch
+        asyncio.run(scraper.update(priority_fixture_ids=[3]))
+        # fixture 3 must come before 1 and 2
+        assert fetch_order[0] == 1003, f"Expected fixture 1003 first, got {fetch_order}"
+
+    def test_per_fixture_timing_logged(self):
+        """AC2 — DEBUG log emitted with elapsed time per fixture."""
+        import asyncio
+        from loguru import logger as _lu
+        scraper = self._make_injury_scraper(fixture_list=[5])
+
+        async def _fake_fetch(fixture_id, home_id, away_id):
+            return 0
+
+        scraper._fetch_fixture_injuries = _fake_fetch
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="DEBUG", format="{message}")
+        try:
+            asyncio.run(scraper.update())
+        finally:
+            _lu.remove(sink_id)
+        timing_logs = [m for m in messages if "Injury fetch for fixture" in m and "s" in m]
+        assert len(timing_logs) >= 1, f"Expected timing DEBUG log, got: {messages}"
+
+    def test_zero_injury_warning_on_new_pick_save(self):
+        """AC4 — WARNING logged when a new pick has no injury data for its fixture."""
+        from unittest.mock import MagicMock, patch
+        from loguru import logger as _lu
+        from src.agent.betting_agent import FootballBettingAgent
+        from src.betting.value_calculator import BetRecommendation
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        agent.db = MagicMock()
+
+        session = MagicMock()
+        session.__enter__ = lambda s: s
+        session.__exit__ = MagicMock(return_value=False)
+        # No existing pick → save new one; injury count = 0
+        session.query.return_value.filter.return_value.first.return_value = None
+        session.query.return_value.filter.return_value.count.return_value = 0
+        # Match lookup returns a match with team IDs
+        mock_match = MagicMock()
+        mock_match.home_team_id = 10
+        mock_match.away_team_id = 11
+        session.query.return_value.filter.return_value.first.side_effect = [
+            None,   # existing pick check 1
+            None,   # existing pick check 2 (match name guard)
+            mock_match,  # match lookup for injury check
+        ]
+        agent.db.get_session.return_value = session
+
+        pick = MagicMock(spec=BetRecommendation)
+        pick.match_id = 42
+        pick.match = "Bayern vs Dortmund"
+        pick.market = "1X2"
+        pick.selection = "Home"
+        pick.odds = 1.9
+        pick.predicted_probability = 0.55
+        pick.expected_value = 0.045
+        pick.confidence = 0.7
+        pick.kelly_stake_percentage = 3.5
+        pick.risk_level = "medium"
+        pick.used_fallback_odds = False
+        pick.league = "germany/bundesliga"
+
+        from datetime import date as _date
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="WARNING", format="{message}")
+        try:
+            agent._save_picks([pick], _date.today())
+        finally:
+            _lu.remove(sink_id)
+        assert any("no injury data" in m and "42" in m for m in messages), \
+            f"Expected no-injury WARNING, got: {messages}"
+
+    def test_no_warning_when_injury_data_present(self):
+        """AC4 negative — no WARNING when injury data exists for the match."""
+        from unittest.mock import MagicMock
+        from loguru import logger as _lu
+        from src.agent.betting_agent import FootballBettingAgent
+        from src.betting.value_calculator import BetRecommendation
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        agent.db = MagicMock()
+
+        session = MagicMock()
+        session.__enter__ = lambda s: s
+        session.__exit__ = MagicMock(return_value=False)
+        mock_match = MagicMock()
+        mock_match.home_team_id = 10
+        mock_match.away_team_id = 11
+        session.query.return_value.filter.return_value.first.side_effect = [
+            None,       # existing pick check 1
+            None,       # existing pick check 2
+            mock_match, # match lookup
+        ]
+        # 3 injuries present — warning must NOT fire
+        session.query.return_value.filter.return_value.count.return_value = 3
+        agent.db.get_session.return_value = session
+
+        pick = MagicMock(spec=BetRecommendation)
+        pick.match_id = 55
+        pick.match = "Arsenal vs Chelsea"
+        pick.market = "1X2"
+        pick.selection = "Away"
+        pick.odds = 2.1
+        pick.predicted_probability = 0.5
+        pick.expected_value = 0.05
+        pick.confidence = 0.65
+        pick.kelly_stake_percentage = 2.0
+        pick.risk_level = "low"
+        pick.used_fallback_odds = False
+        pick.league = "england/premier-league"
+
+        from datetime import date as _date
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="WARNING", format="{message}")
+        try:
+            agent._save_picks([pick], _date.today())
+        finally:
+            _lu.remove(sink_id)
+        assert not any("no injury data" in m for m in messages), \
+            f"Expected no WARNING when injuries present, got: {messages}"

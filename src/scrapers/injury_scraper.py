@@ -4,6 +4,7 @@ Fetches injuries for today's fixtures so the model can factor in missing
 players when generating picks.  Each fixture costs 1 API request.
 """
 
+import time as _time
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 
@@ -27,13 +28,17 @@ class InjuryScraper:
         self.apifootball = apifootball
         self.db = get_db()
 
-    async def update(self):
+    async def update(self, priority_fixture_ids=None):
         """Fetch injuries for today's fixtures that have an apifootball_id.
 
         Uses the shared APIFootballScraper instance so all requests count
         against the single daily quota.  Budget is min(fixture_count,
         remaining requests, max_injury_budget) — the cap (default 30)
         leaves room for targeted backfill after injuries complete.
+
+        Args:
+            priority_fixture_ids: Optional list of match DB IDs to fetch first.
+                                  Used to prioritise fixtures with open picks.
         """
         if not self.apifootball or not self.apifootball.enabled:
             logger.debug("API-Football not available — skipping injury update")
@@ -80,6 +85,12 @@ class InjuryScraper:
             logger.debug("No fixtures for injury update")
             return
 
+        # Prioritise fixtures with open picks so the most important ones are
+        # fetched first if the budget or time runs out before the full list.
+        if priority_fixture_ids:
+            _priority_set = set(priority_fixture_ids)
+            fixture_list.sort(key=lambda x: (0 if x[0] in _priority_set else 1))
+
         # Cap budget to actual fixture count — release unused requests for backfill
         injury_budget = min(injury_budget, len(fixture_list))
 
@@ -110,9 +121,12 @@ class InjuryScraper:
                 logger.debug("Skipping injury fetch — API-Football plan restriction active")
                 break
             try:
+                _t0 = _time.monotonic()
                 count = await self._fetch_fixture_injuries(
                     fixture_id, home_team_id, away_team_id
                 )
+                _elapsed = _time.monotonic() - _t0
+                logger.debug(f"Injury fetch for fixture {fixture_id}: {_elapsed:.1f}s")
                 total_saved += count
                 fetched += 1
                 if count == 0:

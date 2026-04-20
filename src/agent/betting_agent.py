@@ -18,7 +18,7 @@ from src.features.feature_engineer import FeatureEngineer
 from src.models.ensemble import EnsemblePredictor
 from src.betting.value_calculator import ValueBettingCalculator, BetRecommendation
 from src.reporting.telegram_bot import TelegramNotifier
-from src.data.models import Match, Team, Odds, SavedPick
+from src.data.models import Match, Team, Odds, SavedPick, Injury
 from src.data.database import get_db, init_db
 from src.utils.config import get_config
 from src.utils.logger import get_logger, setup_logger, utcnow
@@ -313,6 +313,7 @@ class FootballBettingAgent:
                 f"Fixtures: scraping {len(_fixture_leagues)} leagues with fixtures/pending, "
                 f"skipping {_skipped_fixture_leagues} without"
             )
+        _league_fixture_results: dict = {}
         try:
             _fixtures_deadline = _timer.monotonic() + _FIXTURES_BUDGET_S
             for league in _fixture_leagues:
@@ -320,9 +321,11 @@ class FootballBettingAgent:
                     logger.warning("Flashscore fixtures: time budget exhausted, skipping remaining leagues")
                     break
                 try:
-                    await asyncio.wait_for(
+                    result = await asyncio.wait_for(
                         self.scraper.scrape_league_fixtures(league), timeout=90,
                     )
+                    if result is not None:
+                        _league_fixture_results[league] = result
                 except asyncio.TimeoutError:
                     logger.warning(f"Flashscore fixture timeout for {league}, continuing")
                     try:
@@ -339,6 +342,11 @@ class FootballBettingAgent:
                 self.scraper.close_driver()
             except Exception:
                 pass
+
+        try:
+            await self._check_empty_fixture_leagues(_league_fixture_results)
+        except Exception as e:
+            logger.warning(f"Empty-league Telegram alert failed (non-fatal): {e}")
 
         # 2b. API-Football (fixtures, xG, advanced stats, odds).
         try:
@@ -367,8 +375,24 @@ class FootballBettingAgent:
         self.scraper.close_driver()
 
         # 4. Injury data (cap at 8 min — API-Football calls can be slow; increased from 5)
+        # Prioritise fixtures that already have open (unsettled) picks so those
+        # get injury context first if the budget or timeout cuts the run short.
+        _injury_priority_ids: list = []
         try:
-            await asyncio.wait_for(self.injury_tracker.update(), timeout=480)
+            with self.db.get_session() as _isess:
+                _injury_priority_ids = [
+                    row[0] for row in _isess.query(SavedPick.match_id)
+                    .filter(SavedPick.result.is_(None))
+                    .distinct()
+                    .all()
+                ]
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(
+                self.injury_tracker.update(priority_fixture_ids=_injury_priority_ids),
+                timeout=480,
+            )
             logger.info("Injury update complete")
         except asyncio.TimeoutError:
             logger.warning("Injury update timed out after 8 minutes")
@@ -553,6 +577,18 @@ class FootballBettingAgent:
             recommendations=recommendations,
             injury_report=injury_report,
         )
+
+    async def _check_empty_fixture_leagues(self, league_results: dict) -> None:
+        """Send Telegram WARNING for priority leagues that returned 0 fixtures."""
+        off_season = set(self.config.get("scraping.off_season_leagues", []))
+        empty_leagues = [
+            league for league, fixtures in league_results.items()
+            if len(fixtures) == 0 and league not in off_season
+        ]
+        if empty_leagues and self.telegram.enabled:
+            await self.telegram.send_alert(
+                f"⚠️ Flashscore: 0 fixtures returned for: {', '.join(empty_leagues)}"
+            )
 
     async def get_daily_picks(self, target_date: date = None,
                               max_picks_per_match: int = 2,
@@ -1091,6 +1127,18 @@ class FootballBettingAgent:
                 )
                 session.add(saved)
                 new_picks.append(pick)
+
+                # AC4: warn when a new pick has no injury data for its match
+                match_row = session.query(Match).filter(Match.id == pick.match_id).first()
+                if match_row:
+                    injury_count = session.query(Injury).filter(
+                        Injury.team_id.in_([match_row.home_team_id, match_row.away_team_id])
+                    ).count()
+                    if injury_count == 0:
+                        logger.warning(
+                            f"Pick saved with no injury data for fixture {pick.match_id} "
+                            f"({pick.match}) — injury features will be zero"
+                        )
 
             session.commit()
             logger.info(f"Saved {len(new_picks)} new picks to database (skipped {len(picks) - len(new_picks)} duplicates)")
