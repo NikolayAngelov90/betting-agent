@@ -821,6 +821,9 @@ class FootballBettingAgent:
         # on failure, so the per-fixture fallback path activates automatically.
         self.feature_engineer.preload_batch(fixture_ids)
 
+        # Warn operators when ML is excluded from today's ensemble (Story 7.3)
+        await self._check_ml_zero_weight()
+
         # Analyze fixtures with bounded concurrency — feature engineering and
         # prediction involve synchronous DB queries that block the event loop,
         # so a semaphore limits how many run at once.  Default 5 keeps weekend
@@ -1784,6 +1787,10 @@ class FootballBettingAgent:
             cal_path.write_text(json.dumps(cal_factors, indent=2))
             self.predictor.calibration_factors.update(cal_factors)
             logger.info(f"Calibration factors: {cal_factors}")
+
+            # Reset ML zero-count when ML accuracy recovers (Story 7.3 AC3)
+            if cal_factors.get("ml", 0.0) > 0.0:
+                self._reset_ml_zero_count()
         except Exception as e:
             logger.warning(f"Calibration computation failed: {e}")
 
@@ -2069,6 +2076,63 @@ class FootballBettingAgent:
             )
 
         logger.info("Post-settlement learning complete")
+
+    async def _check_ml_zero_weight(self) -> None:
+        """Send Telegram WARNING when ML cal_factor is 0.0; escalate to CRITICAL at 4+ runs.
+
+        Tracks consecutive zero-weight runs in data/models/ml_zero_count.json.
+        Increments the counter at most once per calendar day (same-day re-runs are safe).
+        Called from get_daily_picks() after the ensemble predictor is ready.
+        """
+        if self.predictor.calibration_factors.get("ml", 1.0) != 0.0:
+            return
+
+        _ml_zero_path = Path("data/models/ml_zero_count.json")
+        _today_str = date.today().isoformat()
+        try:
+            _zdata = (
+                json.loads(_ml_zero_path.read_text())
+                if _ml_zero_path.exists()
+                else {"count": 0, "last_updated": ""}
+            )
+            # Increment once per calendar day — same-day re-runs don't double-count
+            if _zdata.get("last_updated") != _today_str:
+                _zdata["count"] = _zdata.get("count", 0) + 1
+                _zdata["last_updated"] = _today_str
+                _ml_zero_path.parent.mkdir(parents=True, exist_ok=True)
+                _ml_zero_path.write_text(json.dumps(_zdata))
+        except Exception as _ze:
+            logger.warning(f"Failed to update ml_zero_count.json: {_ze}")
+            _zdata = {"count": 1}
+
+        try:
+            await self.telegram.send_alert(
+                "⚠️ ML model contributing 0% to today's picks — calibration gate active. "
+                "Check training pipeline."
+            )
+        except Exception as _tg_err:
+            logger.warning(f"ML zero-weight Telegram alert failed: {_tg_err}")
+
+        if _zdata.get("count", 1) >= 4:
+            try:
+                await self.telegram.send_alert(
+                    f"🚨 ML excluded from ensemble for {_zdata['count']} consecutive runs "
+                    f"— investigate training pipeline"
+                )
+            except Exception as _tg_err:
+                logger.warning(f"ML CRITICAL escalation Telegram alert failed: {_tg_err}")
+
+    def _reset_ml_zero_count(self) -> None:
+        """Reset ml_zero_count.json to 0 when ML calibration factor recovers. (AC3)"""
+        _ml_zero_path = Path("data/models/ml_zero_count.json")
+        if _ml_zero_path.exists():
+            try:
+                _ml_zero_path.write_text(
+                    json.dumps({"count": 0, "last_updated": date.today().isoformat()})
+                )
+                logger.debug("ML zero-weight counter reset (ML accuracy recovered)")
+            except Exception as _rze:
+                logger.warning(f"Failed to reset ml_zero_count.json: {_rze}")
 
     def _apply_ml_calibration_gate(
         self, accuracies: dict, cal_factors: dict, prev_cal: dict

@@ -675,3 +675,134 @@ class TestMLTrainingFailureTelegramAlert:
 
         asyncio.run(_run())
         telegram.send_alert.assert_not_called()
+
+
+class TestMLZeroWeightEscalation:
+    """Story 7.3 — Telegram WARNING + CRITICAL escalation when ML cal_factor is 0.0."""
+
+    def _make_agent(self, cal_ml=0.0):
+        """Return a minimal FootballBettingAgent with real _check_ml_zero_weight()."""
+        from unittest.mock import AsyncMock, MagicMock
+        from src.agent.betting_agent import FootballBettingAgent
+
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        agent.telegram = MagicMock()
+        agent.telegram.send_alert = AsyncMock(return_value=None)
+        agent.predictor = MagicMock()
+        agent.predictor.calibration_factors = {"ml": cal_ml}
+        return agent
+
+    def test_warning_sent_when_ml_zero(self, tmp_path, monkeypatch):
+        """AC1 — send_alert called with WARNING text when ml==0.0, count=1."""
+        import asyncio, json
+        from pathlib import Path
+        from unittest.mock import patch
+
+        agent = self._make_agent(cal_ml=0.0)
+        zero_path = tmp_path / "ml_zero_count.json"
+
+        # Redirect the hardcoded path to tmp_path
+        monkeypatch.setattr(
+            "src.agent.betting_agent.Path",
+            lambda p: zero_path if "ml_zero_count" in str(p) else Path(p),
+        )
+
+        asyncio.run(agent._check_ml_zero_weight())
+
+        agent.telegram.send_alert.assert_called_once()
+        call_text = agent.telegram.send_alert.call_args[0][0]
+        assert "⚠️" in call_text
+        assert "0%" in call_text
+        # Counter file was written
+        assert zero_path.exists()
+        assert json.loads(zero_path.read_text())["count"] == 1
+
+    def test_no_alert_when_ml_not_zero(self, tmp_path):
+        """AC1 negative — no send_alert when ml > 0.0."""
+        import asyncio
+
+        agent = self._make_agent(cal_ml=0.85)
+        asyncio.run(agent._check_ml_zero_weight())
+        agent.telegram.send_alert.assert_not_called()
+
+    def test_critical_escalation_at_count_4(self, tmp_path, monkeypatch):
+        """AC2 — CRITICAL send_alert fired when consecutive count reaches 4."""
+        import asyncio, json
+        from pathlib import Path
+
+        agent = self._make_agent(cal_ml=0.0)
+        zero_path = tmp_path / "ml_zero_count.json"
+        # Pre-seed counter at 3 runs from prior days
+        zero_path.write_text(json.dumps({"count": 3, "last_updated": "2026-01-01"}))
+
+        monkeypatch.setattr(
+            "src.agent.betting_agent.Path",
+            lambda p: zero_path if "ml_zero_count" in str(p) else Path(p),
+        )
+
+        asyncio.run(agent._check_ml_zero_weight())
+
+        assert agent.telegram.send_alert.call_count == 2
+        calls = [c[0][0] for c in agent.telegram.send_alert.call_args_list]
+        assert any("🚨" in c for c in calls)
+        assert any("4 consecutive" in c for c in calls)
+        assert json.loads(zero_path.read_text())["count"] == 4
+
+    def test_same_day_rerun_does_not_double_count(self, tmp_path, monkeypatch):
+        """AC2 — counter not incremented when already updated today."""
+        import asyncio, json
+        from pathlib import Path
+        from datetime import date
+
+        agent = self._make_agent(cal_ml=0.0)
+        today_str = date.today().isoformat()
+        zero_path = tmp_path / "ml_zero_count.json"
+        zero_path.write_text(json.dumps({"count": 2, "last_updated": today_str}))
+
+        monkeypatch.setattr(
+            "src.agent.betting_agent.Path",
+            lambda p: zero_path if "ml_zero_count" in str(p) else Path(p),
+        )
+
+        asyncio.run(agent._check_ml_zero_weight())
+
+        # Count unchanged — already incremented today
+        assert json.loads(zero_path.read_text())["count"] == 2
+
+    def test_counter_reset_on_ml_recovery(self, tmp_path, monkeypatch):
+        """AC3 — ml_zero_count.json reset to 0 when ml cal_factor recovers > 0."""
+        import json
+        from pathlib import Path
+
+        agent = self._make_agent(cal_ml=0.85)
+        zero_path = tmp_path / "ml_zero_count.json"
+        zero_path.write_text(json.dumps({"count": 5, "last_updated": "2026-01-01"}))
+
+        monkeypatch.setattr(
+            "src.agent.betting_agent.Path",
+            lambda p: zero_path if "ml_zero_count" in str(p) else Path(p),
+        )
+
+        agent._reset_ml_zero_count()
+
+        assert json.loads(zero_path.read_text())["count"] == 0
+
+    def test_missing_file_handled_gracefully(self, tmp_path, monkeypatch):
+        """AC4 — no crash when ml_zero_count.json does not exist; created on first run."""
+        import asyncio, json
+        from pathlib import Path
+
+        agent = self._make_agent(cal_ml=0.0)
+        zero_path = tmp_path / "ml_zero_count.json"
+        assert not zero_path.exists()
+
+        monkeypatch.setattr(
+            "src.agent.betting_agent.Path",
+            lambda p: zero_path if "ml_zero_count" in str(p) else Path(p),
+        )
+
+        asyncio.run(agent._check_ml_zero_weight())  # must not raise
+
+        # File created with count=1
+        assert zero_path.exists()
+        assert json.loads(zero_path.read_text())["count"] == 1
