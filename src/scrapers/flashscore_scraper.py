@@ -677,6 +677,12 @@ class FlashscoreScraper(BaseScraper):
             for match_data in matches:
                 self._save_match(session, match_data, league, is_fixture=True)
 
+        if not matches:
+            off_season = set(self.config.get("scraping.off_season_leagues", []))
+            if league not in off_season:
+                logger.warning(
+                    f"Flashscore returned 0 fixtures for {league} — expected ≥1 for active season"
+                )
         logger.info(f"Scraped {len(matches)} fixtures from {league}")
         return matches
 

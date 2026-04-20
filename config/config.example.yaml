@@ -39,6 +39,9 @@ scraping:
     - poland/ekstraklasa
     - romania/liga-1
 
+  # Leagues in off-season that are expected to return 0 fixtures (no alert sent)
+  off_season_leagues: []  # e.g. ["norway/eliteserien", "sweden/allsvenskan"] in winter
+
   update_interval_hours: 6
   headless: true
   request_delay: 3  # seconds between requests
