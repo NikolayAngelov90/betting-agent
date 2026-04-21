@@ -124,7 +124,9 @@ class MLModels:
         """Train all models on the provided data.
 
         Args:
-            X: Feature matrix (n_samples, n_features)
+            X: Feature matrix (n_samples, n_features) — MUST be in chronological order
+                (oldest row first). The last 20% are held out as the validation set, so
+                non-chronological ordering silently produces a contaminated split.
             y: Target labels (0=away, 1=draw, 2=home)
             feature_names: Optional list of feature names
         """
@@ -537,7 +539,8 @@ class GoalsMLModel:
         """Train the goals model.
 
         Args:
-            X: Feature matrix (n_samples, n_features)
+            X: Feature matrix (n_samples, n_features) — MUST be in chronological order
+                (oldest row first). The last 20% are held out as the validation set.
             y: Binary labels — 1 if total goals > 2.5, else 0
             feature_names: Optional list of feature names
         """
