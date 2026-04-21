@@ -261,7 +261,8 @@ class FootballBettingAgent:
         _important = _today_leagues | _pending_leagues
         _priority = [l for l in leagues if l in _important]
         _rest = [l for l in leagues if l not in _important]
-        _ordered_leagues = _priority + _rest
+        # AC1: extend with DB-derived leagues not in static config (e.g. added mid-run by API-Football)
+        _ordered_leagues = self._merge_flashscore_targets(_priority + _rest, _today_leagues | _pending_leagues)
         if _priority:
             logger.info(
                 f"Prioritized {len(_priority)} leagues (fixtures/pending picks): "
@@ -577,6 +578,17 @@ class FootballBettingAgent:
             recommendations=recommendations,
             injury_report=injury_report,
         )
+
+    def _merge_flashscore_targets(self, static_leagues: list, db_leagues: set) -> list:
+        """Return static config leagues extended with any DB-derived leagues not already listed.
+
+        Static list order is preserved (AC4). New leagues are appended alphabetically.
+        """
+        static_set = set(static_leagues)
+        extras = sorted(slug for slug in db_leagues if slug not in static_set)
+        for slug in extras:
+            logger.info(f"Added dynamic Flashscore target: {slug} (fixtures/pending picks, not in static config)")
+        return list(static_leagues) + extras
 
     async def _check_empty_fixture_leagues(self, league_results: dict) -> None:
         """Send Telegram WARNING for priority leagues that returned 0 fixtures."""

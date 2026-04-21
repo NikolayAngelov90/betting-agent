@@ -1437,3 +1437,65 @@ class TestEVPriorityInjuryFetch:
             _lu.remove(sink_id)
         assert not any("no injury data" in m for m in messages), \
             f"Expected no WARNING when injuries present, got: {messages}"
+
+
+class TestDynamicFlashscoreTargets:
+    """Story 9.4: _merge_flashscore_targets() merges static config with DB-derived leagues."""
+
+    def _make_agent(self):
+        from unittest.mock import MagicMock
+        from src.agent.betting_agent import FootballBettingAgent
+        agent = FootballBettingAgent.__new__(FootballBettingAgent)
+        agent.config = MagicMock()
+        return agent
+
+    def test_dynamic_league_appended_when_not_in_static(self):
+        """AC1/AC2 — DB league not in static config is added to target list."""
+        agent = self._make_agent()
+        result = agent._merge_flashscore_targets(
+            ["england/premier-league", "germany/bundesliga"],
+            {"england/premier-league", "poland/ekstraklasa"},
+        )
+        assert "poland/ekstraklasa" in result
+        assert "england/premier-league" in result
+        assert "germany/bundesliga" in result
+
+    def test_no_duplicates_for_shared_leagues(self):
+        """AC3 — league in both DB and static list appears exactly once."""
+        agent = self._make_agent()
+        result = agent._merge_flashscore_targets(
+            ["england/premier-league", "spain/laliga"],
+            {"england/premier-league", "spain/laliga"},
+        )
+        assert result.count("england/premier-league") == 1
+        assert result.count("spain/laliga") == 1
+
+    def test_static_order_preserved_at_front(self):
+        """AC4 — static config list order is preserved (no regression)."""
+        agent = self._make_agent()
+        static = ["z/league", "a/league", "m/league"]
+        result = agent._merge_flashscore_targets(static, {"z/league", "extra/league"})
+        assert result[:3] == static
+
+    def test_no_regression_when_db_matches_static(self):
+        """AC4 — result identical to static list when DB leagues are all known."""
+        agent = self._make_agent()
+        static = ["england/premier-league", "germany/bundesliga"]
+        result = agent._merge_flashscore_targets(static, set(static))
+        assert result == static
+
+    def test_info_log_emitted_for_dynamic_league(self):
+        """INFO log is emitted for each league added dynamically."""
+        from loguru import logger as _lu
+        agent = self._make_agent()
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="INFO", format="{message}")
+        try:
+            agent._merge_flashscore_targets(
+                ["england/premier-league"],
+                {"england/premier-league", "poland/ekstraklasa"},
+            )
+        finally:
+            _lu.remove(sink_id)
+        assert any("poland/ekstraklasa" in m and "dynamic Flashscore target" in m for m in messages), \
+            f"Expected INFO log for dynamic league, got: {messages}"
