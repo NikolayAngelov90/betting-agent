@@ -1213,35 +1213,50 @@ class TestEmptyLeagueFixtureAlert:
         assert any("0 fixtures" in m and "germany/bundesliga" in m for m in messages), \
             f"Expected WARNING for 0 fixtures, got: {messages}"
 
-    def test_check_sends_alert_for_empty_leagues(self):
-        """AC2 — Telegram alert sent listing all empty leagues."""
+    def test_check_logs_empty_leagues(self):
+        """AC2 — empty leagues are logged at INFO (no Telegram alert)."""
         import asyncio
+        from loguru import logger as _lu
         agent = self._make_agent()
-        asyncio.run(agent._check_empty_fixture_leagues(
-            {"germany/bundesliga": [], "england/championship": []}
-        ))
-        agent.telegram.send_alert.assert_called_once()
-        msg = agent.telegram.send_alert.call_args[0][0]
-        assert "germany/bundesliga" in msg
-        assert "england/championship" in msg
-        assert "⚠️" in msg
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="INFO", format="{message}")
+        try:
+            asyncio.run(agent._check_empty_fixture_leagues(
+                {"germany/bundesliga": [], "england/championship": []}
+            ))
+        finally:
+            _lu.remove(sink_id)
+        agent.telegram.send_alert.assert_not_called()
+        assert any("germany/bundesliga" in m or "england/championship" in m for m in messages)
 
-    def test_check_no_alert_when_all_leagues_have_fixtures(self):
-        """AC3 — no alert when all leagues return ≥1 fixture."""
+    def test_check_no_log_when_all_leagues_have_fixtures(self):
+        """AC3 — no log when all leagues return ≥1 fixture."""
         import asyncio
         from unittest.mock import MagicMock
+        from loguru import logger as _lu
         agent = self._make_agent()
-        asyncio.run(agent._check_empty_fixture_leagues(
-            {"germany/bundesliga": [MagicMock()]}
-        ))
-        agent.telegram.send_alert.assert_not_called()
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="INFO", format="{message}")
+        try:
+            asyncio.run(agent._check_empty_fixture_leagues(
+                {"germany/bundesliga": [MagicMock()]}
+            ))
+        finally:
+            _lu.remove(sink_id)
+        assert not any("0 fixtures" in m for m in messages)
 
-    def test_off_season_league_excluded_from_alert(self):
-        """AC4 — off-season leagues not included in empty-league alert."""
+    def test_off_season_league_excluded_from_log(self):
+        """AC4 — off-season leagues not included in empty-league log."""
         import asyncio
+        from loguru import logger as _lu
         agent = self._make_agent(off_season=["norway/eliteserien"])
-        asyncio.run(agent._check_empty_fixture_leagues({"norway/eliteserien": []}))
-        agent.telegram.send_alert.assert_not_called()
+        messages = []
+        sink_id = _lu.add(lambda msg: messages.append(msg), level="INFO", format="{message}")
+        try:
+            asyncio.run(agent._check_empty_fixture_leagues({"norway/eliteserien": []}))
+        finally:
+            _lu.remove(sink_id)
+        assert not any("norway/eliteserien" in m for m in messages)
 
     def test_scraper_no_warning_for_off_season_league(self):
         """AC4 — WARNING log suppressed in scraper for off-season leagues."""

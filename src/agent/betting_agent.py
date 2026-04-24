@@ -608,16 +608,14 @@ class FootballBettingAgent:
         return list(static_leagues) + extras
 
     async def _check_empty_fixture_leagues(self, league_results: dict) -> None:
-        """Send Telegram WARNING for priority leagues that returned 0 fixtures."""
+        """Log leagues that returned 0 fixtures from Flashscore (info only, no Telegram)."""
         off_season = set(self.config.get("scraping.off_season_leagues", []))
         empty_leagues = [
             league for league, fixtures in league_results.items()
             if len(fixtures) == 0 and league not in off_season
         ]
-        if empty_leagues and self.telegram.enabled:
-            await self.telegram.send_alert(
-                f"⚠️ Flashscore: 0 fixtures returned for: {', '.join(empty_leagues)}"
-            )
+        if empty_leagues:
+            logger.info(f"Flashscore: 0 fixtures returned for: {', '.join(empty_leagues)}")
 
     async def get_daily_picks(self, target_date: date = None,
                               max_picks_per_match: int = 2,
