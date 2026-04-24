@@ -85,7 +85,7 @@ class TelegramNotifier:
                 logger.error(f"Failed to initialize Telegram bot: {e}")
         return self._bot
 
-    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None):
+    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None, no_injury_data: bool = False):
         """Send daily picks summary via Telegram with rich formatting."""
         if not self.enabled:
             return
@@ -219,6 +219,9 @@ class TelegramNotifier:
             for dp in dropped_picks:
                 safe_match = html_escape(dp.match)
                 lines.append(f"  • {safe_match} — {html_escape(dp.market)}")
+
+        if no_injury_data and picks:
+            lines.append("\n⚠️ <i>Injury data unavailable for all picks today (API suspended or timed out).</i>")
 
         # Send (split if needed)
         message = "\n".join(lines)

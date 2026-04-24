@@ -358,6 +358,23 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"API-Football update failed: {e}")
 
+        if getattr(self.apifootball, "_account_suspended", False):
+            try:
+                await self.telegram.send_alert(
+                    "🚨 API-Football account suspended — fixtures, xG, odds, and injury "
+                    "data are unavailable. Check account at dashboard.api-football.com"
+                )
+            except Exception as _tg_err:
+                logger.warning(f"Failed to send API suspension Telegram alert: {_tg_err}")
+        elif getattr(self.apifootball, "_xg_all_failed", False):
+            try:
+                await self.telegram.send_alert(
+                    "⚠️ xG backfill: all API-Football stats requests failed this run. "
+                    "xG features will use zero values until next successful run."
+                )
+            except Exception as _tg_err:
+                logger.warning(f"Failed to send xG failure Telegram alert: {_tg_err}")
+
         # 2c. The Odds API — supplemental odds for leagues with today's fixtures.
         # Free tier: 500 credits/month (~1 credit/league call). Only calls leagues
         # that actually have fixtures today to minimise credit burn.
@@ -1018,6 +1035,13 @@ class FootballBettingAgent:
                     "Drawdown circuit breaker TRIGGERED — skipping all picks "
                     "(drawdown exceeds pause threshold)"
                 )
+                try:
+                    await self.telegram.send_alert(
+                        "🛑 Drawdown circuit breaker TRIGGERED: all picks paused. "
+                        "Recent ROI below pause threshold. Picks will resume once performance recovers."
+                    )
+                except Exception as _tg_err:
+                    logger.warning(f"Drawdown Telegram alert failed: {_tg_err}")
                 return [], [], []
             # Tighten EV threshold proportionally with drawdown severity so
             # fewer marginal picks pass when we're in a losing run.
@@ -1031,6 +1055,14 @@ class FootballBettingAgent:
                 f"{dd_multiplier:.0%} of normal; "
                 f"tightened EV threshold to {tightened_ev:.1%} (+{dd_ev_boost:.1%})"
             )
+            try:
+                await self.telegram.send_alert(
+                    f"⚠️ Drawdown circuit breaker active: stakes scaled to {dd_multiplier:.0%}, "
+                    f"EV threshold tightened to {tightened_ev:.1%}. "
+                    f"Check recent pick performance."
+                )
+            except Exception as _tg_err:
+                logger.warning(f"Drawdown Telegram alert failed: {_tg_err}")
             for rec in all_recommendations:
                 rec.kelly_stake_percentage = round(
                     rec.kelly_stake_percentage * dd_multiplier, 2
@@ -1797,11 +1829,13 @@ class FootballBettingAgent:
         # ML weight: if ML models are fitted, give them a baseline weight
         # derived from the average of Poisson/Elo accuracy (since we skip
         # expensive ML re-evaluation). If not fitted, ML stays at 0.
+        ml_is_proxy = False
         if self.predictor.ml_models.is_fitted and accuracies["ml"] == 0.0:
             avg_pe = (accuracies["poisson"] + accuracies["elo"]) / 2
             accuracies["ml"] = avg_pe * 0.6  # slight discount vs proven models
             base_models["ml"] = accuracies["ml"]
             total_acc = sum(base_models.values())
+            ml_is_proxy = True  # proxy value — gate must not apply threshold check
 
         new_weights = {
             "poisson": round(base_models["poisson"] / total_acc, 3),
@@ -1864,7 +1898,7 @@ class FootballBettingAgent:
                 else:
                     cal_factors[model] = 1.0
 
-            self._apply_ml_calibration_gate(accuracies, cal_factors, prev_cal)
+            self._apply_ml_calibration_gate(accuracies, cal_factors, prev_cal, ml_is_proxy=ml_is_proxy)
 
             # Alert operators via Telegram when ML is excluded (AC1 of Story 4.2)
             if cal_factors.get("ml", 1.0) == 0.0:
@@ -2230,14 +2264,26 @@ class FootballBettingAgent:
                 logger.warning(f"Failed to reset ml_zero_count.json: {_rze}")
 
     def _apply_ml_calibration_gate(
-        self, accuracies: dict, cal_factors: dict, prev_cal: dict
+        self, accuracies: dict, cal_factors: dict, prev_cal: dict, ml_is_proxy: bool = False
     ) -> None:
         """Zero-out ML calibration when accuracy is below-random; restore when recovered.
 
         Modifies cal_factors in-place. Called from tune_ensemble_weights() after
         the Poisson/Elo calibration loop and before saving calibration.json.
+
+        When ml_is_proxy=True, the accuracy value was derived from a proxy formula
+        (avg_pe * 0.6 ≈ 0.26) that is always below 0.35 regardless of actual model
+        quality. In this case the gate threshold must not apply — ML models are fitted
+        and should be included at full calibration weight.
         """
         ml_acc = accuracies.get("ml", 0.0)
+        if ml_is_proxy:
+            # Proxy-derived accuracy cannot be used for gate decisions.
+            # ML models are fitted — include at full calibration weight.
+            if prev_cal.get("ml", 1.0) == 0.0:
+                logger.info("ML re-entering ensemble (proxy mode — threshold gate skipped for fitted model)")
+            cal_factors["ml"] = 1.0
+            return
         if ml_acc < 0.35:
             cal_factors["ml"] = 0.0
             logger.warning(
@@ -2628,8 +2674,30 @@ async def main():
                 if agent.telegram.enabled:
                     if new_picks:
                         stats = agent.get_stats()
+                        # Detect when all picks lack injury data (e.g. API suspended)
+                        no_injury_data = False
+                        try:
+                            match_ids = [p.match_id for p in new_picks if p.match_id]
+                            if match_ids:
+                                with agent.db.get_session() as _isess:
+                                    _matches = _isess.query(Match).filter(Match.id.in_(match_ids)).all()
+                                    _team_ids = [
+                                        tid
+                                        for m in _matches
+                                        for tid in (m.home_team_id, m.away_team_id)
+                                        if tid
+                                    ]
+                                    if _team_ids:
+                                        no_injury_data = (
+                                            _isess.query(Injury)
+                                            .filter(Injury.team_id.in_(_team_ids))
+                                            .count()
+                                        ) == 0
+                        except Exception as _ierr:
+                            logger.debug(f"Injury data check failed: {_ierr}")
                         await agent.telegram.send_daily_picks(
-                            new_picks, stats=stats, dropped_picks=dropped_picks
+                            new_picks, stats=stats, dropped_picks=dropped_picks,
+                            no_injury_data=no_injury_data,
                         )
                         print(f"\nPicks sent to Telegram! ({len(new_picks)} new)")
                     else:

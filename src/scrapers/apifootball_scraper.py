@@ -375,6 +375,8 @@ class APIFootballScraper(BaseScraper):
         self._logged_unknown_bets: set = set()  # Suppress repeated unknown bet type logs
         self._today_fixture_count = 0  # Updated after _fetch_fixtures_by_date(today)
         self._rate_limit_retries = 0  # Count 429-triggered retries for telemetry
+        self._account_suspended = False  # Set True when API returns account-suspended error
+        self._xg_all_failed = False  # Set True when xG backfill attempts all return None
 
     def remaining_budget(self) -> int:
         """Return remaining API requests available (excluding safety reserve)."""
@@ -417,6 +419,12 @@ class APIFootballScraper(BaseScraper):
                             "Skipping restricted endpoints for this run."
                         )
                         self._plan_restricted = True
+                elif "access" in errors:
+                    # Account suspended or access revoked — stop all further requests
+                    if not self._account_suspended:
+                        logger.error(f"API-Football account suspended: {errors}")
+                        self._account_suspended = True
+                    self._quota_exhausted = True
                 else:
                     logger.error(f"API-Football errors: {errors}")
                 return None
@@ -727,6 +735,9 @@ class APIFootballScraper(BaseScraper):
         if pending_updates:
             self._batch_update_match_stats(pending_updates)
             logger.info(f"xG backfill: {len(pending_updates)}/{needed} matches updated ({skipped} already complete)")
+        elif needed > 0:
+            logger.warning(f"xG backfill: {needed} matches needed but 0 updated — all API calls failed")
+            self._xg_all_failed = True
 
     async def _fetch_fixture_stats(self, fixture_id: int) -> Optional[Dict]:
         """Fetch detailed statistics for a single fixture."""
