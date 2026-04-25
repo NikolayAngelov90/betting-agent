@@ -37,6 +37,7 @@ ci_logs/
 
 # Secrets
 .env
+.env.local
 config/config.yaml
 
 # IDE & local tooling
