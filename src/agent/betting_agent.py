@@ -526,6 +526,13 @@ class FootballBettingAgent:
         except Exception as e:
             logger.warning(f"Low-coverage backfill failed: {e}")
 
+        # Invalidate the league baselines cache so the picks step uses the
+        # freshly ingested historical data, not stats from before --update ran.
+        try:
+            self.feature_engineer.clear_league_cache()
+        except Exception as _e:
+            logger.debug(f"clear_league_cache failed: {_e}")
+
         logger.info("Daily update cycle complete")
 
     async def analyze_fixture(self, match_id: int) -> MatchAnalysis:
@@ -724,8 +731,7 @@ class FootballBettingAgent:
             # separate Match records for the same game (e.g. "Man City" vs
             # "Manchester City"). Keep the record with more odds or with
             # flashscore_id (better enrichment data).
-            from src.scrapers.flashscore_scraper import FlashscoreScraper as _FS
-            _nm = _FS._team_names_similar
+            from src.utils.team_names import team_names_similar as _nm
             # seen_list: [(match_id, home_name, league, match_date)]
             seen_list: list = []
             dedup_ids: list = []
@@ -1500,12 +1506,12 @@ class FootballBettingAgent:
                                 )
                                 .all()
                             )
-                            from src.scrapers.flashscore_scraper import FlashscoreScraper as _FS
+                            from src.utils.team_names import team_names_similar
                             h_name, a_name = parts[0].strip(), parts[1].strip()
                             for cand in candidates:
                                 ch = session.get(Team, cand.home_team_id)
                                 ca = session.get(Team, cand.away_team_id)
-                                if ch and ca and _FS._team_names_similar(ch.name, h_name) and _FS._team_names_similar(ca.name, a_name):
+                                if ch and ca and team_names_similar(ch.name, h_name) and team_names_similar(ca.name, a_name):
                                     match = cand
                                     break
                 if not match or match.home_goals is None or match.away_goals is None:
@@ -1649,10 +1655,11 @@ class FootballBettingAgent:
             for p in settled:
                 markets.setdefault(p.market, []).append(p)
 
-            # Model coverage summary
-            poisson_teams = len(self.predictor.poisson._team_strengths)
-            elo_teams = len(self.predictor.elo.ratings)
-            ml_fitted = self.predictor.ml_models.is_fitted
+            # Model coverage summary (encapsulated — no private-attr access)
+            _cov = self.predictor.coverage_summary()
+            poisson_teams = _cov["poisson_teams"]
+            elo_teams = _cov["elo_teams"]
+            ml_fitted = _cov["ml_fitted"]
 
             # Fallback vs real odds breakdown
             real_odds_settled = [p for p in settled if not getattr(p, "used_fallback_odds", False)]
@@ -2721,13 +2728,18 @@ class FootballBettingAgent:
 
 
 
-async def main():
-    """CLI entry point."""
+def _configure_cli_runtime():
+    """One-time CLI runtime setup (UTF-8 streams + .env load).
+
+    Kept in a dedicated function so importing `main` doesn't replace stdout
+    / stderr as a side effect of the import — the previous version did this
+    inside main() but at module import time anyone touching the symbol would
+    inherit it.  Now it only runs when the CLI entry point actually starts.
+    """
     import io
     import sys
     from pathlib import Path
 
-    # Ensure UTF-8 stdout/stderr in CI environments (fixes non-ASCII team name corruption)
     if hasattr(sys.stdout, "buffer"):
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "buffer"):
@@ -2738,6 +2750,13 @@ async def main():
         load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     except Exception:
         pass
+
+
+async def main():
+    """CLI entry point."""
+    import sys
+
+    _configure_cli_runtime()
 
     agent = FootballBettingAgent()
 

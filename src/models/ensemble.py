@@ -70,6 +70,19 @@ class EnsemblePredictor:
         # ML models are fitted separately via train() with feature data
         logger.info("Ensemble models fitted")
 
+    def coverage_summary(self) -> Dict:
+        """Return aggregate coverage stats for stats/health-check output.
+
+        Encapsulates access to private model state so callers don't reach
+        into `predictor.poisson._team_strengths` directly.
+        """
+        return {
+            "poisson_teams": len(self.poisson._team_strengths),
+            "elo_teams": len(self.elo.ratings),
+            "ml_fitted": self.ml_models.is_fitted,
+            "goals_ml_fitted": self.goals_model.is_fitted,
+        }
+
     def check_coverage(self, home_team_id: int, away_team_id: int) -> Dict:
         """Check data coverage for a team pair.
 

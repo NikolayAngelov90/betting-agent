@@ -92,9 +92,13 @@ class DatabaseManager:
                 logger.info(f"Dropped removed table: {table}")
 
     def _migrate_missing_columns(self):
-        """Auto-add columns that exist in models but not in the DB (simple migration).
+        """Auto-add columns that exist in models but not in the DB.
 
-        Only handles adding nullable columns — safe for SQLite.
+        Only adds NULLABLE columns, OR NOT NULL columns that carry a server-
+        side default (so existing rows can be back-filled atomically).
+        Anything else requires a real migration script and is skipped with a
+        WARNING — silently adding a NOT NULL column without a default would
+        fail on tables that already have rows.
         """
         inspector = inspect(self.engine)
         for table_name, table in Base.metadata.tables.items():
@@ -103,15 +107,37 @@ class DatabaseManager:
 
             existing_cols = {c["name"] for c in inspector.get_columns(table_name)}
             for col in table.columns:
-                if col.name not in existing_cols:
-                    col_type = col.type.compile(self.engine.dialect)
-                    sql = f"ALTER TABLE {table_name} ADD COLUMN {col.name} {col_type}"
-                    try:
-                        with self.engine.begin() as conn:
-                            conn.execute(text(sql))
-                        logger.info(f"Migration: added column {table_name}.{col.name} ({col_type})")
-                    except Exception as e:
-                        logger.debug(f"Column {table_name}.{col.name} migration skipped: {e}")
+                if col.name in existing_cols:
+                    continue
+
+                has_server_default = col.server_default is not None
+                if not col.nullable and not has_server_default:
+                    logger.warning(
+                        f"Migration: skipping {table_name}.{col.name} — column is "
+                        f"NOT NULL without a server default. Write an explicit "
+                        f"migration that backfills existing rows before adding "
+                        f"the constraint."
+                    )
+                    continue
+
+                col_type = col.type.compile(self.engine.dialect)
+                nullable_clause = "" if col.nullable else " NOT NULL"
+                default_clause = ""
+                if has_server_default and hasattr(col.server_default, "arg"):
+                    default_clause = f" DEFAULT {col.server_default.arg}"
+                sql = (
+                    f"ALTER TABLE {table_name} ADD COLUMN "
+                    f"{col.name} {col_type}{default_clause}{nullable_clause}"
+                )
+                try:
+                    with self.engine.begin() as conn:
+                        conn.execute(text(sql))
+                    logger.info(
+                        f"Migration: added column {table_name}.{col.name} "
+                        f"({col_type}{nullable_clause}{default_clause})"
+                    )
+                except Exception as e:
+                    logger.debug(f"Column {table_name}.{col.name} migration skipped: {e}")
 
     def _migrate_missing_indexes(self):
         """Create any indexes defined in models that don't yet exist in the DB."""

@@ -1100,6 +1100,10 @@ class TestSmartXGBackfill:
         scraper.BUDGET_RESERVE = 10
         scraper.BUDGET_XG = api_budget
         scraper._today_fixture_count = 5
+        # _backfill_xg now reads `data_sources.apifootball_stats_cutoff` from
+        # config. Mock returns None so the cutoff is disabled in tests.
+        scraper.config = MagicMock()
+        scraper.config.get.return_value = None
 
         # DB mock
         session = MagicMock()

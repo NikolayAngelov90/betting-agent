@@ -1642,97 +1642,15 @@ class FlashscoreScraper(BaseScraper):
             session.flush()
         return team
 
-    # Known cross-source name aliases (lowercase canonical form).
-    # Maps variant spellings to a shared canonical string so that alias-based
-    # pairs compare equal after normalisation.
-    # NOTE: only add entries that cannot be resolved by the token/prefix logic
-    # below (e.g. completely different abbreviation styles).
-    _NAME_ALIASES: dict = {
-        # Atletico Madrid (API-Football uses "Ath", Flashscore uses "Atl.")
-        "ath madrid": "atletico madrid",
-        "atl. madrid": "atletico madrid",
-        "atl madrid": "atletico madrid",
-        # PSG (API-Football: "Paris SG", Flashscore: "PSG")
-        "paris sg": "paris saint-germain",
-        "psg": "paris saint-germain",
-        # Olympiakos / Olympiacos (different Latin transliterations)
-        "olympiakos": "olympiacos piraeus",
-        "olympiacos": "olympiacos piraeus",
-        "olympiakos piraeus": "olympiacos piraeus",
-        # Dinamo Bucharest abbreviations ("Din." prefix)
-        "din. bucuresti": "dinamo bucuresti",
-        "din bucuresti": "dinamo bucuresti",
-    }
+    # Re-exported from src.utils.team_names for backward compatibility.
+    # New callers should import directly: `from src.utils.team_names import team_names_similar`.
+    from src.utils.team_names import NAME_ALIASES as _NAME_ALIASES  # noqa: E402
 
     @staticmethod
     def _team_names_similar(name_a: str, name_b: str) -> bool:
-        """Return True if two team names likely refer to the same team.
-
-        Handles common differences between data sources:
-        - Abbreviations:    "Man City" vs "Manchester City"
-        - Short names:      "Oxford" vs "Oxford Utd" / "Oxford United"
-        - Prefixes:         "SK Rapid" vs "Rapid Vienna"
-        - Suffixes:         "Bradford" vs "Bradford City"
-        - Diacritics:       "München" vs "Munich", "Castellón" vs "Castellon"
-        - Known aliases:    "Ath Madrid" vs "Atl. Madrid", "PSG" vs "Paris SG"
-        - Spelling variants:"Olympiakos" vs "Olympiacos"
-        """
-        import unicodedata
-        from difflib import SequenceMatcher
-
-        if name_a == name_b:
-            return True
-
-        def _norm(s: str) -> str:
-            s = s.lower().strip()
-            # Apply known aliases before further normalisation
-            if s in FlashscoreScraper._NAME_ALIASES:
-                s = FlashscoreScraper._NAME_ALIASES[s]
-            # Strip diacritics: ü→u, ó→o, ą→a, ñ→n …
-            s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
-            return s
-
-        a, b = _norm(name_a), _norm(name_b)
-        if a == b:
-            return True
-
-        # Strip common club-type tags that differ between sources
-        _STRIP = {"fc", "sc", "sk", "afc", "sfc", "cf", "bk", "fk", "ac", "as", "cd", "ad"}
-
-        def _tokens(n):
-            return [t.rstrip(".") for t in n.split() if t.rstrip(".") not in _STRIP]
-
-        ta, tb = _tokens(a), _tokens(b)
-        if not ta or not tb:
-            return False
-
-        shorter, longer = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
-
-        # Common abbreviations that differ between sources
-        _ABBREVS = {
-            "utd": "united", "united": "united",
-            "cty": "city", "city": "city",
-            "ath": "athletic", "athletic": "athletic",
-            "weds": "wednesday", "wednesday": "wednesday",
-            "wed": "wednesday",
-            "nott'm": "nottingham", "nottingham": "nottingham",
-        }
-
-        def _tok_match(t1: str, t2: str) -> bool:
-            # Exact prefix match (handles "Man"/"Manchester", "Stockport"/"Stockport County")
-            if t2.startswith(t1) or t1.startswith(t2):
-                return True
-            # Common abbreviation expansion (handles "Utd"/"United", "Cty"/"City")
-            if _ABBREVS.get(t1) and _ABBREVS.get(t1) == _ABBREVS.get(t2):
-                return True
-            # Fuzzy match: catches diacritics stripped unevenly, k/c spelling variants
-            return SequenceMatcher(None, t1, t2).ratio() >= 0.75
-
-        matches = sum(
-            1 for tok in shorter
-            if any(_tok_match(tok, long_tok) for long_tok in longer)
-        )
-        return matches / len(shorter) >= 0.7
+        """Backward-compatible alias for src.utils.team_names.team_names_similar."""
+        from src.utils.team_names import team_names_similar
+        return team_names_similar(name_a, name_b)
 
     def _save_match(self, session, match_data: dict, league: str, is_fixture: bool):
         """Save a match to the database, avoiding duplicates.

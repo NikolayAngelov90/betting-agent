@@ -63,17 +63,35 @@ def _safe_save(state: dict, filepath: Path):
     filepath.with_suffix(".sig").write_text(sig)
 
 
+class IntegrityError(RuntimeError):
+    """Raised when a model file's HMAC signature does not match its contents.
+
+    Distinguished from RuntimeError so callers can react specifically to
+    tampering (vs. missing files or unrelated load errors). The current
+    callers log the message at ERROR and refuse to load — the agent then
+    falls back to Poisson + Elo. They do NOT delete the suspect file: a
+    human operator should investigate before re-saving.
+    """
+
+
 def _safe_load(filepath: Path) -> dict:
-    """Load pickle after verifying HMAC signature. Raises on tampering."""
+    """Load pickle after verifying HMAC signature.
+
+    Raises IntegrityError when the signature exists but doesn't match —
+    callers must surface this loudly rather than fall back silently to a
+    fresh model, since a forged pickle would otherwise be loaded.
+    """
     data = filepath.read_bytes()
     sig_path = filepath.with_suffix(".sig")
     if sig_path.exists():
         expected = sig_path.read_text().strip()
         actual = _compute_hmac(data)
         if not hmac.compare_digest(expected, actual):
-            raise RuntimeError(
+            raise IntegrityError(
                 f"Model file {filepath} failed integrity check — "
-                f"file may have been tampered with. Re-train models to fix."
+                f"signature mismatch.  File may have been tampered with, or "
+                f"MODEL_HMAC_KEY changed since it was last saved.  Investigate "
+                f"and re-train rather than auto-deleting."
             )
     else:
         logger.warning(
@@ -461,8 +479,13 @@ class MLModels:
 
         try:
             state = _safe_load(filepath)
-        except RuntimeError as e:
-            logger.error(str(e))
+        except IntegrityError as e:
+            # Surface tampering at ERROR; do NOT auto-fall-back silently —
+            # log the file path so operators can investigate.
+            logger.error(f"INTEGRITY FAILURE: {e}")
+            return
+        except (RuntimeError, EOFError, pickle.UnpicklingError) as e:
+            logger.warning(f"Could not load {filepath}: {e}")
             return
 
         self.models = state["models"]
@@ -734,8 +757,11 @@ class GoalsMLModel:
             return
         try:
             state = _safe_load(filepath)
-        except RuntimeError as e:
-            logger.error(str(e))
+        except IntegrityError as e:
+            logger.error(f"INTEGRITY FAILURE: {e}")
+            return
+        except (RuntimeError, EOFError, pickle.UnpicklingError) as e:
+            logger.warning(f"Could not load {filepath}: {e}")
             return
         self.models = state["models"]
         self.calibrated_models = state.get("calibrated_models", {})

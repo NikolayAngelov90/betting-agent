@@ -685,11 +685,20 @@ class APIFootballScraper(BaseScraper):
             return
 
         from sqlalchemy import or_
-        # API-Football free plan only allows stats for seasons up to 2024.
-        # The 2025/2026 season starts July 2025 — any fixture on or after that
-        # date returns a plan-restriction error, wasting a quota request.
-        # Cap the upper bound to June 30 2025 so we only backfill allowed data.
-        _FREE_PLAN_SEASON_CUTOFF = datetime(2025, 7, 1)
+        # API-Football free plan limits stats to a fixed range of seasons.
+        # The cutoff used to be hard-coded to 2025-07-01 which silently dropped
+        # all xG backfill from that date forward.  We now read it from config
+        # (data_sources.apifootball_stats_cutoff, ISO date string), and the
+        # _plan_restricted flag set on the first 403/plan error stops further
+        # requests automatically — so leaving the cutoff unset is safe.
+        cutoff_iso = self.config.get("data_sources.apifootball_stats_cutoff")
+        if cutoff_iso:
+            try:
+                _FREE_PLAN_SEASON_CUTOFF = datetime.fromisoformat(cutoff_iso)
+            except Exception:
+                _FREE_PLAN_SEASON_CUTOFF = None
+        else:
+            _FREE_PLAN_SEASON_CUTOFF = None
         with self.db.get_session() as session:
             cutoff = datetime.utcnow() - timedelta(days=days_back)
             base_filters = [
@@ -697,8 +706,9 @@ class APIFootballScraper(BaseScraper):
                 Match.home_goals.isnot(None),
                 Match.apifootball_id.isnot(None),
                 Match.match_date >= cutoff,
-                Match.match_date < _FREE_PLAN_SEASON_CUTOFF,
             ]
+            if _FREE_PLAN_SEASON_CUTOFF is not None:
+                base_filters.append(Match.match_date < _FREE_PLAN_SEASON_CUTOFF)
             # Count total in window (with or without xG) to report skipped
             all_in_window = session.query(Match).filter(
                 *base_filters,
@@ -1035,13 +1045,13 @@ class APIFootballScraper(BaseScraper):
                 )
                 .all()
             )
+            from src.utils.team_names import team_names_similar
             for m in candidates:
                 ht = session.get(Team, m.home_team_id)
                 at = session.get(Team, m.away_team_id)
                 if not ht or not at:
                     continue
-                from src.scrapers.flashscore_scraper import FlashscoreScraper as _FS
-                if _FS._team_names_similar(home_name_api, ht.name) and _FS._team_names_similar(
+                if team_names_similar(home_name_api, ht.name) and team_names_similar(
                     away_name_api, at.name
                 ):
                     return m.id

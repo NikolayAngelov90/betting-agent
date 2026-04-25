@@ -28,6 +28,23 @@ class FeatureEngineer:
         self._weather_service = None  # lazy-loaded on first use
         self.elo_ratings = None  # set externally from predictor.elo.ratings
         self._preload_cache: Optional[dict] = None
+        # Per-instance league baseline rates cache.  Keyed by (league, as_of_date).
+        # Must be invalidated after the agent ingests new historical data within
+        # the same process (CI), or stale rates leak into predictions.
+        self._league_features_cache: dict = {}
+
+    def clear_league_cache(self):
+        """Invalidate the league baseline rates cache.
+
+        Call this after `daily_update` adds new completed matches so the next
+        `get_daily_picks` doesn't re-use stats computed before the new data
+        landed.  Also resets the standings cache on TeamFeatures.
+        """
+        self._league_features_cache = {}
+        try:
+            self.team_features.clear_standings_cache()
+        except Exception:
+            pass
 
     def preload_batch(self, match_ids: list) -> None:
         """Bulk-preload all DB data needed for a list of fixtures into memory.
@@ -868,8 +885,6 @@ class FeatureEngineer:
         if not league:
             return defaults
 
-        if not hasattr(self, "_league_features_cache"):
-            self._league_features_cache: dict = {}
         cache_key = (league, as_of_date)
         if cache_key in self._league_features_cache:
             return self._league_features_cache[cache_key]
@@ -918,13 +933,78 @@ class FeatureEngineer:
             logger.warning(f"League features failed for {league}: {e}")
             return defaults
 
+    @staticmethod
+    def _compute_situational_from_rows(rows: list, team_id: int, match_date) -> dict:
+        """Pure function: compute rest/fatigue features from a list of plain
+        match-history rows (each a dict with keys home_team_id, away_team_id,
+        match_date, home_goals, away_goals, regulation_home_goals,
+        regulation_away_goals).
+
+        Extracted from the cached/live branches so both paths share one
+        source of truth — previously the same arithmetic lived twice.
+        """
+        defaults = {
+            "rest_days": 7, "midweek_flag": 0,
+            "matches_14d": 0, "matches_21d": 0, "matches_30d": 0,
+            "fatigue_index": 0.0, "short_rest_count": 0,
+        }
+        if not rows:
+            return defaults
+
+        prev = rows[0]
+        delta = (match_date - prev["match_date"]).days
+        rest_days = min(delta, 21)
+        midweek_flag = 1 if prev["match_date"].weekday() in (1, 2, 3) else 0
+
+        matches_14d = matches_21d = matches_30d = 0
+        short_rest_count = 0
+        extra_time_recent = 0
+        match_dates = []
+        for m in rows:
+            days_before = (match_date - m["match_date"]).days
+            if days_before <= 14:
+                matches_14d += 1
+            if days_before <= 21:
+                matches_21d += 1
+            if days_before <= 30:
+                matches_30d += 1
+            match_dates.append(m["match_date"])
+            # Extra time: regulation score recorded and differs from final.
+            if (m.get("regulation_home_goals") is not None
+                    and m.get("home_goals") is not None
+                    and (m["regulation_home_goals"] != m["home_goals"]
+                         or m["regulation_away_goals"] != m["away_goals"])):
+                if days_before <= 14:
+                    extra_time_recent += 1
+
+        for i in range(len(match_dates) - 1):
+            gap = (match_dates[i] - match_dates[i + 1]).days
+            if gap < 4:
+                short_rest_count += 1
+
+        # Composite fatigue index (0-1 scale).
+        fatigue_index = (
+            min(matches_14d / 5.0, 1.0) * 0.50       # 5+ matches in 14d = max
+            + min(short_rest_count / 3.0, 1.0) * 0.30  # 3+ short rests = max
+            + min(extra_time_recent, 1) * 0.20          # any extra time = penalty
+        )
+
+        return {
+            "rest_days": rest_days,
+            "midweek_flag": midweek_flag,
+            "matches_14d": matches_14d,
+            "matches_21d": matches_21d,
+            "matches_30d": matches_30d,
+            "fatigue_index": round(fatigue_index, 3),
+            "short_rest_count": short_rest_count,
+        }
+
     def _get_situational_features(self, team_id: int, match_date) -> dict:
         """Return rest days, midweek flag, and cumulative fatigue index.
 
-        Fatigue index considers:
-        - Number of matches in the last 14, 21, and 30 days
-        - Whether any recent match went to extra time (120 min)
-        - Cumulative short-rest matches (< 4 days between games)
+        Reads from preload cache when available; otherwise queries the DB
+        for the team's last 10 matches before `match_date`. Both branches
+        delegate to `_compute_situational_from_rows` for the actual math.
         """
         defaults = {
             "rest_days": 7, "midweek_flag": 0,
@@ -935,49 +1015,7 @@ class FeatureEngineer:
             if self._preload_cache is not None:
                 cached_rows = self._preload_cache.get("team_history", {}).get(team_id, [])
                 recent_cached = [m for m in cached_rows if m["match_date"] < match_date][:10]
-                if recent_cached:
-                    prev = recent_cached[0]
-                    delta = (match_date - prev["match_date"]).days
-                    rest_days = min(delta, 21)
-                    midweek_flag = 1 if prev["match_date"].weekday() in (1, 2, 3) else 0
-                    matches_14d = matches_21d = matches_30d = 0
-                    short_rest_count = 0
-                    extra_time_recent = 0
-                    match_dates = []
-                    for m in recent_cached:
-                        days_before = (match_date - m["match_date"]).days
-                        if days_before <= 14:
-                            matches_14d += 1
-                        if days_before <= 21:
-                            matches_21d += 1
-                        if days_before <= 30:
-                            matches_30d += 1
-                        match_dates.append(m["match_date"])
-                        if (m["regulation_home_goals"] is not None
-                                and m["home_goals"] is not None
-                                and (m["regulation_home_goals"] != m["home_goals"]
-                                     or m["regulation_away_goals"] != m["away_goals"])):
-                            if days_before <= 14:
-                                extra_time_recent += 1
-                    for i in range(len(match_dates) - 1):
-                        gap = (match_dates[i] - match_dates[i + 1]).days
-                        if gap < 4:
-                            short_rest_count += 1
-                    fatigue_index = (
-                        min(matches_14d / 5.0, 1.0) * 0.50
-                        + min(short_rest_count / 3.0, 1.0) * 0.30
-                        + min(extra_time_recent, 1) * 0.20
-                    )
-                    return {
-                        "rest_days": rest_days,
-                        "midweek_flag": midweek_flag,
-                        "matches_14d": matches_14d,
-                        "matches_21d": matches_21d,
-                        "matches_30d": matches_30d,
-                        "fatigue_index": round(fatigue_index, 3),
-                        "short_rest_count": short_rest_count,
-                    }
-                return defaults
+                return self._compute_situational_from_rows(recent_cached, team_id, match_date)
 
             with self.db.get_session() as session:
                 # Fetch last 10 matches (enough to cover 30 days for busy teams)
@@ -987,65 +1025,19 @@ class FeatureEngineer:
                     Match.match_date < match_date,
                     or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
                 ).order_by(Match.match_date.desc()).limit(10).all()
-
-                if not recent:
-                    return defaults
-
-                prev = recent[0]
-                delta = (match_date - prev.match_date).days
-                rest_days = min(delta, 21)
-                midweek_flag = 1 if prev.match_date.weekday() in (1, 2, 3) else 0
-
-                # Count matches in recent windows
-                matches_14d = 0
-                matches_21d = 0
-                matches_30d = 0
-                short_rest_count = 0
-                extra_time_recent = 0
-
-                match_dates = []
-                for m in recent:
-                    days_before = (match_date - m.match_date).days
-                    if days_before <= 14:
-                        matches_14d += 1
-                    if days_before <= 21:
-                        matches_21d += 1
-                    if days_before <= 30:
-                        matches_30d += 1
-                    match_dates.append(m.match_date)
-                    # Check for extra time (regulation score exists and differs from final)
-                    if (m.regulation_home_goals is not None
-                            and m.home_goals is not None
-                            and (m.regulation_home_goals != m.home_goals
-                                 or m.regulation_away_goals != m.away_goals)):
-                        if days_before <= 14:
-                            extra_time_recent += 1
-
-                # Count short-rest intervals (< 4 days between consecutive matches)
-                for i in range(len(match_dates) - 1):
-                    gap = (match_dates[i] - match_dates[i + 1]).days
-                    if gap < 4:
-                        short_rest_count += 1
-
-                # Composite fatigue index (0-1 scale):
-                # - matches_14d contributes most (congestion is immediate)
-                # - short_rest_count penalises accumulated fatigue
-                # - extra_time adds penalty
-                fatigue_index = (
-                    min(matches_14d / 5.0, 1.0) * 0.50       # 5+ matches in 14d = max
-                    + min(short_rest_count / 3.0, 1.0) * 0.30  # 3+ short rests = max
-                    + min(extra_time_recent, 1) * 0.20          # any extra time = penalty
-                )
-
-                return {
-                    "rest_days": rest_days,
-                    "midweek_flag": midweek_flag,
-                    "matches_14d": matches_14d,
-                    "matches_21d": matches_21d,
-                    "matches_30d": matches_30d,
-                    "fatigue_index": round(fatigue_index, 3),
-                    "short_rest_count": short_rest_count,
-                }
+                rows = [
+                    {
+                        "match_date": m.match_date,
+                        "home_team_id": m.home_team_id,
+                        "away_team_id": m.away_team_id,
+                        "home_goals": m.home_goals,
+                        "away_goals": m.away_goals,
+                        "regulation_home_goals": m.regulation_home_goals,
+                        "regulation_away_goals": m.regulation_away_goals,
+                    }
+                    for m in recent
+                ]
+            return self._compute_situational_from_rows(rows, team_id, match_date)
         except Exception as e:
             logger.warning(f"Situational features failed for team {team_id}: {e}")
             return defaults
