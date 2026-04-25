@@ -29,7 +29,7 @@ class EloRatingSystem:
         self.ratings: Dict[int, float] = {}
         self.history: Dict[int, list] = {}
 
-    def fit(self, league: str = None):
+    def fit(self, league: str = None, as_of_date=None):
         """Build Elo ratings by processing all historical matches chronologically.
 
         Applies between-season regression toward the mean so that stale ratings
@@ -39,9 +39,16 @@ class EloRatingSystem:
 
         Args:
             league: Optional league filter
+            as_of_date: When set, only matches before this date are processed.
+                Used by the tuning pipeline to avoid look-ahead leakage when
+                evaluating the model on past picks.
         """
         config = get_config()
         regression_factor = config.get("models.elo_season_regression", 0.33)
+
+        # Reset state so we don't carry forward ratings from a previous fit.
+        self.ratings = {}
+        self.history = {}
 
         db = get_db()
         with db.get_session() as session:
@@ -51,6 +58,8 @@ class EloRatingSystem:
             )
             if league:
                 query = query.filter(Match.league == league)
+            if as_of_date is not None:
+                query = query.filter(Match.match_date < as_of_date)
 
             matches = query.order_by(Match.match_date.asc()).all()
 

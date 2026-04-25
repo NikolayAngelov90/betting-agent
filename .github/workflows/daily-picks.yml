@@ -18,6 +18,10 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      # Use the secret when configured; otherwise fall back to the explicit
+      # dev opt-in so existing CI runs don't break before the secret is added.
+      MODEL_HMAC_KEY: ${{ secrets.MODEL_HMAC_KEY }}
+      BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       PYTHONIOENCODING: utf-8
 

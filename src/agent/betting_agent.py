@@ -99,8 +99,9 @@ class FootballBettingAgent:
     def _get_recently_scraped_leagues(self, minutes: int = 30) -> set:
         """Return leagues scraped within the last N minutes.
 
-        Checks both a marker file (cross-process, written after each
-        successful Flashscore scrape) and DB timestamps as fallback.
+        Marker file format (per-league timestamps so a single global timestamp
+        no longer treats all leagues as fresh whenever ANY league is scraped):
+            {"leagues": {"<league>": "<iso-timestamp>", ...}}
         """
         result: set = set()
 
@@ -108,9 +109,29 @@ class FootballBettingAgent:
         try:
             if self._SCRAPED_LEAGUES_FILE.exists():
                 data = json.loads(self._SCRAPED_LEAGUES_FILE.read_text())
-                ts = datetime.fromisoformat(data.get("timestamp", ""))
-                if (utcnow() - ts).total_seconds() < minutes * 60:
-                    result.update(data.get("leagues", []))
+                cutoff = utcnow() - timedelta(minutes=minutes)
+                # New format: {"leagues": {league: iso_ts}}
+                leagues_field = data.get("leagues", {})
+                if isinstance(leagues_field, dict):
+                    for league, iso_ts in leagues_field.items():
+                        try:
+                            ts = datetime.fromisoformat(iso_ts)
+                            if ts >= cutoff:
+                                result.add(league)
+                        except Exception:
+                            continue
+                else:
+                    # Legacy format: {"timestamp": ..., "leagues": [...]} —
+                    # one global timestamp.  Honour it once on read so we don't
+                    # silently break callers during the upgrade window.
+                    ts_str = data.get("timestamp", "")
+                    if ts_str:
+                        try:
+                            ts = datetime.fromisoformat(ts_str)
+                            if ts >= cutoff:
+                                result.update(leagues_field or [])
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -137,20 +158,32 @@ class FootballBettingAgent:
     def _mark_league_scraped(self, league: str):
         """Record a successfully scraped league in a marker file.
 
-        Survives across separate process invocations within the same CI run.
+        Stores per-league timestamps so each league's freshness is tracked
+        independently. Migrates legacy {"timestamp": ..., "leagues": [...]}
+        format on first write.
         """
         self._scraped_leagues.add(league)
         try:
+            now_iso = utcnow().isoformat()
             data: dict = {}
             if self._SCRAPED_LEAGUES_FILE.exists():
-                data = json.loads(self._SCRAPED_LEAGUES_FILE.read_text())
-            existing = set(data.get("leagues", []))
-            existing.add(league)
+                try:
+                    data = json.loads(self._SCRAPED_LEAGUES_FILE.read_text())
+                except Exception:
+                    data = {}
+            leagues_field = data.get("leagues", {})
+            if isinstance(leagues_field, list):
+                # Legacy: convert list → dict using the legacy global timestamp,
+                # then we'll overwrite this league with NOW below.
+                legacy_ts = data.get("timestamp") or now_iso
+                leagues_field = {l: legacy_ts for l in leagues_field}
+            elif not isinstance(leagues_field, dict):
+                leagues_field = {}
+            leagues_field[league] = now_iso
             self._SCRAPED_LEAGUES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self._SCRAPED_LEAGUES_FILE.write_text(json.dumps({
-                "timestamp": utcnow().isoformat(),
-                "leagues": sorted(existing),
-            }))
+            self._SCRAPED_LEAGUES_FILE.write_text(
+                json.dumps({"leagues": leagues_field}, indent=2)
+            )
         except Exception:
             pass
 
@@ -1026,6 +1059,10 @@ class FootballBettingAgent:
 
         # Drawdown circuit breaker: scale down stakes (or skip picks entirely)
         # when recent performance shows a significant drawdown.
+        # The drawdown breaker no longer mutates value_calculator.min_ev — that
+        # caused the tightened threshold to leak into subsequent calls within
+        # the same process.  Instead, drop picks below the tightened threshold
+        # in-place after the fact.
         dd_multiplier = self._get_drawdown_multiplier()
         if dd_multiplier < 1.0:
             if dd_multiplier <= 0.0:
@@ -1047,16 +1084,21 @@ class FootballBettingAgent:
             # Example: multiplier=0.55 → +0.9pp (3%→3.9%)
             dd_ev_boost = round((1.0 - dd_multiplier) * 0.02, 4)
             tightened_ev = round(self.value_calculator.min_ev + dd_ev_boost, 4)
-            self.value_calculator.min_ev = tightened_ev
+            n_before = len(all_recommendations)
+            all_recommendations = [
+                r for r in all_recommendations if r.expected_value >= tightened_ev
+            ]
+            n_dropped_dd = n_before - len(all_recommendations)
             logger.info(
                 f"Drawdown circuit breaker: scaling stakes to "
                 f"{dd_multiplier:.0%} of normal; "
-                f"tightened EV threshold to {tightened_ev:.1%} (+{dd_ev_boost:.1%})"
+                f"tightened EV threshold to {tightened_ev:.1%} (+{dd_ev_boost:.1%}) "
+                f"dropped {n_dropped_dd} sub-threshold picks"
             )
             try:
                 await self.telegram.send_alert(
                     f"⚠️ Drawdown circuit breaker active: stakes scaled to {dd_multiplier:.0%}, "
-                    f"EV threshold tightened to {tightened_ev:.1%}. "
+                    f"EV threshold tightened to {tightened_ev:.1%} (dropped {n_dropped_dd}). "
                     f"Check recent pick performance."
                 )
             except Exception as _tg_err:
@@ -1474,9 +1516,12 @@ class FootballBettingAgent:
                 total = hg + ag
                 btts = hg > 0 and ag > 0
 
-                # Determine actual outcome for the selection
-                won = False
+                # Determine actual outcome for the selection.
+                # Unknown selections must NOT silently default to "loss" — that
+                # masked a real bug in the past where 7 picks were wrongly settled.
                 sel = pick.selection
+                resolved = True
+                won = False
 
                 if sel == "Home Win":
                     won = hg > ag
@@ -1504,6 +1549,17 @@ class FootballBettingAgent:
                     won = hg >= 2
                 elif sel == "Away Over 1.5":
                     won = ag >= 2
+                else:
+                    resolved = False
+
+                if not resolved:
+                    logger.error(
+                        f"Cannot settle pick id={pick.id}: unknown selection "
+                        f"{sel!r} for {pick.match_name}. Pick left pending — "
+                        f"add a settlement branch for this market or correct the "
+                        f"selection name."
+                    )
+                    continue  # leave result = None so we don't poison stats
 
                 pick.result = "win" if won else "loss"
                 pick.actual_home_goals = hg
@@ -1708,6 +1764,26 @@ class FootballBettingAgent:
 
         logger.info(f"Tuning on {len(settled)} settled picks")
 
+        # ── Leak-resistant refit ─────────────────────────────────────────────
+        # Refit Poisson/Elo using ONLY data older than the oldest settled pick,
+        # so the accuracy we measure below isn't inflated by Poisson strengths
+        # that already saw those outcomes. This is a one-time cost; after
+        # tuning we restore the full-data fit so live prediction sees the
+        # latest information.
+        oldest_pick_date = min(
+            (p["match_date"] for p in settled if p["match_date"]),
+            default=None,
+        )
+        if oldest_pick_date is not None:
+            try:
+                logger.info(
+                    f"Refitting Poisson/Elo on data before {oldest_pick_date} "
+                    f"to avoid leakage during tuning"
+                )
+                self.predictor.fit(as_of_date=oldest_pick_date)
+            except Exception as e:
+                logger.warning(f"Leak-resistant refit failed, using current fit: {e}")
+
         # Batch-load all match data in one query to avoid per-pick DB round-trips
         match_ids = list({p["match_id"] for p in settled})
         match_data = {}  # match_id -> (home_team_id, away_team_id, league)
@@ -1743,12 +1819,21 @@ class FootballBettingAgent:
         # Single pass: accuracy + calibration data + Bayesian updates
         model_correct = {"poisson": 0, "elo": 0, "ml": 0}
         model_total = {"poisson": 0, "elo": 0, "ml": 0}
-        model_predictions: dict = {"poisson": [], "elo": []}
+        model_predictions: dict = {"poisson": [], "elo": [], "ml": []}
         ensemble_correct = 0
         ensemble_total = 0
         bayesian = self.predictor.bayesian_weights
         sel_map = {"Home Win": "home_win", "Draw": "draw", "Away Win": "away_win"}
         keys_1x2 = ["home_win", "draw", "away_win"]
+
+        # ML accuracy is evaluated on a capped sample of the most recent picks
+        # to keep tuning under the 10-minute CI timeout (each feature build is
+        # ~1s on Neon, so ML_EVAL_CAP=80 ≈ 80s of overhead). When the predictor
+        # has fitted ML models, we run a real evaluation pass below and feed
+        # the resulting accuracy into the calibration gate. When ML isn't
+        # fitted we fall back to the proxy path used previously.
+        _ML_EVAL_CAP = 80
+        ml_eval_start = max(0, len(outcomes) - _ML_EVAL_CAP) if self.predictor.ml_models.is_fitted else len(outcomes)
 
         for i, (pick, home_id, away_id, league, actual) in enumerate(outcomes):
             if i % 50 == 0:
@@ -1764,9 +1849,39 @@ class FootballBettingAgent:
                 if best == actual:
                     model_correct[model_name] += 1
 
-            # ML accuracy: use existing fitted models with simple predict (no feature eng)
-            # ML weight is derived from Poisson/Elo accuracy ratio — skip expensive re-eval
-            # to keep tuning fast.
+            # --- ML accuracy on a capped subset (fitted models only) ---
+            ml_pred = None
+            if i >= ml_eval_start:
+                try:
+                    feats = await self.feature_engineer.create_features(
+                        pick["match_id"],
+                        as_of_date=pick["match_date"],
+                        for_training=True,
+                    )
+                    if feats:
+                        vec = self.feature_engineer.create_feature_vector(feats)
+                        names = self.feature_engineer.get_feature_names(feats)
+                        ml_predictions = self.predictor.ml_models.predict(
+                            vec, feature_names=names
+                        )
+                        ml_pred = ml_predictions.get("ml_average")
+                except Exception as _ml_err:
+                    logger.debug(f"ML eval failed for pick: {_ml_err}")
+
+            if ml_pred:
+                ml_best = max(keys_1x2, key=lambda k: ml_pred.get(k, 0))
+                model_total["ml"] += 1
+                if ml_best == actual:
+                    model_correct["ml"] += 1
+                model_predictions["ml"].append(
+                    (ml_pred.get(ml_best, 0.33), 1 if ml_best == actual else 0)
+                )
+                if league:
+                    _days_ago = (
+                        (date.today() - pick["match_date"]).days
+                        if pick["match_date"] else 0
+                    )
+                    bayesian.update(league, "ml", ml_best == actual, _days_ago, market="1X2")
 
             # --- Calibration data ---
             p_best_key = max(keys_1x2, key=lambda k: poisson_pred.get(k, 0))
@@ -1824,9 +1939,11 @@ class FootballBettingAgent:
             logger.info("No accuracy data to tune weights (all models 0)")
             return
 
-        # ML weight: if ML models are fitted, give them a baseline weight
-        # derived from the average of Poisson/Elo accuracy (since we skip
-        # expensive ML re-evaluation). If not fitted, ML stays at 0.
+        # ML weight: when ML models are fitted, the loop above evaluated a
+        # capped sample (last 80 picks) and accuracies["ml"] holds a real
+        # accuracy. If for some reason no samples ran (e.g. all feature builds
+        # failed) we fall back to a proxy derived from Poisson/Elo accuracy
+        # so ML still contributes a non-zero weight.
         ml_is_proxy = False
         if self.predictor.ml_models.is_fitted and accuracies["ml"] == 0.0:
             avg_pe = (accuracies["poisson"] + accuracies["elo"]) / 2
@@ -1835,23 +1952,16 @@ class FootballBettingAgent:
             total_acc = sum(base_models.values())
             ml_is_proxy = True  # proxy value — gate must not apply threshold check
 
+        # Diagnostic snapshot of model accuracies — Bayesian per-league weights
+        # are the sole runtime weights, so this dict is for logging/CLI display only.
         new_weights = {
             "poisson": round(base_models["poisson"] / total_acc, 3),
             "elo": round(base_models["elo"] / total_acc, 3),
             "xgboost": round((base_models["ml"] / total_acc) * 0.6, 3),
             "random_forest": round((base_models["ml"] / total_acc) * 0.4, 3),
         }
-
-        # Save tuned weights
-        weights_path = Path("data/models/ensemble_weights.json")
-        weights_path.parent.mkdir(parents=True, exist_ok=True)
-        weights_path.write_text(json.dumps(new_weights, indent=2))
-
-        logger.info(f"Tuned ensemble weights: {new_weights}")
-        logger.info(f"Model accuracies: {accuracies}")
-
-        # Apply immediately
-        self.predictor.weights = new_weights
+        logger.info(f"Aggregate model accuracies (1X2): {accuracies}")
+        logger.info(f"Diagnostic weight ratios (not used at runtime): {new_weights}")
 
         # Model Confidence Calibration from data collected above.
         # Floors at 0.85 (max 15% weight reduction) and requires ≥5 samples/bin
@@ -1930,6 +2040,16 @@ class FootballBettingAgent:
                 logger.info(f"  Global weights: {info}")
             elif isinstance(info, dict) and info.get("observations", 0) > 0:
                 logger.debug(f"  {lg}: {info['weights']} ({info['observations']} obs)")
+
+        # Restore the full-data fit so live prediction sees the latest information.
+        # (We refit on as_of_date=oldest_pick_date earlier to avoid look-ahead leakage.)
+        if oldest_pick_date is not None:
+            try:
+                self.predictor.fit()
+                self.feature_engineer.elo_ratings = self.predictor.elo.ratings
+                logger.debug("Restored full-data Poisson/Elo fit after tuning")
+            except Exception as e:
+                logger.warning(f"Failed to restore full-data fit after tuning: {e}")
 
         return {"weights": new_weights, "accuracies": accuracies}
 
@@ -2413,15 +2533,33 @@ class FootballBettingAgent:
         ("No", "Away Under 1.5"),
     }
 
+    # Composite score used by both the main sort and the correlation filter,
+    # so a pick promoted by unanimous agreement isn't dropped in favour of a
+    # split-models pick that has marginally higher raw EV*confidence.
+    _AGREEMENT_BONUS = {"unanimous": 1.15, "majority": 1.0, "split": 0.85, "unknown": 0.95}
+
+    def _composite_score(self, r: BetRecommendation) -> float:
+        agr_bonus = self._AGREEMENT_BONUS.get(r.model_agreement, 1.0)
+        cv = getattr(r, "contrarian_value", 0) or 0
+        if cv >= 1.3 and r.model_agreement == "unanimous":
+            cont_bonus = 1.10
+        elif cv >= 1.3 and r.model_agreement == "majority":
+            cont_bonus = 1.05
+        else:
+            cont_bonus = 1.0
+        return r.expected_value * r.confidence * agr_bonus * cont_bonus
+
     def _filter_correlated_picks(
         self, picks: List[BetRecommendation]
     ) -> List[BetRecommendation]:
-        """Remove the lower-EV pick from correlated pairs on the same match.
+        """Remove the lower-ranked pick from correlated pairs on the same match.
 
         When two picks on the same match are positively correlated (e.g.
         Home Win + Over 2.5), keeping both over-concentrates risk. This
-        method detects such pairs and drops the one with lower
-        EV × confidence, logging the removal.
+        method detects such pairs and drops the one with the lower composite
+        score (EV × confidence × agreement × contrarian bonus, same metric
+        used by the main sort) — so a unanimous pick is never dropped in
+        favour of a split-models pick with marginally higher raw EV.
         """
         from collections import defaultdict
 
@@ -2442,9 +2580,8 @@ class FootballBettingAgent:
                     pair = (a.selection, b.selection)
                     pair_rev = (b.selection, a.selection)
                     if pair in self._CORRELATED_PAIRS or pair_rev in self._CORRELATED_PAIRS:
-                        # Drop the lower-EV one
-                        score_a = a.expected_value * a.confidence
-                        score_b = b.expected_value * b.confidence
+                        score_a = self._composite_score(a)
+                        score_b = self._composite_score(b)
                         loser = b if score_a >= score_b else a
                         winner = a if score_a >= score_b else b
                         idx = pick_index[id(loser)]
@@ -2452,9 +2589,11 @@ class FootballBettingAgent:
                             to_remove.add(idx)
                             logger.info(
                                 f"Correlation filter: dropping '{loser.selection}' "
-                                f"(EV={loser.expected_value:.1%}) for {loser.match} — "
+                                f"(EV={loser.expected_value:.1%}, agreement="
+                                f"{loser.model_agreement}) for {loser.match} — "
                                 f"correlated with '{winner.selection}' "
-                                f"(EV={winner.expected_value:.1%})"
+                                f"(EV={winner.expected_value:.1%}, agreement="
+                                f"{winner.model_agreement})"
                             )
 
         if to_remove:

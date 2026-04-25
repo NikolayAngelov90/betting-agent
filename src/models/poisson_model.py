@@ -39,7 +39,7 @@ class PoissonModel:
         self._league_avgs = {}  # league -> {"home": float, "away": float}
         self._league_rhos = {}  # league -> optimized Dixon-Coles rho
 
-    def fit(self, league: str = None, num_matches: int = 5000):
+    def fit(self, league: str = None, num_matches: int = 5000, as_of_date=None):
         """Calculate time-decayed attack/defense strength ratings from historical data.
 
         Applies exponential decay so recent matches count more than older ones.
@@ -48,6 +48,9 @@ class PoissonModel:
         Args:
             league: Optional league filter
             num_matches: Number of recent matches to use
+            as_of_date: When set, only matches before this date are used.
+                Used by the tuning pipeline to avoid look-ahead leakage when
+                evaluating the model on past picks.
         """
         half_life = self.config.get("models.strength_half_life_days", 180)
         decay_rate = np.log(2) / max(half_life, 1)
@@ -60,6 +63,8 @@ class PoissonModel:
             )
             if league:
                 query = query.filter(Match.league == league)
+            if as_of_date is not None:
+                query = query.filter(Match.match_date < as_of_date)
 
             matches = query.order_by(Match.match_date.desc()).limit(num_matches).all()
 

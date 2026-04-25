@@ -68,6 +68,11 @@ class BayesianWeightLearner:
         # Per-league Beta parameters: {league: {model: {"alpha": float, "beta": float, "n": int}}}
         self._league_params: Dict[str, Dict[str, Dict]] = {}
 
+        # Per (league, market) Beta parameters — kept SEPARATE from _league_params
+        # so a league name containing "::" can never collide with a market key.
+        # Key shape: {f"{league}::{market}": {model: params}}
+        self._market_params: Dict[str, Dict[str, Dict]] = {}
+
         # Global Beta parameters (aggregated across all leagues)
         self._global_params: Dict[str, Dict] = {}
 
@@ -130,11 +135,11 @@ class BayesianWeightLearner:
         # Per-market tracking (league+market combo)
         if market:
             mkt_key = f"{league}::{market}"
-            if mkt_key not in self._league_params:
-                self._league_params[mkt_key] = {
+            if mkt_key not in self._market_params:
+                self._market_params[mkt_key] = {
                     m: self._default_params(m) for m in MODELS
                 }
-            mp = self._league_params[mkt_key][model]
+            mp = self._market_params[mkt_key][model]
             if correct:
                 mp["alpha"] += decay
             else:
@@ -161,8 +166,8 @@ class BayesianWeightLearner:
         # Try per-market weights first (most specific)
         if league and market:
             mkt_key = f"{league}::{market}"
-            if mkt_key in self._league_params:
-                mkt_data = self._league_params[mkt_key]
+            if mkt_key in self._market_params:
+                mkt_data = self._market_params[mkt_key]
                 total_obs = sum(p["n"] for p in mkt_data.values())
                 if total_obs >= MIN_LEAGUE_OBS:
                     # Blend market-specific with league-level weights
@@ -228,8 +233,6 @@ class BayesianWeightLearner:
         """Get a summary of learned weights per league for diagnostics."""
         summary = {"global": self._get_global_weights()}
         for league in sorted(self._league_params.keys()):
-            if "::" in league:
-                continue  # skip per-market keys in summary
             total_obs = sum(p["n"] for p in self._league_params[league].values())
             summary[league] = {
                 "weights": self.get_weights(league),
@@ -246,12 +249,21 @@ class BayesianWeightLearner:
                 lg: {m: dict(p) for m, p in models.items()}
                 for lg, models in self._league_params.items()
             },
+            "markets": {
+                mk: {m: dict(p) for m, p in models.items()}
+                for mk, models in self._market_params.items()
+            },
         }
         WEIGHTS_PATH.write_text(json.dumps(data, indent=2))
         logger.debug(f"Saved Bayesian weights to {WEIGHTS_PATH}")
 
     def _load(self):
-        """Load previously saved parameters from disk."""
+        """Load previously saved parameters from disk.
+
+        Also migrates the legacy schema where per-market params lived inside
+        `leagues` under `"<league>::<market>"` keys: those entries are moved
+        to `_market_params` on read, so the upgrade is transparent.
+        """
         if not WEIGHTS_PATH.exists():
             return
         try:
@@ -261,8 +273,19 @@ class BayesianWeightLearner:
                 if m in MODELS
             }
             self._league_params = {}
+            self._market_params = {}
             for lg, models in data.get("leagues", {}).items():
-                self._league_params[lg] = {
+                params = {
+                    m: dict(p) for m, p in models.items()
+                    if m in MODELS
+                }
+                if "::" in lg:
+                    # Legacy market entry stuck in the leagues dict — migrate.
+                    self._market_params[lg] = params
+                else:
+                    self._league_params[lg] = params
+            for mk, models in data.get("markets", {}).items():
+                self._market_params[mk] = {
                     m: dict(p) for m, p in models.items()
                     if m in MODELS
                 }
@@ -272,6 +295,7 @@ class BayesianWeightLearner:
             )
             logger.info(
                 f"Loaded Bayesian weights: {len(self._league_params)} leagues, "
+                f"{len(self._market_params)} market combos, "
                 f"{total_obs} total observations"
             )
         except Exception as e:

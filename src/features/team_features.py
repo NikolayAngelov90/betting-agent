@@ -19,7 +19,8 @@ class TeamFeatures:
 
     def get_form_features(self, team_id: int, num_matches: int = 5,
                           venue: str = "all", as_of_date=None,
-                          elo_ratings: dict = None) -> dict:
+                          elo_ratings: dict = None,
+                          league: str = None) -> dict:
         """Calculate form-based features for a team.
 
         Args:
@@ -28,6 +29,9 @@ class TeamFeatures:
             venue: 'home', 'away', or 'all'
             as_of_date: Only use matches before this date (for training).
                         None = no cutoff (live prediction).
+            league: Optional league filter. When set, only matches in this
+                exact league are counted. Required for league standings so
+                cup/European matches don't inflate point totals.
 
         Returns:
             Dictionary of form features
@@ -40,6 +44,9 @@ class TeamFeatures:
 
             if as_of_date is not None:
                 query = query.filter(Match.match_date < as_of_date)
+
+            if league is not None:
+                query = query.filter(Match.league == league)
 
             if venue == "home":
                 query = query.filter(Match.home_team_id == team_id)
@@ -411,9 +418,12 @@ class TeamFeatures:
 
         standings = []
         for team_id, team_name in team_ids:
-            form_all = self.get_form_features(team_id, num_matches=50, venue="all", as_of_date=as_of_date)
-            form_home = self.get_form_features(team_id, num_matches=50, venue="home", as_of_date=as_of_date)
-            form_away = self.get_form_features(team_id, num_matches=50, venue="away", as_of_date=as_of_date)
+            # Filter by league so cup/Champions League games don't inflate
+            # league points (this fixed a bug where teams in European competition
+            # appeared above their actual domestic-league position).
+            form_all = self.get_form_features(team_id, num_matches=50, venue="all", as_of_date=as_of_date, league=league)
+            form_home = self.get_form_features(team_id, num_matches=50, venue="home", as_of_date=as_of_date, league=league)
+            form_away = self.get_form_features(team_id, num_matches=50, venue="away", as_of_date=as_of_date, league=league)
 
             standings.append({
                 "team_id": team_id,

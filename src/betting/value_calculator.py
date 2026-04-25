@@ -140,7 +140,6 @@ class ValueBettingCalculator:
 
             # Skip selections with no real bookmaker odds — estimated odds
             # cannot be used for value betting since there is no market to beat.
-            is_fallback = False
             if not best_odds:
                 logger.debug(
                     f"No real odds for {match_name} {selection} "
@@ -149,7 +148,7 @@ class ValueBettingCalculator:
                 _reject("no odds")
                 continue
 
-            if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
+            if best_odds < self.min_odds or best_odds > self.max_odds:
                 _reject("odds out of range")
                 continue
 
@@ -173,7 +172,7 @@ class ValueBettingCalculator:
             # contrarian signal (1.3x–2.0x = genuine edge territory).
             implied_prob = 1.0 / best_odds if best_odds > 0 else 0
             divergence = prob / implied_prob if implied_prob > 0 else 0
-            if not is_fallback and divergence > 2.0:
+            if divergence > 2.0:
                 logger.debug(
                     f"Rejecting {match_name} {selection}: model {prob:.0%} vs "
                     f"market {implied_prob:.0%} ({divergence:.1f}x divergence > 2.0x)"
@@ -255,7 +254,7 @@ class ValueBettingCalculator:
                 injury_impact=context.get("injury_impact", ""),
                 h2h_insight=context.get("h2h_insight", ""),
                 form_insight=context.get("form_insight", ""),
-                used_fallback_odds=is_fallback,
+                used_fallback_odds=False,  # retained for DB compatibility; always False since we skip no-odds selections above
                 league=league,
                 model_agreement=agreement_info.get("agreement", ""),
                 models_for=agreement_info.get("models_for", ""),
@@ -390,29 +389,48 @@ class ValueBettingCalculator:
         # bookmaker (Bet365/Pinnacle/1xBet) provides the line (e.g. Over 1.5).
         _OVER_UNDER_MARKETS = {"over_under", "totals"}
 
-        # Two-pass: first collect real bookmaker odds, then fall back to Flashscore
-        # over_under only if nothing was found.
-        real_best = 0.0
+        # Collect every real bookmaker price for this market+selection, plus
+        # the best Flashscore over/under price as a fallback when no real
+        # bookmaker covers the line.
+        real_prices: list = []
         flashscore_ou_best = 0.0
 
         for odds_record in odds_data:
             bookie = odds_record.get("bookmaker", "")
             record_market = odds_record.get("market_type", "")
             record_selection = odds_record.get("selection", "")
-            record_odds = odds_record.get("odds_value", 0)
+            record_odds = odds_record.get("odds_value", 0) or 0
 
             if record_market not in valid_markets or record_selection not in valid_selections:
                 continue
+            if record_odds <= 1.0:
+                continue
 
             if bookie == "Flashscore":
-                # Only usable as fallback, and only for over/under market
                 if record_market in _OVER_UNDER_MARKETS:
                     flashscore_ou_best = max(flashscore_ou_best, record_odds)
             else:
-                real_best = max(real_best, record_odds)
+                real_prices.append(record_odds)
 
-        # Use real bookmaker odds; fall back to Flashscore over/under when absent
-        best = real_best if real_best > 0 else flashscore_ou_best
+        # Aggregation policy: when 2+ bookmakers price a market, use the
+        # MEDIAN to dampen outliers. `max()` produces a positive bias because
+        # an inflated price from a single bookie always passes through —
+        # sharps publish Pinnacle/Bet365 at the consensus, but smaller books
+        # mis-price minor leagues regularly.  Median tracks consensus while
+        # still gaining a small edge over plain bookmaker average.
+        # With a single bookmaker we have no choice — use that price.
+        if real_prices:
+            real_prices.sort()
+            n = len(real_prices)
+            if n == 1:
+                best = real_prices[0]
+            elif n % 2 == 1:
+                best = real_prices[n // 2]
+            else:
+                best = (real_prices[n // 2 - 1] + real_prices[n // 2]) / 2
+        else:
+            best = flashscore_ou_best
+
         return best
 
     def _assess_risk(self, probability: float, odds: float, ev: float) -> str:

@@ -29,25 +29,11 @@ class EnsemblePredictor:
         self.ml_models = MLModels()
         self.goals_model = GoalsMLModel()
 
-        weights = self.config.get("models.ensemble_weights", {})
-        self.weights = {
-            "poisson": weights.get("poisson", 0.25),
-            "elo": weights.get("elo", 0.20),
-            "xgboost": weights.get("xgboost", 0.35),
-            "random_forest": weights.get("random_forest", 0.20),
-        }
-
-        # Load tuned weights if available (overrides config)
-        tuned_path = Path("data/models/ensemble_weights.json")
-        if tuned_path.exists():
-            try:
-                tuned = json.loads(tuned_path.read_text())
-                self.weights.update(tuned)
-                logger.info(f"Loaded tuned ensemble weights: {self.weights}")
-            except Exception as e:
-                logger.warning(f"Failed to load tuned weights: {e}")
-
-        # Bayesian adaptive weight learner (per-league weights)
+        # Bayesian adaptive weight learner is the sole source of ensemble weights.
+        # The static config weights (models.ensemble_weights) are used internally
+        # as the prior inside BayesianWeightLearner; they are never read here.
+        # The historical data/models/ensemble_weights.json file produced by older
+        # versions of tune_ensemble_weights() is intentionally not loaded.
         self.bayesian_weights = BayesianWeightLearner(self.config)
 
         # Per-model calibration discounts (1.0 = perfectly calibrated)
@@ -66,11 +52,21 @@ class EnsemblePredictor:
         self.ml_models.load()
         self.goals_model.load()
 
-    def fit(self, league: str = None):
-        """Fit all sub-models."""
-        logger.info("Fitting ensemble models...")
-        self.poisson.fit(league)
-        self.elo.fit(league)
+    def fit(self, league: str = None, as_of_date=None):
+        """Fit all sub-models.
+
+        Args:
+            league: Optional league filter
+            as_of_date: When set, only matches before this date are used —
+                used by the tuning pipeline so accuracy is measured against
+                a model that did NOT see the outcomes it's being scored on.
+        """
+        logger.info(
+            "Fitting ensemble models..."
+            + (f" (as_of_date={as_of_date})" if as_of_date else "")
+        )
+        self.poisson.fit(league, as_of_date=as_of_date)
+        self.elo.fit(league, as_of_date=as_of_date)
         # ML models are fitted separately via train() with feature data
         logger.info("Ensemble models fitted")
 
@@ -317,6 +313,23 @@ class EnsemblePredictor:
                 ensemble_1x2["home_win"] = round(ensemble_1x2["home_win"] / _tot1x2, 4)
                 ensemble_1x2["draw"] = round(ensemble_1x2["draw"] / _tot1x2, 4)
                 ensemble_1x2["away_win"] = round(ensemble_1x2["away_win"] / _tot1x2, 4)
+
+        # Enforce monotonicity across over lines: P(over 1.5) ≥ P(over 2.5) ≥ P(over 3.5).
+        # Independent dampening / blending can break this invariant (e.g. ceiling
+        # capping over_2.5 while leaving over_1.5 above the cap), which produces
+        # inconsistent EVs across goal lines.  Pull each line up to at least the
+        # next-higher-line value so the family stays internally consistent.
+        o15 = adjusted_goals["over_1.5"]
+        o25 = adjusted_goals["over_2.5"]
+        o35 = adjusted_goals["over_3.5"]
+        if o25 > o15:
+            o15 = o25
+        if o35 > o25:
+            o35 = o25
+        adjusted_goals["over_1.5"] = o15
+        adjusted_goals["over_2.5"] = o25
+        adjusted_goals["over_3.5"] = o35
+        adjusted_goals["under_2.5"] = round(1.0 - o25, 4)
 
         results["ensemble"]["home_xg"] = poisson_pred.get("home_xg", 0)
         results["ensemble"]["away_xg"] = poisson_pred.get("away_xg", 0)

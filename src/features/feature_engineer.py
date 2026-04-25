@@ -186,8 +186,12 @@ class FeatureEngineer:
 
         features = {}
 
-        # 1. Team form features (overall, home, away) — all windows at 10 games
-        _elo = self.elo_ratings
+        # 1. Team form features (overall, home, away) — all windows at 10 games.
+        # During training, do NOT pass current Elo ratings: those are computed from
+        # ALL historical matches (including the targets) so applying them as
+        # opponent-quality weights leaks future information into past form.
+        # Live prediction is unaffected because as_of_date is None.
+        _elo = None if for_training else self.elo_ratings
         home_form_all = self.team_features.get_form_features(home_id, 10, "all", as_of_date=as_of_date, elo_ratings=_elo)
         home_form_home = self.team_features.get_form_features(home_id, 10, "home", as_of_date=as_of_date, elo_ratings=_elo)
         away_form_all = self.team_features.get_form_features(away_id, 10, "all", as_of_date=as_of_date, elo_ratings=_elo)

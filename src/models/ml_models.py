@@ -24,10 +24,29 @@ logger = get_logger()
 
 MODELS_DIR = Path("data/models")
 
-# HMAC key for model file integrity. Uses env var if set, otherwise a
-# deterministic fallback so existing pickle files can still be loaded
-# (with a warning) until they are re-saved with a proper key.
-_MODEL_HMAC_KEY = os.environ.get("MODEL_HMAC_KEY", "betting-agent-default-key").encode()
+# HMAC key for model file integrity.
+# In production MODEL_HMAC_KEY must be set so the integrity check provides
+# a real guarantee — the previous deterministic fallback was source-visible
+# and therefore offered no protection.  For local dev / tests, opt into the
+# legacy default explicitly via BETTING_AGENT_ALLOW_DEFAULT_HMAC=1.
+_MODEL_HMAC_KEY_ENV = os.environ.get("MODEL_HMAC_KEY")
+if _MODEL_HMAC_KEY_ENV:
+    _MODEL_HMAC_KEY = _MODEL_HMAC_KEY_ENV.encode()
+    _MODEL_HMAC_USING_DEFAULT = False
+elif os.environ.get("BETTING_AGENT_ALLOW_DEFAULT_HMAC") == "1":
+    _MODEL_HMAC_KEY = b"betting-agent-default-key"
+    _MODEL_HMAC_USING_DEFAULT = True
+    logger.warning(
+        "MODEL_HMAC_KEY not set; using insecure default key "
+        "(BETTING_AGENT_ALLOW_DEFAULT_HMAC=1). "
+        "Do NOT run this configuration in production — set MODEL_HMAC_KEY."
+    )
+else:
+    raise RuntimeError(
+        "MODEL_HMAC_KEY environment variable is not set. "
+        "Set it to a secret value, or set BETTING_AGENT_ALLOW_DEFAULT_HMAC=1 "
+        "to opt into the insecure default key for local development only."
+    )
 
 
 def _compute_hmac(data: bytes) -> str:
