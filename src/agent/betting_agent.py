@@ -92,7 +92,38 @@ class FootballBettingAgent:
         # between settle and daily_update even when no new results are found).
         self._scraped_leagues: set = set()
 
+        # Reset stale ml=0.0 calibration on a fresh database. The cached
+        # calibration.json may carry ml=0.0 from the old proxy-formula bug;
+        # when the DB has no settled picks yet there is no basis for zeroing ML.
+        self._reset_stale_ml_calibration()
+
         logger.info("Football Betting Agent initialized")
+
+    def _reset_stale_ml_calibration(self) -> None:
+        """Reset ml calibration factor to 1.0 when the DB has no settled picks.
+
+        Handles the "warm cache, cold DB" scenario: ML models are loaded from
+        cache but the database is fresh (no pick history). In this case any
+        ml=0.0 in calibration.json is stale (left by the old proxy-formula bug)
+        and must not suppress ML predictions on a brand-new database.
+        """
+        if self.predictor.calibration_factors.get("ml", 1.0) != 0.0:
+            return
+        if not self.predictor.ml_models.is_fitted:
+            return
+        try:
+            with self.db.get_session() as session:
+                settled = session.query(SavedPick).filter(
+                    SavedPick.result.isnot(None)
+                ).count()
+            if settled == 0:
+                self.predictor.calibration_factors["ml"] = 1.0
+                logger.info(
+                    "Fresh database detected: reset stale ml=0.0 calibration "
+                    "to 1.0 (no settled picks to justify exclusion)"
+                )
+        except Exception as _e:
+            logger.debug(f"Stale calibration reset skipped: {_e}")
 
     _SCRAPED_LEAGUES_FILE = Path("data/scraped_leagues.json")
 

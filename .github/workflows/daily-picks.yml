@@ -107,7 +107,7 @@ jobs:
 
       - name: Run daily update (fixtures + odds, no Flashscore results)
         run: python -m src.agent.betting_agent --update --skip-ml-retrain
-        timeout-minutes: 30
+        timeout-minutes: 65
         continue-on-error: true
 
       - name: Settle yesterday's predictions
