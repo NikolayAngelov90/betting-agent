@@ -122,6 +122,14 @@ class FootballBettingAgent:
                     "Fresh database detected: reset stale ml=0.0 calibration "
                     "to 1.0 (no settled picks to justify exclusion)"
                 )
+                cal_path = Path("data/models/calibration.json")
+                try:
+                    existing = json.loads(cal_path.read_text()) if cal_path.exists() else {}
+                    existing["ml"] = 1.0
+                    cal_path.write_text(json.dumps(existing, indent=2))
+                    logger.info("Saved corrected calibration (ml=1.0) to disk")
+                except Exception as _save_err:
+                    logger.debug(f"Could not save corrected calibration: {_save_err}")
         except Exception as _e:
             logger.debug(f"Stale calibration reset skipped: {_e}")
 

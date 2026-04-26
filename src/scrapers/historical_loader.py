@@ -188,7 +188,7 @@ class HistoricalDataLoader(BaseScraper):
             match_count = session.query(Match).filter(
                 Match.home_goals.isnot(None)
             ).count()
-        if match_count > 10000:
+        if match_count > 2000:
             logger.info(
                 f"Historical loader: {match_count:,} completed matches in DB — "
                 f"skipping (football-data.org handles current season updates)"
