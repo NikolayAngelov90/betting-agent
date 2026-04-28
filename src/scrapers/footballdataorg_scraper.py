@@ -362,14 +362,12 @@ class FootballDataOrgScraper:
                 league = COMPETITION_MAP.get(comp_code)
                 if not league:
                     continue
-                home_name = TEAM_NAME_MAP.get(
-                    m.get("homeTeam", {}).get("name", ""),
-                    m.get("homeTeam", {}).get("name", ""),
-                )
-                away_name = TEAM_NAME_MAP.get(
-                    m.get("awayTeam", {}).get("name", ""),
-                    m.get("awayTeam", {}).get("name", ""),
-                )
+                home_raw_r = (m.get("homeTeam") or {}).get("name") or ""
+                away_raw_r = (m.get("awayTeam") or {}).get("name") or ""
+                home_name = TEAM_NAME_MAP.get(home_raw_r, home_raw_r)
+                away_name = TEAM_NAME_MAP.get(away_raw_r, away_raw_r)
+                if not home_name or not away_name:
+                    continue
                 updated = self._apply_score(
                     league, home_name, away_name, target, home_goals, away_goals
                 )
@@ -444,10 +442,12 @@ class FootballDataOrgScraper:
                 league = COMPETITION_MAP.get(comp_code)
                 if not league:
                     continue
-                home_raw = m.get("homeTeam", {}).get("name", "")
-                away_raw = m.get("awayTeam", {}).get("name", "")
+                home_raw = (m.get("homeTeam") or {}).get("name") or ""
+                away_raw = (m.get("awayTeam") or {}).get("name") or ""
                 home_name = TEAM_NAME_MAP.get(home_raw, home_raw)
                 away_name = TEAM_NAME_MAP.get(away_raw, away_raw)
+                if not home_name or not away_name:
+                    continue
                 utc_str = m.get("utcDate", "")
                 try:
                     match_dt = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
@@ -473,7 +473,7 @@ class FootballDataOrgScraper:
         Only applied when the name is longer than 8 characters to avoid false
         positives on short names.
         """
-        if len(name) <= 8:
+        if not name or len(name) <= 8:
             return None
         # FDO name starts with DB name (DB name is a truncated prefix)
         candidate = session.query(Team).filter(
