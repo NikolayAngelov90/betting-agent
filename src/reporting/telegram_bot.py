@@ -179,9 +179,14 @@ class TelegramNotifier:
                     if pick.predicted_xg:
                         line += f"\n      xG: {pick.predicted_xg}"
 
-                    # Bet
+                    # Bet + optional line movement
                     safe_sel = html_escape(pick.selection)
                     line += f"\n      Bet: <b>{safe_sel}</b> @ {pick.odds:.2f}"
+                    op = getattr(pick, "opening_odds", 0) or 0
+                    if op > 1.0 and abs(pick.odds - op) / op >= 0.03:
+                        direction = "↑" if pick.odds > op else "↓"
+                        pct = (pick.odds - op) / op * 100
+                        line += f" <i>(opened {op:.2f} {direction}{abs(pct):.1f}%)</i>"
 
                     # EV / Conf / Risk / Stake
                     line += (

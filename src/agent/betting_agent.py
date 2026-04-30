@@ -608,6 +608,7 @@ class FootballBettingAgent:
                     "selection": o.selection,
                     "odds_value": o.odds_value,
                     "bookmaker": o.bookmaker,
+                    "opening_odds": o.opening_odds,
                 }
                 for o in odds_records
             ]
@@ -715,6 +716,18 @@ class FootballBettingAgent:
             Tuple of (picks, new_picks, dropped_picks)
         """
         target = target_date or date.today()
+
+        # Reload calibration from disk if it was updated by a recent --train/--tune.
+        # This ensures picks always use the freshest model weights without a restart.
+        _cal_path = Path("data/models/calibration.json")
+        if _cal_path.exists():
+            try:
+                _cal = json.loads(_cal_path.read_text())
+                if _cal != self.predictor.calibration_factors:
+                    self.predictor.calibration_factors.update(_cal)
+                    logger.info(f"Reloaded calibration factors from disk: {_cal}")
+            except Exception as _ce:
+                logger.debug(f"Could not reload calibration: {_ce}")
 
         # Idempotency guard — skip if today's picks already exist (AC1 Story 8.3)
         if not force:
@@ -1119,8 +1132,7 @@ class FootballBettingAgent:
 
         logger.info(
             f"Found {len(all_recommendations)} high-confidence picks for {target} "
-            f"(EV threshold: {self.value_calculator.min_ev:.1%}, "
-            f"dd_multiplier: {dd_multiplier:.2f})"
+            f"(EV threshold: {self.value_calculator.min_ev:.1%})"
         )
 
         # Save picks; get back only the ones new this run (for Telegram deduplication)
@@ -1724,6 +1736,77 @@ class FootballBettingAgent:
 
             return stats
 
+    def rolling_backtest(self, window_days: int = 30) -> None:
+        """Print per-window (monthly by default) performance over all settled picks.
+
+        Groups settled picks into rolling windows and reports win rate, ROI,
+        and average EV per window so drift or improvement over time is visible.
+        """
+        with self.db.get_session() as session:
+            all_picks = session.query(SavedPick).filter(
+                SavedPick.result.isnot(None)
+            ).order_by(SavedPick.pick_date).all()
+            if not all_picks:
+                print("No settled picks found.")
+                return
+            rows = [
+                {
+                    "date": p.pick_date,
+                    "result": p.result,
+                    "odds": p.odds or 0.0,
+                    "kelly": p.kelly_stake_percentage or 0.0,
+                    "ev": p.expected_value or 0.0,
+                    "market": p.market or "",
+                }
+                for p in all_picks
+            ]
+
+        # Group into calendar-month windows
+        from collections import defaultdict
+        by_month: dict = defaultdict(list)
+        for row in rows:
+            d = row["date"]
+            key = f"{d.year}-{d.month:02d}" if d else "unknown"
+            by_month[key].append(row)
+
+        header = f"{'Month':<10} {'Picks':>6} {'W':>5} {'L':>5} {'Win%':>7} {'ROI%':>8} {'AvgOdds':>9} {'AvgEV%':>8}"
+        print("\nRolling backtest — per-month performance")
+        print("=" * len(header))
+        print(header)
+        print("-" * len(header))
+
+        cumulative_staked = 0.0
+        cumulative_profit = 0.0
+        for month in sorted(by_month.keys()):
+            picks = by_month[month]
+            wins = sum(1 for p in picks if p["result"] == "win")
+            losses = sum(1 for p in picks if p["result"] == "loss")
+            total = wins + losses
+            win_rate = wins / total if total else 0.0
+            staked = sum(p["kelly"] for p in picks)
+            profit = sum(
+                p["kelly"] * (p["odds"] - 1) if p["result"] == "win" else -p["kelly"]
+                for p in picks
+            )
+            roi = profit / staked if staked else 0.0
+            avg_odds = sum(p["odds"] for p in picks) / len(picks) if picks else 0.0
+            avg_ev = sum(p["ev"] for p in picks) / len(picks) if picks else 0.0
+            cumulative_staked += staked
+            cumulative_profit += profit
+            print(
+                f"{month:<10} {total:>6} {wins:>5} {losses:>5} "
+                f"{win_rate:>7.1%} {roi:>8.1%} {avg_odds:>9.2f} {avg_ev:>7.1%}"
+            )
+
+        print("-" * len(header))
+        cum_roi = cumulative_profit / cumulative_staked if cumulative_staked else 0.0
+        total_picks = len(rows)
+        total_wins = sum(1 for r in rows if r["result"] == "win")
+        print(
+            f"{'ALL TIME':<10} {total_picks:>6} {total_wins:>5} {total_picks-total_wins:>5} "
+            f"{total_wins/total_picks if total_picks else 0:>7.1%} {cum_roi:>8.1%}"
+        )
+
     async def tune_ensemble_weights(self):
         """Adjust ensemble weights based on recent prediction accuracy.
 
@@ -1750,8 +1833,8 @@ class FootballBettingAgent:
                 for p in rows
             ]
 
-        if len(settled) < 20:
-            logger.info(f"Not enough settled picks for tuning ({len(settled)}, need 20+)")
+        if len(settled) < 10:
+            logger.info(f"Not enough settled picks for tuning ({len(settled)}, need 10+)")
             return
 
         logger.info(f"Tuning on {len(settled)} settled picks")
@@ -2691,6 +2774,7 @@ async def main():
         print("  --telegram-setup    Setup Telegram bot notifications")
         print("  --telegram-test     Send a test Telegram message")
         print("  --telegram-welcome  Send group welcome/info message to Telegram")
+        print("  --backtest-rolling  Show per-month rolling performance over all settled picks")
         return
 
     command = sys.argv[1]
@@ -2801,7 +2885,12 @@ async def main():
                         print(f"\n  Pick #{pick_num}: {match_name}")
                         if pick.predicted_xg:
                             print(f"    xG: {pick.predicted_xg}")
-                        print(f"    Bet: {pick.selection} @ {pick.odds:.2f}")
+                        op_str = ""
+                        op = getattr(pick, "opening_odds", 0) or 0
+                        if op > 1.0 and abs(pick.odds - op) / op >= 0.03:
+                            direction = "↑" if pick.odds > op else "↓"
+                            op_str = f"  (opened {op:.2f} {direction}{abs((pick.odds-op)/op)*100:.1f}%)"
+                        print(f"    Bet: {pick.selection} @ {pick.odds:.2f}{op_str}")
                         print(f"    EV: {pick.expected_value:.1%} | Conf: {pick.confidence:.1%} | Risk: {pick.risk_level}")
                         print(f"    Stake: {pick.kelly_stake_percentage:.1f}% of bankroll")
                         if pick.model_agreement:
@@ -2998,6 +3087,10 @@ async def main():
                     if rec.models_against:
                         print(f" | Against: {rec.models_against}", end="")
                     print()
+
+        elif command == "--backtest-rolling":
+            print("Rolling backtest — per-month performance over all settled picks")
+            agent.rolling_backtest()
 
         elif command == "--backfill-history":
             print("Fetching historical match data for low-coverage teams...")

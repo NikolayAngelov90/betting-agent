@@ -40,6 +40,7 @@ class BetRecommendation:
     predicted_xg: str = ""         # e.g. "1.45 - 0.92"
     match_date: Optional[datetime] = None  # Kickoff time (UTC)
     contrarian_value: float = 0.0          # Model-vs-market divergence ratio (>1.3 = contrarian)
+    opening_odds: float = 0.0              # Opening line (first odds seen); 0 if unknown
 
 
 class ValueBettingCalculator:
@@ -132,8 +133,12 @@ class ValueBettingCalculator:
                 _reject("prob<45%")
                 continue  # hard floor — never go below 45%
 
-            # Find best odds for this market/selection
+            # Find best (median) odds for this market/selection
             best_odds = self._find_best_odds(
+                odds_data, market, selection,
+                home_team_name=home_team_name, away_team_name=away_team_name,
+            )
+            opening = self._find_opening_odds(
                 odds_data, market, selection,
                 home_team_name=home_team_name, away_team_name=away_team_name,
             )
@@ -264,6 +269,7 @@ class ValueBettingCalculator:
                 xg_edge=xg_info.get("insight", ""),
                 predicted_xg=xg_info.get("predicted_xg", ""),
                 contrarian_value=round(divergence, 2),
+                opening_odds=round(opening, 2) if opening else 0.0,
             )
             recommendations.append(rec)
 
@@ -428,10 +434,79 @@ class ValueBettingCalculator:
                 best = real_prices[n // 2]
             else:
                 best = (real_prices[n // 2 - 1] + real_prices[n // 2]) / 2
+            if n >= 2:
+                spread = real_prices[-1] - real_prices[0]
+                if spread >= 0.30:
+                    logger.debug(
+                        f"Wide odds spread for {selection} ({market}): "
+                        f"low={real_prices[0]:.2f} high={real_prices[-1]:.2f} "
+                        f"spread={spread:.2f} — using median={best:.2f}"
+                    )
         else:
             best = flashscore_ou_best
 
         return best
+
+    def _find_opening_odds(self, odds_data: List[Dict], market: str,
+                           selection: str,
+                           home_team_name: str = "",
+                           away_team_name: str = "") -> float:
+        """Return the median opening line across bookmakers for this selection.
+
+        Uses the same selection/market mapping as _find_best_odds but reads
+        the opening_odds field instead of odds_value.  Returns 0.0 when no
+        opening odds are recorded (feature is populated gradually).
+        """
+        selection_map = {
+            "Home Win": ["1", "Home", "home_win", "Home Win", home_team_name],
+            "Draw": ["X", "Draw", "draw", "Draw"],
+            "Away Win": ["2", "Away", "away_win", "Away Win", away_team_name],
+            "Over 2.5 Goals": ["Over 2.5", "Over", "Over 2.5 Goals"],
+            "Under 2.5 Goals": ["Under 2.5", "Under", "Under 2.5 Goals"],
+            "Over 1.5 Goals": ["Over 1.5", "Over 1.5 Goals"],
+            "Under 1.5 Goals": ["Under 1.5", "Under 1.5 Goals"],
+            "Over 3.5 Goals": ["Over 3.5", "Over 3.5 Goals"],
+            "Under 3.5 Goals": ["Under 3.5", "Under 3.5 Goals"],
+            "BTTS Yes": ["Yes", "BTTS Yes"],
+            "BTTS No": ["No", "BTTS No"],
+            "Home Over 1.5": ["Home Over 1.5", "Home Team Over 1.5", "Home - Over 1.5"],
+            "Away Over 1.5": ["Away Over 1.5", "Away Team Over 1.5", "Away - Over 1.5"],
+        }
+        market_map = {
+            "1X2": ["1X2", "h2h"],
+            "Over 2.5": ["over_under", "totals"],
+            "Under 2.5": ["over_under", "totals"],
+            "Over 1.5": ["over_under", "totals"],
+            "Under 1.5": ["over_under", "totals"],
+            "Over 3.5": ["over_under", "totals"],
+            "Under 3.5": ["over_under", "totals"],
+            "BTTS": ["btts"],
+            "Team Goals": ["team_goals", "team_over_under"],
+        }
+        valid_selections = [s for s in selection_map.get(selection, [selection]) if s]
+        valid_markets = market_map.get(market, [market])
+
+        prices = []
+        for rec in odds_data:
+            if rec.get("bookmaker") == "Flashscore":
+                continue
+            if rec.get("market_type") not in valid_markets:
+                continue
+            if rec.get("selection") not in valid_selections:
+                continue
+            op = rec.get("opening_odds") or 0
+            if op > 1.0:
+                prices.append(op)
+
+        if not prices:
+            return 0.0
+        prices.sort()
+        n = len(prices)
+        if n == 1:
+            return prices[0]
+        if n % 2 == 1:
+            return prices[n // 2]
+        return (prices[n // 2 - 1] + prices[n // 2]) / 2
 
     def _assess_risk(self, probability: float, odds: float, ev: float) -> str:
         """Assess the risk level of a bet."""
