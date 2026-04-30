@@ -1099,60 +1099,6 @@ class FootballBettingAgent:
         # over-concentrating risk on correlated outcomes.
         all_recommendations = self._filter_correlated_picks(all_recommendations)
 
-        # No portfolio caps — include all value picks to avoid missing edges.
-        # Risk is managed at the Kelly fraction and max_stake_percentage level.
-
-        # Drawdown circuit breaker: scale down stakes (or skip picks entirely)
-        # when recent performance shows a significant drawdown.
-        # The drawdown breaker no longer mutates value_calculator.min_ev — that
-        # caused the tightened threshold to leak into subsequent calls within
-        # the same process.  Instead, drop picks below the tightened threshold
-        # in-place after the fact.
-        dd_multiplier = self._get_drawdown_multiplier()
-        if dd_multiplier < 1.0:
-            if dd_multiplier <= 0.0:
-                logger.warning(
-                    "Drawdown circuit breaker TRIGGERED — skipping all picks "
-                    "(drawdown exceeds pause threshold)"
-                )
-                try:
-                    await self.telegram.send_alert(
-                        "🛑 Drawdown circuit breaker TRIGGERED: all picks paused. "
-                        "Recent ROI below pause threshold. Picks will resume once performance recovers."
-                    )
-                except Exception as _tg_err:
-                    logger.warning(f"Drawdown Telegram alert failed: {_tg_err}")
-                return [], [], []
-            # Tighten EV threshold proportionally with drawdown severity so
-            # fewer marginal picks pass when we're in a losing run.
-            # Formula: +2pp at full pause threshold (multiplier→0), +0pp at no drawdown.
-            # Example: multiplier=0.55 → +0.9pp (3%→3.9%)
-            dd_ev_boost = round((1.0 - dd_multiplier) * 0.02, 4)
-            tightened_ev = round(self.value_calculator.min_ev + dd_ev_boost, 4)
-            n_before = len(all_recommendations)
-            all_recommendations = [
-                r for r in all_recommendations if r.expected_value >= tightened_ev
-            ]
-            n_dropped_dd = n_before - len(all_recommendations)
-            logger.info(
-                f"Drawdown circuit breaker: scaling stakes to "
-                f"{dd_multiplier:.0%} of normal; "
-                f"tightened EV threshold to {tightened_ev:.1%} (+{dd_ev_boost:.1%}) "
-                f"dropped {n_dropped_dd} sub-threshold picks"
-            )
-            try:
-                await self.telegram.send_alert(
-                    f"⚠️ Drawdown circuit breaker active: stakes scaled to {dd_multiplier:.0%}, "
-                    f"EV threshold tightened to {tightened_ev:.1%} (dropped {n_dropped_dd}). "
-                    f"Check recent pick performance."
-                )
-            except Exception as _tg_err:
-                logger.warning(f"Drawdown Telegram alert failed: {_tg_err}")
-            for rec in all_recommendations:
-                rec.kelly_stake_percentage = round(
-                    rec.kelly_stake_percentage * dd_multiplier, 2
-                )
-
         # Daily exposure limit: cap total Kelly stake across all picks to
         # prevent over-betting even when many value picks are found.
         max_daily_exposure = self.config.get("betting.max_total_kelly_pct", 40.0)
@@ -2645,77 +2591,6 @@ class FootballBettingAgent:
         if to_remove:
             picks = [p for i, p in enumerate(picks) if i not in to_remove]
         return picks
-
-    def _get_drawdown_multiplier(self) -> float:
-        """Compute a stake multiplier based on recent bankroll drawdown.
-
-        Looks at the last N settled picks (configurable via
-        drawdown_lookback_picks, default 30) and computes cumulative P&L
-        as a fraction of total staked.  Three zones:
-
-        - ROI >= reduce_threshold (default -0.10):  normal (1.0×)
-        - reduce < ROI < pause:  linear scale from 1.0× down to 0.0×
-        - ROI <= pause_threshold (default -0.30):  pause all betting (0.0×)
-
-        Returns a multiplier in [0.0, 1.0].
-        """
-        lookback = self.config.get("models.drawdown_lookback_picks", 30)
-        reduce_at = self.config.get("models.drawdown_reduce_threshold", -0.10)
-        pause_at = self.config.get("models.drawdown_pause_threshold", -0.30)
-
-        # Guard: if thresholds are equal or inverted, no interpolation possible
-        if reduce_at <= pause_at:
-            return 1.0
-
-        try:
-            with self.db.get_session() as session:
-                recent = (
-                    session.query(SavedPick)
-                    .filter(SavedPick.result.isnot(None))
-                    .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
-                    .limit(lookback)
-                    .all()
-                )
-                if len(recent) < 10:
-                    return 1.0  # not enough data to judge
-
-                total_staked = 0.0
-                total_profit = 0.0
-                for p in recent:
-                    if p.result not in ("win", "loss"):
-                        continue  # skip void/push picks
-                    stake = p.kelly_stake_percentage or 1.0
-                    total_staked += stake
-                    if p.result == "win":
-                        total_profit += stake * (p.odds - 1)
-                    else:
-                        total_profit -= stake
-
-                if total_staked == 0:
-                    return 1.0
-
-                roi = total_profit / total_staked
-
-                if roi >= reduce_at:
-                    return 1.0
-                if roi <= pause_at:
-                    logger.warning(
-                        f"Drawdown breaker: ROI={roi:.1%} over last "
-                        f"{len(recent)} picks (pause threshold={pause_at:.0%})"
-                    )
-                    return 0.0
-
-                # Linear interpolation between reduce_at (1.0) and pause_at (0.0)
-                multiplier = (roi - pause_at) / (reduce_at - pause_at)
-                logger.info(
-                    f"Drawdown breaker: ROI={roi:.1%} over last "
-                    f"{len(recent)} picks -> stake multiplier={multiplier:.2f}"
-                )
-                return round(multiplier, 2)
-
-        except Exception as e:
-            logger.warning(f"Drawdown circuit breaker check failed: {e}")
-            return 1.0
 
     def _build_context(self, features: Dict, injury_report: Dict) -> Dict:
         """Build context strings for bet reasoning."""

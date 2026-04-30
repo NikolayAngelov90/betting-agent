@@ -1,8 +1,8 @@
 """Tests for value-betting decision logic that was previously uncovered.
 
 Targets the most consequential business logic: median odds aggregation,
-correlation filter, exposure cap, drawdown breaker, and over-line
-monotonicity. These tests use minimal stubs so they don't touch the DB.
+correlation filter, exposure cap, and over-line monotonicity.
+These tests use minimal stubs so they don't touch the DB.
 """
 
 from dataclasses import dataclass
@@ -232,78 +232,6 @@ class TestExposureCap:
         assert len(capped) == 1
         assert capped[0].kelly_stake_percentage == 40.0
         assert len(dropped) == 1
-
-
-# --------------------------------------------------------------------------- #
-# Drawdown circuit breaker (logic only, no DB)
-# --------------------------------------------------------------------------- #
-
-
-class TestDrawdownMultiplier:
-    """`_get_drawdown_multiplier` interpolates between reduce/pause thresholds."""
-
-    def _agent_with_picks(self, picks_data):
-        """Return an agent whose DB session yields the supplied SavedPick stubs."""
-        from src.agent.betting_agent import FootballBettingAgent
-
-        agent = FootballBettingAgent.__new__(FootballBettingAgent)
-        agent.config = MagicMock()
-        agent.config.get.side_effect = lambda k, default=None: {
-            "models.drawdown_lookback_picks": 30,
-            "models.drawdown_reduce_threshold": -0.10,
-            "models.drawdown_pause_threshold": -0.30,
-        }.get(k, default)
-
-        @dataclass
-        class _Pick:
-            result: str
-            odds: float
-            kelly_stake_percentage: float
-
-        picks = [_Pick(**p) for p in picks_data]
-
-        agent.db = MagicMock()
-        sess = MagicMock()
-        sess.__enter__ = lambda s: s
-        sess.__exit__ = MagicMock(return_value=False)
-        sess.query.return_value.filter.return_value.order_by.return_value \
-            .limit.return_value.all.return_value = picks
-        agent.db.get_session.return_value = sess
-        return agent
-
-    def test_full_multiplier_when_profitable(self):
-        agent = self._agent_with_picks([
-            {"result": "win", "odds": 2.0, "kelly_stake_percentage": 2.0},
-        ] * 15)
-        assert agent._get_drawdown_multiplier() == 1.0
-
-    def test_paused_when_below_pause_threshold(self):
-        # 15 losses in a row → ROI = -100%, way below -30% pause
-        agent = self._agent_with_picks([
-            {"result": "loss", "odds": 2.0, "kelly_stake_percentage": 2.0},
-        ] * 15)
-        assert agent._get_drawdown_multiplier() == 0.0
-
-    def test_scaled_in_between(self):
-        # 10 wins @ 2.0 odds + 5 losses → +10pp profit on 30 staked = +33% ROI
-        # Need a mix that lands between -10% and -30% ROI.
-        # 2 wins @ 2.0 (+2 each = +4) + 8 losses (-8) = -4 / 10 = -40% ROI → paused
-        # Try: 4 wins @ 2.0 (+4) + 6 losses (-6) = -2 / 10 = -20% ROI → between
-        agent = self._agent_with_picks(
-            [{"result": "win", "odds": 2.0, "kelly_stake_percentage": 1.0}] * 4
-            + [{"result": "loss", "odds": 2.0, "kelly_stake_percentage": 1.0}] * 6
-        )
-        m = agent._get_drawdown_multiplier()
-        # ROI = -20%; reduce_at=-10%, pause_at=-30%
-        # multiplier = (-0.20 - (-0.30)) / (-0.10 - (-0.30)) = 0.10 / 0.20 = 0.50
-        assert 0.0 < m < 1.0
-        assert m == pytest.approx(0.50, abs=0.05)
-
-    def test_too_few_picks_returns_full(self):
-        agent = self._agent_with_picks([
-            {"result": "loss", "odds": 2.0, "kelly_stake_percentage": 2.0},
-        ] * 5)  # < 10 picks needed
-        assert agent._get_drawdown_multiplier() == 1.0
 
 
 # --------------------------------------------------------------------------- #

@@ -738,8 +738,8 @@ class FlashscoreScraper(BaseScraper):
         try:
             driver.get(url)
             # With page_load_strategy='none', driver.get() returns immediately.
-            # Wait up to 20s for the first match row to be rendered by JS.
-            WebDriverWait(driver, 20).until(
+            # Wait up to 30s for the first match row to be rendered by JS.
+            WebDriverWait(driver, 30).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
             )
             if load_more:
@@ -772,7 +772,7 @@ class FlashscoreScraper(BaseScraper):
                 driver2 = self._get_driver()
                 if driver2:
                     driver2.get(url)
-                    WebDriverWait(driver2, 20).until(
+                    WebDriverWait(driver2, 30).until(
                         EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
                     )
                     for el in driver2.find_elements(By.CLASS_NAME, "event__match"):
@@ -803,7 +803,7 @@ class FlashscoreScraper(BaseScraper):
 
         try:
             driver.get(url)
-            WebDriverWait(driver, 20).until(
+            WebDriverWait(driver, 30).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
             )
             self._click_load_more(driver)
@@ -833,7 +833,7 @@ class FlashscoreScraper(BaseScraper):
                 driver2 = self._get_driver()
                 if driver2:
                     driver2.get(url)
-                    WebDriverWait(driver2, 20).until(
+                    WebDriverWait(driver2, 30).until(
                         EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
                     )
                     cutoff = datetime.now() + timedelta(days=max_days_ahead)
