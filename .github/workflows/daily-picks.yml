@@ -112,7 +112,7 @@ jobs:
 
       - name: Settle yesterday's predictions
         run: python -m src.agent.betting_agent --settle
-        timeout-minutes: 5
+        timeout-minutes: 15
         continue-on-error: true
 
       - name: Retrain ML models (if stale)
@@ -171,7 +171,7 @@ jobs:
       - name: Settle late results (post update-results)
         if: always()
         run: python -m src.agent.betting_agent --settle
-        timeout-minutes: 5
+        timeout-minutes: 15
         continue-on-error: true
 
       - name: Send weekly performance report (Sundays only)

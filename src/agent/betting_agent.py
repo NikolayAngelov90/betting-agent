@@ -1164,7 +1164,7 @@ class FootballBettingAgent:
             logger.info(
                 f"Dropped by exposure cap: {dp.match} "
                 f"— {dp.market} @ {dp.odds:.2f} "
-                f"(Kelly {dp.kelly_stake_percentage:.1%})"
+                f"(Kelly {dp.kelly_stake_percentage:.2f}%)"
             )
         return capped, dropped
 

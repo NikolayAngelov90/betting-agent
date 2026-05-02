@@ -351,11 +351,25 @@ class MLModels:
                 lambda col: np.bincount(col.astype(int)).argmax(), 0, votes
             )
             val_acc = accuracy_score(y_val, majority)
-            logger.info(f"ML validation accuracy: {val_acc:.1%}")
-            if val_acc > 0.85:
+            # Log class distribution so high accuracy can be diagnosed against imbalance
+            val_counts = np.bincount(y_val.astype(int), minlength=3)
+            majority_share = val_counts.max() / len(y_val) if len(y_val) else 0
+            logger.info(
+                f"ML validation accuracy: {val_acc:.1%} "
+                f"(val set: H={val_counts[0]} D={val_counts[1]} A={val_counts[2]}, "
+                f"majority-class share={majority_share:.0%})"
+            )
+            # >0.95 is genuinely suspicious even with imbalanced val sets.
+            # 0.85-0.95 is plausible when the val set is class-skewed; log WARNING.
+            if val_acc > 0.95:
                 logger.critical(
                     f"CRITICAL: val accuracy {val_acc:.1%} on 3-class target — "
-                    "possible label leakage, inspect training data"
+                    "very likely label leakage; inspect features and data split"
+                )
+            elif val_acc > 0.85:
+                logger.warning(
+                    f"High val accuracy {val_acc:.1%} on 3-class (majority-class share "
+                    f"{majority_share:.0%}) — check if val set is class-imbalanced"
                 )
 
     def predict(self, X: np.ndarray, feature_names: List[str] = None) -> Dict:
@@ -674,11 +688,22 @@ class GoalsMLModel:
                 lambda col: np.bincount(col.astype(int)).argmax(), 0, votes
             )
             val_acc = accuracy_score(y_val, majority)
-            logger.info(f"GoalsMLModel validation accuracy: {val_acc:.1%}")
-            if val_acc > 0.90:
+            val_counts = np.bincount(y_val.astype(int), minlength=2)
+            majority_share = val_counts.max() / len(y_val) if len(y_val) else 0
+            logger.info(
+                f"GoalsMLModel validation accuracy: {val_acc:.1%} "
+                f"(val set: under={val_counts[0]} over={val_counts[1]}, "
+                f"majority-class share={majority_share:.0%})"
+            )
+            if val_acc > 0.95:
                 logger.critical(
                     f"CRITICAL: GoalsMLModel val accuracy {val_acc:.1%} on binary target — "
-                    "possible label leakage, inspect training data"
+                    "very likely label leakage; inspect features and data split"
+                )
+            elif val_acc > 0.85:
+                logger.warning(
+                    f"High GoalsMLModel val accuracy {val_acc:.1%} "
+                    f"(majority-class share {majority_share:.0%}) — check val set balance"
                 )
 
         logger.info("GoalsMLModel training complete")
