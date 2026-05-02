@@ -2830,6 +2830,7 @@ async def main():
                         stats = agent.get_stats()
                         # Detect when all picks lack injury data (e.g. API suspended)
                         no_injury_data = False
+                        injury_data_stale = False
                         try:
                             match_ids = [p.match_id for p in new_picks if p.match_id]
                             if match_ids:
@@ -2842,16 +2843,31 @@ async def main():
                                         if tid
                                     ]
                                     if _team_ids:
-                                        no_injury_data = (
+                                        _inj_total = (
                                             _isess.query(Injury)
                                             .filter(Injury.team_id.in_(_team_ids))
                                             .count()
-                                        ) == 0
+                                        )
+                                        no_injury_data = _inj_total == 0
+                                        if not no_injury_data:
+                                            _today_start = datetime.combine(
+                                                date.today(), datetime.min.time()
+                                            )
+                                            _fresh = (
+                                                _isess.query(Injury)
+                                                .filter(
+                                                    Injury.team_id.in_(_team_ids),
+                                                    Injury.updated_at >= _today_start,
+                                                )
+                                                .count()
+                                            )
+                                            injury_data_stale = _fresh == 0
                         except Exception as _ierr:
                             logger.debug(f"Injury data check failed: {_ierr}")
                         await agent.telegram.send_daily_picks(
                             new_picks, stats=stats, dropped_picks=dropped_picks,
                             no_injury_data=no_injury_data,
+                            injury_data_stale=injury_data_stale,
                         )
                         print(f"\nPicks sent to Telegram! ({len(new_picks)} new)")
                     else:

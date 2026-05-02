@@ -53,12 +53,24 @@ class InjuryScraper:
         if hasattr(self.config, 'get'):
             max_injury = self.config.get("models.max_injury_budget", 15)
         injury_budget = min(self.apifootball.remaining_budget(), max_injury)
+        today_start = datetime.combine(date.today(), datetime.min.time())
+
         if injury_budget <= 0:
-            logger.debug("No API budget remaining for injuries")
+            # No budget — log how much cached data is still available as fallback
+            with self.db.get_session() as session:
+                cached_total = session.query(Injury).filter(
+                    Injury.source == "api-football"
+                ).count()
+            if cached_total > 0:
+                logger.info(
+                    f"No API budget for injuries — using {cached_total} cached injuries "
+                    f"from previous run as fallback"
+                )
+            else:
+                logger.warning("No API budget for injuries and no cached data available")
             return
 
         # Get upcoming fixtures that have odds (skip fixtures with no market interest)
-        today_start = datetime.combine(date.today(), datetime.min.time())
         upcoming_cutoff = today_start + timedelta(days=3)
 
         with self.db.get_session() as session:
@@ -81,8 +93,38 @@ class InjuryScraper:
                 for m in fixtures
             ]
 
+            # Find teams that already have fresh injury data fetched today
+            fresh_team_ids = set(
+                row[0]
+                for row in session.query(Injury.team_id)
+                .filter(
+                    Injury.source == "api-football",
+                    Injury.updated_at >= today_start,
+                )
+                .distinct()
+                .all()
+            )
+
         if not fixture_list:
             logger.debug("No fixtures for injury update")
+            return
+
+        # Skip fixtures where both teams already have today's injury data
+        fixtures_to_fetch = [
+            (mid, fid, htid, atid)
+            for mid, fid, htid, atid in fixture_list
+            if htid not in fresh_team_ids or atid not in fresh_team_ids
+        ]
+        already_fresh_count = len(fixture_list) - len(fixtures_to_fetch)
+        if already_fresh_count:
+            logger.info(
+                f"Injury freshness: {already_fresh_count}/{len(fixture_list)} fixtures "
+                f"already have today's data, fetching {len(fixtures_to_fetch)}"
+            )
+        fixture_list = fixtures_to_fetch
+
+        if not fixture_list:
+            logger.info("Injury update: all fixtures already have today's injury data")
             return
 
         # Prioritise fixtures with open picks so the most important ones are
@@ -98,18 +140,6 @@ class InjuryScraper:
             f"Fetching injuries for {injury_budget}"
             f"/{len(fixture_list)} fixtures (budget: {injury_budget})"
         )
-
-        # Clear stale injuries from previous days — keep only today's data
-        with self.db.get_session() as session:
-            old_count = session.query(Injury).filter(
-                Injury.source == "api-football"
-            ).count()
-            if old_count:
-                session.query(Injury).filter(
-                    Injury.source == "api-football"
-                ).delete()
-                session.commit()
-                logger.debug(f"Cleared {old_count} stale API-Football injuries")
 
         fetched = 0
         total_saved = 0
@@ -166,6 +196,22 @@ class InjuryScraper:
             logger.info(f"Injury data missing for fixture IDs (budget cutoff): {skipped_ids}")
         elif fixture_list:
             logger.info(f"Injury data complete for all {len(fixture_list)} fixtures")
+
+        # Purge injuries older than 48h — keep today's and yesterday's data as fallback.
+        # Never bulk-delete before fetching (that destroys the fallback on budget-zero runs).
+        cutoff_48h = datetime.utcnow() - timedelta(hours=48)
+        with self.db.get_session() as session:
+            old_count = session.query(Injury).filter(
+                Injury.source == "api-football",
+                Injury.updated_at < cutoff_48h,
+            ).count()
+            if old_count:
+                session.query(Injury).filter(
+                    Injury.source == "api-football",
+                    Injury.updated_at < cutoff_48h,
+                ).delete()
+                session.commit()
+                logger.debug(f"Purged {old_count} injury records older than 48h")
 
     async def _fetch_fixture_injuries(
         self, fixture_id: int, home_team_id: int, away_team_id: int
