@@ -2306,6 +2306,26 @@ class FootballBettingAgent:
 
         logger.info("ML model training complete")
 
+        # If a previous tune_ensemble_weights() zeroed-out ML calibration and wrote
+        # ml: 0.0 to disk, reset it now so the --picks step (which runs after --train
+        # in CI) uses the freshly trained model instead of silently excluding ML.
+        # The next tune call will re-evaluate the model's actual accuracy and re-apply
+        # the gate if it genuinely underperforms.
+        _cal_path = Path("data/models/calibration.json")
+        try:
+            if _cal_path.exists():
+                _cal = json.loads(_cal_path.read_text())
+                if _cal.get("ml", 1.0) == 0.0:
+                    _cal["ml"] = 1.0
+                    _cal_path.write_text(json.dumps(_cal, indent=2))
+                    self.predictor.calibration_factors["ml"] = 1.0
+                    logger.info(
+                        "ML calibration reset to 1.0 after retraining — "
+                        "freshly trained model re-enters ensemble (gate re-evaluates at next --tune)"
+                    )
+        except Exception as _ce:
+            logger.warning(f"Could not reset ML calibration after training: {_ce}")
+
     def _ml_models_stale(self, max_age_days: int = 3) -> bool:
         """Check if ML models are older than max_age_days and need retraining.
 
