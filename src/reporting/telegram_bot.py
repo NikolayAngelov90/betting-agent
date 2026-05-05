@@ -42,6 +42,7 @@ LEAGUE_DISPLAY = {
     "france/ligue-1": "🇫🇷 Ligue 1",
     "france/ligue-2": "🇫🇷 Ligue 2",
     "netherlands/eredivisie": "🇳🇱 Eredivisie",
+    "netherlands/eerste-divisie": "🇳🇱 Eerste Divisie",
     "portugal/primeira-liga": "🇵🇹 Primeira Liga",
     "belgium/jupiler-pro-league": "🇧🇪 Jupiler Pro",
     "turkey/super-lig": "🇹🇷 Super Lig",

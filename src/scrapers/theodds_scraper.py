@@ -32,6 +32,7 @@ LEAGUE_TO_THEODDS_SPORT: Dict[str, str] = {
     "france/ligue-1":                  "soccer_france_ligue_one",
     # Strong European
     "netherlands/eredivisie":          "soccer_netherlands_eredivisie",
+    "netherlands/eerste-divisie":      "soccer_netherlands_eerste_divisie",
     "portugal/primeira-liga":          "soccer_portugal_primeira_liga",
     "belgium/jupiler-pro-league":      "soccer_belgium_first_div",
     "turkey/super-lig":                "soccer_turkey_super_league",

@@ -847,6 +847,7 @@ class FootballBettingAgent:
                     "italy/serie-a",
                     "france/ligue-1",
                     "netherlands/eredivisie",
+                    "netherlands/eerste-divisie",
                     "portugal/primeira-liga",
                     "belgium/jupiler-pro-league",
                     "turkey/super-lig",
