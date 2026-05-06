@@ -33,13 +33,19 @@ class DatabaseManager:
         database_url = db_config.get("url") or os.environ.get("DATABASE_URL")
 
         if database_url:
-            logger.info(f"Using PostgreSQL database (Neon)")
+            if "supabase" in database_url:
+                provider = "Supabase"
+            elif "neon" in database_url:
+                provider = "Neon"
+            else:
+                provider = "PostgreSQL"
+            logger.info(f"Using PostgreSQL database ({provider})")
             return create_engine(
                 database_url, echo=False,
                 pool_pre_ping=True,
                 pool_size=5,
                 max_overflow=10,
-                pool_recycle=300,  # recycle connections every 5min (Neon scale-to-zero)
+                pool_recycle=300,
             )
 
         # 2. Fall back to SQLite (local dev without DATABASE_URL)
