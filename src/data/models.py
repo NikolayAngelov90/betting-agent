@@ -152,7 +152,6 @@ class Injury(Base):
     team_id = Column(Integer, ForeignKey('teams.id'))
     injury_type = Column(String(100))
     start_date = Column(Date)
-    expected_return = Column(Date)
     status = Column(String(50))  # 'out', 'doubtful', 'available'
     source = Column(String(200))
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

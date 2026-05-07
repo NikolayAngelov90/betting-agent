@@ -144,6 +144,7 @@ class InjuryScraper:
         fetched = 0
         total_saved = 0
         zero_injury_fixtures = []  # track fixtures with no data for team-level fallback
+        all_processed_teams: set = set()  # collect for squad stats pass below
         for match_id, fixture_id, home_team_id, away_team_id in fixture_list:
             if fetched >= injury_budget:
                 break
@@ -159,6 +160,8 @@ class InjuryScraper:
                 logger.debug(f"Injury fetch for fixture {fixture_id}: {_elapsed:.1f}s")
                 total_saved += count
                 fetched += 1
+                all_processed_teams.add(home_team_id)
+                all_processed_teams.add(away_team_id)
                 if count == 0:
                     zero_injury_fixtures.append((home_team_id, away_team_id))
             except Exception as e:
@@ -189,6 +192,39 @@ class InjuryScraper:
                 logger.debug(f"Team injury fallback: {team_fetched} teams queried, {total_saved} total saved")
 
         logger.info(f"Injury update: saved {total_saved} injuries from {fetched} fixtures")
+
+        # Squad stats pass: for each team we just processed, update player
+        # positions and is_key_player from /players?team&season stats.
+        # Only targets teams that still have players with empty position strings.
+        # Budget: min(remaining - 5, teams * 2, 20) — reserve 5 calls for backfill.
+        if all_processed_teams and not self.apifootball._plan_restricted:
+            season_year = date.today().year
+            if date.today().month < 7:
+                season_year -= 1  # e.g. May 2026 -> 2025 season
+            with self.db.get_session() as _s:
+                teams_needing_squad = [
+                    tid for tid in all_processed_teams
+                    if _s.query(Player).filter(
+                        Player.team_id == tid, Player.position == ""
+                    ).first()
+                ]
+            squad_budget = min(
+                max(0, self.apifootball.remaining_budget() - 5),
+                len(teams_needing_squad) * 2,
+                20,
+            )
+            if squad_budget > 0 and teams_needing_squad:
+                logger.info(
+                    f"Squad stats: updating {len(teams_needing_squad)} teams "
+                    f"with empty player positions (budget: {squad_budget})"
+                )
+                for team_db_id in teams_needing_squad:
+                    if self.apifootball.remaining_budget() <= 5:
+                        break
+                    try:
+                        await self._fetch_and_update_squad_stats(team_db_id, season_year)
+                    except Exception as e:
+                        logger.debug(f"Squad stats failed for team {team_db_id}: {e}")
 
         # Log fixture IDs skipped due to budget exhaustion (AC3 of Story 5.1)
         skipped_ids = [match_id for match_id, _, _, _ in fixture_list[fetched:]]
@@ -377,6 +413,89 @@ class InjuryScraper:
             session.commit()
         return saved
 
+    async def _fetch_and_update_squad_stats(self, team_db_id: int, season_year: int) -> int:
+        """Fetch player stats for a team and update position + is_key_player.
+
+        Uses /players?team={api_id}&season={year} (paginated, ~20 players/page).
+        Position is taken from statistics[0].games.position.
+        is_key_player = appearances >= 10 OR minutes >= 900 in the season.
+
+        Only overwrites position if it is currently empty.
+        Always overwrites is_key_player so it stays current with playing time.
+
+        Returns number of player records updated.
+        """
+        with self.db.get_session() as _s:
+            team = _s.query(Team).filter_by(id=team_db_id).first()
+            if not team or not team.apifootball_team_id:
+                return 0
+            api_team_id = team.apifootball_team_id
+
+        updated = 0
+        page = 1
+        while True:
+            data = await self.apifootball._api_get(
+                "/players",
+                {"team": api_team_id, "season": season_year, "page": page},
+            )
+            if not data:
+                break
+
+            response = data.get("response", [])
+            if not response:
+                break
+
+            total_pages = data.get("paging", {}).get("total", 1)
+
+            with self.db.get_session() as session:
+                for entry in response:
+                    try:
+                        player_info = entry.get("player", {})
+                        stats_list = entry.get("statistics", [])
+                        if not player_info or not stats_list:
+                            continue
+
+                        player_name = player_info.get("name", "")
+                        if not player_name:
+                            continue
+
+                        games = stats_list[0].get("games", {})
+                        position = games.get("position") or ""
+                        # API-Football spells it "appearences" (typo in their API)
+                        appearances = games.get("appearences") or 0
+                        minutes = games.get("minutes") or 0
+                        is_key = bool(appearances >= 10 or minutes >= 900)
+
+                        player = session.query(Player).filter_by(
+                            name=player_name, team_id=team_db_id
+                        ).first()
+                        if player:
+                            if not player.position:
+                                player.position = position
+                            player.is_key_player = is_key
+                            updated += 1
+                        else:
+                            session.add(Player(
+                                name=player_name,
+                                team_id=team_db_id,
+                                position=position,
+                                is_key_player=is_key,
+                            ))
+                            updated += 1
+                    except Exception as e:
+                        logger.debug(f"Squad stats parse error for team {team_db_id}: {e}")
+                session.commit()
+
+            if page >= total_pages or self.apifootball.remaining_budget() <= 5:
+                break
+            page += 1
+
+        logger.debug(
+            f"Squad stats updated: team_db_id={team_db_id}, "
+            f"season={season_year}, {updated} players"
+        )
+        return updated
+
     async def get_team_injuries(self, team_id: int) -> List[Injury]:
         """Get current injuries for a team from the database."""
         with self.db.get_session() as session:
@@ -406,9 +525,7 @@ class InjuryScraper:
                         "type": i.injury_type,
                         "status": i.status,
                         "position": i.player.position if i.player else "",
-                        "expected_return": (
-                            str(i.expected_return) if i.expected_return else "Unknown"
-                        ),
+                        "is_key_player": i.player.is_key_player if i.player else False,
                     }
                     for i in injuries
                 ],

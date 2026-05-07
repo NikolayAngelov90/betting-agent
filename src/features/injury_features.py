@@ -6,13 +6,19 @@ from src.utils.logger import get_logger
 
 logger = get_logger()
 
-# Position groups for impact scoring
+# Position groups for impact scoring.
+# Covers both Transfermarkt-style granular names and API-Football's
+# simple 4-category labels (Goalkeeper / Defender / Midfielder / Attacker).
 POSITION_GROUPS = {
+    # API-Football simple labels
     "Goalkeeper": "goalkeeper",
-    "Centre-Back": "defense", "Left-Back": "defense", "Right-Back": "defense",
     "Defender": "defense",
+    "Midfielder": "midfield",
+    "Attacker": "attack",
+    # Transfermarkt granular labels
+    "Centre-Back": "defense", "Left-Back": "defense", "Right-Back": "defense",
     "Defensive Midfield": "midfield", "Central Midfield": "midfield",
-    "Attacking Midfield": "midfield", "Midfielder": "midfield",
+    "Attacking Midfield": "midfield",
     "Left Midfield": "midfield", "Right Midfield": "midfield",
     "Left Winger": "attack", "Right Winger": "attack",
     "Centre-Forward": "attack", "Second Striker": "attack",
