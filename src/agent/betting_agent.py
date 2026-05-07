@@ -2443,6 +2443,15 @@ class FootballBettingAgent:
         except Exception as e:
             logger.warning(f"EV calibration failed: {e}")
 
+        # 3.5. Per-market calibration from pick outcomes (goals/BTTS markets).
+        # Uses SavedPick.predicted_probability vs actual win/loss to measure how
+        # well-calibrated the ensemble is per market — supplements the 1X2-only
+        # calibration computed inside tune_ensemble_weights().
+        try:
+            self.calibrate_from_pick_outcomes()
+        except Exception as e:
+            logger.warning(f"Pick calibration failed: {e}")
+
         # 4. ML retrain is deferred to --train or --update (takes ~11 min,
         # too expensive for --settle which runs under a 25-min CI timeout).
         max_age = self.config.get("models.ml_retrain_days", 3)
@@ -2454,6 +2463,111 @@ class FootballBettingAgent:
             )
 
         logger.info("Post-settlement learning complete")
+
+    def calibrate_from_pick_outcomes(self) -> dict:
+        """Compute per-market calibration factors from settled pick history.
+
+        Compares SavedPick.predicted_probability against actual win/loss outcomes
+        for goals and BTTS markets. Produces a per-market calibration factor stored
+        in data/models/pick_calibration.json and applied by EnsemblePredictor.predict()
+        via center-shrink (factor<1 means model is overconfident → shrink toward 0.5).
+
+        1X2 calibration is handled separately by tune_ensemble_weights() (per-model).
+        This method fills the gap for goals/BTTS markets which have no per-model loop.
+
+        Returns:
+            Dict of {market_key: factor} written to disk.
+        """
+        lookback = date.today() - timedelta(days=90)
+        with self.db.get_session() as session:
+            picks = session.query(SavedPick).filter(
+                SavedPick.result.isnot(None),
+                SavedPick.result != "void",
+                SavedPick.predicted_probability.isnot(None),
+                SavedPick.pick_date >= lookback,
+            ).all()
+            pick_data = [
+                {
+                    "market": p.market,
+                    "selection": p.selection,
+                    "prob": p.predicted_probability,
+                    "win": 1 if p.result == "win" else 0,
+                }
+                for p in picks
+            ]
+
+        # Convert picks to (P(canonical_direction), actual) pairs.
+        # Canonical direction: over_2.5 = P(over 2.5 goals), btts = P(BTTS yes),
+        #                      over_1.5 = P(over 1.5 goals).
+        # "Under" and "No" picks are inverted so all data points share the same axis.
+        market_pairs: dict = {}
+        for d in pick_data:
+            mkt = d["market"]
+            sel = d["selection"]
+            prob = d["prob"]
+            win = d["win"]
+
+            if mkt == "Over 2.5":
+                market_pairs.setdefault("over_2.5", []).append((prob, win))
+            elif mkt == "Under 2.5":
+                market_pairs.setdefault("over_2.5", []).append((1.0 - prob, 1 - win))
+            elif mkt == "Over 1.5":
+                market_pairs.setdefault("over_1.5", []).append((prob, win))
+            elif mkt == "Under 1.5":
+                market_pairs.setdefault("over_1.5", []).append((1.0 - prob, 1 - win))
+            elif mkt == "BTTS" and sel == "BTTS Yes":
+                market_pairs.setdefault("btts", []).append((prob, win))
+            elif mkt == "BTTS" and sel == "BTTS No":
+                market_pairs.setdefault("btts", []).append((1.0 - prob, 1 - win))
+
+        # Load previous factors for EMA smoothing (prevents jumpy adjustments)
+        cal_path = Path("data/models/pick_calibration.json")
+        prev_cal: dict = {}
+        try:
+            if cal_path.exists():
+                prev_cal = json.loads(cal_path.read_text())
+        except Exception:
+            pass
+
+        cal_factors = dict(prev_cal)
+        bins = [(0.40, 0.55), (0.55, 0.65), (0.65, 0.75), (0.75, 0.88), (0.88, 1.01)]
+
+        for mkey, pairs in market_pairs.items():
+            if len(pairs) < 20:
+                logger.info(
+                    f"Pick calibration [{mkey}]: not enough data "
+                    f"({len(pairs)} picks, need 20+) — keeping previous"
+                )
+                continue
+
+            total_error = 0.0
+            n_bins = 0
+            for lo, hi in bins:
+                in_bin = [(p, a) for p, a in pairs if lo <= p < hi]
+                if len(in_bin) < 5:
+                    continue
+                mean_pred = sum(p for p, _ in in_bin) / len(in_bin)
+                mean_actual = sum(a for _, a in in_bin) / len(in_bin)
+                total_error += abs(mean_pred - mean_actual)
+                n_bins += 1
+
+            if n_bins == 0:
+                continue
+
+            avg_error = total_error / n_bins
+            raw_factor = round(max(0.85, 1.0 - avg_error), 3)
+            prev = prev_cal.get(mkey, raw_factor)
+            cal_factors[mkey] = round(0.7 * raw_factor + 0.3 * prev, 3)
+            logger.info(
+                f"Pick calibration [{mkey}]: factor={cal_factors[mkey]:.3f} "
+                f"(n={len(pairs)}, avg_cal_error={avg_error:.3f}, bins_used={n_bins})"
+            )
+
+        cal_path.parent.mkdir(parents=True, exist_ok=True)
+        cal_path.write_text(json.dumps(cal_factors, indent=2))
+        self.predictor.pick_calibration = cal_factors
+        logger.info(f"Pick calibration saved: {cal_factors}")
+        return cal_factors
 
     async def _check_ml_zero_weight(self) -> None:
         """Send Telegram WARNING when ML cal_factor is 0.0; escalate to CRITICAL at 4+ runs.
@@ -2827,6 +2941,7 @@ async def main():
         print("  --tune              Tune ensemble weights from recent results")
         print("  --analyze <id>      Analyze a specific match")
         print("  --backfill-history  Fetch historical data for low-coverage teams")
+        print("  --backfill-stats [N] Backfill xG/shots/venue/halftime for historical matches (default budget: 80 requests)")
         print("  --telegram-setup    Setup Telegram bot notifications")
         print("  --telegram-test     Send a test Telegram message")
         print("  --telegram-welcome  Send group welcome/info message to Telegram")
@@ -3217,6 +3332,29 @@ async def main():
             else:
                 await agent.telegram.send_welcome_message()
                 print("Welcome message sent to Telegram group!")
+
+        elif command == "--backfill-stats":
+            # Optional positional arg: budget (default 80 requests).
+            # Run on a day without a prior daily update to stay under the 100 req/day limit.
+            budget = 80
+            if len(sys.argv) > 2:
+                try:
+                    budget = int(sys.argv[2])
+                except ValueError:
+                    print(f"Invalid budget '{sys.argv[2]}', using default 80.")
+            print(f"Backfilling match stats for historical API-Football-linked matches (budget: {budget} requests)...")
+            print("Pass 1 (60%): xG, shots, saves, offsides via /fixtures/statistics")
+            print("Pass 2 (40%): venue, halftime, regulation, penalty via /fixtures?id=")
+            result = await agent.apifootball.backfill_match_stats(budget=budget)
+            print(
+                f"Backfill complete: {result['stats']} stats + {result['details']} fixture details updated."
+            )
+            if result["stats"] + result["details"] == 0:
+                print("Nothing to backfill — all API-Football-linked matches already have stats.")
+            else:
+                remaining = budget - result["stats"] - result["details"]
+                print(f"Remaining budget unused: ~{remaining} requests.")
+                print("Run again tomorrow to continue backfilling (100 req/day free-tier limit).")
 
         else:
             print(f"Unknown command: {command}")

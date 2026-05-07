@@ -48,6 +48,18 @@ class EnsemblePredictor:
             except Exception as e:
                 logger.warning(f"Failed to load calibration factors: {e}")
 
+        # Per-market calibration factors derived from settled pick outcomes.
+        # Applied via center-shrink in predict(): factor<1 shrinks predictions toward 0.5.
+        # Updated by FootballBettingAgent.calibrate_from_pick_outcomes() after each settle.
+        self.pick_calibration: dict = {}
+        _pick_cal_path = Path("data/models/pick_calibration.json")
+        if _pick_cal_path.exists():
+            try:
+                self.pick_calibration = json.loads(_pick_cal_path.read_text())
+                logger.info(f"Loaded pick calibration: {self.pick_calibration}")
+            except Exception as e:
+                logger.warning(f"Failed to load pick calibration: {e}")
+
         # Try to load previously trained ML models from disk
         self.ml_models.load()
         self.goals_model.load()
@@ -291,6 +303,24 @@ class EnsemblePredictor:
                         ensemble_1x2["home_win"] = round(ensemble_1x2["home_win"] / _tot, 4)
                         ensemble_1x2["draw"] = round(ensemble_1x2["draw"] / _tot, 4)
                         ensemble_1x2["away_win"] = round(ensemble_1x2["away_win"] / _tot, 4)
+
+        # Pick-outcome calibration — center-shrink goals/BTTS probabilities using
+        # empirical calibration factors learned from SavedPick win/loss history.
+        # factor < 1.0 means the model is overconfident → shrink toward 0.5.
+        # Only applied when a factor deviates meaningfully from 1.0.
+        _pick_cal = getattr(self, "pick_calibration", {})
+        _pcal_map = [
+            ("over_2.5", "under_2.5", "over_2.5"),
+            ("over_1.5", None, "over_1.5"),
+            ("btts_yes", "btts_no", "btts"),
+        ]
+        for _pcal_key, _pcal_comp, _pcal_lookup in _pcal_map:
+            _pcal_factor = _pick_cal.get(_pcal_lookup, 1.0)
+            if _pcal_factor != 1.0 and _pcal_key in adjusted_goals:
+                _v = adjusted_goals[_pcal_key]
+                adjusted_goals[_pcal_key] = round(0.5 + (_v - 0.5) * _pcal_factor, 4)
+                if _pcal_comp:
+                    adjusted_goals[_pcal_comp] = round(1.0 - adjusted_goals[_pcal_key], 4)
 
         # Extreme-confidence dampening — shrink any prediction above the ceiling
         # toward the ceiling to prevent the model from over-committing on sparse data.

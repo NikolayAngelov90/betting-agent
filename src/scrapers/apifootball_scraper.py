@@ -944,6 +944,152 @@ class APIFootballScraper(BaseScraper):
                     match.away_offsides = away["offsides"]
             session.commit()
 
+    async def _fetch_fixture_detail(self, fixture_id: int) -> Optional[Dict]:
+        """Fetch venue, halftime, regulation, and penalty scores for a single fixture."""
+        data = await self._api_get("/fixtures", {"id": fixture_id})
+        if not data:
+            return None
+        response = data.get("response", [])
+        if not response:
+            return None
+        fix = response[0]
+        score = fix.get("score", {})
+        venue_city = ((fix.get("fixture") or {}).get("venue") or {}).get("city") or ""
+        ht_home = score.get("halftime", {}).get("home")
+        ht_away = score.get("halftime", {}).get("away")
+        reg_home = score.get("fulltime", {}).get("home")
+        reg_away = score.get("fulltime", {}).get("away")
+        pen_home = score.get("penalty", {}).get("home")
+        pen_away = score.get("penalty", {}).get("away")
+        return {
+            "venue": venue_city or None,
+            "ht_home": ht_home,
+            "ht_away": ht_away,
+            "reg_home": reg_home,
+            "reg_away": reg_away,
+            "pen_home": pen_home,
+            "pen_away": pen_away,
+        }
+
+    def _batch_update_fixture_details(self, updates: list):
+        """Write venue/halftime/regulation/penalty for multiple matches in one commit."""
+        with self.db.get_session() as session:
+            for match_id, detail in updates:
+                match = session.get(Match, match_id)
+                if not match:
+                    continue
+                if detail.get("venue") and not match.venue:
+                    match.venue = detail["venue"]
+                if detail.get("ht_home") is not None and match.ht_home_goals is None:
+                    match.ht_home_goals = detail["ht_home"]
+                if detail.get("ht_away") is not None and match.ht_away_goals is None:
+                    match.ht_away_goals = detail["ht_away"]
+                if detail.get("reg_home") is not None and match.regulation_home_goals is None:
+                    match.regulation_home_goals = detail["reg_home"]
+                if detail.get("reg_away") is not None and match.regulation_away_goals is None:
+                    match.regulation_away_goals = detail["reg_away"]
+                if detail.get("pen_home") is not None and match.penalty_home_score is None:
+                    match.penalty_home_score = detail["pen_home"]
+                if detail.get("pen_away") is not None and match.penalty_away_score is None:
+                    match.penalty_away_score = detail["pen_away"]
+            session.commit()
+
+    async def backfill_match_stats(self, budget: int = 80) -> dict:
+        """Bulk backfill statistics and fixture metadata for historical matches.
+
+        Designed for manual use via --backfill-stats only — not called during
+        the daily update cycle. Processes two passes within the given budget:
+
+          Pass 1 (60% of budget) — /fixtures/statistics:
+            xG, shots, possession, corners, fouls, cards, saves, offsides.
+            Targets completed matches with apifootball_id that are missing xG or shots.
+
+          Pass 2 (40% of budget) — /fixtures?id=:
+            venue, halftime scores, regulation scores, penalty scores.
+            Targets completed matches with apifootball_id that are missing venue or halftime.
+
+        Both passes process newest matches first (most useful for ML training).
+
+        Args:
+            budget: Maximum API requests to spend across both passes (default 80).
+                    Run on a day with no prior daily update to avoid exceeding the
+                    100 req/day free-tier limit.
+
+        Returns:
+            {"stats": N, "details": M} — number of matches updated per pass.
+        """
+        from sqlalchemy import or_
+
+        if not self.enabled:
+            logger.warning("API-Football not enabled — backfill-stats skipped")
+            return {"stats": 0, "details": 0}
+
+        stats_budget = round(budget * 0.6)
+        detail_budget = budget - stats_budget
+
+        # ── Pass 1: statistics ──────────────────────────────────────────────
+        with self.db.get_session() as session:
+            stats_needed = session.query(Match).filter(
+                Match.apifootball_id.isnot(None),
+                Match.is_fixture == False,
+                Match.home_goals.isnot(None),
+                or_(Match.home_xg.is_(None), Match.home_shots.is_(None)),
+            ).order_by(Match.match_date.desc()).limit(stats_budget).all()
+            stats_queue = [(m.id, m.apifootball_id) for m in stats_needed]
+
+        logger.info(
+            f"Backfill stats pass: {len(stats_queue)} matches to process "
+            f"(budget={stats_budget})"
+        )
+
+        stats_done = 0
+        pending_stats: list = []
+        for match_id, fixture_id in stats_queue:
+            if self._requests_today >= self._daily_limit - 2:
+                logger.warning(f"API limit approached — stopping stats pass at {stats_done}")
+                break
+            stats = await self._fetch_fixture_stats(fixture_id)
+            if stats:
+                pending_stats.append((match_id, stats))
+                stats_done += 1
+            await asyncio.sleep(0.12)
+
+        if pending_stats:
+            self._batch_update_match_stats(pending_stats)
+        logger.info(f"Stats pass complete: {stats_done}/{len(stats_queue)} matches updated")
+
+        # ── Pass 2: fixture details ─────────────────────────────────────────
+        with self.db.get_session() as session:
+            detail_needed = session.query(Match).filter(
+                Match.apifootball_id.isnot(None),
+                Match.is_fixture == False,
+                or_(Match.venue.is_(None), Match.ht_home_goals.is_(None)),
+            ).order_by(Match.match_date.desc()).limit(detail_budget).all()
+            detail_queue = [(m.id, m.apifootball_id) for m in detail_needed]
+
+        logger.info(
+            f"Backfill details pass: {len(detail_queue)} matches to process "
+            f"(budget={detail_budget})"
+        )
+
+        detail_done = 0
+        pending_details: list = []
+        for match_id, fixture_id in detail_queue:
+            if self._requests_today >= self._daily_limit - 2:
+                logger.warning(f"API limit approached — stopping details pass at {detail_done}")
+                break
+            detail = await self._fetch_fixture_detail(fixture_id)
+            if detail:
+                pending_details.append((match_id, detail))
+                detail_done += 1
+            await asyncio.sleep(0.12)
+
+        if pending_details:
+            self._batch_update_fixture_details(pending_details)
+        logger.info(f"Details pass complete: {detail_done}/{len(detail_queue)} matches updated")
+
+        return {"stats": stats_done, "details": detail_done}
+
     # Leagues where teams are stored under their domestic league, not the competition.
     # Searching by league="europe/champions-league" would return nothing.
     _INTERNATIONAL_LEAGUES = frozenset({
