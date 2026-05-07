@@ -1426,6 +1426,34 @@ class FootballBettingAgent:
             f"Settling against DB results (no inline scraping — run --update-results after picks)"
         )
 
+        # 2a. For stale pending picks (match date >24h ago, still no result in DB),
+        # try a one-off API-Football fetch for the missing date(s).  This recovers
+        # results for leagues where Flashscore scraping consistently fails
+        # (e.g. portugal/primeira-liga).
+        try:
+            stale_dates: set = set()
+            with self.db.get_session() as _sess:
+                for _pick in _sess.query(SavedPick).filter(SavedPick.result.is_(None)):
+                    _match = _sess.get(Match, _pick.match_id)
+                    if _match and _match.home_goals is None and _match.match_date:
+                        _match_naive = (
+                            _match.match_date.replace(tzinfo=None)
+                            if getattr(_match.match_date, "tzinfo", None)
+                            else _match.match_date
+                        )
+                        if _match_naive < utcnow() - timedelta(hours=24):
+                            _d = _match.match_date.date() if hasattr(_match.match_date, "date") else _match.match_date
+                            stale_dates.add(_d)
+            if stale_dates:
+                logger.info(
+                    f"Settle: {len(stale_dates)} stale date(s) with no result — "
+                    f"fetching from API-Football: {sorted(stale_dates)}"
+                )
+                for _d in sorted(stale_dates):
+                    await self.apifootball_scraper._fetch_fixtures_by_date(_d)
+        except Exception as _exc:
+            logger.warning(f"Settle: API-Football stale-result pre-fetch failed: {_exc}")
+
         settled = []
 
         with self.db.get_session() as session:
@@ -1474,8 +1502,15 @@ class FootballBettingAgent:
                 # Skip picks for matches that haven't started yet — the match record
                 # still has is_fixture=True and no goals. Don't fall through to the
                 # fuzzy fallback which could find yesterday's completed match.
+                # Exception: if the match is >3h past its scheduled kickoff, is_fixture=True
+                # just means the result was never fetched — let those fall through.
                 if match and match.is_fixture:
-                    continue
+                    _mdt = match.match_date
+                    if _mdt is None:
+                        continue
+                    _mdt_naive = _mdt.replace(tzinfo=None) if getattr(_mdt, "tzinfo", None) else _mdt
+                    if _mdt_naive > utcnow() - timedelta(hours=3):
+                        continue  # Genuinely upcoming or just kicked off
 
                 # Fallback: if the primary match_id has no result, scan same league+date
                 # by team-name similarity (handles cross-source name mismatches)
