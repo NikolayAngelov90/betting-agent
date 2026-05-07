@@ -396,14 +396,10 @@ class InjuryScraper:
             key_players_out = sum(
                 1 for i in injuries if i.player and i.player.is_key_player
             )
-            total_value = sum(
-                (i.player.market_value or 0) for i in injuries if i.player
-            )
 
             return {
                 "total_injured": len(injuries),
                 "key_players_out": key_players_out,
-                "total_market_value_lost": total_value,
                 "injuries": [
                     {
                         "player": i.player.name if i.player else "Unknown",

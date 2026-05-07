@@ -1120,13 +1120,12 @@ class APIFootballScraper(BaseScraper):
         return None
 
     def _get_season(self, dt: datetime) -> str:
-        """Determine the season string from a match date."""
+        """Determine the season string from a match date (e.g. '2025/2026')."""
         year = dt.year
-        month = dt.month
-        if month >= 7:
-            return f"{year % 100:02d}{(year + 1) % 100:02d}"
+        if dt.month >= 7:
+            return f"{year}/{year + 1}"
         else:
-            return f"{(year - 1) % 100:02d}{year % 100:02d}"
+            return f"{year - 1}/{year}"
 
     # ---- Odds fetching ----
 

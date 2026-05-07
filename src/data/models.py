@@ -21,8 +21,6 @@ class Team(Base):
     name = Column(String(100), nullable=False)
     country = Column(String(50))
     league = Column(String(100))
-    flashscore_id = Column(String(50))
-    transfermarkt_id = Column(String(50))
     apifootball_team_id = Column(Integer)  # API-Football team ID for history backfill
     created_at = Column(DateTime, default=utcnow)
 
@@ -134,9 +132,7 @@ class Player(Base):
     name = Column(String(100), nullable=False)
     team_id = Column(Integer, ForeignKey('teams.id'))
     position = Column(String(50))
-    market_value = Column(Float)
     is_key_player = Column(Boolean, default=False)
-    transfermarkt_id = Column(String(50))
 
     # Relationships
     team = relationship("Team", back_populates="players")

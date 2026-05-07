@@ -48,11 +48,6 @@ class InjuryFeatures:
             if not squad:
                 return self._empty_injury_features()
 
-            total_squad_value = sum(p.market_value or 0 for p in squad)
-            injured_value = sum(
-                (i.player.market_value or 0) for i in injuries if i.player
-            )
-
             key_players_injured = sum(
                 1 for i in injuries if i.player and i.player.is_key_player
             )
@@ -89,10 +84,8 @@ class InjuryFeatures:
             return {
                 "total_injured": len(injuries),
                 "key_players_injured": key_players_injured,
-                "injured_market_value": injured_value,
-                "injured_value_percentage": round(
-                    injured_value / total_squad_value, 3
-                ) if total_squad_value else 0,
+                "injured_market_value": 0,
+                "injured_value_percentage": 0,
                 "goalkeeper_available": gk_available,
                 "defenders_out": defenders_out,
                 "midfielders_out": midfielders_out,
