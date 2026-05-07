@@ -1089,6 +1089,17 @@ class FlashscoreScraper(BaseScraper):
                         except ValueError:
                             pass
 
+            # --- Penalty score ---
+            pen_el = soup2.select_one("[data-testid='wcl-scores-overline-02']")
+            if pen_el:
+                nums = re.findall(r'\d+', pen_el.get_text(" ", strip=True))
+                if len(nums) >= 2:
+                    try:
+                        result["penalty_home_score"] = int(nums[0])
+                        result["penalty_away_score"] = int(nums[1])
+                    except ValueError:
+                        pass
+
         return result if result else None
 
     def _scrape_match_detail(self, url: str, stats_only: bool = False) -> Optional[dict]:
@@ -1208,6 +1219,20 @@ class FlashscoreScraper(BaseScraper):
                     if len(parts) == 2:
                         result["regulation_home_goals"] = int(parts[0].strip())
                         result["regulation_away_goals"] = int(parts[1].strip())
+            except Exception:
+                pass
+
+            # --- Penalty score ---
+            try:
+                pen_els = driver.find_elements(
+                    By.CSS_SELECTOR, "[data-testid='wcl-scores-overline-02']"
+                )
+                for pen_el in pen_els:
+                    nums = re.findall(r'\d+', pen_el.text)
+                    if len(nums) >= 2:
+                        result["penalty_home_score"] = int(nums[0])
+                        result["penalty_away_score"] = int(nums[1])
+                        break
             except Exception:
                 pass
 

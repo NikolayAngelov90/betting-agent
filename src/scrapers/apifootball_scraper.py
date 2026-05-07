@@ -550,6 +550,15 @@ class APIFootballScraper(BaseScraper):
             is_finished = status_short in ("FT", "AET", "PEN")
             is_fixture = status_short in ("NS", "TBD", "")
 
+            score = fix.get("score", {})
+            venue_city = (fix.get("fixture", {}).get("venue") or {}).get("city") or ""
+            ht_home = score.get("halftime", {}).get("home")
+            ht_away = score.get("halftime", {}).get("away")
+            reg_home = score.get("fulltime", {}).get("home")
+            reg_away = score.get("fulltime", {}).get("away")
+            pen_home = score.get("penalty", {}).get("home")
+            pen_away = score.get("penalty", {}).get("away")
+
             # Fast path: fixture already known by apifootball_id (pre-loaded cache).
             # Only update score/referee — skip all team lookups and fuzzy matching.
             if fixture_id in _afid_to_match_id:
@@ -576,6 +585,17 @@ class APIFootballScraper(BaseScraper):
                             match.is_fixture = False
                             if referee and not match.referee:
                                 match.referee = referee
+                            if venue_city and not match.venue:
+                                match.venue = venue_city
+                            if ht_home is not None and match.ht_home_goals is None:
+                                match.ht_home_goals = ht_home
+                                match.ht_away_goals = ht_away
+                            if reg_home is not None and match.regulation_home_goals is None:
+                                match.regulation_home_goals = reg_home
+                                match.regulation_away_goals = reg_away
+                            if pen_home is not None and match.penalty_home_score is None:
+                                match.penalty_home_score = pen_home
+                                match.penalty_away_score = pen_away
                             session.commit()
                 updated += 1
                 continue
@@ -614,6 +634,8 @@ class APIFootballScraper(BaseScraper):
                         match.apifootball_id = fixture_id
                         if referee and not match.referee:
                             match.referee = referee
+                        if venue_city and not match.venue:
+                            match.venue = venue_city
                         if is_finished and home_goals is not None:
                             # Never overwrite an existing score — first source wins.
                             if not (match.home_goals is not None
@@ -622,6 +644,15 @@ class APIFootballScraper(BaseScraper):
                                 match.home_goals = home_goals
                                 match.away_goals = away_goals
                             match.is_fixture = False
+                            if ht_home is not None and match.ht_home_goals is None:
+                                match.ht_home_goals = ht_home
+                                match.ht_away_goals = ht_away
+                            if reg_home is not None and match.regulation_home_goals is None:
+                                match.regulation_home_goals = reg_home
+                                match.regulation_away_goals = reg_away
+                            if pen_home is not None and match.penalty_home_score is None:
+                                match.penalty_home_score = pen_home
+                                match.penalty_away_score = pen_away
                         session.commit()
                 _afid_to_match_id[fixture_id] = match_id  # warm cache for future use
                 updated += 1
@@ -641,11 +672,21 @@ class APIFootballScraper(BaseScraper):
                         is_fixture=is_fixture,
                         apifootball_id=fixture_id,
                         referee=referee or None,
+                        venue=venue_city or None,
                     )
                     if is_finished and home_goals is not None:
                         match.home_goals = home_goals
                         match.away_goals = away_goals
                         match.is_fixture = False
+                        if ht_home is not None:
+                            match.ht_home_goals = ht_home
+                            match.ht_away_goals = ht_away
+                        if reg_home is not None:
+                            match.regulation_home_goals = reg_home
+                            match.regulation_away_goals = reg_away
+                        if pen_home is not None:
+                            match.penalty_home_score = pen_home
+                            match.penalty_away_score = pen_away
                     session.add(match)
                     session.commit()
                 created += 1
@@ -785,6 +826,10 @@ class APIFootballScraper(BaseScraper):
                     result[side]["yellow_cards"] = _safe_int(stat_value)
                 elif stat_type == "Red Cards":
                     result[side]["red_cards"] = _safe_int(stat_value)
+                elif stat_type == "Goalkeeper Saves":
+                    result[side]["saves"] = _safe_int(stat_value)
+                elif stat_type == "Offsides":
+                    result[side]["offsides"] = _safe_int(stat_value)
 
         return result
 
@@ -833,6 +878,14 @@ class APIFootballScraper(BaseScraper):
                 match.home_red_cards = home["red_cards"]
             if match.away_red_cards is None and "red_cards" in away:
                 match.away_red_cards = away["red_cards"]
+            if match.home_saves is None and "saves" in home:
+                match.home_saves = home["saves"]
+            if match.away_saves is None and "saves" in away:
+                match.away_saves = away["saves"]
+            if match.home_offsides is None and "offsides" in home:
+                match.home_offsides = home["offsides"]
+            if match.away_offsides is None and "offsides" in away:
+                match.away_offsides = away["offsides"]
 
             session.commit()
             logger.debug(f"Updated stats for match {match_id} (xG: {home.get('xg')}-{away.get('xg')})")
@@ -881,6 +934,14 @@ class APIFootballScraper(BaseScraper):
                     match.home_red_cards = home["red_cards"]
                 if match.away_red_cards is None and "red_cards" in away:
                     match.away_red_cards = away["red_cards"]
+                if match.home_saves is None and "saves" in home:
+                    match.home_saves = home["saves"]
+                if match.away_saves is None and "saves" in away:
+                    match.away_saves = away["saves"]
+                if match.home_offsides is None and "offsides" in home:
+                    match.home_offsides = home["offsides"]
+                if match.away_offsides is None and "offsides" in away:
+                    match.away_offsides = away["offsides"]
             session.commit()
 
     # Leagues where teams are stored under their domestic league, not the competition.
