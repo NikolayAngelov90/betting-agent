@@ -3104,9 +3104,36 @@ async def main():
                 print(f"Avg CLV: {stats['avg_clv']:+.3f}")
             print(f"Pending: {stats.get('pending', 0)} picks")
 
-            # Send settlement report to Telegram
-            if settled_picks and agent.telegram.enabled:
-                await agent.telegram.send_settlement_report(settled_picks, stats)
+            # Query picks from yesterday that are still unresolved after this settle run.
+            # Passed to the settlement report so operators can see which picks need follow-up.
+            pending_from_yesterday: list = []
+            try:
+                _yesterday = date.today() - timedelta(days=1)
+                with agent.db.get_session() as _psess:
+                    _pending_rows = _psess.query(SavedPick).filter(
+                        SavedPick.result.is_(None),
+                        SavedPick.pick_date == _yesterday,
+                    ).all()
+                    pending_from_yesterday = [
+                        {
+                            "match_name": p.match_name,
+                            "selection": p.selection,
+                            "odds": p.odds,
+                            "pick_date": p.pick_date,
+                            "league": p.league,
+                            "stake": p.kelly_stake_percentage or 0,
+                        }
+                        for p in _pending_rows
+                    ]
+            except Exception as _pe:
+                logger.warning(f"Could not query yesterday's pending picks: {_pe}")
+
+            # Send settlement report to Telegram — fires even when 0 settled but
+            # there are pending picks from yesterday, so operators see named stuck picks.
+            if (settled_picks or pending_from_yesterday) and agent.telegram.enabled:
+                await agent.telegram.send_settlement_report(
+                    settled_picks, stats, pending_picks=pending_from_yesterday
+                )
                 print("Settlement report sent to Telegram!")
 
             # Post-settlement learning: update weights, calibration, retrain if stale

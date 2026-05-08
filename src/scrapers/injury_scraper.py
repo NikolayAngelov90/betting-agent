@@ -5,7 +5,7 @@ players when generating picks.  Each fixture costs 1 API request.
 """
 
 import time as _time
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import List, Optional
 
 from src.data.models import Player, Injury, Team, Match, Odds
@@ -235,7 +235,7 @@ class InjuryScraper:
 
         # Purge injuries older than 48h — keep today's and yesterday's data as fallback.
         # Never bulk-delete before fetching (that destroys the fallback on budget-zero runs).
-        cutoff_48h = datetime.utcnow() - timedelta(hours=48)
+        cutoff_48h = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=48)
         with self.db.get_session() as session:
             old_count = session.query(Injury).filter(
                 Injury.source == "api-football",

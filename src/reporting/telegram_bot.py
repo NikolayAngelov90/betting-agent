@@ -239,15 +239,29 @@ class TelegramNotifier:
         except Exception as _mse:
             logger.warning(f"Could not write picks-sent state file: {_mse}")
 
-    async def send_settlement_report(self, settled_picks: list, stats: dict = None):
-        """Send settlement results for yesterday's picks via Telegram."""
-        if not self.enabled or not settled_picks:
+    async def send_settlement_report(
+        self,
+        settled_picks: list,
+        stats: dict = None,
+        pending_picks: list = None,
+    ):
+        """Send settlement results for yesterday's picks via Telegram.
+
+        Args:
+            settled_picks: Picks that were settled in this run (from settle_predictions()).
+            stats: All-time stats dict from get_stats().
+            pending_picks: Picks from yesterday that are still unresolved after this
+                run (result=None). Shown with ⏳ so operators know which picks need
+                manual follow-up. Triggers the message even when settled_picks is empty.
+        """
+        pending_picks = pending_picks or []
+        if not self.enabled or (not settled_picks and not pending_picks):
             return
 
         from datetime import date, timedelta
         yesterday = date.today() - timedelta(days=1)
 
-        # Filter to yesterday's settled picks (or show all if dates vary)
+        # Filter settled to yesterday's picks (or show all if dates vary)
         yesterday_picks = [p for p in settled_picks if p.get("pick_date") == yesterday]
         picks_to_show = yesterday_picks if yesterday_picks else settled_picks
 
@@ -263,10 +277,13 @@ class TelegramNotifier:
         )
 
         label = yesterday.strftime('%d %b %Y') if yesterday_picks else "Recent"
-        header = f"<b>📊 Settlement Report - {label}</b>\n"
-        # Batch result (just settled)
-        profit_emoji = "📈" if profit >= 0 else "📉"
-        header += f"Batch: {wins}W-{losses}L ({win_rate:.0%}) {profit_emoji} {profit:+.1f}%\n"
+        if picks_to_show:
+            header = f"<b>📊 Settlement Report - {label}</b>\n"
+            profit_emoji = "📈" if profit >= 0 else "📉"
+            header += f"Batch: {wins}W-{losses}L ({win_rate:.0%}) {profit_emoji} {profit:+.1f}%\n"
+        else:
+            # Only pending picks to report — no settled batch header
+            header = f"<b>📊 Settlement Report - {label}</b>\n"
         # Running all-time totals from DB
         if stats:
             at = stats.get("all_time", {})
@@ -336,9 +353,32 @@ class TelegramNotifier:
                     f"Fallback: {fb['win_rate']:.0%} win rate</i>"
                 )
 
-            pending = stats.get("pending", 0)
-            if pending > 0:
-                lines.append(f"\n⏳ {pending} picks still pending")
+        # Show pending picks from yesterday by name so operators know what to follow up on.
+        # These are picks that had no result in DB after all settlement attempts today.
+        if pending_picks:
+            n = len(pending_picks)
+            lines.append(
+                f"\n<b>⏳ {n} pick{'s' if n != 1 else ''} still pending from {label} — result unavailable</b>"
+            )
+            by_pending_league: Dict[str, list] = {}
+            for p in pending_picks:
+                lg = p.get("league", "Other") or "Other"
+                by_pending_league.setdefault(lg, []).append(p)
+            for lg_key in sorted(by_pending_league.keys()):
+                lg_name = html_escape(LEAGUE_DISPLAY.get(lg_key, lg_key))
+                lines.append(f"\n  <i>{lg_name}</i>")
+                for pick in by_pending_league[lg_key]:
+                    safe_match = html_escape(pick["match_name"])
+                    safe_sel = html_escape(pick["selection"])
+                    lines.append(
+                        f"    ⏳ <b>{safe_match}</b>\n"
+                        f"        {safe_sel} @ {pick['odds']:.2f} | Stake: {pick['stake']:.1f}%"
+                    )
+        elif stats:
+            # No named pending — just show aggregate count if > 0
+            leftover = stats.get("pending", 0)
+            if leftover > 0:
+                lines.append(f"\n⏳ {leftover} other picks still pending")
 
         message = "\n".join(lines)
         await self._send_message(message)

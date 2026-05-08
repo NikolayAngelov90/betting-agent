@@ -7,7 +7,7 @@ Includes real bookmaker odds via the /odds endpoint.
 
 import asyncio
 import os
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional
 
 from src.scrapers.base_scraper import BaseScraper
@@ -742,7 +742,7 @@ class APIFootballScraper(BaseScraper):
         else:
             _FREE_PLAN_SEASON_CUTOFF = None
         with self.db.get_session() as session:
-            cutoff = datetime.utcnow() - timedelta(days=days_back)
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days_back)
             base_filters = [
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
