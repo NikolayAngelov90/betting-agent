@@ -8,7 +8,7 @@ Free tier: 500 credits/month (1 credit per league request).
 
 import asyncio
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set
 
 import aiohttp
@@ -498,7 +498,7 @@ class TheOddsScraper:
                 )
             if existing:
                 existing.odds_value = odds_value
-                existing.timestamp = datetime.utcnow()
+                existing.timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
             else:
                 new_row = Odds(
                     match_id=match_id,

@@ -2380,8 +2380,8 @@ class FootballBettingAgent:
                 return True
             try:
                 trained_dt = datetime.fromisoformat(trained_at)
-                if trained_dt.tzinfo is None:
-                    trained_dt = trained_dt.replace(tzinfo=timezone.utc)
+                if trained_dt.tzinfo is not None:
+                    trained_dt = trained_dt.replace(tzinfo=None)
                 age_days = (utcnow() - trained_dt).days
                 if age_days >= max_age_days:
                     return True

@@ -8,12 +8,12 @@ import sys
 
 
 def utcnow() -> datetime:
-    """Return the current UTC time as a timezone-aware datetime.
+    """Return the current UTC time as a naive datetime (no tzinfo).
 
-    Replacement for the deprecated ``datetime.utcnow()`` which returns a
-    naive datetime.  All call-sites should use this instead.
+    Consistent with DB column storage (TIMESTAMP WITHOUT TIME ZONE).
+    Uses the non-deprecated datetime.now(timezone.utc) path internally.
     """
-    return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def setup_logger(log_level: str = "INFO", log_file: str = "logs/betting_agent.log"):

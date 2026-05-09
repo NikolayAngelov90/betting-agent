@@ -1509,7 +1509,7 @@ class APIFootballScraper(BaseScraper):
                                     if existing.opening_odds is None:
                                         existing.opening_odds = existing.odds_value
                                     existing.odds_value = odds_value
-                                    existing.timestamp = datetime.utcnow()
+                                    existing.timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
                                 continue
 
                             odds = Odds(

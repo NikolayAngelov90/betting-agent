@@ -323,7 +323,7 @@ class InjuryScraper:
 
                     if existing:
                         existing.status = status
-                        existing.updated_at = datetime.utcnow()
+                        existing.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     else:
                         injury = Injury(
                             player_id=player.id,
@@ -396,7 +396,7 @@ class InjuryScraper:
                     ).first()
                     if existing:
                         existing.status = status
-                        existing.updated_at = datetime.utcnow()
+                        existing.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     else:
                         session.add(Injury(
                             player_id=player.id,
