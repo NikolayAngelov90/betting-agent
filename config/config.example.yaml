@@ -128,7 +128,7 @@ betting:
   kelly_fraction: 0.25      # Fractional Kelly — 25% of full Kelly (professional standard)
   max_stake_percentage: 4.0 # Hard cap: maximum 4% of bankroll per bet
   max_picks_per_league: 5   # Portfolio: cap exposure per league per day
-  max_total_kelly_pct: 40.0 # Portfolio: cap total bankroll exposure per day (%)
+  max_total_kelly_pct: 0    # Portfolio: 0 = disabled (show all picks)
   # Scale Kelly stake by model agreement level. Reduces exposure when models disagree.
   # Markets to exclude from picks. Use market_key names from value_calculator.
   # Available: home_win, draw, away_win, over_1.5, over_2.5, over_3.5,
@@ -137,6 +137,7 @@ betting:
     - under_1.5
     - under_2.5
     - under_3.5
+    - btts_no
   kelly_agreement_scale:
     unanimous: 1.0
     majority: 0.80
