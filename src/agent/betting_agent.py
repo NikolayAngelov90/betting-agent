@@ -376,11 +376,15 @@ class FootballBettingAgent:
         # Fixtures (today's upcoming matches) — only scrape leagues that have
         # today's fixtures OR are priority (pending picks).  Skipping leagues
         # with 0 fixtures avoids ~5-7s per wasted page load × 20+ leagues.
+        _fs_skip = set(self.config.get("scraping.flashscore_skip_leagues", []))
         _fixture_leagues = [
             l for l in _ordered_leagues
             if l in _important  # has today's fixtures or pending picks
+            and l not in _fs_skip
         ]
         _skipped_fixture_leagues = len(_ordered_leagues) - len(_fixture_leagues)
+        if _fs_skip:
+            logger.info(f"Flashscore: skipping {sorted(_fs_skip)} (flashscore_skip_leagues)")
         if _skipped_fixture_leagues:
             logger.info(
                 f"Fixtures: scraping {len(_fixture_leagues)} leagues with fixtures/pending, "
@@ -1278,6 +1282,11 @@ class FootballBettingAgent:
             "austria/bundesliga",
             "denmark/superliga",
         }
+        _fs_skip_results = set(self.config.get("scraping.flashscore_skip_leagues", []))
+        if _fs_skip_results:
+            leagues = [l for l in leagues if l not in _fs_skip_results]
+            logger.info(f"scrape_results: skipping {sorted(_fs_skip_results)} (flashscore_skip_leagues)")
+
         _priority = [l for l in leagues if l in _pending_leagues]
         _rest_normal = [l for l in leagues if l not in _pending_leagues and l not in _SLOW_LEAGUES]
         _rest_slow   = [l for l in leagues if l not in _pending_leagues and l in _SLOW_LEAGUES]
@@ -2206,6 +2215,23 @@ class FootballBettingAgent:
             logger.warning(f"Not enough matches for ML training ({len(match_data)}, need 50+)")
             return
 
+        # Bulk-preload all team history for all training matches in 3 queries.
+        # With no date cutoff (cutoff_days=0) and a larger cap (200/team), the
+        # cache covers as_of_date filtering in Python — eliminates per-sample
+        # form/H2H/xG/referee DB round-trips.  On Neon (50ms RTT) this turns
+        # ~10-13 queries × 500 samples = ~25,000ms into 3 queries + Python loops.
+        _all_train_ids = [md["id"] for md in match_data]
+        try:
+            self.feature_engineer.preload_batch(
+                _all_train_ids, cap_per_team=200, cutoff_days=0
+            )
+            logger.info(
+                f"Training preload complete: "
+                f"{len(self.feature_engineer._preload_cache.get('team_history', {}))} teams cached"
+            )
+        except Exception as _pre_err:
+            logger.warning(f"Training preload failed (falling back to per-sample queries): {_pre_err}")
+
         # Build feature matrix and labels — process in parallel batches
         # Hard time budget prevents ML training from blowing the CI timeout.
         import time as _timer
@@ -2338,6 +2364,10 @@ class FootballBettingAgent:
         )
         self.predictor.goals_model.fit(X, y_goals, feature_names)
         self.predictor.goals_model.save()
+
+        # Free the training preload cache — it holds history for all training teams
+        # and is no longer needed now that feature extraction is done.
+        self.feature_engineer._preload_cache = None
 
         logger.info("ML model training complete")
 
@@ -2659,20 +2689,21 @@ class FootballBettingAgent:
             cal_factors["ml"] = 1.0
 
     def _auto_calibrate_ev_threshold(self):
-        """Dynamically adjust min EV threshold based on recent hit rate.
+        """Dynamically adjust min EV threshold based on recent ROI.
 
-        Looks at the last N settled picks and computes hit rate. Compared
-        to the expected baseline (~50-55%), adjusts min_ev:
-        - Hit rate > 60%: hot streak → tighten min_ev by up to +2pp
-        - Hit rate 45-60%: normal range → keep base min_ev
-        - Hit rate < 45%: cold streak → loosen min_ev by up to -1.5pp
+        Looks at the last N settled picks and computes per-unit ROI:
+            roi = sum((odds - 1) if win else -1) / n
 
-        This prevents over-betting during cold streaks (by demanding higher
-        edge) and captures more volume during hot streaks.  Adjustments are
-        bounded: min_ev never goes below 1% or above 8%.
+        ROI is market-agnostic — unlike hit rate, it correctly accounts
+        for odds level (e.g. 40% win rate at 1.75 = -30% ROI is cold;
+        40% at 2.80 = +12% ROI is hot).
 
-        The calibrated threshold is persisted to data/models/ev_threshold.json
-        so it survives across CI runs.
+        - ROI > +10%: hot → tighten min_ev by up to +2pp
+        - ROI -10% to +10%: normal → keep base min_ev
+        - ROI < -10%: cold → loosen min_ev by up to -0.5pp
+
+        Bounded: min_ev never goes below 1% or above 8%.
+        The calibrated threshold is persisted to data/models/ev_threshold.json.
         """
         from src.models.ml_models import MODELS_DIR as _MODELS_DIR
 
@@ -2706,28 +2737,33 @@ class FootballBettingAgent:
                 if len(recent) < 15:
                     return  # not enough data
 
-                wins = sum(1 for p in recent if p.result == "win")
-                hit_rate = wins / len(recent)
+                # ROI = sum of profits per unit staked, market-agnostic
+                # win: profit = odds - 1; loss: profit = -1
+                roi_values = [
+                    (p.odds - 1) if p.result == "win" else -1.0
+                    for p in recent
+                    if p.odds and p.odds > 1.0
+                ]
+                if len(roi_values) < 15:
+                    return  # not enough picks with valid odds
+                roi = sum(roi_values) / len(roi_values)
 
-                if hit_rate > 0.60:
+                if roi > 0.10:
                     # Hot streak: tighten — be more selective (raise min EV)
-                    # Scale: 60% → +0pp, 75%+ → +2pp
-                    bonus = min((hit_rate - 0.60) / 0.15, 1.0) * 0.02
+                    # Scale: +10% ROI → +0pp, +30%+ → +2pp
+                    bonus = min((roi - 0.10) / 0.20, 1.0) * 0.02
                     new_ev = base_ev + bonus
-                elif hit_rate < 0.45:
+                elif roi < -0.10:
                     # Cold streak: loosen slightly — lower min EV by at most 0.5pp.
-                    # Capped tightly because loosening on a bad run admits more poor
-                    # bets and accelerates the drawdown. Primary protection is the
-                    # drawdown circuit breaker; EV floor is a secondary guard.
-                    # Scale: 45% → -0pp, 30%- → -0.5pp
-                    penalty = min((0.45 - hit_rate) / 0.15, 1.0) * 0.005
+                    # Capped tightly; primary protection is the drawdown circuit breaker.
+                    # Scale: -10% ROI → -0pp, -30%- → -0.5pp
+                    penalty = min((-roi - 0.10) / 0.20, 1.0) * 0.005
                     new_ev = base_ev - penalty
                 else:
                     new_ev = base_ev  # normal range, keep base
 
                 # Clamp to sane bounds.
                 # Floor = base_ev - 0.5pp to prevent runaway loosening on cold streaks
-                # (previously 0.01 allowed threshold to fall to 1%, far below useful range).
                 ev_floor = max(base_ev - 0.005, 0.01)
                 new_ev = max(ev_floor, min(0.08, round(new_ev, 4)))
 
@@ -2737,15 +2773,15 @@ class FootballBettingAgent:
                     logger.info(
                         f"EV auto-calibration: {direction} min_ev from "
                         f"{base_ev:.1%} → {new_ev:.1%} "
-                        f"(hit rate={hit_rate:.0%} over last {len(recent)} picks)"
+                        f"(ROI={roi:+.1%} over last {len(roi_values)} picks)"
                     )
 
                 # Persist to disk so next CI run starts from this threshold
                 ev_path.parent.mkdir(parents=True, exist_ok=True)
                 ev_path.write_text(json.dumps({
                     "min_ev": new_ev,
-                    "hit_rate": round(hit_rate, 4),
-                    "n_picks": len(recent),
+                    "roi": round(roi, 4),
+                    "n_picks": len(roi_values),
                     "updated_at": utcnow().isoformat(),
                 }, indent=2))
         except Exception as e:

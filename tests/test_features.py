@@ -355,23 +355,43 @@ class TestCacheAwareFeatures:
         assert result["xg_against_avg"] == 0.9
         assert result["xg_matches"] == 1
 
-    def test_xg_features_skips_cache_when_as_of_date_set(self):
-        """Training path (as_of_date set) must always use live DB, never cache."""
+    def test_xg_features_uses_cache_with_as_of_date(self):
+        """Training path (as_of_date set) uses cache with Python-side date filter."""
         from unittest.mock import MagicMock
         from datetime import date
         fe = self._make_fe()
-        fe._preload_cache = {"match_meta": {}, "odds": {}, "team_history": {1: []}}
-
-        mock_session = MagicMock()
-        mock_session.__enter__ = lambda s: s
-        mock_session.__exit__ = MagicMock(return_value=False)
-        mock_session.query.return_value.filter.return_value.filter.return_value \
-            .filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+        fe._preload_cache = {
+            "match_meta": {}, "odds": {},
+            "team_history": {
+                1: [
+                    {"id": 10, "match_date": date(2024, 6, 1),
+                     "home_team_id": 1, "away_team_id": 2,
+                     "home_goals": 2, "away_goals": 1,
+                     "home_xg": 1.5, "away_xg": 0.8,
+                     "home_yellow_cards": 1, "away_yellow_cards": 0,
+                     "home_red_cards": 0, "away_red_cards": 0,
+                     "home_fouls": 10, "away_fouls": 8,
+                     "regulation_home_goals": 2, "regulation_away_goals": 1,
+                     "league": "epl", "referee": "Dean"},
+                    {"id": 11, "match_date": date(2025, 6, 1),  # after as_of_date, should be filtered
+                     "home_team_id": 1, "away_team_id": 3,
+                     "home_goals": 1, "away_goals": 0,
+                     "home_xg": 2.0, "away_xg": 0.5,
+                     "home_yellow_cards": 0, "away_yellow_cards": 0,
+                     "home_red_cards": 0, "away_red_cards": 0,
+                     "home_fouls": 8, "away_fouls": 7,
+                     "regulation_home_goals": 1, "regulation_away_goals": 0,
+                     "league": "epl", "referee": "Smith"},
+                ]
+            },
+        }
         fe.db = MagicMock()
-        fe.db.get_session.return_value = mock_session
 
-        fe._get_xg_features(1, "home", as_of_date=date(2025, 1, 1))
-        fe.db.get_session.assert_called_once()
+        result = fe._get_xg_features(1, "home", as_of_date=date(2025, 1, 1))
+
+        fe.db.get_session.assert_not_called()  # cache used, no DB call
+        assert result["xg_matches"] == 1  # only the pre-2025 match passes date filter
+        assert result["xg_avg"] == 1.5
 
     # ── _get_referee_features ─────────────────────────────────────────────
 
@@ -400,23 +420,31 @@ class TestCacheAwareFeatures:
         fe.db.get_session.assert_not_called()
         assert result["referee_matches"] == 1  # deduplication: counted once despite 2 teams
 
-    def test_referee_features_skips_cache_when_as_of_date_set(self):
-        """Training path (as_of_date set) must always use live DB, never cache."""
+    def test_referee_features_uses_cache_with_as_of_date(self):
+        """Training path (as_of_date set) uses cache with Python-side date filter."""
         from unittest.mock import MagicMock
         from datetime import date
         fe = self._make_fe()
-        fe._preload_cache = {"match_meta": {}, "odds": {}, "team_history": {1: []}}
-
-        mock_session = MagicMock()
-        mock_session.__enter__ = lambda s: s
-        mock_session.__exit__ = MagicMock(return_value=False)
-        mock_session.query.return_value.filter.return_value.filter.return_value \
-            .order_by.return_value.limit.return_value.all.return_value = []
+        early_row = {"id": 5, "match_date": date(2024, 6, 1),
+                     "home_team_id": 1, "away_team_id": 2,
+                     "home_goals": 2, "away_goals": 2,
+                     "home_xg": 1.5, "away_xg": 1.5,
+                     "home_yellow_cards": 3, "away_yellow_cards": 2,
+                     "home_red_cards": 0, "away_red_cards": 1,
+                     "home_fouls": 12, "away_fouls": 11,
+                     "regulation_home_goals": 2, "regulation_away_goals": 2,
+                     "league": "epl", "referee": "Mike Dean"}
+        late_row = {**early_row, "id": 6, "match_date": date(2025, 6, 1)}  # after cutoff
+        fe._preload_cache = {
+            "match_meta": {}, "odds": {},
+            "team_history": {1: [early_row, late_row], 2: [early_row, late_row]},
+        }
         fe.db = MagicMock()
-        fe.db.get_session.return_value = mock_session
 
-        fe._get_referee_features("Mike Dean", as_of_date=date(2025, 1, 1))
-        fe.db.get_session.assert_called_once()
+        result = fe._get_referee_features("Mike Dean", as_of_date=date(2025, 1, 1))
+
+        fe.db.get_session.assert_not_called()  # cache used, no DB call
+        assert result["referee_matches"] == 1  # only pre-2025 match passes filter
 
     # ── _get_situational_features ─────────────────────────────────────────
 

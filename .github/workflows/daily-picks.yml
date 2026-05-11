@@ -175,7 +175,7 @@ jobs:
         continue-on-error: true
 
       - name: Send weekly performance report (Sundays only)
-        if: success()
+        if: always()
         run: |
           if [ "$(date +%w)" = "0" ]; then
             echo "Sunday — sending weekly performance report"

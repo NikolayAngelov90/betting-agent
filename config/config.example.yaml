@@ -42,6 +42,13 @@ scraping:
   # Leagues in off-season that are expected to return 0 fixtures (no alert sent)
   off_season_leagues: []  # e.g. ["norway/eliteserien", "sweden/allsvenskan"] in winter
 
+  # Leagues to exclude from Flashscore scraping entirely (fixtures AND results).
+  # Use for leagues that consistently timeout or are covered by API-Football instead.
+  # Results for these leagues are still obtained via API-Football's yesterday-fixtures fetch.
+  flashscore_skip_leagues:
+    - portugal/primeira-liga  # consistent timeout in CI; covered by football-data.org
+    - romania/liga-1          # consistent timeout in CI; no fallback source needed
+
   update_interval_hours: 6
   headless: true
   request_delay: 3  # seconds between requests

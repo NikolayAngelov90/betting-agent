@@ -46,13 +46,19 @@ class FeatureEngineer:
         except Exception:
             pass
 
-    def preload_batch(self, match_ids: list) -> None:
+    def preload_batch(self, match_ids: list,
+                      cap_per_team: int = 60,
+                      cutoff_days: int = 365) -> None:
         """Bulk-preload all DB data needed for a list of fixtures into memory.
 
         Replaces O(N) per-fixture DB round-trips with three bulk queries:
           1. Match metadata for all match_ids (1 query)
           2. All Odds rows for all match_ids (1 query)
           3. Completed match history for all involved teams (1 query)
+
+        Args:
+            cap_per_team: Max history rows per team (60 for live, 200 for training).
+            cutoff_days: History window in days (365 for live, 0=no cutoff for training).
 
         Calling preload_batch is optional — if not called (or if it raises),
         create_features() falls back to per-fixture live queries with zero
@@ -104,21 +110,20 @@ class FeatureEngineer:
 
             # ── Query 3: team history (one bulk query for all teams) ──────────
             if all_team_ids:
-                # 365-day window; results ordered desc so first N per team are newest.
-                # Cap at 60 per team: largest window used by any feature method is 30
-                # (referee stats), and venue-specific windows need ~2× the total to
-                # find 10 home/away matches each — 60 covers all cases with headroom.
-                _TEAM_HISTORY_CAP = 60
-                cutoff = _date.today() - timedelta(days=365)
                 with self.db.get_session() as session:
-                    history_rows = session.query(Match).filter(
+                    _hist_filter = [
                         Match.is_fixture == False,
                         Match.home_goals.isnot(None),
-                        Match.match_date >= cutoff,
                         or_(
                             Match.home_team_id.in_(all_team_ids),
                             Match.away_team_id.in_(all_team_ids),
                         ),
+                    ]
+                    if cutoff_days > 0:
+                        cutoff = _date.today() - timedelta(days=cutoff_days)
+                        _hist_filter.append(Match.match_date >= cutoff)
+                    history_rows = session.query(Match).filter(
+                        *_hist_filter
                     ).order_by(Match.match_date.desc()).all()
 
                     team_history: dict = defaultdict(list)
@@ -143,13 +148,30 @@ class FeatureEngineer:
                             "away_fouls": m.away_fouls,
                             "regulation_home_goals": m.regulation_home_goals,
                             "regulation_away_goals": m.regulation_away_goals,
+                            # Stats needed by get_form_features_from_cache
+                            "home_shots": m.home_shots,
+                            "away_shots": m.away_shots,
+                            "home_shots_on_target": m.home_shots_on_target,
+                            "away_shots_on_target": m.away_shots_on_target,
+                            "home_possession": m.home_possession,
+                            "away_possession": m.away_possession,
+                            "home_corners": m.home_corners,
+                            "away_corners": m.away_corners,
+                            "home_dangerous_attacks": m.home_dangerous_attacks,
+                            "away_dangerous_attacks": m.away_dangerous_attacks,
+                            "home_saves": m.home_saves,
+                            "away_saves": m.away_saves,
+                            "home_offsides": m.home_offsides,
+                            "away_offsides": m.away_offsides,
+                            "home_free_kicks": m.home_free_kicks,
+                            "away_free_kicks": m.away_free_kicks,
                         }
                         if (m.home_team_id in all_team_ids
-                                and team_counts[m.home_team_id] < _TEAM_HISTORY_CAP):
+                                and team_counts[m.home_team_id] < cap_per_team):
                             team_history[m.home_team_id].append(row_data)
                             team_counts[m.home_team_id] += 1
                         if (m.away_team_id in all_team_ids
-                                and team_counts[m.away_team_id] < _TEAM_HISTORY_CAP):
+                                and team_counts[m.away_team_id] < cap_per_team):
                             team_history[m.away_team_id].append(row_data)
                             team_counts[m.away_team_id] += 1
 
@@ -209,10 +231,15 @@ class FeatureEngineer:
         # opponent-quality weights leaks future information into past form.
         # Live prediction is unaffected because as_of_date is None.
         _elo = None if for_training else self.elo_ratings
-        home_form_all = self.team_features.get_form_features(home_id, 10, "all", as_of_date=as_of_date, elo_ratings=_elo)
-        home_form_home = self.team_features.get_form_features(home_id, 10, "home", as_of_date=as_of_date, elo_ratings=_elo)
-        away_form_all = self.team_features.get_form_features(away_id, 10, "all", as_of_date=as_of_date, elo_ratings=_elo)
-        away_form_away = self.team_features.get_form_features(away_id, 10, "away", as_of_date=as_of_date, elo_ratings=_elo)
+        _cache = self._preload_cache
+        home_form_all = self.team_features.get_form_features(
+            home_id, 10, "all", as_of_date=as_of_date, elo_ratings=_elo, preload_cache=_cache)
+        home_form_home = self.team_features.get_form_features(
+            home_id, 10, "home", as_of_date=as_of_date, elo_ratings=_elo, preload_cache=_cache)
+        away_form_all = self.team_features.get_form_features(
+            away_id, 10, "all", as_of_date=as_of_date, elo_ratings=_elo, preload_cache=_cache)
+        away_form_away = self.team_features.get_form_features(
+            away_id, 10, "away", as_of_date=as_of_date, elo_ratings=_elo, preload_cache=_cache)
 
         features.update(self._prefix_dict(home_form_all, "home_overall_"))
         features.update(self._prefix_dict(home_form_home, "home_home_"))
@@ -225,7 +252,8 @@ class FeatureEngineer:
         await _asyncio.sleep(0)
 
         # 2. H2H features
-        h2h = self.h2h_features.get_h2h_features(home_id, away_id, as_of_date=as_of_date)
+        h2h = self.h2h_features.get_h2h_features(
+            home_id, away_id, as_of_date=as_of_date, preload_cache=_cache)
         features.update(h2h)
 
         # 3. Injury features (skip during training — no historical injury data)
@@ -426,11 +454,12 @@ class FeatureEngineer:
             "xg_overperformance": 0.0, "xg_matches": 0,
         }
 
-        if self._preload_cache is not None and as_of_date is None:
+        if self._preload_cache is not None:
             cached_rows = self._preload_cache.get("team_history", {}).get(team_id, [])
             filtered = [
                 m for m in cached_rows
                 if m["home_xg"] is not None
+                and (as_of_date is None or m["match_date"] < as_of_date)
                 and (venue != "home" or m["home_team_id"] == team_id)
                 and (venue != "away" or m["away_team_id"] == team_id)
             ]
@@ -529,12 +558,15 @@ class FeatureEngineer:
         if not referee:
             return empty
 
-        if self._preload_cache is not None and as_of_date is None:
+        if self._preload_cache is not None:
             seen_ids: set = set()
             matches_data = []
             for team_rows in self._preload_cache.get("team_history", {}).values():
                 for m in team_rows:
-                    if m["id"] not in seen_ids and m.get("referee") == referee and m["home_goals"] is not None:
+                    if (m["id"] not in seen_ids
+                            and m.get("referee") == referee
+                            and m["home_goals"] is not None
+                            and (as_of_date is None or m["match_date"] < as_of_date)):
                         matches_data.append(m)
                         seen_ids.add(m["id"])
             matches_data.sort(key=lambda m: m["match_date"], reverse=True)

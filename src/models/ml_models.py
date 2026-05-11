@@ -36,10 +36,9 @@ if _MODEL_HMAC_KEY_ENV:
 elif os.environ.get("BETTING_AGENT_ALLOW_DEFAULT_HMAC") == "1":
     _MODEL_HMAC_KEY = b"betting-agent-default-key"
     _MODEL_HMAC_USING_DEFAULT = True
-    logger.warning(
-        "MODEL_HMAC_KEY not set; using insecure default key "
-        "(BETTING_AGENT_ALLOW_DEFAULT_HMAC=1). "
-        "Do NOT run this configuration in production — set MODEL_HMAC_KEY."
+    logger.debug(
+        "MODEL_HMAC_KEY not set; using default key "
+        "(BETTING_AGENT_ALLOW_DEFAULT_HMAC=1 — explicit dev/CI opt-in)."
     )
 else:
     raise RuntimeError(

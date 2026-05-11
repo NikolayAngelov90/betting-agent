@@ -20,7 +20,8 @@ class TeamFeatures:
     def get_form_features(self, team_id: int, num_matches: int = 5,
                           venue: str = "all", as_of_date=None,
                           elo_ratings: dict = None,
-                          league: str = None) -> dict:
+                          league: str = None,
+                          preload_cache: dict = None) -> dict:
         """Calculate form-based features for a team.
 
         Args:
@@ -29,13 +30,27 @@ class TeamFeatures:
             venue: 'home', 'away', or 'all'
             as_of_date: Only use matches before this date (for training).
                         None = no cutoff (live prediction).
-            league: Optional league filter. When set, only matches in this
-                exact league are counted. Required for league standings so
-                cup/European matches don't inflate point totals.
+            league: Optional league filter.
+            preload_cache: If provided, uses in-memory team_history instead of DB.
 
         Returns:
             Dictionary of form features
         """
+        if preload_cache is not None:
+            rows = preload_cache.get("team_history", {}).get(team_id, [])
+            filtered = [
+                m for m in rows
+                if m["home_goals"] is not None
+                and (as_of_date is None or m["match_date"] < as_of_date)
+                and (league is None or m["league"] == league)
+                and (venue != "home" or m["home_team_id"] == team_id)
+                and (venue != "away" or m["away_team_id"] == team_id)
+            ]
+            rows_subset = filtered[:num_matches]
+            if not rows_subset:
+                return self._empty_form_features()
+            return self._calculate_form_from_dicts(rows_subset, team_id, elo_ratings=elo_ratings)
+
         with self.db.get_session() as session:
             query = session.query(Match).filter(
                 Match.is_fixture == False,
@@ -195,6 +210,150 @@ class TeamFeatures:
         )
 
         # Calculate streaks
+        win_streak = self._calculate_streak(form_string, "W")
+        losing_streak = self._calculate_streak(form_string, "L")
+        unbeaten_run = self._calculate_unbeaten_run(form_string)
+
+        return {
+            "matches_played": n,
+            "points": points,
+            "points_per_match": round(points / n, 2) if n else 0,
+            "wins": wins,
+            "draws": draws,
+            "losses": losses,
+            "goals_scored": goals_scored,
+            "goals_conceded": goals_conceded,
+            "goal_difference": goals_scored - goals_conceded,
+            "goals_scored_per_match": round(goals_scored / n, 2) if n else 0,
+            "goals_conceded_per_match": round(goals_conceded / n, 2) if n else 0,
+            "clean_sheets": clean_sheets,
+            "failed_to_score": failed_to_score,
+            "win_streak": win_streak,
+            "losing_streak": losing_streak,
+            "unbeaten_run": unbeaten_run,
+            "shots_per_game_avg": round(shots_total / shots_count, 2) if shots_count else 0,
+            "shots_on_target_per_game_avg": round(shots_on_target_total / shots_count, 2) if shots_count else 0,
+            "possession_avg": round(possession_total / possession_count, 2) if possession_count else 0,
+            "corners_per_game_avg": round(corners_total / corners_count, 2) if corners_count else 0,
+            "dangerous_attacks_per_game_avg": round(da_total / da_count, 2) if da_count else 0,
+            "saves_per_game_avg": round(sv_total / sv_count, 2) if sv_count else 0,
+            "offsides_per_game_avg": round(off_total / off_count, 2) if off_count else 0,
+            "free_kicks_per_game_avg": round(fk_total / fk_count, 2) if fk_count else 0,
+            "form_string": "-".join(form_string),
+            "decay_form_score": decay_form_score,
+            "quality_adjusted_ppg": round(quality_weighted_pts / quality_weight_sum, 3) if quality_weight_sum else 0.0,
+        }
+
+    def _calculate_form_from_dicts(self, rows: list, team_id: int,
+                                   elo_ratings: dict = None) -> dict:
+        """Mirror of _calculate_form() that works with dict rows from preload cache."""
+        points = 0
+        goals_scored = 0
+        goals_conceded = 0
+        clean_sheets = 0
+        failed_to_score = 0
+        wins = 0
+        draws = 0
+        losses = 0
+        shots_total = 0
+        shots_on_target_total = 0
+        possession_total = 0.0
+        corners_total = 0
+        shots_count = 0
+        possession_count = 0
+        corners_count = 0
+        da_total = 0
+        sv_total = 0
+        off_total = 0
+        fk_total = 0
+        da_count = 0
+        sv_count = 0
+        off_count = 0
+        fk_count = 0
+        form_string = []
+        per_match_pts = []
+        quality_weighted_pts = 0.0
+        quality_weight_sum = 0.0
+
+        for m in rows:
+            is_home = m["home_team_id"] == team_id
+            scored = (m["home_goals"] or 0) if is_home else (m["away_goals"] or 0)
+            conceded = (m["away_goals"] or 0) if is_home else (m["home_goals"] or 0)
+            shots = m.get("home_shots" if is_home else "away_shots")
+            sot = m.get("home_shots_on_target" if is_home else "away_shots_on_target")
+            poss = m.get("home_possession" if is_home else "away_possession")
+            corners = m.get("home_corners" if is_home else "away_corners")
+            da = m.get("home_dangerous_attacks" if is_home else "away_dangerous_attacks")
+            sv = m.get("home_saves" if is_home else "away_saves")
+            off = m.get("home_offsides" if is_home else "away_offsides")
+            fk = m.get("home_free_kicks" if is_home else "away_free_kicks")
+
+            goals_scored += scored
+            goals_conceded += conceded
+            if conceded == 0:
+                clean_sheets += 1
+            if scored == 0:
+                failed_to_score += 1
+
+            if scored > conceded:
+                points += 3
+                wins += 1
+                form_string.append("W")
+                per_match_pts.append(3)
+                match_pts = 3
+            elif scored == conceded:
+                points += 1
+                draws += 1
+                form_string.append("D")
+                per_match_pts.append(1)
+                match_pts = 1
+            else:
+                losses += 1
+                form_string.append("L")
+                per_match_pts.append(0)
+                match_pts = 0
+
+            if elo_ratings:
+                opp_id = m["away_team_id"] if is_home else m["home_team_id"]
+                opp_elo = elo_ratings.get(opp_id, 1500)
+                quality_w = opp_elo / 1500.0
+            else:
+                quality_w = 1.0
+            quality_weighted_pts += match_pts * quality_w
+            quality_weight_sum += quality_w
+
+            if shots is not None:
+                shots_total += shots
+                shots_count += 1
+            if sot is not None:
+                shots_on_target_total += sot
+            if poss is not None:
+                possession_total += poss
+                possession_count += 1
+            if corners is not None:
+                corners_total += corners
+                corners_count += 1
+            if da is not None:
+                da_total += da
+                da_count += 1
+            if sv is not None:
+                sv_total += sv
+                sv_count += 1
+            if off is not None:
+                off_total += off
+                off_count += 1
+            if fk is not None:
+                fk_total += fk
+                fk_count += 1
+
+        n = len(rows)
+        _decay = 0.85
+        _decay_weights = [_decay ** i for i in range(len(per_match_pts))]
+        _total_weight = sum(_decay_weights)
+        decay_form_score = (
+            round(sum(w * p for w, p in zip(_decay_weights, per_match_pts)) / _total_weight, 3)
+            if _total_weight else 0.0
+        )
         win_streak = self._calculate_streak(form_string, "W")
         losing_streak = self._calculate_streak(form_string, "L")
         unbeaten_run = self._calculate_unbeaten_run(form_string)

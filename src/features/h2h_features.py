@@ -18,7 +18,8 @@ class H2HFeatures:
         self.db = get_db()
 
     def get_h2h_features(self, home_team_id: int, away_team_id: int,
-                         limit: int = 10, as_of_date=None) -> dict:
+                         limit: int = 10, as_of_date=None,
+                         preload_cache: dict = None) -> dict:
         """Calculate H2H features between two teams.
 
         Args:
@@ -27,10 +28,32 @@ class H2HFeatures:
             limit: Number of past meetings to analyze
             as_of_date: Only use matches before this date (for training).
                         None = no cutoff (live prediction).
+            preload_cache: If provided, uses in-memory team_history instead of DB.
 
         Returns:
             Dictionary of H2H features
         """
+        if preload_cache is not None:
+            team_history = preload_cache.get("team_history", {})
+            # H2H matches appear in both teams' history; use union via seen_ids
+            seen_ids: set = set()
+            h2h_rows = []
+            for tid in (home_team_id, away_team_id):
+                for m in team_history.get(tid, []):
+                    if m["id"] not in seen_ids and m["home_goals"] is not None:
+                        is_h2h = (
+                            (m["home_team_id"] == home_team_id and m["away_team_id"] == away_team_id)
+                            or (m["home_team_id"] == away_team_id and m["away_team_id"] == home_team_id)
+                        )
+                        if is_h2h and (as_of_date is None or m["match_date"] < as_of_date):
+                            h2h_rows.append(m)
+                            seen_ids.add(m["id"])
+            h2h_rows.sort(key=lambda m: m["match_date"], reverse=True)
+            h2h_rows = h2h_rows[:limit]
+            if not h2h_rows:
+                return self._empty_h2h()
+            return self._calculate_h2h_from_dicts(h2h_rows, home_team_id, away_team_id)
+
         with self.db.get_session() as session:
             query = session.query(Match).filter(
                 Match.is_fixture == False,
@@ -92,6 +115,60 @@ class H2HFeatures:
             if their_goals > 0:
                 away_team_scored_count += 1
 
+            if hg > 0 and ag > 0:
+                btts_count += 1
+            if match_total_goals > 2.5:
+                over_25_count += 1
+
+        return {
+            "h2h_total_meetings": total,
+            "h2h_home_wins": home_wins,
+            "h2h_away_wins": away_wins,
+            "h2h_draws": draws,
+            "h2h_home_win_pct": round(home_wins / total, 3) if total else 0,
+            "h2h_away_win_pct": round(away_wins / total, 3) if total else 0,
+            "h2h_draw_pct": round(draws / total, 3) if total else 0,
+            "h2h_avg_total_goals": round(total_goals / total, 2) if total else 0,
+            "h2h_btts_percentage": round(btts_count / total, 3) if total else 0,
+            "h2h_over_25_percentage": round(over_25_count / total, 3) if total else 0,
+            "h2h_home_team_scored_pct": round(home_team_scored_count / total, 3) if total else 0,
+            "h2h_away_team_scored_pct": round(away_team_scored_count / total, 3) if total else 0,
+        }
+
+    def _calculate_h2h_from_dicts(self, rows: list, home_team_id: int,
+                                   away_team_id: int) -> dict:
+        """Mirror of _calculate_h2h() that works with dict rows from preload cache."""
+        total = len(rows)
+        home_wins = 0
+        away_wins = 0
+        draws = 0
+        total_goals = 0
+        btts_count = 0
+        over_25_count = 0
+        home_team_scored_count = 0
+        away_team_scored_count = 0
+
+        for m in rows:
+            hg = m["home_goals"] or 0
+            ag = m["away_goals"] or 0
+            match_total_goals = hg + ag
+            total_goals += match_total_goals
+            if m["home_team_id"] == home_team_id:
+                our_goals = hg
+                their_goals = ag
+            else:
+                our_goals = ag
+                their_goals = hg
+            if our_goals > their_goals:
+                home_wins += 1
+            elif our_goals < their_goals:
+                away_wins += 1
+            else:
+                draws += 1
+            if our_goals > 0:
+                home_team_scored_count += 1
+            if their_goals > 0:
+                away_team_scored_count += 1
             if hg > 0 and ag > 0:
                 btts_count += 1
             if match_total_goals > 2.5:

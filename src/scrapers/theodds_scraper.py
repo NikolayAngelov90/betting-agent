@@ -294,10 +294,16 @@ class TheOddsScraper:
             for league in leagues_with_fixtures
             if league in LEAGUE_TO_THEODDS_SPORT
         ]
-        logger.info(
-            f"TheOddsAPI: {len(supported)} leagues with today's fixtures "
-            f"(skipping {len(leagues_with_fixtures) - len(supported)} unsupported)"
-        )
+        unsupported = sorted(leagues_with_fixtures - set(supported))
+        if unsupported:
+            logger.info(
+                f"TheOddsAPI: {len(supported)} leagues with today's fixtures "
+                f"(skipping {len(unsupported)} unsupported: {', '.join(unsupported)})"
+            )
+        else:
+            logger.info(
+                f"TheOddsAPI: {len(supported)} leagues with today's fixtures"
+            )
         return supported
 
     def _get_today_fixtures(self, league: str) -> List[Dict]:
