@@ -381,7 +381,7 @@ class TelegramNotifier:
                 lines.append(f"\n⏳ {leftover} other picks still pending")
 
         message = "\n".join(lines)
-        await self._send_message(message)
+        await self._send_chunked(message)
 
     async def send_performance_report(self, stats: dict):
         """Send a comprehensive performance report via Telegram.
