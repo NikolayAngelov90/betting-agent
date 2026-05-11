@@ -191,6 +191,8 @@ def _team_names_similar(name_a: str, name_b: str) -> bool:
         # Poland — Ekstraklasa (TheOdds API uses short name; DB stores API-Football display name)
         "nieciecza": "termalica b-b.",
         "bruk-bet termalica nieciecza": "termalica b-b.",
+        # Portugal — TheOddsAPI uses "Vitória SC" for Vitória SC Guimarães; DB stores "Guimaraes"
+        "vitoria sc": "guimaraes",
     }
 
     def _strip_accents(s: str) -> str:

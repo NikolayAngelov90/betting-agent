@@ -847,7 +847,6 @@ class FootballBettingAgent:
                     "italy/serie-a",
                     "france/ligue-1",
                     "netherlands/eredivisie",
-                    "netherlands/eerste-divisie",
                     "portugal/primeira-liga",
                     "belgium/jupiler-pro-league",
                     "turkey/super-lig",
@@ -1943,7 +1942,7 @@ class FootballBettingAgent:
         # has fitted ML models, we run a real evaluation pass below and feed
         # the resulting accuracy into the calibration gate. When ML isn't
         # fitted we fall back to the proxy path used previously.
-        _ML_EVAL_CAP = 80
+        _ML_EVAL_CAP = 25
         ml_eval_start = max(0, len(outcomes) - _ML_EVAL_CAP) if self.predictor.ml_models.is_fitted else len(outcomes)
 
         for i, (pick, home_id, away_id, league, actual) in enumerate(outcomes):
