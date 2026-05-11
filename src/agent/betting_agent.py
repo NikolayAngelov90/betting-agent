@@ -1450,7 +1450,7 @@ class FootballBettingAgent:
                     f"fetching from API-Football: {sorted(stale_dates)}"
                 )
                 for _d in sorted(stale_dates):
-                    await self.apifootball_scraper._fetch_fixtures_by_date(_d)
+                    await self.apifootball._fetch_fixtures_by_date(_d)
         except Exception as _exc:
             logger.warning(f"Settle: API-Football stale-result pre-fetch failed: {_exc}")
 

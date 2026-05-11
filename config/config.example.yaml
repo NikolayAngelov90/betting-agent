@@ -12,7 +12,6 @@ scraping:
     - france/ligue-1
     # Strong European Leagues
     - netherlands/eredivisie
-    - netherlands/eerste-divisie
     - portugal/primeira-liga
     - belgium/jupiler-pro-league
     - turkey/super-lig

@@ -252,7 +252,7 @@ LEAGUE_ID_MAP = {
     "france/ligue-1": 61,
     "france/ligue-2": 62,
     "netherlands/eredivisie": 88,
-    "netherlands/eerste-divisie": 131,
+    # "netherlands/eerste-divisie": 131,  # ID 131 = Argentina B Metropolitana, not NL Eerste Divisie
     "portugal/primeira-liga": 94,
     "belgium/jupiler-pro-league": 144,
     "turkey/super-lig": 203,
@@ -281,7 +281,7 @@ PRIORITY_LEAGUES = [
     "italy/serie-a", "france/ligue-1", "europe/champions-league",
     "europe/europa-league", "europe/europa-conference-league",
     # Strong European leagues
-    "netherlands/eredivisie", "netherlands/eerste-divisie", "portugal/primeira-liga",
+    "netherlands/eredivisie", "portugal/primeira-liga",
     "belgium/jupiler-pro-league", "turkey/super-lig", "scotland/premiership",
     # Lower divisions & smaller leagues
     "england/championship", "england/league-one", "england/league-two",
