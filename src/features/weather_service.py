@@ -36,22 +36,36 @@ _CB_THRESHOLD: int = 2
 _weather_disabled: bool = False
 
 
-def _geocode(city: str) -> Optional[Tuple[float, float]]:
-    """Return (latitude, longitude) for a city name. Results cached."""
+def _geocode(city: str, country_code: Optional[str] = None) -> Optional[Tuple[float, float]]:
+    """Return (latitude, longitude) for a city name.
+
+    When country_code is provided (ISO 3166-1 alpha-2, e.g. 'GB', 'DE'), up to
+    three geocoding results are fetched and the one whose country matches is
+    preferred, avoiding false matches (e.g. Dunfermline → Illinois instead of
+    Scotland).  Results are cached per (city, country_code) pair.
+    """
     global _cb_failures, _weather_disabled
-    key = city.lower().strip()
+    key = (city.lower().strip(), country_code)
     if key in _GEO_CACHE:
         return _GEO_CACHE[key]
     try:
-        params = urllib.parse.urlencode({"name": city, "count": 1, "format": "json"})
+        count = 3 if country_code else 1
+        params = urllib.parse.urlencode({"name": city, "count": count, "format": "json"})
         url = f"{_GEOCODING_URL}?{params}"
         req = urllib.request.Request(url, headers={"User-Agent": "betting-agent/1.0"})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
         results = data.get("results", [])
         if results:
-            lat = float(results[0]["latitude"])
-            lon = float(results[0]["longitude"])
+            chosen = results[0]
+            if country_code:
+                # Prefer a result whose country_code matches the expected one
+                for r in results:
+                    if r.get("country_code", "").upper() == country_code.upper():
+                        chosen = r
+                        break
+            lat = float(chosen["latitude"])
+            lon = float(chosen["longitude"])
             _GEO_CACHE[key] = (lat, lon)
             _cb_failures = 0  # reset on success
             return (lat, lon)
@@ -138,26 +152,31 @@ class WeatherService:
         weather_available   — 1 if data was successfully fetched, else 0
     """
 
-    def get_match_weather(self, venue: Optional[str], match_date: date) -> Dict:
+    def get_match_weather(self, venue: Optional[str], match_date: date,
+                          country_code: Optional[str] = None) -> Dict:
         """Return weather features for a venue and date.
 
         Falls back to neutral defaults when the venue cannot be geocoded or
         when the Open-Meteo API is unavailable.
 
         Args:
-            venue: Stadium/city name (e.g. "Old Trafford" or "Manchester").
+            venue: Stadium/city name (e.g. "East End Park" or "Dunfermline").
                    If None or empty, defaults are returned immediately.
             match_date: Date of the match.
+            country_code: ISO 3166-1 alpha-2 country hint (e.g. 'GB', 'DE').
+                          Used to prefer the correct geocoding result when a
+                          city name is ambiguous (e.g. Dunfermline → Scotland,
+                          not Illinois).
         """
         if _weather_disabled or not venue:
             return dict(_DEFAULTS)
 
-        coords = _geocode(venue)
+        coords = _geocode(venue, country_code=country_code)
         if coords is None and " " in venue:
             # Try just the first token as a city name fallback
             first = venue.split()[0]
             if len(first) >= 3:
-                coords = _geocode(first)
+                coords = _geocode(first, country_code=country_code)
 
         if coords is None:
             return dict(_DEFAULTS)

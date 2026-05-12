@@ -469,12 +469,23 @@ class FootballBettingAgent:
         self.scraper.close_driver()
 
         # 4. Injury data (cap at 8 min — API-Football calls can be slow; increased from 5)
-        # Prioritise fixtures that already have open (unsettled) picks so those
-        # get injury context first if the budget or timeout cuts the run short.
-        _injury_priority_ids: list = []
+        # Priority order: today's fixtures first (today's picks need injury data most),
+        # then unsettled picks from previous days. This ensures Swiss/Scottish leagues
+        # that appear late in the alphabetical queue aren't systematically skipped.
+        _today_start = datetime.combine(date.today(), datetime.min.time())
+        _today_end = _today_start + timedelta(days=1)
+        _injury_today_ids: list = []
+        _injury_pending_ids: list = []
         try:
             with self.db.get_session() as _isess:
-                _injury_priority_ids = [
+                _injury_today_ids = [
+                    row[0] for row in _isess.query(Match.id)
+                    .filter(Match.is_fixture == True,
+                            Match.match_date >= _today_start,
+                            Match.match_date < _today_end)
+                    .all()
+                ]
+                _injury_pending_ids = [
                     row[0] for row in _isess.query(SavedPick.match_id)
                     .filter(SavedPick.result.is_(None))
                     .distinct()
@@ -482,6 +493,10 @@ class FootballBettingAgent:
                 ]
         except Exception:
             pass
+        _today_set = set(_injury_today_ids)
+        _injury_priority_ids = _injury_today_ids + [
+            mid for mid in _injury_pending_ids if mid not in _today_set
+        ]
         try:
             await asyncio.wait_for(
                 self.injury_tracker.update(priority_fixture_ids=_injury_priority_ids),
@@ -1306,6 +1321,7 @@ class FootballBettingAgent:
         }
 
         scraped, skipped = 0, 0
+        _pending_failed: set = set()  # pending-pick leagues that failed/timed out
         deadline = _timer.monotonic() + budget_seconds
         loop = asyncio.get_event_loop()
         try:
@@ -1318,6 +1334,10 @@ class FootballBettingAgent:
                         f"(needs ≥{min_needed}s) — "
                         f"{len(_ordered) - scraped - skipped} leagues not reached"
                     )
+                    # Any pending leagues we didn't even start
+                    for remaining_league in _ordered[_ordered.index(league):]:
+                        if remaining_league in _pending_leagues:
+                            _pending_failed.add(remaining_league)
                     break
                 if league in _recently_scraped:
                     skipped += 1
@@ -1353,6 +1373,8 @@ class FootballBettingAgent:
                         f"Flashscore results timeout for {league} after {_elapsed:.0f}s "
                         f"(cap={_per_league_cap}s), continuing"
                     )
+                    if league in _pending_leagues:
+                        _pending_failed.add(league)
                     # Run close_driver in an executor so it can't block the event loop
                     # (driver.quit() and camoufox teardown can themselves take 30-60s).
                     try:
@@ -1364,6 +1386,8 @@ class FootballBettingAgent:
                         pass
                 except Exception as e:
                     logger.debug(f"Flashscore results error for {league}: {e}")
+                    if league in _pending_leagues:
+                        _pending_failed.add(league)
         finally:
             try:
                 await asyncio.wait_for(
@@ -1374,6 +1398,20 @@ class FootballBettingAgent:
                 pass
 
         logger.info(f"Flashscore results scrape complete: {scraped} scraped, {skipped} skipped (already done)")
+
+        # Alert when leagues with unsettled picks could not be scraped — picks
+        # in those leagues will remain stuck in 'pending' until the next run.
+        if _pending_failed:
+            _alert = (
+                f"⚠️ Flashscore results: failed to scrape {len(_pending_failed)} league(s) "
+                f"with pending picks — settlement may be delayed.\n"
+                f"Affected: {', '.join(sorted(_pending_failed))}"
+            )
+            logger.warning(_alert)
+            try:
+                await self.telegram.send_alert(_alert)
+            except Exception as _tg_err:
+                logger.warning(f"Could not send results-failure Telegram alert: {_tg_err}")
 
     async def settle_predictions(self):
         """Fetch recent results and settle pending picks.
@@ -1935,6 +1973,30 @@ class FootballBettingAgent:
             logger.info("No 1X2 outcomes to tune on")
             return
 
+        # Cap total outcomes to the N most recent picks so the full loop stays
+        # well inside the 10-minute CI timeout.  Poisson/Elo predictions are
+        # in-memory but iterating 70+ outcomes + the leak-resistant refit was
+        # already consuming most of the budget.  _ML_EVAL_CAP picks within that
+        # window get real ML feature evaluation.
+        _TUNE_PICK_CAP = 40
+        _ML_EVAL_CAP = 15
+        if len(outcomes) > _TUNE_PICK_CAP:
+            outcomes = outcomes[-_TUNE_PICK_CAP:]
+            logger.info(f"  Tuning: capped to most recent {_TUNE_PICK_CAP} 1X2 outcomes")
+
+        # Preload team history for the ML-evaluated picks so create_features()
+        # uses the cache instead of per-pick DB queries.
+        ml_eval_start = max(0, len(outcomes) - _ML_EVAL_CAP) if self.predictor.ml_models.is_fitted else len(outcomes)
+        if self.predictor.ml_models.is_fitted and ml_eval_start < len(outcomes):
+            _ml_match_ids = [outcomes[i][0]["match_id"] for i in range(ml_eval_start, len(outcomes))]
+            try:
+                self.feature_engineer.preload_batch(
+                    _ml_match_ids, cap_per_team=200, cutoff_days=0
+                )
+                logger.debug(f"  Tuning preload: {len(self.feature_engineer._preload_cache.get('team_history', {}))} teams cached for ML eval")
+            except Exception as _pre_err:
+                logger.debug(f"  Tuning preload failed (falling back to per-pick queries): {_pre_err}")
+
         # Single pass: accuracy + calibration data + Bayesian updates
         model_correct = {"poisson": 0, "elo": 0, "ml": 0}
         model_total = {"poisson": 0, "elo": 0, "ml": 0}
@@ -1944,15 +2006,6 @@ class FootballBettingAgent:
         bayesian = self.predictor.bayesian_weights
         sel_map = {"Home Win": "home_win", "Draw": "draw", "Away Win": "away_win"}
         keys_1x2 = ["home_win", "draw", "away_win"]
-
-        # ML accuracy is evaluated on a capped sample of the most recent picks
-        # to keep tuning under the 10-minute CI timeout (each feature build is
-        # ~1s on Neon, so ML_EVAL_CAP=80 ≈ 80s of overhead). When the predictor
-        # has fitted ML models, we run a real evaluation pass below and feed
-        # the resulting accuracy into the calibration gate. When ML isn't
-        # fitted we fall back to the proxy path used previously.
-        _ML_EVAL_CAP = 25
-        ml_eval_start = max(0, len(outcomes) - _ML_EVAL_CAP) if self.predictor.ml_models.is_fitted else len(outcomes)
 
         for i, (pick, home_id, away_id, league, actual) in enumerate(outcomes):
             if i % 50 == 0:
@@ -2035,6 +2088,9 @@ class FootballBettingAgent:
                 bayesian.update(league, "poisson", poisson_over25 == actual_over25, days_ago, market="goals")
 
         logger.info(f"  Tuning: {len(outcomes)}/{len(outcomes)} 1X2 picks processed")
+
+        # Release tuning preload cache — it's only needed for this loop
+        self.feature_engineer._preload_cache = None
 
         # Calculate accuracy per model
         accuracies = {}
@@ -2381,13 +2437,20 @@ class FootballBettingAgent:
             if _cal_path.exists():
                 _cal = json.loads(_cal_path.read_text())
                 if _cal.get("ml", 1.0) == 0.0:
-                    _cal["ml"] = 1.0
-                    _cal_path.write_text(json.dumps(_cal, indent=2))
-                    self.predictor.calibration_factors["ml"] = 1.0
-                    logger.info(
-                        "ML calibration reset to 1.0 after retraining — "
-                        "freshly trained model re-enters ensemble (gate re-evaluates at next --tune)"
-                    )
+                    if not _budget_exhausted:
+                        _cal["ml"] = 1.0
+                        _cal_path.write_text(json.dumps(_cal, indent=2))
+                        self.predictor.calibration_factors["ml"] = 1.0
+                        logger.info(
+                            "ML calibration reset to 1.0 after retraining — "
+                            "freshly trained model re-enters ensemble (gate re-evaluates at next --tune)"
+                        )
+                    else:
+                        logger.warning(
+                            f"ML calibration NOT reset (training was budget-exhausted at "
+                            f"{len(X_list)}/{len(match_data)} samples) — "
+                            f"ml=0.0 calibration remains until a full training run completes"
+                        )
         except Exception as _ce:
             logger.warning(f"Could not reset ML calibration after training: {_ce}")
 

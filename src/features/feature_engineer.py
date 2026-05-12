@@ -275,8 +275,8 @@ class FeatureEngineer:
         from datetime import date as _date
         _effective_date = _standings_date if _standings_date is not None else _date.today()
         _standings_date = _effective_date.replace(day=1)
-        home_pos = self.team_features.get_league_position(home_id, league, as_of_date=_standings_date)
-        away_pos = self.team_features.get_league_position(away_id, league, as_of_date=_standings_date)
+        home_pos = self.team_features.get_league_position(home_id, league, as_of_date=_standings_date, preload_cache=_cache)
+        away_pos = self.team_features.get_league_position(away_id, league, as_of_date=_standings_date, preload_cache=_cache)
         features.update(self._prefix_dict(home_pos, "home_league_"))
         features.update(self._prefix_dict(away_pos, "away_league_"))
 
@@ -294,8 +294,8 @@ class FeatureEngineer:
         )
 
         # 5. International competition features (CL/EL/ECL form)
-        home_intl = self.team_features.get_international_form(home_id, as_of_date=as_of_date)
-        away_intl = self.team_features.get_international_form(away_id, as_of_date=as_of_date)
+        home_intl = self.team_features.get_international_form(home_id, as_of_date=as_of_date, preload_cache=_cache)
+        away_intl = self.team_features.get_international_form(away_id, as_of_date=as_of_date, preload_cache=_cache)
         features.update(self._prefix_dict(home_intl, "home_"))
         features.update(self._prefix_dict(away_intl, "away_"))
 
@@ -343,8 +343,8 @@ class FeatureEngineer:
         features.update(ref_features)
 
         # 10. RSI + MACD momentum indicators
-        home_mom = self.team_features.get_momentum_indicators(home_id, as_of_date=as_of_date)
-        away_mom = self.team_features.get_momentum_indicators(away_id, as_of_date=as_of_date)
+        home_mom = self.team_features.get_momentum_indicators(home_id, as_of_date=as_of_date, preload_cache=_cache)
+        away_mom = self.team_features.get_momentum_indicators(away_id, as_of_date=as_of_date, preload_cache=_cache)
         features.update(self._prefix_dict(home_mom, "home_"))
         features.update(self._prefix_dict(away_mom, "away_"))
         features["rsi_diff"] = home_mom["rsi"] - away_mom["rsi"]
@@ -409,7 +409,7 @@ class FeatureEngineer:
         # Skip during training: historical weather is unavailable and
         # constant placeholders just become zero-variance noise.
         if not for_training:
-            weather = self._get_weather_features(_venue, _match_date)
+            weather = self._get_weather_features(_venue, _match_date, league=league)
             features.update(weather)
 
         logger.debug(f"Generated {len(features)} features for match {match_id}")
@@ -1074,11 +1074,35 @@ class FeatureEngineer:
             logger.warning(f"Situational features failed for team {team_id}: {e}")
             return defaults
 
-    def _get_weather_features(self, venue, match_date) -> dict:
+    # ISO 3166-1 alpha-2 country codes derived from league slug prefix.
+    # Used to disambiguate geocoding when a city name exists in multiple countries.
+    _LEAGUE_COUNTRY_CODES: dict = {
+        "scotland/": "GB", "england/": "GB", "wales/": "GB", "northern-ireland/": "GB",
+        "france/": "FR", "germany/": "DE", "italy/": "IT", "spain/": "ES",
+        "portugal/": "PT", "netherlands/": "NL", "belgium/": "BE", "turkey/": "TR",
+        "greece/": "GR", "norway/": "NO", "sweden/": "SE", "denmark/": "DK",
+        "austria/": "AT", "switzerland/": "CH", "poland/": "PL", "romania/": "RO",
+        "czech/": "CZ", "russia/": "RU", "ukraine/": "UA", "croatia/": "HR",
+        "serbia/": "RS", "hungary/": "HU", "slovakia/": "SK", "bulgaria/": "BG",
+        "finland/": "FI", "ireland/": "IE", "scotland/": "GB",
+    }
+
+    @classmethod
+    def _league_country_code(cls, league: str) -> str | None:
+        if not league:
+            return None
+        for prefix, code in cls._LEAGUE_COUNTRY_CODES.items():
+            if league.startswith(prefix):
+                return code
+        return None
+
+    def _get_weather_features(self, venue, match_date, league: str = None) -> dict:
         """Return weather features for the match venue and date.
 
         Uses Open-Meteo free API (no key). Returns neutral defaults on failure.
         Can be disabled via models.weather_features_enabled: false in config.
+        A league-derived country_code hint is passed to the geocoder to avoid
+        false matches (e.g. Dunfermline → Scotland, not Illinois).
         """
         defaults = {
             "weather_temp_c": 12.0, "weather_wind_kmh": 10.0,
@@ -1095,7 +1119,8 @@ class FeatureEngineer:
             if match_date is None:
                 return defaults
             md = match_date.date() if hasattr(match_date, "date") else match_date
-            return self._weather_service.get_match_weather(venue, md)
+            country_code = self._league_country_code(league)
+            return self._weather_service.get_match_weather(venue, md, country_code=country_code)
         except Exception as exc:
             logger.debug(f"Weather features failed: {exc}")
             return defaults

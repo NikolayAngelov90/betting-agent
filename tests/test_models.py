@@ -1116,14 +1116,16 @@ class TestSmartXGBackfill:
         scraper.db = MagicMock()
         scraper.db.get_session.return_value = session
 
-        # First .all() → total in window (all_in_window query, no xG filter)
-        # Second .all() → matches needing xG (filtered query)
+        # New implementation uses count() for totals, all() only for the processing list.
+        # First count() → total_in_window; second count() → missing_total (= matches_needing)
         mock_matches = [MagicMock(id=i, apifootball_id=1000 + i) for i in range(matches_needing)]
-        mock_all_window = [MagicMock(id=i) for i in range(total_in_window)]
-        session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.side_effect = [
-            mock_all_window,  # total_in_window query (first)
-            mock_matches,     # matches_needing query (second)
+        session.query.return_value.filter.return_value.count.side_effect = [
+            total_in_window,   # total_in_window query (first count())
+            matches_needing,   # missing_total query (second count())
         ]
+        session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
+            mock_matches
+        )
 
         scraper._fetch_fixture_stats = AsyncMock(return_value={"home_xg": 1.2})
         scraper._batch_update_match_stats = MagicMock()
@@ -1141,7 +1143,7 @@ class TestSmartXGBackfill:
             asyncio.run(scraper._backfill_xg())
         finally:
             _lu.remove(sink_id)
-        assert any("all recent matches have xG data, skipping" in m for m in messages)
+        assert any("have xG data, skipping" in m for m in messages)
         scraper._fetch_fixture_stats.assert_not_called()
 
     def test_completion_log_includes_skipped_count(self):
@@ -1155,11 +1157,12 @@ class TestSmartXGBackfill:
             asyncio.run(scraper._backfill_xg())
         finally:
             _lu.remove(sink_id)
-        info_logs = [m for m in messages if "xG backfill:" in m and "already complete" in m]
-        assert len(info_logs) >= 1, f"Expected completion log, got: {messages}"
+        # The start log: "Backfilling xG/stats for 3 recent matches ... (7/10 already complete, 3 total missing)"
+        info_logs = [m for m in messages if "already complete" in m]
+        assert len(info_logs) >= 1, f"Expected start log with already_complete count, got: {messages}"
         log = info_logs[0]
-        assert "3" in log       # needed
-        assert "7" in log       # skipped (10 - 3)
+        assert "3" in log       # needed / missing_total
+        assert "7" in log       # already_complete (10 - 3)
 
     def test_dynamic_count_processes_only_needed(self):
         """AC2 — only N matches processed when N < 25."""
