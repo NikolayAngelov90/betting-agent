@@ -272,9 +272,14 @@ class FeatureEngineer:
         # League standings barely change within a month so this is accurate enough.
         # Applies to both training (as_of_date set) and live prediction (as_of_date None).
         _standings_date = as_of_date
-        from datetime import date as _date
+        from datetime import date as _date, datetime as _datetime
         _effective_date = _standings_date if _standings_date is not None else _date.today()
         _standings_date = _effective_date.replace(day=1)
+        # Preload-cache rows store match_date as datetime.datetime (from SQLAlchemy).
+        # Normalize _standings_date to datetime so the preload-path comparison
+        # `m["match_date"] < as_of_date` doesn't raise TypeError (datetime vs date).
+        if not isinstance(_standings_date, _datetime):
+            _standings_date = _datetime(_standings_date.year, _standings_date.month, 1)
         home_pos = self.team_features.get_league_position(home_id, league, as_of_date=_standings_date, preload_cache=_cache)
         away_pos = self.team_features.get_league_position(away_id, league, as_of_date=_standings_date, preload_cache=_cache)
         features.update(self._prefix_dict(home_pos, "home_league_"))
