@@ -1225,10 +1225,18 @@ class TestEmptyLeagueFixtureAlert:
             f"Expected WARNING for 0 fixtures, got: {messages}"
 
     def test_check_logs_empty_leagues(self):
-        """AC2 — empty leagues are logged at INFO (no Telegram alert)."""
+        """AC2 — tier-1 empty leagues trigger Telegram alert; non-tier-1 only logged."""
         import asyncio
+        from unittest.mock import MagicMock
         from loguru import logger as _lu
         agent = self._make_agent()
+        # Provide a DB mock so the tier-1 DB fixture-count query doesn't crash
+        session = MagicMock()
+        session.__enter__ = lambda s: s
+        session.__exit__ = MagicMock(return_value=False)
+        session.query.return_value.filter.return_value.count.return_value = 5
+        agent.db = MagicMock()
+        agent.db.get_session.return_value = session
         messages = []
         sink_id = _lu.add(lambda msg: messages.append(msg), level="INFO", format="{message}")
         try:
@@ -1237,8 +1245,12 @@ class TestEmptyLeagueFixtureAlert:
             ))
         finally:
             _lu.remove(sink_id)
-        agent.telegram.send_alert.assert_not_called()
-        assert any("germany/bundesliga" in m or "england/championship" in m for m in messages)
+        # Bundesliga is tier-1 → Telegram alert must fire
+        agent.telegram.send_alert.assert_called_once()
+        alert_text = agent.telegram.send_alert.call_args[0][0]
+        assert "bundesliga" in alert_text.lower()
+        # Championship is not tier-1 → only in INFO log, no extra alert
+        assert any("championship" in m for m in messages)
 
     def test_check_no_log_when_all_leagues_have_fixtures(self):
         """AC3 — no log when all leagues return ≥1 fixture."""

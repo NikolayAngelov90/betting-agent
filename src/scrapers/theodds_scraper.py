@@ -193,6 +193,13 @@ def _team_names_similar(name_a: str, name_b: str) -> bool:
         "bruk-bet termalica nieciecza": "termalica b-b.",
         # Portugal — TheOddsAPI uses "Vitória SC" for Vitória SC Guimarães; DB stores "Guimaraes"
         "vitoria sc": "guimaraes",
+        # Greece — DB stores short names; TheOddsAPI sends city-qualified names
+        "ofi crete": "ofi",
+        "ofi crete fc": "ofi",
+        "panserraikos fc": "panserraikos",
+        "panserraikos fc thessaloniki": "panserraikos",
+        # Netherlands — DB stores "PSV Eindhoven"; TheOdds may send bare "PSV"
+        "psv": "psv eindhoven",
     }
 
     def _strip_accents(s: str) -> str:

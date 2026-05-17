@@ -735,11 +735,17 @@ class FlashscoreScraper(BaseScraper):
             return []
         matches = []
 
+        # European tournament pages (UCL/UEL/ECL) load more slowly than domestic
+        # leagues — use a longer wait timeout to reduce spurious TimeoutExceptions.
+        _is_euro = any(t in url for t in ("/champions-league/", "/europa-league/",
+                                           "/europa-conference-league/"))
+        _wait_s = 75 if _is_euro else 45
+
         try:
             driver.get(url)
             # With page_load_strategy='none', driver.get() returns immediately.
-            # Wait up to 30s for the first match row to be rendered by JS.
-            WebDriverWait(driver, 45).until(
+            # Wait for the first match row to be rendered by JS.
+            WebDriverWait(driver, _wait_s).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
             )
             if load_more:
@@ -772,7 +778,7 @@ class FlashscoreScraper(BaseScraper):
                 driver2 = self._get_driver()
                 if driver2:
                     driver2.get(url)
-                    WebDriverWait(driver2, 45).until(
+                    WebDriverWait(driver2, _wait_s).until(
                         EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
                     )
                     for el in driver2.find_elements(By.CLASS_NAME, "event__match"):

@@ -421,7 +421,7 @@ class FootballBettingAgent:
                 pass
 
         try:
-            await self._check_empty_fixture_leagues(_league_fixture_results)
+            await self._check_empty_fixture_leagues(_league_fixture_results, _fixture_leagues)
         except Exception as e:
             logger.warning(f"Empty-league Telegram alert failed (non-fatal): {e}")
 
@@ -468,23 +468,44 @@ class FootballBettingAgent:
         # scraping (~12s/match) is unreliable due to Cloudflare blocking in CI.
         self.scraper.close_driver()
 
-        # 4. Injury data (cap at 8 min — API-Football calls can be slow; increased from 5)
-        # Priority order: today's fixtures first (today's picks need injury data most),
-        # then unsettled picks from previous days. This ensures Swiss/Scottish leagues
-        # that appear late in the alphabetical queue aren't systematically skipped.
+        # 4. Injury data (cap at 12 min — API-Football calls can be slow).
+        # Today's fixtures are fetched first, sorted by league tier so that on high-
+        # fixture days (88+ in run #134) the top leagues are covered before timeout.
+        # Tier order: top-5 → major European → second tier → rest.
+        _INJURY_TIER1 = {
+            "england/premier-league", "germany/bundesliga", "spain/laliga",
+            "italy/serie-a", "france/ligue-1",
+        }
+        _INJURY_TIER2 = {
+            "netherlands/eredivisie", "portugal/primeira-liga", "turkey/super-lig",
+            "belgium/jupiler-pro-league", "scotland/premiership",
+            "europe/champions-league", "europe/europa-league",
+        }
+
+        def _injury_league_rank(league: str) -> int:
+            if league in _INJURY_TIER1:
+                return 0
+            if league in _INJURY_TIER2:
+                return 1
+            return 2
+
         _today_start = datetime.combine(date.today(), datetime.min.time())
         _today_end = _today_start + timedelta(days=1)
         _injury_today_ids: list = []
         _injury_pending_ids: list = []
         try:
             with self.db.get_session() as _isess:
-                _injury_today_ids = [
-                    row[0] for row in _isess.query(Match.id)
-                    .filter(Match.is_fixture == True,
-                            Match.match_date >= _today_start,
-                            Match.match_date < _today_end)
-                    .all()
-                ]
+                # Fetch today's fixtures with league info for tier-sorting
+                _today_rows = _isess.query(Match.id, Match.league).filter(
+                    Match.is_fixture == True,
+                    Match.match_date >= _today_start,
+                    Match.match_date < _today_end,
+                ).all()
+                # Sort by tier so tier-1 leagues are always processed first
+                _today_rows_sorted = sorted(
+                    _today_rows, key=lambda r: _injury_league_rank(r[1] or "")
+                )
+                _injury_today_ids = [row[0] for row in _today_rows_sorted]
                 _injury_pending_ids = [
                     row[0] for row in _isess.query(SavedPick.match_id)
                     .filter(SavedPick.result.is_(None))
@@ -500,11 +521,11 @@ class FootballBettingAgent:
         try:
             await asyncio.wait_for(
                 self.injury_tracker.update(priority_fixture_ids=_injury_priority_ids),
-                timeout=480,
+                timeout=720,  # 12 min (up from 8) — 88 fixtures × ~8s = ~12 min worst case
             )
             logger.info("Injury update complete")
         except asyncio.TimeoutError:
-            logger.warning("Injury update timed out after 8 minutes")
+            logger.warning("Injury update timed out after 12 minutes")
         except Exception as e:
             logger.error(f"Injury update failed: {e}")
 
@@ -706,15 +727,83 @@ class FootballBettingAgent:
             logger.info(f"Added dynamic Flashscore target: {slug} (fixtures/pending picks, not in static config)")
         return list(static_leagues) + extras
 
-    async def _check_empty_fixture_leagues(self, league_results: dict) -> None:
-        """Log leagues that returned 0 fixtures from Flashscore (info only, no Telegram)."""
+    async def _check_empty_fixture_leagues(
+        self, league_results: dict, attempted_leagues: list = None
+    ) -> None:
+        """Warn when tier-1 leagues return 0 fixtures or timed out during scraping.
+
+        For major leagues (PL, Bundesliga, La Liga, Serie A, Ligue 1) a zero-fixture
+        result is almost always a scraper failure rather than a genuine rest day, so we:
+        - Log a WARNING (not INFO)
+        - Check the DB for already-stored fixtures for that league today
+        - Send a Telegram alert so operators know picks may be incomplete
+        """
+        _TIER1 = {
+            "england/premier-league", "germany/bundesliga", "spain/laliga",
+            "italy/serie-a", "france/ligue-1", "netherlands/eredivisie",
+            "portugal/primeira-liga", "turkey/super-lig",
+        }
         off_season = set(self.config.get("scraping.off_season_leagues", []))
-        empty_leagues = [
+        today_start = datetime.combine(date.today(), datetime.min.time())
+        today_end = today_start + timedelta(days=1)
+
+        # Leagues that were attempted but not in results at all (timed out)
+        attempted = set(attempted_leagues or [])
+        timed_out = attempted - set(league_results.keys())
+
+        # Leagues that returned 0 fixtures (scrape completed but empty)
+        zero_result = {
             league for league, fixtures in league_results.items()
             if len(fixtures) == 0 and league not in off_season
-        ]
-        if empty_leagues:
-            logger.info(f"Flashscore: 0 fixtures returned for: {', '.join(empty_leagues)}")
+        }
+
+        problem_leagues = (timed_out | zero_result) - off_season
+        if not problem_leagues:
+            return
+
+        tier1_problems = problem_leagues & _TIER1
+        non_tier1 = problem_leagues - _TIER1
+
+        if non_tier1:
+            logger.info(f"Flashscore: 0 fixtures / timeout for: {', '.join(sorted(non_tier1))}")
+
+        if not tier1_problems:
+            return
+
+        # For tier-1 problems: check how many fixtures exist in DB for today
+        db_counts = {}
+        try:
+            with self.db.get_session() as session:
+                for league in tier1_problems:
+                    n = session.query(Match).filter(
+                        Match.league == league,
+                        Match.is_fixture == True,
+                        Match.match_date >= today_start,
+                        Match.match_date < today_end,
+                    ).count()
+                    db_counts[league] = n
+        except Exception:
+            pass
+
+        reasons = []
+        for league in sorted(tier1_problems):
+            reason = "timeout" if league in timed_out else "0 fixtures returned"
+            db_n = db_counts.get(league, "?")
+            reasons.append(f"  • {league}: {reason} ({db_n} fixtures in DB for today)")
+            logger.warning(
+                f"Flashscore tier-1 failure for {league}: {reason} "
+                f"— {db_n} fixtures already in DB from API-Football"
+            )
+
+        alert = (
+            f"⚠️ Flashscore scrape failed for {len(tier1_problems)} tier-1 league(s):\n"
+            + "\n".join(reasons)
+            + "\nPicks may be missing venue/referee enrichment; API-Football fixtures used as fallback."
+        )
+        try:
+            await self.telegram.send_alert(alert)
+        except Exception as _te:
+            logger.warning(f"Could not send tier-1 fixture failure alert: {_te}")
 
     async def get_daily_picks(self, target_date: date = None,
                               max_picks_per_match: int = 2,
@@ -976,7 +1065,23 @@ class FootballBettingAgent:
 
         # Value threshold auto-calibration: adjust min EV based on recent hit rate.
         # Hot streak → tighten (be more selective), cold streak → loosen slightly.
+        self._recent_roi = None
+        self._recent_roi_n = 0
         self._auto_calibrate_ev_threshold()
+        # Alert operators when the model is in a sustained cold streak (ROI < -15%)
+        _cal_roi = getattr(self, "_recent_roi", None)
+        if _cal_roi is not None and _cal_roi < -0.15:
+            _cold_msg = (
+                f"⚠️ Cold streak alert: ROI={_cal_roi:+.1%} over last "
+                f"{getattr(self, '_recent_roi_n', '?')} settled picks — "
+                f"model is underperforming. EV threshold adjusted to "
+                f"{self.value_calculator.min_ev:.1%}. Monitor picks closely."
+            )
+            logger.warning(_cold_msg)
+            try:
+                await self.telegram.send_alert(_cold_msg)
+            except Exception:
+                pass
 
         # Pre-filter: skip fixtures with no real bookmaker odds.
         # Feature engineering costs ~1s × 146 DB queries on Neon.  Fixtures with
@@ -2400,11 +2505,44 @@ class FootballBettingAgent:
         y = np.array(y_list)
         y_goals = np.array(y_goals_list)
 
+        # Log 1X2 class distribution — helps diagnose if ML predicts only majority class
+        _label_names = {0: "Away", 1: "Draw", 2: "Home"}
+        _class_counts = {_label_names[c]: int(np.sum(y == c)) for c in [0, 1, 2]}
+        _class_pcts = {k: f"{v/len(y):.1%}" for k, v in _class_counts.items()}
+        logger.info(
+            f"1X2 class distribution ({len(y)} samples): "
+            + ", ".join(f"{k}={v} ({_class_pcts[k]})" for k, v in _class_counts.items())
+        )
+
         logger.info(f"Training on {len(X)} samples, {X.shape[1]} features (skipped {skipped})")
 
         # Train 1X2 models
         self.predictor.ml_models.fit(X, y, feature_names)
         self.predictor.ml_models.save()
+
+        # Per-class precision/recall from cross-validated predictions (leak-free diagnostic)
+        try:
+            from sklearn.model_selection import cross_val_predict
+            from sklearn.metrics import classification_report
+            _best_model = self.predictor.ml_models._models.get(
+                "xgboost") or next(iter(self.predictor.ml_models._models.values()))
+            _cv_pred = cross_val_predict(_best_model, X, y, cv=3)
+            _report = classification_report(
+                y, _cv_pred,
+                target_names=["Away", "Draw", "Home"],
+                output_dict=True,
+                zero_division=0,
+            )
+            for cls in ["Away", "Draw", "Home"]:
+                r = _report.get(cls, {})
+                logger.info(
+                    f"  1X2 CV [{cls}]: precision={r.get('precision', 0):.2f} "
+                    f"recall={r.get('recall', 0):.2f} f1={r.get('f1-score', 0):.2f} "
+                    f"support={int(r.get('support', 0))}"
+                )
+            logger.info(f"  1X2 CV accuracy={_report.get('accuracy', 0):.3f}")
+        except Exception as _cv_err:
+            logger.debug(f"1X2 CV classification report failed (non-fatal): {_cv_err}")
 
         # Log feature importance
         importance = self.predictor.ml_models.get_feature_importance()
@@ -2531,7 +2669,20 @@ class FootballBettingAgent:
 
         # 3. EV threshold calibration (persisted to disk)
         try:
+            self._recent_roi = None
             self._auto_calibrate_ev_threshold()
+            _settle_roi = getattr(self, "_recent_roi", None)
+            if _settle_roi is not None and _settle_roi < -0.15:
+                _cold_msg = (
+                    f"⚠️ Cold streak alert: ROI={_settle_roi:+.1%} over last "
+                    f"{getattr(self, '_recent_roi_n', '?')} settled picks — "
+                    f"model is underperforming. Monitor picks closely."
+                )
+                logger.warning(_cold_msg)
+                try:
+                    await self.telegram.send_alert(_cold_msg)
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"EV calibration failed: {e}")
 
@@ -2838,6 +2989,10 @@ class FootballBettingAgent:
                         f"{base_ev:.1%} → {new_ev:.1%} "
                         f"(ROI={roi:+.1%} over last {len(roi_values)} picks)"
                     )
+
+                # Store recent ROI so callers can issue a Telegram cold-streak alert
+                self._recent_roi = roi
+                self._recent_roi_n = len(roi_values)
 
                 # Persist to disk so next CI run starts from this threshold
                 ev_path.parent.mkdir(parents=True, exist_ok=True)

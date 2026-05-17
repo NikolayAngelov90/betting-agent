@@ -398,44 +398,58 @@ class APIFootballScraper(BaseScraper):
         url = f"{API_FOOTBALL_BASE}{endpoint}"
         headers = {"x-apisports-key": self.api_key}
 
-        try:
-            data = await self.fetch_json(url, params=params, headers=headers)
-            self._requests_today += 1
-            errors = data.get("errors", {})
-            if errors:
-                if "rateLimit" in errors:
-                    self._rate_limit_retries += 1
-                    logger.debug("API-Football rate limited, waiting 12s")
-                    await asyncio.sleep(12)
-                elif "requests" in errors:
-                    logger.warning("API-Football daily quota exhausted — skipping all further API calls")
-                    self._quota_exhausted = True
-                elif "plan" in str(errors).lower():
-                    # Free-tier season restriction (expected on free plan — not an error).
-                    # Logs once at INFO level so it's visible but not alarming.
-                    if not self._plan_restricted:
-                        logger.info(
-                            "API-Football free-plan: current season stats unavailable "
-                            "(plan allows 2022-2024 only). "
-                            "Skipping restricted endpoints for this run."
-                        )
-                        self._plan_restricted = True
-                elif "access" in errors:
-                    # Account suspended or access revoked — stop all further requests
-                    if not self._account_suspended:
-                        logger.error(f"API-Football account suspended: {errors}")
-                        self._account_suspended = True
-                    self._quota_exhausted = True
-                else:
-                    logger.error(f"API-Football errors: {errors}")
+        # Retry loop for rateLimit errors with exponential backoff + jitter.
+        # API-Football returns HTTP 200 with {"errors": {"rateLimit": "..."}} instead
+        # of HTTP 429, so the base-scraper retry path doesn't catch it — we handle
+        # it here and retry the full request up to 3 times before giving up.
+        import random as _random
+        for _rl_attempt in range(4):  # 1 initial attempt + up to 3 retries
+            try:
+                data = await self.fetch_json(url, params=params, headers=headers)
+                self._requests_today += 1
+                errors = data.get("errors", {})
+                if errors:
+                    if "rateLimit" in errors:
+                        self._rate_limit_retries += 1
+                        if _rl_attempt < 3:
+                            _backoff = min(12 * (2 ** _rl_attempt), 60) + _random.uniform(0, 4)
+                            logger.warning(
+                                f"API-Football rate limited — retry {_rl_attempt + 1}/3 "
+                                f"in {_backoff:.1f}s"
+                            )
+                            await asyncio.sleep(_backoff)
+                            continue  # retry the request
+                        logger.warning("API-Football rate limited — all retries exhausted")
+                    elif "requests" in errors:
+                        logger.warning("API-Football daily quota exhausted — skipping all further API calls")
+                        self._quota_exhausted = True
+                    elif "plan" in str(errors).lower():
+                        # Free-tier season restriction (expected on free plan — not an error).
+                        # Logs once at INFO level so it's visible but not alarming.
+                        if not self._plan_restricted:
+                            logger.info(
+                                "API-Football free-plan: current season stats unavailable "
+                                "(plan allows 2022-2024 only). "
+                                "Skipping restricted endpoints for this run."
+                            )
+                            self._plan_restricted = True
+                    elif "access" in errors:
+                        # Account suspended or access revoked — stop all further requests
+                        if not self._account_suspended:
+                            logger.error(f"API-Football account suspended: {errors}")
+                            self._account_suspended = True
+                        self._quota_exhausted = True
+                    else:
+                        logger.error(f"API-Football errors: {errors}")
+                    return None
+                # Pace requests to stay under 10/min free-tier limit (6s = safe margin)
+                await asyncio.sleep(6)
+                return data
+            except Exception as e:
+                self._requests_today += 1
+                logger.error(f"API-Football request failed: {e}")
                 return None
-            # Pace requests to stay under 10/min free-tier limit (6s = safe margin)
-            await asyncio.sleep(6)
-            return data
-        except Exception as e:
-            self._requests_today += 1
-            logger.error(f"API-Football request failed: {e}")
-            return None
+        return None  # exhausted all rate-limit retries
 
     async def update(self):
         """Run the full API-Football update: yesterday results + today fixtures + odds + xG.
