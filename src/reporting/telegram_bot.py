@@ -29,6 +29,23 @@ def _mark_picks_sent_today() -> None:
     _PICKS_SENT_STATE.parent.mkdir(parents=True, exist_ok=True)
     _PICKS_SENT_STATE.write_text(date.today().isoformat())
 
+
+_COLD_STREAK_STATE = Path("data/models/cold_streak_alerted_date.txt")
+
+
+def _cold_streak_alerted_today() -> bool:
+    """Return True if a cold-streak Telegram alert was already sent today."""
+    if _COLD_STREAK_STATE.exists():
+        return _COLD_STREAK_STATE.read_text().strip() == date.today().isoformat()
+    return False
+
+
+def _mark_cold_streak_alerted() -> None:
+    """Record that today's cold-streak alert was sent so we don't duplicate it."""
+    _COLD_STREAK_STATE.parent.mkdir(parents=True, exist_ok=True)
+    _COLD_STREAK_STATE.write_text(date.today().isoformat())
+
+
 # League display names for clean formatting
 LEAGUE_DISPLAY = {
     "england/premier-league": "🏴 Premier League",
@@ -86,7 +103,7 @@ class TelegramNotifier:
                 logger.error(f"Failed to initialize Telegram bot: {e}")
         return self._bot
 
-    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None, no_injury_data: bool = False, injury_data_stale: bool = False):
+    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None, no_injury_data: bool = False, injury_data_stale: bool = False, injury_budget_exhausted: bool = False, force: bool = False):
         """Send daily picks summary via Telegram with rich formatting."""
         if not self.enabled:
             return
@@ -99,9 +116,10 @@ class TelegramNotifier:
             await self._send_message("No value picks found for today.")
             return
 
-        # Supplement header when picks were already sent earlier today (AC1/AC2 — Story 8.2)
+        # Supplement header when picks were already sent earlier today (AC1/AC2 — Story 8.2).
+        # Skipped when force=True (--picks --force always uses the normal header).
         try:
-            is_supplement = _picks_sent_today()
+            is_supplement = (not force) and _picks_sent_today()
         except Exception as _e:
             logger.warning(f"Could not check prior pick sends: {_e}")
             is_supplement = False
@@ -227,7 +245,10 @@ class TelegramNotifier:
                 lines.append(f"  • {safe_match} — {html_escape(dp.market)}")
 
         if no_injury_data and picks:
-            lines.append("\n⚠️ <i>Injury data unavailable (API budget exhausted, no cached data).</i>")
+            if injury_budget_exhausted:
+                lines.append("\n⚠️ <i>Injury data unavailable (API budget exhausted, no cached data).</i>")
+            else:
+                lines.append("\n⚠️ <i>Injury data unavailable for some matches (limited API coverage for these leagues).</i>")
         elif injury_data_stale and picks:
             lines.append("\n⚠️ <i>Using yesterday's injury data (today's API budget exhausted).</i>")
 

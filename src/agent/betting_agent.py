@@ -17,7 +17,11 @@ from src.scrapers.theodds_scraper import TheOddsScraper
 from src.features.feature_engineer import FeatureEngineer
 from src.models.ensemble import EnsemblePredictor
 from src.betting.value_calculator import ValueBettingCalculator, BetRecommendation
-from src.reporting.telegram_bot import TelegramNotifier
+from src.reporting.telegram_bot import (
+    TelegramNotifier,
+    _cold_streak_alerted_today,
+    _mark_cold_streak_alerted,
+)
 from src.data.models import Match, Team, Odds, SavedPick, Injury
 from src.data.database import get_db, init_db
 from src.utils.config import get_config
@@ -785,18 +789,50 @@ class FootballBettingAgent:
         except Exception:
             pass
 
-        reasons = []
+        # Separate true scraping failures (DB has fixtures but Flashscore missed them)
+        # from no-match days (both Flashscore AND DB return 0 — not a failure).
+        # Timeouts are always failures regardless of DB count.
+        true_failures = []   # needs Telegram alert
+        no_match_days = []   # just log INFO, no alert spam
+
         for league in sorted(tier1_problems):
-            reason = "timeout" if league in timed_out else "0 fixtures returned"
-            db_n = db_counts.get(league, "?")
-            reasons.append(f"  • {league}: {reason} ({db_n} fixtures in DB for today)")
-            logger.warning(
-                f"Flashscore tier-1 failure for {league}: {reason} "
-                f"— {db_n} fixtures already in DB from API-Football"
+            db_n = db_counts.get(league, 0)
+            if league in timed_out:
+                reason = "timeout"
+                true_failures.append((league, reason, db_n))
+                logger.warning(
+                    f"Flashscore tier-1 timeout for {league} "
+                    f"— {db_n} fixtures in DB from API-Football"
+                )
+            elif db_n > 0:
+                reason = "0 fixtures returned"
+                true_failures.append((league, reason, db_n))
+                logger.warning(
+                    f"Flashscore tier-1 failure for {league}: 0 fixtures returned "
+                    f"— {db_n} fixtures already in DB from API-Football"
+                )
+            else:
+                no_match_days.append(league)
+                logger.info(
+                    f"Flashscore: 0 fixtures for tier-1 league {league} "
+                    f"— no matches scheduled today (DB also empty)"
+                )
+
+        if no_match_days:
+            logger.info(
+                f"Flashscore: no matches today for {len(no_match_days)} tier-1 league(s): "
+                + ", ".join(no_match_days)
             )
 
+        if not true_failures:
+            return  # all zeros were genuine no-match days, no alert needed
+
+        reasons = [
+            f"  • {lg}: {reason} ({db_n} fixtures in DB for today)"
+            for lg, reason, db_n in true_failures
+        ]
         alert = (
-            f"⚠️ Flashscore scrape failed for {len(tier1_problems)} tier-1 league(s):\n"
+            f"⚠️ Flashscore scrape failed for {len(true_failures)} tier-1 league(s):\n"
             + "\n".join(reasons)
             + "\nPicks may be missing venue/referee enrichment; API-Football fixtures used as fallback."
         )
@@ -1063,25 +1099,27 @@ class FootballBettingAgent:
                     f"Add them to historical_loader.py to improve predictions."
                 )
 
-        # Value threshold auto-calibration: adjust min EV based on recent hit rate.
-        # Hot streak → tighten (be more selective), cold streak → loosen slightly.
+        # Value threshold auto-calibration: hot streak → relax, cold streak → tighten.
         self._recent_roi = None
         self._recent_roi_n = 0
         self._auto_calibrate_ev_threshold()
-        # Alert operators when the model is in a sustained cold streak (ROI < -15%)
+        # Alert operators when the model is in a sustained cold streak (ROI < -15%).
+        # Guard: only send once per day (same alert fires from --settle AND --picks).
         _cal_roi = getattr(self, "_recent_roi", None)
         if _cal_roi is not None and _cal_roi < -0.15:
             _cold_msg = (
                 f"⚠️ Cold streak alert: ROI={_cal_roi:+.1%} over last "
                 f"{getattr(self, '_recent_roi_n', '?')} settled picks — "
-                f"model is underperforming. EV threshold adjusted to "
+                f"model is underperforming. EV threshold tightened to "
                 f"{self.value_calculator.min_ev:.1%}. Monitor picks closely."
             )
             logger.warning(_cold_msg)
-            try:
-                await self.telegram.send_alert(_cold_msg)
-            except Exception:
-                pass
+            if not _cold_streak_alerted_today():
+                try:
+                    await self.telegram.send_alert(_cold_msg)
+                    _mark_cold_streak_alerted()
+                except Exception:
+                    pass
 
         # Pre-filter: skip fixtures with no real bookmaker odds.
         # Feature engineering costs ~1s × 146 DB queries on Neon.  Fixtures with
@@ -2559,6 +2597,31 @@ class FootballBettingAgent:
         self.predictor.goals_model.fit(X, y_goals, feature_names)
         self.predictor.goals_model.save()
 
+        # GoalsML accuracy gate: if the model cannot beat the majority-class baseline
+        # (predicting the more common outcome every time) it is actively hurting
+        # over/under predictions. Disable its blend weight for this session.
+        try:
+            _goals_val_acc = getattr(self.predictor.goals_model, "last_val_accuracy", None)
+            _goals_baseline = getattr(self.predictor.goals_model, "last_majority_baseline", None)
+            if _goals_val_acc is not None and _goals_baseline is not None:
+                self.predictor.goals_ml_accuracy = _goals_val_acc
+                self.predictor.goals_ml_majority_baseline = _goals_baseline
+                if _goals_val_acc < _goals_baseline:
+                    self.predictor.goals_ml_disabled = True
+                    logger.warning(
+                        f"GoalsML blend DISABLED: val accuracy {_goals_val_acc:.1%} < "
+                        f"majority baseline {_goals_baseline:.1%} — "
+                        f"model adds noise; Poisson+bookmaker used for over/under"
+                    )
+                else:
+                    self.predictor.goals_ml_disabled = False
+                    logger.info(
+                        f"GoalsML blend active: val accuracy {_goals_val_acc:.1%} vs "
+                        f"majority baseline {_goals_baseline:.1%}"
+                    )
+        except Exception as _gate_err:
+            logger.debug(f"GoalsML accuracy gate check failed (non-fatal): {_gate_err}")
+
         # Free the training preload cache — it holds history for all training teams
         # and is no longer needed now that feature extraction is done.
         self.feature_engineer._preload_cache = None
@@ -2676,13 +2739,15 @@ class FootballBettingAgent:
                 _cold_msg = (
                     f"⚠️ Cold streak alert: ROI={_settle_roi:+.1%} over last "
                     f"{getattr(self, '_recent_roi_n', '?')} settled picks — "
-                    f"model is underperforming. Monitor picks closely."
+                    f"model is underperforming. EV threshold tightened. Monitor picks closely."
                 )
                 logger.warning(_cold_msg)
-                try:
-                    await self.telegram.send_alert(_cold_msg)
-                except Exception:
-                    pass
+                if not _cold_streak_alerted_today():
+                    try:
+                        await self.telegram.send_alert(_cold_msg)
+                        _mark_cold_streak_alerted()
+                    except Exception:
+                        pass
         except Exception as e:
             logger.warning(f"EV calibration failed: {e}")
 
@@ -2912,11 +2977,11 @@ class FootballBettingAgent:
         for odds level (e.g. 40% win rate at 1.75 = -30% ROI is cold;
         40% at 2.80 = +12% ROI is hot).
 
-        - ROI > +10%: hot → tighten min_ev by up to +2pp
+        - ROI > +10%: hot → relax min_ev by up to -0.5pp (catch more value)
         - ROI -10% to +10%: normal → keep base min_ev
-        - ROI < -10%: cold → loosen min_ev by up to -0.5pp
+        - ROI < -10%: cold → TIGHTEN min_ev by up to +2pp (only best bets)
 
-        Bounded: min_ev never goes below 1% or above 8%.
+        Bounded: min_ev never goes below base or above 10%.
         The calibrated threshold is persisted to data/models/ev_threshold.json.
         """
         from src.models.ml_models import MODELS_DIR as _MODELS_DIR
@@ -2963,23 +3028,23 @@ class FootballBettingAgent:
                 roi = sum(roi_values) / len(roi_values)
 
                 if roi > 0.10:
-                    # Hot streak: tighten — be more selective (raise min EV)
-                    # Scale: +10% ROI → +0pp, +30%+ → +2pp
-                    bonus = min((roi - 0.10) / 0.20, 1.0) * 0.02
-                    new_ev = base_ev + bonus
+                    # Hot streak: slight relaxation — model is outperforming, allow
+                    # marginally lower EV threshold to capture more value bets.
+                    # Scale: +10% ROI → -0pp, +30%+ → -0.5pp
+                    bonus = min((roi - 0.10) / 0.20, 1.0) * 0.005
+                    new_ev = base_ev - bonus
                 elif roi < -0.10:
-                    # Cold streak: loosen slightly — lower min EV by at most 0.5pp.
-                    # Capped tightly; primary protection is the drawdown circuit breaker.
-                    # Scale: -10% ROI → -0pp, -30%- → -0.5pp
-                    penalty = min((-roi - 0.10) / 0.20, 1.0) * 0.005
-                    new_ev = base_ev - penalty
+                    # Cold streak: TIGHTEN — only the highest-EV bets during
+                    # underperformance. Lower quality picks will make a slump worse.
+                    # Scale: -10% ROI → +0pp, -30%- → +2pp
+                    tighten = min((-roi - 0.10) / 0.20, 1.0) * 0.02
+                    new_ev = base_ev + tighten
                 else:
                     new_ev = base_ev  # normal range, keep base
 
-                # Clamp to sane bounds.
-                # Floor = base_ev - 0.5pp to prevent runaway loosening on cold streaks
-                ev_floor = max(base_ev - 0.005, 0.01)
-                new_ev = max(ev_floor, min(0.08, round(new_ev, 4)))
+                # Clamp to sane bounds: floor at base, ceiling at 10%
+                ev_floor = base_ev
+                new_ev = max(ev_floor, min(0.10, round(new_ev, 4)))
 
                 if abs(new_ev - prev_ev) > 0.001:
                     self.value_calculator.min_ev = new_ev
@@ -3255,6 +3320,7 @@ async def main():
                         # Detect when all picks lack injury data (e.g. API suspended)
                         no_injury_data = False
                         injury_data_stale = False
+                        injury_budget_exhausted = False
                         try:
                             match_ids = [p.match_id for p in new_picks if p.match_id]
                             if match_ids:
@@ -3267,6 +3333,17 @@ async def main():
                                         if tid
                                     ]
                                     if _team_ids:
+                                        _today_start = datetime.combine(
+                                            date.today(), datetime.min.time()
+                                        )
+                                        # Check total injury records for today across all teams
+                                        _any_today = (
+                                            _isess.query(Injury)
+                                            .filter(Injury.updated_at >= _today_start)
+                                            .count()
+                                        )
+                                        # No injury records at all today → budget exhausted
+                                        injury_budget_exhausted = _any_today == 0
                                         _inj_total = (
                                             _isess.query(Injury)
                                             .filter(Injury.team_id.in_(_team_ids))
@@ -3274,9 +3351,6 @@ async def main():
                                         )
                                         no_injury_data = _inj_total == 0
                                         if not no_injury_data:
-                                            _today_start = datetime.combine(
-                                                date.today(), datetime.min.time()
-                                            )
                                             _fresh = (
                                                 _isess.query(Injury)
                                                 .filter(
@@ -3292,6 +3366,8 @@ async def main():
                             new_picks, stats=stats, dropped_picks=dropped_picks,
                             no_injury_data=no_injury_data,
                             injury_data_stale=injury_data_stale,
+                            injury_budget_exhausted=injury_budget_exhausted,
+                            force=force_picks,
                         )
                         print(f"\nPicks sent to Telegram! ({len(new_picks)} new)")
                     else:

@@ -36,6 +36,13 @@ class EnsemblePredictor:
         # versions of tune_ensemble_weights() is intentionally not loaded.
         self.bayesian_weights = BayesianWeightLearner(self.config)
 
+        # Last known GoalsML validation accuracy and majority-class baseline.
+        # When accuracy < baseline the model is hurting over/under predictions —
+        # blend weight is forced to 0 for the session via goals_ml_disabled.
+        self.goals_ml_accuracy: float = 0.0
+        self.goals_ml_majority_baseline: float = 0.0
+        self.goals_ml_disabled: bool = False
+
         # Per-model calibration discounts (1.0 = perfectly calibrated)
         # Overconfident models get <1.0, reducing their ensemble weight.
         self.calibration_factors = {"poisson": 1.0, "elo": 1.0, "ml": 1.0}
@@ -261,9 +268,10 @@ class EnsemblePredictor:
                     )
 
         # Goals ML model blend — when the dedicated over/under classifier is
-        # fitted, blend its P(over 2.5) with the current Poisson+bookmaker estimate.
-        # A 25% weight keeps Poisson dominant while respecting the ML signal.
-        if features_vector is not None and self.goals_model.is_fitted:
+        # fitted AND performing above the majority-class baseline, blend its
+        # P(over 2.5) with the current Poisson+bookmaker estimate.
+        # If GoalsML accuracy < baseline (model hurts predictions), blend is skipped.
+        if features_vector is not None and self.goals_model.is_fitted and not self.goals_ml_disabled:
             try:
                 ml_o25 = self.goals_model.predict_proba_over25(
                     features_vector, feature_names=feature_names

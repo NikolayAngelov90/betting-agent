@@ -125,9 +125,9 @@ models:
   min_training_samples: 1000
 
 betting:
-  min_odds: 1.30
+  min_odds: 1.50            # Skip very short prices — too little margin for model error
   max_odds: 10.0
-  min_expected_value: 0.03  # 3% minimum edge (professional standard is 2-3%)
+  min_expected_value: 0.05  # 5% minimum edge — filters noise, improves selectivity
   min_confidence: 0.58      # 58% minimum model probability (hard floor: 45%)
   min_ev_confidence_score: 0.035  # Sliding scale: EV × confidence combined threshold
                                   # Allows sub-58% confidence when EV compensates (smooth curve)

@@ -560,6 +560,8 @@ class GoalsMLModel:
         self.is_fitted = False
         self._kept_feature_mask = None
         self._corr_drop_mask = None
+        self.last_val_accuracy: float = 0.0
+        self.last_majority_baseline: float = 0.0
         self._init_models()
 
     def _init_models(self):
@@ -689,6 +691,8 @@ class GoalsMLModel:
             val_acc = accuracy_score(y_val, majority)
             val_counts = np.bincount(y_val.astype(int), minlength=2)
             majority_share = val_counts.max() / len(y_val) if len(y_val) else 0
+            self.last_val_accuracy = val_acc
+            self.last_majority_baseline = majority_share
             logger.info(
                 f"GoalsMLModel validation accuracy: {val_acc:.1%} "
                 f"(val set: under={val_counts[0]} over={val_counts[1]}, "
