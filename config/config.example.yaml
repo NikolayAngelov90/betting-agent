@@ -49,6 +49,12 @@ scraping:
     - portugal/primeira-liga  # consistent timeout in CI; covered by football-data.org
     - romania/liga-1          # consistent timeout in CI; no fallback source needed
 
+  # Leagues to skip ONLY in the --update-results (Flashscore results) step.
+  # Unlike flashscore_skip_leagues, fixtures and odds are still scraped normally.
+  # Use for competitions that time out during results scraping but have active picks.
+  flashscore_skip_results_leagues:
+    - europe/europa-conference-league  # consistent timeout in results CI step (~5 min/run)
+
   update_interval_hours: 6
   headless: true
   request_delay: 3  # seconds between requests
@@ -128,9 +134,9 @@ betting:
   min_odds: 1.50            # Skip very short prices — too little margin for model error
   max_odds: 10.0
   min_expected_value: 0.05  # 5% minimum edge — filters noise, improves selectivity
-  min_confidence: 0.58      # 58% minimum model probability (hard floor: 45%)
-  min_ev_confidence_score: 0.035  # Sliding scale: EV × confidence combined threshold
-                                  # Allows sub-58% confidence when EV compensates (smooth curve)
+  min_confidence: 0.55      # 55% minimum model probability — model must give >50% clear majority
+  min_ev_confidence_score: 0.038  # Sliding scale: EV × confidence combined threshold
+                                  # Stricter than before; prevents very-low-confidence picks
   kelly_fraction: 0.25      # Fractional Kelly — 25% of full Kelly (professional standard)
   max_stake_percentage: 4.0 # Hard cap: maximum 4% of bankroll per bet
   max_picks_per_league: 5   # Portfolio: cap exposure per league per day

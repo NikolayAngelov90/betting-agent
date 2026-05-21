@@ -102,16 +102,16 @@ class TestOddsQuotaSemaphore:
         return scraper
 
     def test_semaphore_capacity_min_of_budget_and_fixtures(self):
-        """Capacity = min(budget, n_fixtures) when budget is the limiting factor."""
+        """Capacity is capped at 2 to prevent concurrent rate-limit cascade."""
         scraper = self._make_scraper()
         sem = scraper._make_odds_semaphore(remaining_budget=10, n_fixtures=49)
-        assert sem._value == 10
+        assert sem._value == 2  # hard cap at 2 concurrent requests
 
     def test_semaphore_capacity_limited_by_fixture_count(self):
-        """Capacity = min(budget, n_fixtures) when fixture count is smaller."""
+        """Capacity = min(2, n_fixtures) when fixture count is smaller than the cap."""
         scraper = self._make_scraper()
         sem = scraper._make_odds_semaphore(remaining_budget=49, n_fixtures=3)
-        assert sem._value == 3
+        assert sem._value == 2  # 3 fixtures > cap of 2, so cap applies
 
     def test_semaphore_capacity_floor_when_budget_zero(self):
         """Capacity floors at 1 when remaining_budget=0 — prevents asyncio.Semaphore(0) hang."""

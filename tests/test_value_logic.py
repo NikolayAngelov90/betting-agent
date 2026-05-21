@@ -142,7 +142,7 @@ class TestCorrelatedPicksFilter:
     def test_drops_one_of_correlated_pair(self):
         agent = self._agent()
         winner = _make_rec(1, "Home Win", ev=0.10, confidence=0.65, agreement="unanimous")
-        loser = _make_rec(1, "Over 2.5", ev=0.06, confidence=0.55, agreement="majority")
+        loser = _make_rec(1, "Over 2.5 Goals", ev=0.06, confidence=0.55, agreement="majority")
         result = agent._filter_correlated_picks([winner, loser])
         assert len(result) == 1
         assert result[0].selection == "Home Win"
@@ -151,7 +151,7 @@ class TestCorrelatedPicksFilter:
         """Composite score (with agreement bonus) trumps raw EV."""
         agent = self._agent()
         # Split-models pick has higher raw EV*conf but lower composite.
-        split_higher_ev = _make_rec(1, "Over 2.5", ev=0.10, confidence=0.55,
+        split_higher_ev = _make_rec(1, "Over 2.5 Goals", ev=0.10, confidence=0.55,
                                     agreement="split")
         unanimous_lower_ev = _make_rec(1, "Home Win", ev=0.085, confidence=0.62,
                                        agreement="unanimous")
@@ -161,24 +161,33 @@ class TestCorrelatedPicksFilter:
         assert len(result) == 1
         assert result[0].selection == "Home Win"
 
+    def test_btts_yes_and_over_2_5_goals_correlated(self):
+        """BTTS Yes + Over 2.5 Goals on same match: lower-EV one is dropped."""
+        agent = self._agent()
+        winner = _make_rec(1, "BTTS Yes", ev=0.10, confidence=0.65, agreement="unanimous")
+        loser = _make_rec(1, "Over 2.5 Goals", ev=0.06, confidence=0.55, agreement="majority")
+        result = agent._filter_correlated_picks([winner, loser])
+        assert len(result) == 1
+        assert result[0].selection == "BTTS Yes"
+
     def test_uncorrelated_pairs_unchanged(self):
         agent = self._agent()
         a = _make_rec(1, "Home Win", ev=0.10, confidence=0.65)
-        b = _make_rec(1, "BTTS Yes", ev=0.06, confidence=0.55)  # not in CORRELATED_PAIRS
+        b = _make_rec(1, "Draw", ev=0.06, confidence=0.55)  # not in CORRELATED_PAIRS
         result = agent._filter_correlated_picks([a, b])
         assert len(result) == 2
 
     def test_different_matches_unchanged(self):
         agent = self._agent()
         a = _make_rec(1, "Home Win", ev=0.10, confidence=0.65)
-        b = _make_rec(2, "Over 2.5", ev=0.06, confidence=0.55)
+        b = _make_rec(2, "Over 2.5 Goals", ev=0.06, confidence=0.55)
         result = agent._filter_correlated_picks([a, b])
         assert len(result) == 2
 
     def test_three_correlated_drops_to_one(self):
         agent = self._agent()
         a = _make_rec(1, "Home Win", ev=0.10, confidence=0.65, agreement="unanimous")
-        b = _make_rec(1, "Over 2.5", ev=0.06, confidence=0.55, agreement="majority")
+        b = _make_rec(1, "Over 2.5 Goals", ev=0.06, confidence=0.55, agreement="majority")
         c = _make_rec(1, "Home Over 1.5", ev=0.05, confidence=0.50, agreement="split")
         result = agent._filter_correlated_picks([a, b, c])
         # All three are pairwise correlated; the composite winner survives.

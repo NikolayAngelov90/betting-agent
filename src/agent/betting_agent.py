@@ -1113,13 +1113,18 @@ class FootballBettingAgent:
                 f"model is underperforming. EV threshold tightened to "
                 f"{self.value_calculator.min_ev:.1%}. Monitor picks closely."
             )
-            logger.warning(_cold_msg)
             if not _cold_streak_alerted_today():
+                logger.warning(_cold_msg)
                 try:
                     await self.telegram.send_alert(_cold_msg)
                     _mark_cold_streak_alerted()
                 except Exception:
                     pass
+            else:
+                logger.info(
+                    f"Cold streak already alerted today (ROI={_cal_roi:+.1%}, "
+                    f"EV threshold={self.value_calculator.min_ev:.1%}) — skipping duplicate Telegram"
+                )
 
         # Pre-filter: skip fixtures with no real bookmaker odds.
         # Feature engineering costs ~1s × 146 DB queries on Neon.  Fixtures with
@@ -1186,7 +1191,7 @@ class FootballBettingAgent:
         # Contrarian picks (model significantly disagrees with market) get
         # a boost when backed by strong model agreement — these are genuine
         # edges the market is mispricing, not model errors.
-        _agreement_bonus = {"unanimous": 1.15, "majority": 1.0, "split": 0.85, "unknown": 0.95}
+        _agreement_bonus = {"unanimous": 1.15, "solo": 1.05, "majority": 1.0, "split": 0.85, "unknown": 0.95}
 
         def _contrarian_bonus(r):
             """1.0 for normal, up to 1.10 for contrarian + unanimous."""
@@ -1440,10 +1445,14 @@ class FootballBettingAgent:
             "austria/bundesliga",
             "denmark/superliga",
         }
+        # Skip leagues excluded from all Flashscore scraping
         _fs_skip_results = set(self.config.get("scraping.flashscore_skip_leagues", []))
+        # Also skip leagues excluded specifically from results scraping (e.g. ECL timeout)
+        _fs_skip_results_only = set(self.config.get("scraping.flashscore_skip_results_leagues", []))
+        _fs_skip_results |= _fs_skip_results_only
         if _fs_skip_results:
             leagues = [l for l in leagues if l not in _fs_skip_results]
-            logger.info(f"scrape_results: skipping {sorted(_fs_skip_results)} (flashscore_skip_leagues)")
+            logger.info(f"scrape_results: skipping {sorted(_fs_skip_results)} (flashscore_skip_leagues + flashscore_skip_results_leagues)")
 
         _priority = [l for l in leagues if l in _pending_leagues]
         _rest_normal = [l for l in leagues if l not in _pending_leagues and l not in _SLOW_LEAGUES]
@@ -2739,7 +2748,8 @@ class FootballBettingAgent:
                 _cold_msg = (
                     f"⚠️ Cold streak alert: ROI={_settle_roi:+.1%} over last "
                     f"{getattr(self, '_recent_roi_n', '?')} settled picks — "
-                    f"model is underperforming. EV threshold tightened. Monitor picks closely."
+                    f"model is underperforming. EV threshold tightened to "
+                    f"{self.value_calculator.min_ev:.1%}. Monitor picks closely."
                 )
                 logger.warning(_cold_msg)
                 if not _cold_streak_alerted_today():
@@ -3072,34 +3082,43 @@ class FootballBettingAgent:
 
     # Pairs of (selection_A, selection_B) that are positively correlated —
     # if one hits, the other is significantly more likely to hit too.
+    # Selection names must match BetRecommendation.selection exactly:
+    #   "Home Win", "Draw", "Away Win"
+    #   "Over 1.5 Goals", "Over 2.5 Goals", "Over 3.5 Goals"
+    #   "Under 1.5 Goals", "Under 2.5 Goals", "Under 3.5 Goals"
+    #   "BTTS Yes", "BTTS No"
+    #   "Home Over 1.5", "Away Over 1.5"
     _CORRELATED_PAIRS = {
         # Home win correlates with high-scoring outcomes
-        ("Home Win", "Over 2.5"),
+        ("Home Win", "Over 2.5 Goals"),
+        ("Home Win", "Over 1.5 Goals"),
         ("Home Win", "Home Over 1.5"),
         # Away win correlates with high-scoring outcomes
-        ("Away Win", "Over 2.5"),
+        ("Away Win", "Over 2.5 Goals"),
+        ("Away Win", "Over 1.5 Goals"),
         ("Away Win", "Away Over 1.5"),
         # Draw correlates with low-scoring outcomes
-        ("Draw", "Under 2.5"),
-        # BTTS correlates with over goals
-        ("Yes", "Over 2.5"),        # BTTS Yes + Over 2.5
+        ("Draw", "Under 2.5 Goals"),
+        ("Draw", "Under 1.5 Goals"),
+        # BTTS Yes correlates with over goals (key fix: was "Yes"/"Over 2.5")
+        ("BTTS Yes", "Over 2.5 Goals"),
+        ("BTTS Yes", "Over 1.5 Goals"),
         # Under markets are correlated with each other
-        ("Under 2.5", "Under 1.5"),
-        ("Under 2.5", "Home Under 1.5"),
-        ("Under 2.5", "Away Under 1.5"),
-        # Over markets correlate with each other
-        ("Over 2.5", "Home Over 1.5"),
-        ("Over 2.5", "Away Over 1.5"),
-        # BTTS No correlates with under goals and team unders
-        ("No", "Under 2.5"),
-        ("No", "Home Under 1.5"),
-        ("No", "Away Under 1.5"),
+        ("Under 2.5 Goals", "Under 1.5 Goals"),
+        # Over markets correlate with team-level overs
+        ("Over 2.5 Goals", "Home Over 1.5"),
+        ("Over 2.5 Goals", "Away Over 1.5"),
+        ("Over 1.5 Goals", "Home Over 1.5"),
+        ("Over 1.5 Goals", "Away Over 1.5"),
+        # BTTS No correlates with under goals
+        ("BTTS No", "Under 2.5 Goals"),
+        ("BTTS No", "Under 1.5 Goals"),
     }
 
     # Composite score used by both the main sort and the correlation filter,
     # so a pick promoted by unanimous agreement isn't dropped in favour of a
     # split-models pick that has marginally higher raw EV*confidence.
-    _AGREEMENT_BONUS = {"unanimous": 1.15, "majority": 1.0, "split": 0.85, "unknown": 0.95}
+    _AGREEMENT_BONUS = {"unanimous": 1.15, "solo": 1.05, "majority": 1.0, "split": 0.85, "unknown": 0.95}
 
     def _composite_score(self, r: BetRecommendation) -> float:
         agr_bonus = self._AGREEMENT_BONUS.get(r.model_agreement, 1.0)
@@ -3410,11 +3429,15 @@ async def main():
                         print(f"    EV: {pick.expected_value:.1%} | Conf: {pick.confidence:.1%} | Risk: {pick.risk_level}")
                         print(f"    Stake: {pick.kelly_stake_percentage:.1f}% of bankroll")
                         if pick.model_agreement:
-                            line = f"    Models: {pick.model_agreement}{agreement_tag}"
-                            if pick.models_for:
-                                line += f" - {pick.models_for} agree"
-                            if pick.models_against:
-                                line += f" | {pick.models_against} disagree"
+                            agr = pick.model_agreement
+                            if agr == "solo":
+                                line = f"    Models: Only {pick.models_for} (single model signal)"
+                            else:
+                                line = f"    Models: {agr}{agreement_tag}"
+                                if pick.models_for:
+                                    line += f" - {pick.models_for} agree"
+                                if pick.models_against:
+                                    line += f" | {pick.models_against} disagree"
                             print(line)
                         if pick.xg_edge:
                             print(f"    xG edge: {pick.xg_edge}")

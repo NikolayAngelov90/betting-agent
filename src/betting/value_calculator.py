@@ -51,13 +51,13 @@ class ValueBettingCalculator:
         betting = self.config.betting
         self.min_odds = betting.get("min_odds", 1.30)
         self.max_odds = betting.get("max_odds", 10.0)
-        self.min_ev = betting.get("min_expected_value", 0.03)       # 3% — professional standard
-        self.min_confidence = betting.get("min_confidence", 0.58)   # 58% minimum model probability
-        self.high_ev_min_confidence = 0.45  # hard floor — never go below 45% even with high EV
+        self.min_ev = betting.get("min_expected_value", 0.05)       # 5% — selective standard
+        self.min_confidence = betting.get("min_confidence", 0.55)   # 55% minimum model probability
+        self.high_ev_min_confidence = 0.52  # hard floor — model must give clear majority (>50%)
         # Sliding scale: EV × confidence combined score threshold.
         # Allows slightly sub-threshold confidence when EV compensates (and vice versa).
-        # e.g. 56% conf + 7% EV = 0.039 → passes; 46% conf + 3.5% EV = 0.016 → rejected.
-        self.min_ev_confidence_score = betting.get("min_ev_confidence_score", 0.035)
+        # e.g. 56% conf + 8% EV = 0.045 → passes; 52% conf + 7% EV = 0.036 → rejected.
+        self.min_ev_confidence_score = betting.get("min_ev_confidence_score", 0.038)
         self.kelly_fraction = betting.get("kelly_fraction", 0.25)
         self.max_stake_pct = betting.get("max_stake_percentage", 5.0)
         _VALID_MARKET_KEYS = {
@@ -219,6 +219,41 @@ class ValueBettingCalculator:
                 _reject("split+low conf")
                 continue
 
+            # xG regression contradiction penalty: when xG signals that a team
+            # has been scoring above expected (regression risk) and we are
+            # betting on MORE goals / BTTS Yes, dampen the probability to
+            # reflect mean-reversion pressure.  Applied before Kelly so that
+            # severely penalised picks also fail minimum-stake checks.
+            home_overperf = context.get("home_xg_overperformance", 0) or 0
+            away_overperf = context.get("away_xg_overperformance", 0) or 0
+            _xg_penalty = 0.0
+            if market_key in ("over_2.5", "over_1.5", "over_3.5", "btts_yes"):
+                # Both teams overperforming → strong regression signal against goals
+                if home_overperf > 0.5 and away_overperf > 0.5:
+                    _xg_penalty = 0.05
+                elif home_overperf > 0.5 or away_overperf > 0.5:
+                    _xg_penalty = 0.03
+            elif market_key == "home_win" and home_overperf > 1.0:
+                _xg_penalty = 0.03
+            elif market_key == "away_win" and away_overperf > 1.0:
+                _xg_penalty = 0.03
+            if _xg_penalty > 0:
+                prob_orig = prob
+                prob = prob * (1.0 - _xg_penalty)
+                ev = self.calculate_expected_value(prob, best_odds)
+                logger.debug(
+                    f"xG regression penalty ({_xg_penalty:.0%}) on {match_name} "
+                    f"{selection}: prob {prob_orig:.1%} → {prob:.1%}, "
+                    f"EV → {ev:.1%}"
+                )
+                # Re-check minimum thresholds after penalty
+                if ev < self.min_ev:
+                    _reject("xg_regression_penalty")
+                    continue
+                if prob < self.high_ev_min_confidence:
+                    _reject("xg_regression_penalty_low_conf")
+                    continue
+
             # Uncertainty-aware Kelly: scale stake by model agreement
             kelly_pct = self.kelly_criterion(
                 prob, best_odds,
@@ -276,7 +311,7 @@ class ValueBettingCalculator:
         # Sort by EV * confidence * agreement bonus (best bets first).
         # Unanimous picks are promoted; split-model picks are demoted.
         # This ensures portfolio caps consume slots on the highest-conviction bets first.
-        _agreement_bonus = {"unanimous": 1.15, "majority": 1.0, "split": 0.85, "unknown": 0.95}
+        _agreement_bonus = {"unanimous": 1.15, "solo": 1.05, "majority": 1.0, "split": 0.85, "unknown": 0.95}
         recommendations.sort(
             key=lambda r: r.expected_value * r.confidence
             * _agreement_bonus.get(r.model_agreement, 1.0),
@@ -299,6 +334,7 @@ class ValueBettingCalculator:
     # Scale Kelly stake by model agreement level
     _KELLY_AGREEMENT_SCALE = {
         "unanimous": 1.0,
+        "solo": 0.85,     # single model, no dissent — reduce stake vs full consensus
         "majority": 0.80,
         "split": 0.60,
         "unknown": 0.75,
@@ -588,6 +624,8 @@ class ValueBettingCalculator:
         total = len(models_for) + len(models_against)
         if total == 0:
             agreement = "unknown"
+        elif len(models_against) == 0 and len(models_for) == 1:
+            agreement = "solo"      # only one model has a signal; no dissent but not true consensus
         elif len(models_against) == 0:
             agreement = "unanimous"
         elif len(models_for) > len(models_against):
@@ -652,6 +690,8 @@ class ValueBettingCalculator:
             agr = agreement_info["agreement"]
             if agr == "unanimous":
                 parts.append(f"All models agree ({agreement_info['models_for']}).")
+            elif agr == "solo":
+                parts.append(f"Only {agreement_info['models_for']} signal (single model).")
             elif agr == "majority":
                 parts.append(
                     f"Majority of models agree ({agreement_info['models_for']}); "
