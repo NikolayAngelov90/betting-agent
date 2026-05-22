@@ -381,14 +381,21 @@ class FootballBettingAgent:
         # today's fixtures OR are priority (pending picks).  Skipping leagues
         # with 0 fixtures avoids ~5-7s per wasted page load × 20+ leagues.
         _fs_skip = set(self.config.get("scraping.flashscore_skip_leagues", []))
+        _fs_skip_fixtures_only = set(
+            self.config.get("scraping.flashscore_skip_fixtures_leagues", [])
+        )
+        _fs_skip_fixtures = _fs_skip | _fs_skip_fixtures_only
         _fixture_leagues = [
             l for l in _ordered_leagues
             if l in _important  # has today's fixtures or pending picks
-            and l not in _fs_skip
+            and l not in _fs_skip_fixtures
         ]
         _skipped_fixture_leagues = len(_ordered_leagues) - len(_fixture_leagues)
-        if _fs_skip:
-            logger.info(f"Flashscore: skipping {sorted(_fs_skip)} (flashscore_skip_leagues)")
+        if _fs_skip_fixtures:
+            logger.info(
+                f"Flashscore fixtures: skipping {sorted(_fs_skip_fixtures)} "
+                f"(flashscore_skip_leagues + flashscore_skip_fixtures_leagues)"
+            )
         if _skipped_fixture_leagues:
             logger.info(
                 f"Fixtures: scraping {len(_fixture_leagues)} leagues with fixtures/pending, "
@@ -461,6 +468,17 @@ class FootballBettingAgent:
         try:
             theodds_written = await asyncio.wait_for(self.theodds.update(), timeout=300)
             logger.info(f"The Odds API update complete: {theodds_written} odds rows written")
+            _remaining = getattr(self.theodds, "_remaining_requests", None)
+            if _remaining is not None and _remaining < 100:
+                _warn_msg = (
+                    f"⚠️ TheOddsAPI credits low: {_remaining} remaining. "
+                    f"Odds coverage will degrade when quota is exhausted."
+                )
+                logger.warning(_warn_msg)
+                try:
+                    await self.telegram.send_alert(_warn_msg)
+                except Exception as _tg_err:
+                    logger.warning(f"Failed to send TheOddsAPI credit warning: {_tg_err}")
         except asyncio.TimeoutError:
             logger.warning("The Odds API update timed out after 5 minutes")
         except Exception as e:
@@ -699,6 +717,10 @@ class FootballBettingAgent:
 
         # Build context for reasoning
         context = self._build_context(features, injury_report)
+        # Expose pick-level calibration factors so value_calculator can raise the EV
+        # floor for markets that systematically overestimate goal probability.
+        if hasattr(self.predictor, "pick_calibration") and self.predictor.pick_calibration:
+            context["pick_calibration"] = self.predictor.pick_calibration
 
         # Find value bets
         recommendations = self.value_calculator.find_value_bets(
@@ -2335,6 +2357,19 @@ class FootballBettingAgent:
 
             self._apply_ml_calibration_gate(accuracies, cal_factors, prev_cal, ml_is_proxy=ml_is_proxy)
 
+            # Poisson weight floor: when Poisson clearly outperforms the ensemble
+            # (>5pp gap), protect it from calibration discount.  Without this floor,
+            # a short-run calibration error can inadvertently suppress the best
+            # individual model while ML (or other noisy models) dominate.
+            poisson_acc = accuracies.get("poisson", 0.0)
+            ensemble_acc = accuracies.get("ensemble", 0.0)
+            if poisson_acc > ensemble_acc + 0.05 and cal_factors.get("poisson", 1.0) < 1.0:
+                cal_factors["poisson"] = 1.0
+                logger.info(
+                    f"Poisson floor applied: Poisson {poisson_acc:.1%} > "
+                    f"ensemble {ensemble_acc:.1%} (+5pp) — calibration restored to 1.0"
+                )
+
             # Alert operators via Telegram when ML is excluded (AC1 of Story 4.2)
             if cal_factors.get("ml", 1.0) == 0.0:
                 ml_acc = accuracies.get("ml", 0.0)
@@ -2646,23 +2681,54 @@ class FootballBettingAgent:
         try:
             if _cal_path.exists():
                 _cal = json.loads(_cal_path.read_text())
-                if _cal.get("ml", 1.0) == 0.0:
-                    if not _budget_exhausted:
-                        _cal["ml"] = 1.0
-                        _cal_path.write_text(json.dumps(_cal, indent=2))
-                        self.predictor.calibration_factors["ml"] = 1.0
-                        logger.info(
-                            "ML calibration reset to 1.0 after retraining — "
-                            "freshly trained model re-enters ensemble (gate re-evaluates at next --tune)"
+                _prev_ml_cal = _cal.get("ml", 1.0)
+                if _prev_ml_cal < 1.0:
+                    if _budget_exhausted:
+                        logger.warning(
+                            f"ML calibration NOT reset (training budget-exhausted at "
+                            f"{len(X_list)}/{len(match_data)} samples) — "
+                            f"ml={_prev_ml_cal} calibration remains until a full training run"
                         )
                     else:
-                        logger.warning(
-                            f"ML calibration NOT reset (training was budget-exhausted at "
-                            f"{len(X_list)}/{len(match_data)} samples) — "
-                            f"ml=0.0 calibration remains until a full training run completes"
+                        # Only restore ML to full weight when the freshly-trained model
+                        # actually beats the naive majority-class baseline.  If it doesn't,
+                        # keep the previous gate discount so --picks doesn't accidentally
+                        # inherit a below-baseline model.
+                        _val_acc = getattr(self.predictor.ml_models, "last_val_accuracy", None)
+                        _majority = getattr(self.predictor.ml_models, "last_majority_baseline", None)
+                        _beats_baseline = (
+                            _val_acc is not None
+                            and _majority is not None
+                            and _val_acc > _majority
                         )
+                        if _beats_baseline:
+                            _cal["ml"] = 1.0
+                            _cal_path.write_text(json.dumps(_cal, indent=2))
+                            self.predictor.calibration_factors["ml"] = 1.0
+                            logger.info(
+                                f"ML calibration restored to 1.0 after retraining "
+                                f"(val_acc={_val_acc:.1%} > majority_baseline={_majority:.1%})"
+                            )
+                        elif _val_acc is not None:
+                            # Model trained but doesn't beat baseline — apply partial discount
+                            # so it contributes a little rather than being silently reset to full
+                            _new_ml = 0.6 if _prev_ml_cal == 0.0 else _prev_ml_cal
+                            _cal["ml"] = _new_ml
+                            _cal_path.write_text(json.dumps(_cal, indent=2))
+                            self.predictor.calibration_factors["ml"] = _new_ml
+                            logger.warning(
+                                f"ML val_acc={_val_acc:.1%} does not beat majority "
+                                f"baseline={_majority:.1%} — keeping partial discount ml={_new_ml}"
+                            )
+                        else:
+                            # No val accuracy recorded (e.g. training skipped validation step)
+                            # — keep the gate's existing decision rather than guessing
+                            logger.info(
+                                f"ML calibration unchanged (ml={_prev_ml_cal}) — "
+                                f"no validation accuracy available from fresh training run"
+                            )
         except Exception as _ce:
-            logger.warning(f"Could not reset ML calibration after training: {_ce}")
+            logger.warning(f"Could not update ML calibration after training: {_ce}")
 
     def _ml_models_stale(self, max_age_days: int = 3) -> bool:
         """Check if ML models are older than max_age_days and need retraining.
@@ -2965,10 +3031,18 @@ class FootballBettingAgent:
                 logger.info("ML re-entering ensemble (proxy mode — threshold gate skipped for fitted model)")
             cal_factors["ml"] = 1.0
             return
-        if ml_acc < 0.35:
+        if ml_acc < 0.30:
             cal_factors["ml"] = 0.0
             logger.warning(
-                f"ML accuracy {ml_acc:.1%} below threshold — ML excluded from ensemble"
+                f"ML accuracy {ml_acc:.1%} below random baseline — ML excluded from ensemble"
+            )
+        elif ml_acc < 0.35:
+            # Partial discount: ML is worse than a random 3-class baseline but not
+            # catastrophically so — reduce its ensemble contribution by 40% rather
+            # than silencing it completely.  Full exclusion resumes below 30%.
+            cal_factors["ml"] = 0.6
+            logger.warning(
+                f"ML accuracy {ml_acc:.1%} below threshold — applying 40% discount (cal=0.6)"
             )
         else:
             if prev_cal.get("ml", 1.0) == 0.0:

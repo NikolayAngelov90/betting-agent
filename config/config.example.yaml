@@ -49,6 +49,14 @@ scraping:
     - portugal/primeira-liga  # consistent timeout in CI; covered by football-data.org
     - romania/liga-1          # consistent timeout in CI; no fallback source needed
 
+  # Leagues to skip ONLY in the Flashscore fixtures step (not results).
+  # API-Football provides fixtures and odds for these leagues, so the Flashscore
+  # fixture scrape is redundant and wastes 60-90s per league in CI.
+  # Results scraping for these leagues continues normally.
+  flashscore_skip_fixtures_leagues:
+    - switzerland/super-league  # ~90s fixture timeout in CI; covered by API-Football
+    - denmark/superliga         # ~90s fixture timeout in CI; covered by API-Football
+
   # Leagues to skip ONLY in the --update-results (Flashscore results) step.
   # Unlike flashscore_skip_leagues, fixtures and odds are still scraped normally.
   # Use for competitions that time out during results scraping but have active picks.

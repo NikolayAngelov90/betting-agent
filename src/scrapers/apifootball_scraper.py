@@ -338,11 +338,12 @@ class APIFootballScraper(BaseScraper):
     """Fetches xG, match statistics, fixtures, and odds from API-Football."""
 
     # Request budget allocation (out of 100/day free tier).
-    # Static total: 4+2+25+20+9 = 60.  Remaining 40 shared dynamically
+    # Static total: 4+2+50+20+9 = 85.  Remaining 15 shared dynamically
     # between injuries (1 per fixture) and targeted backfill.
+    # BUDGET_XG is a ceiling only — actual usage is capped by remaining daily quota.
     BUDGET_RESULTS = 4    # settlement for leagues not in football-data.org
     BUDGET_FIXTURES = 2   # fixture ids needed for odds lookup
-    BUDGET_XG = 25        # xG backfill — API-Football is the sole xG source
+    BUDGET_XG = 50        # xG backfill — doubled to accelerate coverage; budget-capped at runtime
     BUDGET_ODDS = 20      # odds from top 3 bookmakers (fast DB writes)
     BUDGET_RESERVE = 9    # safety margin
     # Note: no static BUDGET_INJURIES — computed dynamically as
@@ -726,8 +727,9 @@ class APIFootballScraper(BaseScraper):
         scraping (~0.5s/match via API vs ~12s/match via browser).
 
         Each API call has a mandatory 6s rate-limit sleep (free tier: 10/min),
-        so 25 matches = ~175s.  We batch DB writes into a single commit at
-        the end to save ~50ms/match of Neon latency.
+        so 25 matches ≈ 175s, 50 matches ≈ 350s.  Budget is capped at runtime by
+        BUDGET_XG and remaining daily quota.  We batch DB writes into a single
+        commit at the end to save ~50ms/match of Neon latency.
         """
         # Compute available budget: reserve room for injury-scraper that runs after this.
         injury_reserve = min(40, self._today_fixture_count + 10)

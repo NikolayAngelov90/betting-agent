@@ -130,8 +130,8 @@ class ValueBettingCalculator:
             if market_key in self.excluded_markets:
                 continue
             if prob < self.high_ev_min_confidence:
-                _reject("prob<45%")
-                continue  # hard floor — never go below 45%
+                _reject(f"prob<{self.high_ev_min_confidence:.0%}")
+                continue  # hard floor — model probability below absolute minimum
 
             # Find best (median) odds for this market/selection
             best_odds = self._find_best_odds(
@@ -161,6 +161,29 @@ class ValueBettingCalculator:
             if ev < self.min_ev:
                 _reject("low EV")
                 continue
+
+            # Goals-market EV floor: when historical pick calibration shows
+            # systematic overestimation (cal_factor < 0.90), require proportionally
+            # higher EV to compensate.  Avoids picking goals markets where the model
+            # consistently over-predicts but the EV margin is thin.
+            _pick_cal = context.get("pick_calibration", {})
+            _cal_key_map = {
+                "over_2.5": "over_2.5", "under_2.5": "over_2.5",
+                "over_1.5": "over_1.5", "under_1.5": "over_1.5",
+                "btts_yes": "btts", "btts_no": "btts",
+            }
+            _cal_key = _cal_key_map.get(market_key)
+            if _cal_key and _pick_cal:
+                _mkt_cal = _pick_cal.get(_cal_key, 1.0)
+                if _mkt_cal < 0.90:
+                    _adj_min_ev = min(self.min_ev / _mkt_cal, self.min_ev + 0.05)
+                    if ev < _adj_min_ev:
+                        logger.debug(
+                            f"Goals EV floor: {match_name} {selection} ev={ev:.2%} < "
+                            f"adj_min_ev={_adj_min_ev:.2%} (pick_cal={_mkt_cal:.3f})"
+                        )
+                        _reject("goals_cal_ev_floor")
+                        continue
 
             # Sliding scale: allow bets below min_confidence when EV compensates.
             # EV × confidence must exceed min_ev_confidence_score (default 0.035).
