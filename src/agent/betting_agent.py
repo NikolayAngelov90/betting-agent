@@ -465,20 +465,38 @@ class FootballBettingAgent:
         # 2c. The Odds API — supplemental odds for leagues with today's fixtures.
         # Free tier: 500 credits/month (~1 credit/league call). Only calls leagues
         # that actually have fixtures today to minimise credit burn.
+
+        # Warn BEFORE the update if last-known credits are already low — this way
+        # operators see the alert even if today's update exhausts the last few credits.
+        from src.scrapers.theodds_scraper import _load_persisted_credits, _CREDITS_LOW_THRESHOLD
+        _pre_credits = _load_persisted_credits()
+        if _pre_credits is not None and _pre_credits < _CREDITS_LOW_THRESHOLD:
+            _pre_warn = (
+                f"⚠️ TheOddsAPI credits low (from last run): {_pre_credits} remaining. "
+                f"Odds coverage will degrade when quota is exhausted."
+            )
+            logger.warning(_pre_warn)
+            try:
+                await self.telegram.send_alert(_pre_warn)
+            except Exception:
+                pass
+
         try:
             theodds_written = await asyncio.wait_for(self.theodds.update(), timeout=300)
             logger.info(f"The Odds API update complete: {theodds_written} odds rows written")
             _remaining = getattr(self.theodds, "_remaining_requests", None)
-            if _remaining is not None and _remaining < 100:
+            if _remaining is not None and _remaining < _CREDITS_LOW_THRESHOLD:
                 _warn_msg = (
-                    f"⚠️ TheOddsAPI credits low: {_remaining} remaining. "
+                    f"⚠️ TheOddsAPI credits low: {_remaining} remaining this month. "
                     f"Odds coverage will degrade when quota is exhausted."
                 )
                 logger.warning(_warn_msg)
-                try:
-                    await self.telegram.send_alert(_warn_msg)
-                except Exception as _tg_err:
-                    logger.warning(f"Failed to send TheOddsAPI credit warning: {_tg_err}")
+                # Avoid double-alerting if pre-update warning already fired for same count
+                if _pre_credits is None or abs(_remaining - _pre_credits) > 5:
+                    try:
+                        await self.telegram.send_alert(_warn_msg)
+                    except Exception as _tg_err:
+                        logger.warning(f"Failed to send TheOddsAPI credit warning: {_tg_err}")
         except asyncio.TimeoutError:
             logger.warning("The Odds API update timed out after 5 minutes")
         except Exception as e:
@@ -1129,11 +1147,39 @@ class FootballBettingAgent:
         # Guard: only send once per day (same alert fires from --settle AND --picks).
         _cal_roi = getattr(self, "_recent_roi", None)
         if _cal_roi is not None and _cal_roi < -0.15:
+            # Build per-market breakdown so operators can diagnose which markets are losing
+            _mkt_breakdown = ""
+            try:
+                lookback = self.config.get("models.ev_calibration_lookback", 40)
+                with self.db.get_session() as _cs:
+                    _recent_picks = (
+                        _cs.query(SavedPick)
+                        .filter(SavedPick.result.isnot(None))
+                        .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
+                        .limit(lookback)
+                        .all()
+                    )
+                    _mkt_roi: dict = {}
+                    for _p in _recent_picks:
+                        if not _p.odds or _p.odds <= 1.0:
+                            continue
+                        _mkt = _p.market or "Unknown"
+                        _profit = (_p.odds - 1) if _p.result == "win" else -1.0
+                        _mkt_roi.setdefault(_mkt, []).append(_profit)
+                    _parts = []
+                    for _mkt, _profits in sorted(_mkt_roi.items()):
+                        _r = sum(_profits) / len(_profits)
+                        _parts.append(f"{_mkt}: {_r:+.0%} ({len(_profits)})")
+                    if _parts:
+                        _mkt_breakdown = "\nBy market: " + " | ".join(_parts)
+            except Exception:
+                pass
             _cold_msg = (
                 f"⚠️ Cold streak alert: ROI={_cal_roi:+.1%} over last "
                 f"{getattr(self, '_recent_roi_n', '?')} settled picks — "
                 f"model is underperforming. EV threshold tightened to "
                 f"{self.value_calculator.min_ev:.1%}. Monitor picks closely."
+                f"{_mkt_breakdown}"
             )
             if not _cold_streak_alerted_today():
                 logger.warning(_cold_msg)

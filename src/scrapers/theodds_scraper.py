@@ -7,8 +7,10 @@ Free tier: 500 credits/month (1 credit per league request).
 """
 
 import asyncio
+import json
 import os
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 import aiohttp
@@ -18,6 +20,30 @@ from src.data.models import Match, Odds, Team
 from src.utils.logger import get_logger
 
 logger = get_logger()
+
+_CREDITS_STATE_PATH = Path("data/models/theodds_credits.json")
+_CREDITS_LOW_THRESHOLD = 100
+
+
+def _load_persisted_credits() -> Optional[int]:
+    """Return last-known TheOddsAPI remaining credits from state file, or None."""
+    try:
+        if _CREDITS_STATE_PATH.exists():
+            return json.loads(_CREDITS_STATE_PATH.read_text()).get("remaining")
+    except Exception:
+        pass
+    return None
+
+
+def _persist_credits(remaining: int) -> None:
+    """Save current remaining credit count so next run can warn early."""
+    try:
+        _CREDITS_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CREDITS_STATE_PATH.write_text(
+            json.dumps({"remaining": remaining, "updated": date.today().isoformat()})
+        )
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # League key → The Odds API sport key mapping
@@ -184,10 +210,24 @@ def _team_names_similar(name_a: str, name_b: str) -> bool:
         "sporting lisbon": "sporting",
         "benfica": "benfica",
         "porto": "porto",
-        # Belgium — Jupiler Pro League (TheOdds API uses full name; DB stores "St. Gilloise")
+        # Belgium — Jupiler Pro League
         "union saint-gilloise": "st. gilloise",
         "royale union saint-gilloise": "st. gilloise",
         "union sg": "st. gilloise",
+        # Standard Liège: TheOddsAPI sends "Standard Liège" → canon "standard liege";
+        # DB may store bare "Standard" → canon "standard". Token match {"standard","liege"}
+        # vs {"standard"} = 0.5 < 0.7 threshold → no match. Alias collapses all forms.
+        "standard liege": "standard",
+        "r. standard de liege": "standard",
+        "r standard de liege": "standard",
+        "standard de liege": "standard",
+        # Further Belgium aliases for completeness
+        "rsc anderlecht": "anderlecht",
+        "royale union sportive anderlecht": "anderlecht",
+        "club brugge kv": "club brugge",
+        "krc genk": "genk",
+        "kaa gent": "gent",
+        "oh leuven": "oud-heverlee leuven",
         # Poland — Ekstraklasa (TheOdds API uses short name; DB stores API-Football display name)
         "nieciecza": "termalica b-b.",
         "bruk-bet termalica nieciecza": "termalica b-b.",
@@ -380,6 +420,7 @@ class TheOddsScraper:
                 used = resp.headers.get("x-requests-used")
                 if remaining is not None:
                     self._remaining_requests = int(remaining)
+                    _persist_credits(self._remaining_requests)
                 if used is not None:
                     self._used_requests = int(used)
 

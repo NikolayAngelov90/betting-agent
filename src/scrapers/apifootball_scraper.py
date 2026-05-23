@@ -1303,10 +1303,12 @@ class APIFootballScraper(BaseScraper):
     # ---- Odds fetching ----
 
     def _make_odds_semaphore(self, remaining_budget: int, n_fixtures: int) -> asyncio.Semaphore:
-        # Cap at 2 concurrent odds requests to prevent rate-limit cascade.
-        # API-Football free tier allows 10 requests/min; 2 concurrent + 2s dispatch
-        # delay keeps us well under the limit even on weekends with many fixtures.
-        capacity = max(1, min(2, remaining_budget, n_fixtures))
+        # Serial (cap=1): API-Football free tier allows 10 req/min = 1 every 6 s.
+        # Each request already sleeps 6 s after the response, so cap=1 guarantees
+        # exactly one in-flight request at a time and eliminates HTTP 429 bursts.
+        # cap=2 caused concurrent requests 2 s apart → both within a single 6 s
+        # window → rate-limit errors on every run with ≥2 fixtures.
+        capacity = max(1, min(1, remaining_budget, n_fixtures))
         return asyncio.Semaphore(capacity)
 
     async def _fetch_odds_guarded(self, sem, match_id: int, fixture_id: int, league: str) -> tuple:
