@@ -38,6 +38,8 @@ scraping:
     - sweden/allsvenskan
     - poland/ekstraklasa
     - romania/liga-1
+    # International tournaments (national teams)
+    - world/fifa-world-cup     # FIFA World Cup 2026 — active Jun-Jul 2026
 
   # Leagues in off-season that are expected to return 0 fixtures (no alert sent)
   off_season_leagues: []  # e.g. ["norway/eliteserien", "sweden/allsvenskan"] in winter

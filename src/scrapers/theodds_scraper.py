@@ -90,6 +90,8 @@ LEAGUE_TO_THEODDS_SPORT: Dict[str, str] = {
     "sweden/allsvenskan":              "soccer_sweden_allsvenskan",
     "poland/ekstraklasa":              "soccer_poland_ekstraklasa",
     # romania/liga-1 intentionally omitted — not available on The Odds API
+    # International — national team competitions
+    "world/fifa-world-cup":             "soccer_fifa_world_cup",
 }
 
 # Bookmaker prefix so these odds rows are distinguishable from API-Football rows

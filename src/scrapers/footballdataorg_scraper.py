@@ -40,6 +40,8 @@ COMPETITION_MAP: Dict[str, str] = {
     "CL":  "europe/champions-league",
     "DED": "netherlands/eredivisie",
     "PPL": "portugal/primeira-liga",
+    # International — national team competitions
+    "WC":  "world/fifa-world-cup",
 }
 
 # football-data.org full team name → name used in our DB (from football-data.co.uk CSVs)

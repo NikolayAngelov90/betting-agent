@@ -42,6 +42,90 @@ class TestPoissonModel:
         assert all(p.isdigit() for p in parts)
 
 
+class TestNationalTeamPoisson:
+    """Tests for World Cup / national-team separate Poisson strength logic."""
+
+    def _make_model_with_wc_data(self):
+        """Return a PoissonModel with injected WC strengths for teams 10 and 11."""
+        from src.models.poisson_model import PoissonModel
+        model = PoissonModel()
+        model._national_team_strengths = {
+            10: {"attack": 1.4, "defense": 0.8},
+            11: {"attack": 1.1, "defense": 1.0},
+        }
+        model._national_team_avgs = {
+            "world/fifa-world-cup": {"home": 1.35, "away": 1.10}
+        }
+        model.league_avg_home_goals = 1.5
+        model.league_avg_away_goals = 1.2
+        return model
+
+    def test_national_team_league_constant_includes_wc(self):
+        from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+        assert "world/fifa-world-cup" in NATIONAL_TEAM_LEAGUES
+
+    def test_expected_goals_uses_national_strengths_for_wc(self):
+        model = self._make_model_with_wc_data()
+        xg_home, xg_away = model._expected_goals(10, 11, league="world/fifa-world-cup")
+        # Should use national_team_avgs (1.35/1.10) + national strengths
+        expected_home = 1.35 * 1.4 * 1.0   # avg_home * atk_10 * def_11
+        expected_away = 1.10 * 1.1 * 0.8   # avg_away * atk_11 * def_10
+        assert abs(xg_home - expected_home) < 0.001
+        assert abs(xg_away - expected_away) < 0.001
+
+    def test_expected_goals_uses_club_strengths_for_club_league(self):
+        model = self._make_model_with_wc_data()
+        model._team_strengths = {
+            10: {"attack": 1.2, "defense": 0.9},
+            11: {"attack": 0.9, "defense": 1.1},
+        }
+        xg_home, xg_away = model._expected_goals(10, 11, league="england/premier-league")
+        # Must NOT use national_team_strengths for a club league
+        expected_home = 1.5 * 1.2 * 1.1   # league avg * atk_10 * def_11
+        expected_away = 1.2 * 0.9 * 0.9   # league avg * atk_11 * def_10
+        assert abs(xg_home - expected_home) < 0.001
+        assert abs(xg_away - expected_away) < 0.001
+
+    def test_wc_fallback_to_global_strengths_when_national_empty(self):
+        """When _national_team_strengths is empty, falls back to _team_strengths."""
+        from src.models.poisson_model import PoissonModel
+        model = PoissonModel()
+        model._national_team_strengths = {}
+        model._team_strengths = {10: {"attack": 1.3, "defense": 0.9}}
+        model.league_avg_home_goals = 1.5
+        model.league_avg_away_goals = 1.2
+        xg_home, _ = model._expected_goals(10, 99, league="world/fifa-world-cup")
+        # Should use _team_strengths[10] since _national_team_strengths is empty
+        assert xg_home > 0
+
+    def test_predict_propagates_league_to_expected_goals(self):
+        """predict(league=...) must reach _expected_goals with the correct league."""
+        model = self._make_model_with_wc_data()
+        # Club league prediction — no national team strengths involved
+        pred = model.predict(10, 11, league="world/fifa-world-cup")
+        assert "home_win" in pred
+        assert abs(pred["home_win"] + pred["draw"] + pred["away_win"] - 1.0) < 0.01
+
+    def test_api_football_wc_league_id_mapped(self):
+        from src.scrapers.apifootball_scraper import LEAGUE_ID_MAP
+        assert LEAGUE_ID_MAP.get("world/fifa-world-cup") == 1
+
+    def test_wc_in_priority_leagues(self):
+        from src.scrapers.apifootball_scraper import PRIORITY_LEAGUES
+        assert "world/fifa-world-cup" in PRIORITY_LEAGUES
+        # Must be first entry so it's processed before club leagues
+        assert PRIORITY_LEAGUES[0] == "world/fifa-world-cup"
+
+    def test_wc_in_theodds_sport_map(self):
+        from src.scrapers.theodds_scraper import LEAGUE_TO_THEODDS_SPORT
+        assert "world/fifa-world-cup" in LEAGUE_TO_THEODDS_SPORT
+        assert LEAGUE_TO_THEODDS_SPORT["world/fifa-world-cup"] == "soccer_fifa_world_cup"
+
+    def test_wc_in_fdo_competition_map(self):
+        from src.scrapers.footballdataorg_scraper import COMPETITION_MAP
+        assert COMPETITION_MAP.get("WC") == "world/fifa-world-cup"
+
+
 class TestEloRatingSystem:
     """Tests for the Elo rating system."""
 

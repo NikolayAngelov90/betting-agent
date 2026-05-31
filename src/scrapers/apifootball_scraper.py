@@ -269,6 +269,8 @@ LEAGUE_ID_MAP = {
     "europe/champions-league": 2,
     "europe/europa-league": 3,
     "europe/europa-conference-league": 848,
+    # International — national team competitions
+    "world/fifa-world-cup": 1,
 }
 
 # Reverse map: API-Football league ID -> our internal league key
@@ -276,7 +278,9 @@ ID_TO_LEAGUE = {v: k for k, v in LEAGUE_ID_MAP.items()}
 
 # Leagues to fetch odds for first (highest priority)
 PRIORITY_LEAGUES = [
-    # Top 5 + European competitions first
+    # International tournaments (highest priority when active)
+    "world/fifa-world-cup",
+    # Top 5 + European competitions
     "england/premier-league", "spain/laliga", "germany/bundesliga",
     "italy/serie-a", "france/ligue-1", "europe/champions-league",
     "europe/europa-league", "europe/europa-conference-league",
