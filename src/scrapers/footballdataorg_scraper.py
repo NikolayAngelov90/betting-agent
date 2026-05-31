@@ -585,9 +585,17 @@ class FootballDataOrgScraper:
         if seasons is None:
             seasons = [2023, 2024, 2025]
 
+        # WC only had tournaments in 2018 and 2022 — the regular seasons list
+        # (2023-2025) returns 404 for those years.
+        _WC_SEASONS = [2018, 2022]
+        _WC_CODE = next(
+            (c for c, l in COMPETITION_MAP.items() if l == "world/fifa-world-cup"), None
+        )
+
         total_saved = 0
         for code, league in COMPETITION_MAP.items():
-            for season in seasons:
+            comp_seasons = _WC_SEASONS if code == _WC_CODE else seasons
+            for season in comp_seasons:
                 data = await self._get(
                     f"/competitions/{code}/matches",
                     {"season": season, "status": "FINISHED"},

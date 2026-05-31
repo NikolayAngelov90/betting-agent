@@ -1566,6 +1566,171 @@ class APIFootballScraper(BaseScraper):
 
     # ---- Historical data backfill ----
 
+    async def backfill_competition_season(
+        self, league_key: str, season: int
+    ) -> tuple[int, int]:
+        """Fetch all fixtures for a competition+season and upsert into DB.
+
+        Unlike _fetch_fixtures_by_date(), this ignores _tracked_league_ids so
+        that competition backfills (e.g. WC 2022) always run regardless of the
+        current flashscore_leagues config.
+
+        Returns (created, updated) counts.
+        """
+        league_id = LEAGUE_ID_MAP.get(league_key)
+        if league_id is None:
+            logger.warning(
+                f"backfill_competition_season: unknown league key '{league_key}'"
+            )
+            return 0, 0
+
+        data = await self._api_get("/fixtures", {"league": league_id, "season": season})
+        if not data:
+            return 0, 0
+
+        fixtures = data.get("response", [])
+        logger.info(
+            f"API-Football backfill {league_key} {season}: {len(fixtures)} fixtures"
+        )
+
+        # Pre-load existing apifootball_id → match_id for all WC matches in DB.
+        with self.db.get_session() as session:
+            existing_rows = session.query(Match.id, Match.apifootball_id).filter(
+                Match.league == league_key,
+                Match.apifootball_id.isnot(None),
+            ).all()
+        _afid_to_match_id = {row.apifootball_id: row.id for row in existing_rows}
+
+        created = 0
+        updated = 0
+
+        for fix in fixtures:
+            fixture_id = fix.get("fixture", {}).get("id")
+            home_name = fix.get("teams", {}).get("home", {}).get("name", "")
+            away_name = fix.get("teams", {}).get("away", {}).get("name", "")
+            home_api_id = fix.get("teams", {}).get("home", {}).get("id")
+            away_api_id = fix.get("teams", {}).get("away", {}).get("id")
+            match_ts = fix.get("fixture", {}).get("timestamp")
+            status_short = fix.get("fixture", {}).get("status", {}).get("short", "")
+            referee = fix.get("fixture", {}).get("referee") or ""
+
+            if not home_name or not away_name or not match_ts:
+                continue
+
+            match_dt = datetime.utcfromtimestamp(match_ts)
+            goals = fix.get("goals", {})
+            home_goals = goals.get("home")
+            away_goals = goals.get("away")
+            is_finished = status_short in ("FT", "AET", "PEN")
+            is_fixture = status_short in ("NS", "TBD", "")
+            venue_city = (fix.get("fixture", {}).get("venue") or {}).get("city") or ""
+
+            score = fix.get("score", {})
+            ht_home = score.get("halftime", {}).get("home")
+            ht_away = score.get("halftime", {}).get("away")
+            reg_home = score.get("fulltime", {}).get("home")
+            reg_away = score.get("fulltime", {}).get("away")
+            pen_home = score.get("penalty", {}).get("home")
+            pen_away = score.get("penalty", {}).get("away")
+
+            # Fast path: already in DB by apifootball_id.
+            if fixture_id in _afid_to_match_id:
+                match_id = _afid_to_match_id[fixture_id]
+                if is_finished and home_goals is not None:
+                    with self.db.get_session() as session:
+                        match = session.get(Match, match_id)
+                        if match and match.home_goals is None:
+                            match.home_goals = home_goals
+                            match.away_goals = away_goals
+                            match.is_fixture = False
+                            if ht_home is not None and match.ht_home_goals is None:
+                                match.ht_home_goals = ht_home
+                                match.ht_away_goals = ht_away
+                            if reg_home is not None and match.regulation_home_goals is None:
+                                match.regulation_home_goals = reg_home
+                                match.regulation_away_goals = reg_away
+                            if pen_home is not None and match.penalty_home_score is None:
+                                match.penalty_home_score = pen_home
+                                match.penalty_away_score = pen_away
+                            session.commit()
+                            updated += 1
+                continue
+
+            # Slow path: create/find teams and match.
+            home_team_id = self._get_or_create_team_id(
+                home_name, league_key, apifootball_team_id=home_api_id
+            )
+            away_team_id = self._get_or_create_team_id(
+                away_name, league_key, apifootball_team_id=away_api_id
+            )
+
+            match_id = self._find_match_id(home_team_id, away_team_id, match_dt)
+            if match_id is None:
+                match_id = self._find_match_by_date_league(
+                    league_key, match_dt, home_name, away_name
+                )
+
+            if match_id:
+                with self.db.get_session() as session:
+                    match = session.get(Match, match_id)
+                    if match:
+                        match.apifootball_id = fixture_id
+                        if referee and not match.referee:
+                            match.referee = referee
+                        if venue_city and not match.venue:
+                            match.venue = venue_city
+                        if is_finished and home_goals is not None and match.home_goals is None:
+                            match.home_goals = home_goals
+                            match.away_goals = away_goals
+                            match.is_fixture = False
+                            if ht_home is not None and match.ht_home_goals is None:
+                                match.ht_home_goals = ht_home
+                                match.ht_away_goals = ht_away
+                            if reg_home is not None and match.regulation_home_goals is None:
+                                match.regulation_home_goals = reg_home
+                                match.regulation_away_goals = reg_away
+                            if pen_home is not None and match.penalty_home_score is None:
+                                match.penalty_home_score = pen_home
+                                match.penalty_away_score = pen_away
+                        session.commit()
+                _afid_to_match_id[fixture_id] = match_id
+                updated += 1
+            else:
+                with self.db.get_session() as session:
+                    match = Match(
+                        home_team_id=home_team_id,
+                        away_team_id=away_team_id,
+                        match_date=match_dt,
+                        league=league_key,
+                        season=self._get_season(match_dt),
+                        is_fixture=is_fixture,
+                        apifootball_id=fixture_id,
+                        referee=referee or None,
+                        venue=venue_city or None,
+                    )
+                    if is_finished and home_goals is not None:
+                        match.home_goals = home_goals
+                        match.away_goals = away_goals
+                        match.is_fixture = False
+                        if ht_home is not None:
+                            match.ht_home_goals = ht_home
+                            match.ht_away_goals = ht_away
+                        if reg_home is not None:
+                            match.regulation_home_goals = reg_home
+                            match.regulation_away_goals = reg_away
+                        if pen_home is not None:
+                            match.penalty_home_score = pen_home
+                            match.penalty_away_score = pen_away
+                    session.add(match)
+                    session.commit()
+                created += 1
+
+        logger.info(
+            f"API-Football backfill {league_key} {season}: "
+            f"{created} created, {updated} updated"
+        )
+        return created, updated
+
     async def backfill_team_history(self, min_matches: int = 10,
                                     seasons: Optional[List[int]] = None,
                                     max_budget: int = 30,

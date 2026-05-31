@@ -3466,6 +3466,7 @@ async def main():
         print("  --tune              Tune ensemble weights from recent results")
         print("  --analyze <id>      Analyze a specific match")
         print("  --backfill-history  Fetch historical data for low-coverage teams")
+        print("  --backfill-wc       Backfill FIFA World Cup 2018/2022/2026 match history")
         print("  --backfill-stats [N] Backfill xG/shots/venue/halftime for historical matches (default budget: 80 requests)")
         print("  --telegram-setup    Setup Telegram bot notifications")
         print("  --telegram-test     Send a test Telegram message")
@@ -3845,6 +3846,36 @@ async def main():
         elif command == "--backtest-rolling":
             print("Rolling backtest — per-month performance over all settled picks")
             agent.rolling_backtest()
+
+        elif command == "--backfill-wc":
+            print("Backfilling FIFA World Cup match history (2018, 2022, 2026)...")
+            wc_key = "world/fifa-world-cup"
+
+            # Step 1: FDO for WC 2018 and 2022 (competition code "WC").
+            print("  [1/2] football-data.org: fetching WC 2018 and 2022...")
+            fdo_saved = await agent.footballdataorg.backfill_historical_seasons(
+                seasons=[2018, 2022]
+            )
+            print(f"  FDO: {fdo_saved} new match records saved")
+
+            # Step 2: API-Football for WC 2022 + 2026 (fills gaps FDO may miss
+            # and fetches upcoming 2026 group-stage fixtures).
+            print("  [2/2] API-Football: fetching WC 2022 and 2026 fixtures...")
+            total_created = 0
+            total_updated = 0
+            for wc_season in (2022, 2026):
+                c, u = await agent.apifootball.backfill_competition_season(
+                    wc_key, wc_season
+                )
+                total_created += c
+                total_updated += u
+                print(f"  API-Football WC {wc_season}: {c} created, {u} updated")
+
+            print(
+                f"World Cup backfill complete: "
+                f"{fdo_saved} FDO + {total_created} AF created, "
+                f"{total_updated} AF updated."
+            )
 
         elif command == "--backfill-history":
             print("Fetching historical match data for low-coverage teams...")
