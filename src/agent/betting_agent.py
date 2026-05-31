@@ -910,6 +910,29 @@ class FootballBettingAgent:
                 if _cal != self.predictor.calibration_factors:
                     self.predictor.calibration_factors.update(_cal)
                     logger.info(f"Reloaded calibration factors from disk: {_cal}")
+
+                # Apply Poisson/Elo floors using last-tuned accuracies so that
+                # a failed or skipped tune run can't leave a suppressed floor value
+                # persisted across the pick cycle.
+                _acc_path = Path("data/models/model_accuracies.json")
+                if _acc_path.exists():
+                    try:
+                        _accs = json.loads(_acc_path.read_text())
+                        _ensemble_acc = _accs.get("ensemble", 0.0)
+                        for _mdl in ("poisson", "elo"):
+                            _mdl_acc = _accs.get(_mdl, 0.0)
+                            if (
+                                _mdl_acc > _ensemble_acc + 0.05
+                                and self.predictor.calibration_factors.get(_mdl, 1.0) < 1.0
+                            ):
+                                self.predictor.calibration_factors[_mdl] = 1.0
+                                logger.info(
+                                    f"Load-time {_mdl.capitalize()} floor applied: "
+                                    f"{_mdl} {_mdl_acc:.1%} > ensemble {_ensemble_acc:.1%} "
+                                    f"(+5pp) — calibration restored to 1.0"
+                                )
+                    except Exception as _fe:
+                        logger.debug(f"Could not apply load-time model floor: {_fe}")
             except Exception as _ce:
                 logger.debug(f"Could not reload calibration: {_ce}")
 
@@ -1886,6 +1909,13 @@ class FootballBettingAgent:
 
             session.commit()
 
+        for s in settled:
+            result_icon = "✅" if s["result"] == "win" else "❌"
+            logger.info(
+                f"Settled {result_icon} {s['match_name']} | {s['selection']} "
+                f"@ {s['odds']:.2f} → {s['result'].upper()} [{s['score']}] "
+                f"(stake {s['stake']:.1f}%, {s['league']})"
+            )
         logger.info(f"Settled {len(settled)} picks")
         return settled
 
@@ -2416,6 +2446,16 @@ class FootballBettingAgent:
                     f"ensemble {ensemble_acc:.1%} (+5pp) — calibration restored to 1.0"
                 )
 
+            # Elo weight floor: same logic as Poisson — protect Elo when it clearly
+            # outperforms the blended ensemble.
+            elo_acc = accuracies.get("elo", 0.0)
+            if elo_acc > ensemble_acc + 0.05 and cal_factors.get("elo", 1.0) < 1.0:
+                cal_factors["elo"] = 1.0
+                logger.info(
+                    f"Elo floor applied: Elo {elo_acc:.1%} > "
+                    f"ensemble {ensemble_acc:.1%} (+5pp) — calibration restored to 1.0"
+                )
+
             # Alert operators via Telegram when ML is excluded (AC1 of Story 4.2)
             if cal_factors.get("ml", 1.0) == 0.0:
                 ml_acc = accuracies.get("ml", 0.0)
@@ -2432,6 +2472,14 @@ class FootballBettingAgent:
             cal_path.write_text(json.dumps(cal_factors, indent=2))
             self.predictor.calibration_factors.update(cal_factors)
             logger.info(f"Calibration factors: {cal_factors}")
+
+            # Persist model accuracies so get_daily_picks() can apply Poisson/Elo
+            # floors at load time even when tune_ensemble_weights() didn't run this CI cycle.
+            _acc_path = Path("data/models/model_accuracies.json")
+            try:
+                _acc_path.write_text(json.dumps(accuracies, indent=2))
+            except Exception as _ae:
+                logger.debug(f"Could not persist model accuracies: {_ae}")
 
             # Reset ML zero-count when ML accuracy recovers (Story 7.3 AC3)
             if cal_factors.get("ml", 0.0) > 0.0:
@@ -3233,6 +3281,9 @@ class FootballBettingAgent:
         # BTTS No correlates with under goals
         ("BTTS No", "Under 2.5 Goals"),
         ("BTTS No", "Under 1.5 Goals"),
+        # Team-level overs imply high-scoring match → correlated with Over 3.5
+        ("Home Over 1.5", "Over 3.5 Goals"),
+        ("Away Over 1.5", "Over 3.5 Goals"),
     }
 
     # Composite score used by both the main sort and the correlation filter,
@@ -3284,8 +3335,25 @@ class FootballBettingAgent:
                     if pair in self._CORRELATED_PAIRS or pair_rev in self._CORRELATED_PAIRS:
                         score_a = self._composite_score(a)
                         score_b = self._composite_score(b)
-                        loser = b if score_a >= score_b else a
-                        winner = a if score_a >= score_b else b
+                        ev_diff = abs(a.expected_value - b.expected_value)
+                        if ev_diff < 0.10:
+                            # Small EV gap: prefer better model agreement to avoid
+                            # keeping a solo-Poisson pick over a majority/unanimous one
+                            _agr_rank = {
+                                "unanimous": 4, "majority": 3,
+                                "solo": 2, "split": 1, "unknown": 0,
+                            }
+                            agr_a = _agr_rank.get(a.model_agreement, 0)
+                            agr_b = _agr_rank.get(b.model_agreement, 0)
+                            if agr_a != agr_b:
+                                loser = b if agr_a >= agr_b else a
+                                winner = a if agr_a >= agr_b else b
+                            else:
+                                loser = b if score_a >= score_b else a
+                                winner = a if score_a >= score_b else b
+                        else:
+                            loser = b if score_a >= score_b else a
+                            winner = a if score_a >= score_b else b
                         idx = pick_index[id(loser)]
                         if idx not in to_remove:
                             to_remove.add(idx)

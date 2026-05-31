@@ -56,6 +56,14 @@ scraping:
   flashscore_skip_fixtures_leagues:
     - switzerland/super-league  # ~90s fixture timeout in CI; covered by API-Football
     - denmark/superliga         # ~90s fixture timeout in CI; covered by API-Football
+    # End-of-season (May–August): these competitions have no remaining fixtures.
+    # Remove when the new season kicks off (typically late July/August).
+    - europe/champions-league        # final played late May
+    - europe/europa-league           # final played late May
+    - europe/europa-conference-league  # final played late May
+    - spain/laliga                   # season ends late May
+    - italy/serie-a                  # season ends late May
+    - germany/bundesliga             # season ends mid-May
 
   # Leagues to skip ONLY in the --update-results (Flashscore results) step.
   # Unlike flashscore_skip_leagues, fixtures and odds are still scraped normally.
@@ -119,8 +127,9 @@ models:
   # xG data is available. Falls back to raw goals for matches without xG.
   poisson_use_xg: true
   # Minimum fraction of matches with xG data required before xG-based
-  # strengths are used for a team (0.5 = at least 50% of matches need xG).
-  poisson_xg_min_coverage: 0.50
+  # strengths are used for a team (0.35 = at least 35% of matches need xG).
+  # Lowered from 0.50 to enable partial xG usage for teams with moderate coverage.
+  poisson_xg_min_coverage: 0.35
   # ML model auto-retraining: retrain if models are older than N days.
   # Triggered automatically after settlement via learn_from_settled().
   ml_retrain_days: 3

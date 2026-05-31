@@ -353,7 +353,8 @@ class FootballDataOrgScraper:
             for m in matches:
                 if m.get("status") != "FINISHED":
                     continue
-                ft = m.get("score", {}).get("fullTime", {})
+                score_obj = m.get("score", {})
+                ft = score_obj.get("fullTime", {})
                 home_goals = ft.get("home")
                 away_goals = ft.get("away")
                 if home_goals is None or away_goals is None:
@@ -368,6 +369,15 @@ class FootballDataOrgScraper:
                 away_name = TEAM_NAME_MAP.get(away_raw_r, away_raw_r)
                 if not home_name or not away_name:
                     continue
+                duration = score_obj.get("duration", "REGULAR")
+                if duration != "REGULAR":
+                    # FDO fullTime = 90-min score even for AET/penalty matches,
+                    # so settlement logic is correct. Log so operators can verify.
+                    logger.warning(
+                        f"FDO: {home_name} vs {away_name} ({league}) "
+                        f"went to {duration} — settling on 90-min score "
+                        f"{home_goals}-{away_goals} (penalty goals excluded)"
+                    )
                 updated = self._apply_score(
                     league, home_name, away_name, target, home_goals, away_goals
                 )

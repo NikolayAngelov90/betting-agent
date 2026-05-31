@@ -22,7 +22,13 @@ from src.utils.logger import get_logger
 logger = get_logger()
 
 _CREDITS_STATE_PATH = Path("data/models/theodds_credits.json")
-_CREDITS_LOW_THRESHOLD = 100
+_CREDITS_LOW_THRESHOLD = 100   # existing WARNING in betting_agent.py
+
+# Tiered in-scraper warnings (absolute credit counts, out of 500/month free tier)
+_CREDITS_TIER_INFO = 60       # ~3 days of daily runs remaining
+_CREDITS_TIER_WARNING = 40    # ~2 days remaining
+_CREDITS_TIER_CRITICAL = 20   # ~1 day remaining
+_CREDITS_GATE_THRESHOLD = 10  # hard skip — not enough for even one league call
 
 
 def _load_persisted_credits() -> Optional[int]:
@@ -421,6 +427,20 @@ class TheOddsScraper:
                 if remaining is not None:
                     self._remaining_requests = int(remaining)
                     _persist_credits(self._remaining_requests)
+                    _r = self._remaining_requests
+                    if _r <= _CREDITS_TIER_CRITICAL:
+                        logger.critical(
+                            f"TheOddsAPI CRITICAL: only {_r} credits remaining "
+                            f"— suspend non-essential league calls or add credits"
+                        )
+                    elif _r <= _CREDITS_TIER_WARNING:
+                        logger.warning(
+                            f"TheOddsAPI WARNING: {_r} credits remaining (~2 days left)"
+                        )
+                    elif _r <= _CREDITS_TIER_INFO:
+                        logger.info(
+                            f"TheOddsAPI: {_r} credits remaining (~3 days left)"
+                        )
                 if used is not None:
                     self._used_requests = int(used)
 
@@ -584,6 +604,17 @@ class TheOddsScraper:
         """
         if not self.api_key:
             logger.info("TheOddsAPI: ODDS_API_KEY not configured — skipping")
+            return 0
+
+        # Hard gate: if last-known credits are below the gate threshold, skip
+        # entirely rather than burning the last few credits and going silent.
+        _persisted = _load_persisted_credits()
+        if _persisted is not None and _persisted <= _CREDITS_GATE_THRESHOLD:
+            logger.warning(
+                f"TheOddsAPI: skipping update — only {_persisted} credits remain "
+                f"(gate threshold: {_CREDITS_GATE_THRESHOLD}). "
+                f"Add credits or wait for monthly reset."
+            )
             return 0
 
         leagues = self._leagues_with_today_fixtures()
