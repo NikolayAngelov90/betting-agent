@@ -1194,10 +1194,16 @@ class FeatureEngineer:
             defaults["wc_is_knockout"] = int(not is_group)
 
             # Query all completed WC matches for this season played BEFORE this match.
+            # Extract primitive tuples INSIDE the session — Match instances become
+            # detached once the `with` block closes and lazy attribute access then
+            # raises DetachedInstanceError (silently falling back to zeros).
             cutoff = match_date if match_date else None
             with self.db.get_session() as session:
                 from sqlalchemy import or_ as _or
-                q = session.query(Match).filter(
+                q = session.query(
+                    Match.home_team_id, Match.away_team_id,
+                    Match.home_goals, Match.away_goals,
+                ).filter(
                     Match.league == league,
                     Match.season == season,
                     Match.is_fixture == False,
@@ -1209,19 +1215,19 @@ class FeatureEngineer:
                 )
                 if cutoff:
                     q = q.filter(Match.match_date < cutoff)
-                past_matches = q.all()
+                past_rows = [
+                    (r[0], r[1], r[2], r[3]) for r in q.all()
+                ]
 
             def _team_stats(team_id):
                 pts = gd = gf = mp = 0
-                for m in past_matches:
-                    if m.home_team_id == team_id:
-                        hg, ag = m.home_goals, m.away_goals
+                for h_tid, a_tid, hg, ag in past_rows:
+                    if h_tid == team_id:
                         mp += 1
                         gf += hg
                         gd += hg - ag
                         pts += 3 if hg > ag else (1 if hg == ag else 0)
-                    elif m.away_team_id == team_id:
-                        hg, ag = m.home_goals, m.away_goals
+                    elif a_tid == team_id:
                         mp += 1
                         gf += ag
                         gd += ag - hg
