@@ -171,6 +171,11 @@ notifications:
   telegram_chat_id: "YOUR_CHAT_ID"       # Override via TELEGRAM_CHAT_ID env var
   send_daily_picks: true
   send_live_alerts: false
+  # WC mode: suppress the bulk "Daily Value Picks" Telegram summary so the
+  # per-match AI briefings (which make the final bet call) are the single source
+  # of truth in the channel. Picks are still saved to the DB and printed to the
+  # console. Set false to restore the bulk summary alongside briefings.
+  suppress_picks_summary: true
 
 # AI match briefings (Claude Opus 4.8 + server-side web search).
 # Requires ANTHROPIC_API_KEY env var (GitHub secret). When unset, briefing

@@ -3549,10 +3549,23 @@ async def main():
             if not picks:
                 print("No value picks found for today.")
             else:
+                # WC mode: the per-match AI briefings are the authoritative Telegram
+                # output (they finalize the bet), so the bulk picks summary is
+                # suppressed to avoid posting provisional picks the briefing may veto
+                # or switch. Picks are still saved to the DB and printed to console.
+                _suppress_summary = agent.config.get(
+                    "notifications.suppress_picks_summary", False
+                )
+                if _suppress_summary:
+                    print(
+                        f"\nBulk picks summary suppressed "
+                        f"(notifications.suppress_picks_summary) — per-match briefings "
+                        f"are authoritative. {len(new_picks)} new pick(s) saved."
+                    )
                 # Send to Telegram only the picks that are NEW this run.
                 # On a re-run on the same day, previously-sent picks are excluded
                 # so users don't receive duplicate notifications.
-                if agent.telegram.enabled:
+                if agent.telegram.enabled and not _suppress_summary:
                     if new_picks:
                         stats = agent.get_stats()
                         # Detect when all picks lack injury data (e.g. API suspended)

@@ -494,11 +494,13 @@ class MatchBriefingService:
 
         system = (
             f"You are an expert football analyst writing a concise, high-signal World Cup "
-            f"match briefing for a Telegram betting channel. WRITE THE ENTIRE BRIEFING IN "
-            f"{language.upper()}. You have access to a web search tool — use it to gather "
+            f"match briefing for a Telegram betting channel. Do all your web research and "
+            f"reasoning in English (search in English for the best coverage) — but write the "
+            f"FINAL briefing message that gets posted to Telegram ENTIRELY IN {language.upper()}. "
+            f"Only the final message is in {language}; everything else (searches, thinking) "
+            f"stays in English. You have access to a web search tool — use it to gather "
             f"current, factual information (storyline, recent form, head-to-head, team news, "
-            f"injuries, betting market). Search in English or {language} as needed, but the "
-            f"OUTPUT must be in {language}. Never invent lineups, injuries, or quotes; if "
+            f"injuries, betting market). Never invent lineups, injuries, or quotes; if "
             f"something is uncertain, say so. Be specific and cite what you found. "
             + _HTML_RULES
         )
