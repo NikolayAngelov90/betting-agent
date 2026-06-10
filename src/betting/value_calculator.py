@@ -368,8 +368,9 @@ class ValueBettingCalculator:
         for market, selection, prob, market_key in self._market_specs(ensemble):
             if market_key in self.excluded_markets:
                 continue
-            if prob < self.high_ev_min_confidence:
-                continue
+            # No confidence floor here: this is the "pick every match" fallback, so
+            # we accept the best available selection even on an even match. The
+            # divergence ≤ 2x guard below still rejects miscalibrated outliers.
             best_odds = self._find_best_odds(
                 odds_data, market, selection,
                 home_team_name=home_team_name, away_team_name=away_team_name,
@@ -388,6 +389,77 @@ class ValueBettingCalculator:
             return None
 
         market, selection, prob, market_key, best_odds, divergence, ev = best
+        return self._build_pick(
+            predictions, ensemble, context, match_name, match_id, league, odds_data,
+            market, selection, prob, market_key, best_odds,
+            home_team_name=home_team_name, away_team_name=away_team_name,
+        )
+
+    def available_selections(self, predictions: Dict, odds_data: List[Dict],
+                             home_team_name: str = "", away_team_name: str = "") -> List[Dict]:
+        """Return the selections that have real bookmaker odds in range for a match.
+
+        This is the menu the briefing LLM may switch a pick to — it can only choose
+        a selection the market actually prices. Each entry: market, selection,
+        market_key, model probability, and best odds.
+        """
+        ensemble = predictions.get("ensemble", {})
+        out = []
+        for market, selection, prob, market_key in self._market_specs(ensemble):
+            if market_key in self.excluded_markets:
+                continue
+            best_odds = self._find_best_odds(
+                odds_data, market, selection,
+                home_team_name=home_team_name, away_team_name=away_team_name,
+            )
+            if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
+                continue
+            out.append({
+                "market": market, "selection": selection, "market_key": market_key,
+                "probability": round(prob, 4), "odds": round(best_odds, 2),
+            })
+        return out
+
+    def build_selection_pick(self, predictions: Dict, odds_data: List[Dict],
+                             market_key: str, match_name: str = "", context: Dict = None,
+                             home_team_name: str = "", away_team_name: str = "",
+                             match_id: int = 0, league: str = "") -> Optional[BetRecommendation]:
+        """Build a tracked pick for a SPECIFIC selection (chosen by the briefing LLM).
+
+        Bypasses value/confidence gates; requires real odds in range. Returns None
+        if the selection has no usable bookmaker odds.
+        """
+        context = context or {}
+        ensemble = predictions.get("ensemble", {})
+        spec = next(
+            (s for s in self._market_specs(ensemble) if s[3] == market_key), None
+        )
+        if spec is None:
+            return None
+        market, selection, prob, _ = spec
+        best_odds = self._find_best_odds(
+            odds_data, market, selection,
+            home_team_name=home_team_name, away_team_name=away_team_name,
+        )
+        if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
+            return None
+        return self._build_pick(
+            predictions, ensemble, context, match_name, match_id, league, odds_data,
+            market, selection, prob, market_key, best_odds,
+            home_team_name=home_team_name, away_team_name=away_team_name,
+        )
+
+    def _build_pick(self, predictions, ensemble, context, match_name, match_id, league,
+                    odds_data, market, selection, prob, market_key, best_odds,
+                    home_team_name="", away_team_name="") -> BetRecommendation:
+        """Construct a BetRecommendation for a given (market, selection, odds).
+
+        Shared by find_best_bet and build_selection_pick — no value gates, Kelly
+        clamped to the minimum stake so the pick carries a real (if small) stake.
+        """
+        implied = 1.0 / best_odds if best_odds > 0 else 0
+        divergence = prob / implied if implied > 0 else 0
+        ev = self.calculate_expected_value(prob, best_odds)
         opening = self._find_opening_odds(
             odds_data, market, selection,
             home_team_name=home_team_name, away_team_name=away_team_name,

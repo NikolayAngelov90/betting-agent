@@ -20,13 +20,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
 
-from src.data.models import Match, Team
+from src.data.models import Match, Team, Odds, SavedPick
 from src.utils.logger import get_logger
 
 logger = get_logger()
+
+# Machine-readable decision block the LLM appends after the (Bulgarian) briefing.
+_DECISION_RE = re.compile(
+    r"<<<DECISION>>>(.*?)<<<END>>>", re.DOTALL | re.IGNORECASE
+)
 
 # Per-day record of (kind, match_id) already briefed, so the every-15-min
 # pre-match workflow (and any double daily run) never double-posts. Cached
@@ -208,13 +214,35 @@ class MatchBriefingService:
                 f"posting briefing with team-news context instead"
             )
 
+        # Menu of selections Claude may switch the pick to (real odds only).
+        odds_data, home_name, away_name = self._match_odds_and_teams(match_id)
+        menu = []
+        finalize = self.config.get("briefings.finalize_picks", True)
+        if finalize and odds_data:
+            try:
+                menu = self.agent.value_calculator.available_selections(
+                    analysis.predictions, odds_data,
+                    home_team_name=home_name, away_team_name=away_name,
+                )
+            except Exception as e:
+                logger.debug(f"available_selections failed for {match_id}: {e}")
+
         dossier = self._build_dossier(analysis, round_name, lineups)
-        briefing = await self._research_and_write(
+        briefing, decision = await self._research_and_write(
             analysis.match_name, dossier, lineup_aware=lineup_aware,
-            has_lineups=bool(lineups),
+            has_lineups=bool(lineups), menu=menu if finalize else [],
         )
         if not briefing:
             return False
+
+        # Apply Claude's final decision to the persisted pick (KEEP/PASS/CHANGE).
+        if finalize and decision:
+            try:
+                self._apply_decision(
+                    match_id, decision, analysis, odds_data, home_name, away_name
+                )
+            except Exception as e:
+                logger.warning(f"Could not apply briefing decision for {match_id}: {e}")
 
         header = self._header(analysis, round_name, lineups)
         await self.telegram._send_chunked(f"{header}\n\n{briefing}")
@@ -223,6 +251,94 @@ class MatchBriefingService:
             "PRE-MATCH" if lineup_aware else "PREVIEW")
         logger.info(f"Briefing sent [{label}]: {analysis.match_name}")
         return True
+
+    def _match_odds_and_teams(self, match_id: int):
+        """Return (odds_data list, home_name, away_name) for a match — same odds_data
+        shape analyze_fixture feeds the value calculator."""
+        odds_data, home_name, away_name = [], "", ""
+        try:
+            with self.db.get_session() as session:
+                m = session.get(Match, match_id)
+                if m:
+                    ht = session.get(Team, m.home_team_id)
+                    at = session.get(Team, m.away_team_id)
+                    home_name = ht.name if ht else ""
+                    away_name = at.name if at else ""
+                rows = session.query(Odds).filter(Odds.match_id == match_id).all()
+                odds_data = [
+                    {
+                        "market_type": o.market_type,
+                        "selection": o.selection,
+                        "odds_value": o.odds_value,
+                        "bookmaker": o.bookmaker,
+                        "opening_odds": o.opening_odds,
+                    }
+                    for o in rows
+                ]
+        except Exception as e:
+            logger.debug(f"_match_odds_and_teams failed for {match_id}: {e}")
+        return odds_data, home_name, away_name
+
+    def _apply_decision(self, match_id, decision, analysis, odds_data,
+                        home_name, away_name):
+        """Apply the LLM verdict to today's saved pick for this match.
+
+        KEEP  → leave the saved pick unchanged.
+        PASS  → delete the saved pick (Claude vetoed — no bet placed).
+        CHANGE→ rebuild the pick for the chosen market_key and overwrite the row.
+        """
+        action = (decision.get("action") or "").upper()
+        if action not in ("PASS", "CHANGE"):
+            return  # KEEP or unrecognised → no DB change
+
+        with self.db.get_session() as session:
+            picks = session.query(SavedPick).filter(
+                SavedPick.match_id == match_id,
+                SavedPick.pick_date == date.today(),
+                SavedPick.result.is_(None),
+            ).order_by(SavedPick.expected_value.desc()).all()
+            if not picks:
+                logger.info(f"Briefing decision {action}: no saved pick for match {match_id}")
+                return
+            primary = picks[0]
+
+            if action == "PASS":
+                for p in picks:
+                    session.delete(p)
+                session.commit()
+                logger.info(
+                    f"Briefing VETO: dropped {len(picks)} pick(s) for "
+                    f"{analysis.match_name} (Claude passed)"
+                )
+                return
+
+            # CHANGE
+            market_key = decision.get("market_key")
+            new = self.agent.value_calculator.build_selection_pick(
+                analysis.predictions, odds_data, market_key,
+                match_name=analysis.match_name, home_team_name=home_name,
+                away_team_name=away_name, match_id=match_id, league=analysis.league,
+            )
+            if not new:
+                logger.info(
+                    f"Briefing CHANGE to '{market_key}' rejected for "
+                    f"{analysis.match_name}: no real odds — keeping original pick"
+                )
+                return
+            old_sel = primary.selection
+            primary.market = new.market
+            primary.selection = new.selection
+            primary.odds = new.odds
+            primary.predicted_probability = new.predicted_probability
+            primary.expected_value = new.expected_value
+            primary.confidence = new.confidence
+            primary.kelly_stake_percentage = new.kelly_stake_percentage
+            primary.risk_level = new.risk_level
+            session.commit()
+            logger.info(
+                f"Briefing SWITCH: {analysis.match_name} {old_sel} → "
+                f"{new.selection} @ {new.odds:.2f} (Claude's call)"
+            )
 
     def _header(self, analysis, round_name: str, lineups: dict) -> str:
         ko = _kyiv(analysis.match_date)
@@ -315,41 +431,76 @@ class MatchBriefingService:
         return "\n".join(lines)
 
     async def _research_and_write(self, match_name: str, dossier: str,
-                                  lineup_aware: bool, has_lineups: bool) -> str:
-        """Call Claude Opus 4.8 with server-side web search; return Telegram-HTML briefing."""
+                                  lineup_aware: bool, has_lineups: bool,
+                                  menu: list = None):
+        """Call Claude Opus 4.8 with server-side web search.
+
+        Returns (briefing_text, decision) where decision is a dict
+        {action: KEEP|PASS|CHANGE, market_key, confidence} or None.
+        """
         from anthropic import AsyncAnthropic
 
         client = AsyncAnthropic()  # reads ANTHROPIC_API_KEY from env
+        language = self.config.get("briefings.language", "Bulgarian")
+        menu = menu or []
 
         if has_lineups:
             task = (
                 "Confirmed starting XIs are included in the dossier. Search the web for "
                 "the latest team news, tactical context, and any last-minute changes, then "
                 "write a pre-match briefing. Explicitly assess how the confirmed lineups "
-                "affect OUR model's pick: are key attackers/defenders starting or benched? "
-                "Does the XI support or undercut the pick? End with a clear VERDICT line."
+                "affect our pick: are key attackers/defenders starting or benched?"
             )
         elif lineup_aware:
             task = (
                 "Lineups are not published yet. Search for the latest probable XIs, team "
                 "news and injuries, then write a pre-match briefing and assess how it lines "
-                "up against OUR model's pick. End with a clear VERDICT line."
+                "up against our pick."
             )
         else:
             task = (
                 "Write a rich pre-match PREVIEW (the match is hours away, so no confirmed "
                 "lineups exist — do not invent any). Search the web for the storyline, recent "
-                "form, head-to-head, team news/injuries, and the betting market angle. Close "
-                "by relating the picture to OUR model's prediction and pick."
+                "form, head-to-head, team news/injuries, and the betting market angle."
             )
 
+        # Decision authority: confirm / veto / switch among real-odds selections.
+        if menu:
+            menu_lines = "\n".join(
+                f"  - market_key={m['market_key']} | {m['selection']} @ {m['odds']} "
+                f"(model {m['probability']:.0%})"
+                for m in menu
+            )
+            decision_block = (
+                "\n\nYOU MAKE THE FINAL CALL ON THE BET. After your research, decide one of:\n"
+                "  KEEP   — back our model's current pick as-is.\n"
+                "  PASS   — no bet on this match (your research says the pick is unsafe).\n"
+                "  CHANGE — switch to a different selection from the menu below that your "
+                "research supports better.\n"
+                "You may ONLY choose a CHANGE target from this menu (these are the selections "
+                "the bookmakers actually price):\n"
+                f"{menu_lines}\n\n"
+                "Explain your decision inside the briefing (in the verdict section). Then, as the "
+                "VERY LAST thing in your reply, append this exact machine-readable block "
+                "(keys in English, nothing after it):\n"
+                "<<<DECISION>>>\n"
+                "action: KEEP|PASS|CHANGE\n"
+                "market_key: <one key from the menu, required only if action is CHANGE>\n"
+                "confidence: <your confidence 0.0-1.0>\n"
+                "<<<END>>>"
+            )
+        else:
+            decision_block = ""
+
         system = (
-            "You are an expert football analyst writing a concise, high-signal World Cup "
-            "match briefing for a Telegram betting channel. You have access to a web search "
-            "tool — use it to gather current, factual information (storyline, recent form, "
-            "head-to-head, team news, injuries, betting market). Never invent lineups, "
-            "injuries, or quotes; if something is uncertain, say so. Be specific and cite "
-            "what you found. " + _HTML_RULES
+            f"You are an expert football analyst writing a concise, high-signal World Cup "
+            f"match briefing for a Telegram betting channel. WRITE THE ENTIRE BRIEFING IN "
+            f"{language.upper()}. You have access to a web search tool — use it to gather "
+            f"current, factual information (storyline, recent form, head-to-head, team news, "
+            f"injuries, betting market). Search in English or {language} as needed, but the "
+            f"OUTPUT must be in {language}. Never invent lineups, injuries, or quotes; if "
+            f"something is uncertain, say so. Be specific and cite what you found. "
+            + _HTML_RULES
         )
 
         user = (
@@ -357,9 +508,10 @@ class MatchBriefingService:
             f"Here is our internal model dossier for {match_name} (treat these numbers as "
             f"ground truth from our prediction system — research everything else):\n\n"
             f"{dossier}\n\n"
-            "Structure the briefing with emoji section headers, e.g.: 📜 Storyline, "
-            "📈 Form, 🩹 Team news, 🎯 Model & market, 🔮 Verdict. End with a one-line "
-            "'Sources:' note listing the main outlets you used."
+            f"Structure the briefing with emoji section headers (write the headers in "
+            f"{language}), e.g. storyline, form, team news, model & market, verdict. End the "
+            f"prose with a one-line 'Sources:' note listing the main outlets you used."
+            f"{decision_block}"
         )
 
         tools = [{"type": "web_search_20260209", "name": "web_search"}]
@@ -380,7 +532,7 @@ class MatchBriefingService:
                 )
             except Exception as e:
                 logger.warning(f"Claude briefing call failed for {match_name}: {e}")
-                return ""
+                return "", None
 
             if resp.stop_reason == "pause_turn":
                 messages = [
@@ -394,4 +546,30 @@ class MatchBriefingService:
             ).strip()
             break
 
-        return text_out
+        decision = self._parse_decision(text_out) if menu else None
+        # Strip the machine-readable block from the user-facing briefing.
+        clean = _DECISION_RE.sub("", text_out).strip()
+        return clean, decision
+
+    @staticmethod
+    def _parse_decision(text: str):
+        """Extract the <<<DECISION>>> block into {action, market_key, confidence}."""
+        m = _DECISION_RE.search(text or "")
+        if not m:
+            return None
+        body = m.group(1)
+        out = {}
+        for line in body.splitlines():
+            if ":" not in line:
+                continue
+            k, _, v = line.partition(":")
+            out[k.strip().lower()] = v.strip()
+        action = (out.get("action") or "").upper()
+        if action not in ("KEEP", "PASS", "CHANGE"):
+            return None
+        decision = {"action": action, "market_key": out.get("market_key") or None}
+        try:
+            decision["confidence"] = float(out.get("confidence", ""))
+        except (TypeError, ValueError):
+            decision["confidence"] = None
+        return decision
