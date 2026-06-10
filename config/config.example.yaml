@@ -167,6 +167,14 @@ notifications:
   send_daily_picks: true
   send_live_alerts: false
 
+# AI match briefings (Claude Opus 4.8 + server-side web search).
+# Requires ANTHROPIC_API_KEY env var (GitHub secret). When unset, briefing
+# commands no-op gracefully so the rest of the pipeline is unaffected.
+briefings:
+  enabled: true               # master switch for --briefing / --prematch-briefing
+  # Currently scoped to the FIFA World Cup. Preview briefings (no lineups) run in
+  # the daily pipeline; lineup-aware briefings run ~45 min before kickoff.
+
 logging:
   level: INFO
   log_file: logs/betting_agent.log

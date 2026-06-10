@@ -3473,6 +3473,8 @@ async def main():
         print("  --analyze <id>      Analyze a specific match")
         print("  --backfill-history  Fetch historical data for low-coverage teams")
         print("  --backfill-wc       Backfill FIFA World Cup 2018/2022/2026 match history")
+        print("  --briefing          Post AI preview briefings for today's WC matches (no lineups)")
+        print("  --prematch-briefing [min] Post lineup-aware AI briefings for WC matches ~min before KO (default 45)")
         print("  --backfill-stats [N] Backfill xG/shots/venue/halftime for historical matches (default budget: 80 requests)")
         print("  --telegram-setup    Setup Telegram bot notifications")
         print("  --telegram-test     Send a test Telegram message")
@@ -3852,6 +3854,26 @@ async def main():
         elif command == "--backtest-rolling":
             print("Rolling backtest — per-month performance over all settled picks")
             agent.rolling_backtest()
+
+        elif command in ("--briefing", "--prematch-briefing"):
+            from src.reporting.match_briefing import MatchBriefingService
+            agent.predictor.fit()
+            agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
+            service = MatchBriefingService(agent)
+            if command == "--briefing":
+                print("Generating WC preview briefings...")
+                n = await service.run_preview_briefings()
+            else:
+                # Optional T-window override: --prematch-briefing 45
+                window = 45
+                if len(sys.argv) > 2:
+                    try:
+                        window = int(sys.argv[2])
+                    except ValueError:
+                        pass
+                print(f"Generating WC pre-match (T-{window}) briefings...")
+                n = await service.run_prematch_briefings(window_min=window)
+            print(f"Briefings sent: {n}")
 
         elif command == "--backfill-wc":
             print("Backfilling FIFA World Cup match history (2018, 2022, 2026)...")

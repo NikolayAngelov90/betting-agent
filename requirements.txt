@@ -42,6 +42,9 @@ apscheduler>=3.10.0
 # Notifications
 python-telegram-bot>=20.0
 
+# LLM match briefings (Claude API with server-side web search)
+anthropic>=0.69.0
+
 # Utilities
 pyyaml>=6.0.0
 python-dotenv>=1.0.0

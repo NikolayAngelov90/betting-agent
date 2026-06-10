@@ -505,6 +505,58 @@ class APIFootballScraper(BaseScraper):
 
         logger.info(f"API-Football update complete ({self._requests_today} requests used)")
 
+    async def fetch_lineups(self, fixture_id: int) -> dict:
+        """Fetch confirmed starting XIs for a fixture (available ~20-45 min pre-KO).
+
+        Returns a dict keyed by side:
+            {
+              "home": {"team": str, "formation": str,
+                       "start_xi": [{"name", "number", "pos"}],
+                       "substitutes": [...], "coach": str},
+              "away": {...},
+            }
+        Empty dict when lineups are not yet published (API returns []).
+        """
+        if not self.enabled or not fixture_id:
+            return {}
+
+        data = await self._api_get("/fixtures/lineups", {"fixture": fixture_id})
+        if not data:
+            return {}
+
+        resp = data.get("response", [])
+        if not resp:
+            return {}  # lineups not published yet
+
+        def _players(raw_list):
+            out = []
+            for entry in raw_list or []:
+                p = entry.get("player", {}) if isinstance(entry, dict) else {}
+                name = p.get("name")
+                if not name:
+                    continue
+                out.append({
+                    "name": name,
+                    "number": p.get("number"),
+                    "pos": p.get("pos"),
+                })
+            return out
+
+        result = {}
+        # API returns the home team first, away team second (by convention).
+        for idx, side in enumerate(("home", "away")):
+            if idx >= len(resp):
+                break
+            block = resp[idx]
+            result[side] = {
+                "team": (block.get("team") or {}).get("name", ""),
+                "formation": block.get("formation") or "",
+                "start_xi": _players(block.get("startXI")),
+                "substitutes": _players(block.get("substitutes")),
+                "coach": (block.get("coach") or {}).get("name", ""),
+            }
+        return result
+
     async def fetch_recent_results(self, days_back: int = 3):
         """Fetch results for recent past days to update scores in the DB.
 

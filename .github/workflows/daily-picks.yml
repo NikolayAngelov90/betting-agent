@@ -18,6 +18,7 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       # Use the secret when configured; otherwise fall back to the explicit
       # dev opt-in so existing CI runs don't break before the secret is added.
       MODEL_HMAC_KEY: ${{ secrets.MODEL_HMAC_KEY }}
@@ -161,6 +162,26 @@ jobs:
         run: python -m src.agent.betting_agent --picks --force
         timeout-minutes: 60
         continue-on-error: true
+
+      - name: Restore briefings-sent guard
+        uses: actions/cache/restore@v5
+        with:
+          path: data/briefings_sent.json
+          key: briefings-sent-${{ github.run_id }}
+          restore-keys: |
+            briefings-sent-
+
+      - name: Post AI preview briefings (WC matches, no lineups)
+        run: python -m src.agent.betting_agent --briefing
+        timeout-minutes: 30
+        continue-on-error: true
+
+      - name: Save briefings-sent guard
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: data/briefings_sent.json
+          key: briefings-sent-${{ github.run_id }}
 
       - name: Scrape Flashscore results for all leagues (post-picks)
         if: always()
