@@ -108,23 +108,7 @@ class ValueBettingCalculator:
         def _reject(reason: str):
             _rejected[reason] = _rejected.get(reason, 0) + 1
 
-        # Define markets to check
-        markets = [
-            ("1X2", "Home Win", ensemble.get("home_win", 0), "home_win"),
-            ("1X2", "Draw", ensemble.get("draw", 0), "draw"),
-            ("1X2", "Away Win", ensemble.get("away_win", 0), "away_win"),
-            ("Over 1.5", "Over 1.5 Goals", ensemble.get("over_1.5", 0), "over_1.5"),
-            ("Over 2.5", "Over 2.5 Goals", ensemble.get("over_2.5", 0), "over_2.5"),
-            ("Over 3.5", "Over 3.5 Goals", ensemble.get("over_3.5", 0), "over_3.5"),
-            ("Under 1.5", "Under 1.5 Goals", ensemble.get("under_1.5", 0), "under_1.5"),
-            ("Under 2.5", "Under 2.5 Goals", ensemble.get("under_2.5", 0), "under_2.5"),
-            ("Under 3.5", "Under 3.5 Goals", ensemble.get("under_3.5", 0), "under_3.5"),
-            ("BTTS", "BTTS Yes", ensemble.get("btts_yes", 0), "btts_yes"),
-            ("BTTS", "BTTS No", ensemble.get("btts_no", 0), "btts_no"),
-            # Team goal line markets
-            ("Team Goals", "Home Over 1.5", ensemble.get("home_over_1.5", 0), "home_over_1.5"),
-            ("Team Goals", "Away Over 1.5", ensemble.get("away_over_1.5", 0), "away_over_1.5"),
-        ]
+        markets = self._market_specs(ensemble)
 
         for market, selection, prob, market_key in markets:
             if market_key in self.excluded_markets:
@@ -344,6 +328,111 @@ class ValueBettingCalculator:
             _summary = ", ".join(f"{v} {k}" for k, v in sorted(_rejected.items(), key=lambda x: -x[1]))
             logger.info(f"  {match_name}: 0 picks — rejected: {_summary}")
         return recommendations
+
+    def _market_specs(self, ensemble: Dict):
+        """The (market, selection, prob, market_key) tuples evaluated for a match."""
+        return [
+            ("1X2", "Home Win", ensemble.get("home_win", 0), "home_win"),
+            ("1X2", "Draw", ensemble.get("draw", 0), "draw"),
+            ("1X2", "Away Win", ensemble.get("away_win", 0), "away_win"),
+            ("Over 1.5", "Over 1.5 Goals", ensemble.get("over_1.5", 0), "over_1.5"),
+            ("Over 2.5", "Over 2.5 Goals", ensemble.get("over_2.5", 0), "over_2.5"),
+            ("Over 3.5", "Over 3.5 Goals", ensemble.get("over_3.5", 0), "over_3.5"),
+            ("Under 1.5", "Under 1.5 Goals", ensemble.get("under_1.5", 0), "under_1.5"),
+            ("Under 2.5", "Under 2.5 Goals", ensemble.get("under_2.5", 0), "under_2.5"),
+            ("Under 3.5", "Under 3.5 Goals", ensemble.get("under_3.5", 0), "under_3.5"),
+            ("BTTS", "BTTS Yes", ensemble.get("btts_yes", 0), "btts_yes"),
+            ("BTTS", "BTTS No", ensemble.get("btts_no", 0), "btts_no"),
+            ("Team Goals", "Home Over 1.5", ensemble.get("home_over_1.5", 0), "home_over_1.5"),
+            ("Team Goals", "Away Over 1.5", ensemble.get("away_over_1.5", 0), "away_over_1.5"),
+        ]
+
+    def find_best_bet(self, predictions: Dict, odds_data: List[Dict],
+                      match_name: str = "", context: Dict = None,
+                      home_team_name: str = "", away_team_name: str = "",
+                      match_id: int = 0, league: str = "") -> Optional[BetRecommendation]:
+        """Return the single highest-EV bet for a match, bypassing the value and
+        confidence gates used by find_value_bets.
+
+        Used for "pick every match" mode (WC): when no selection clears the normal
+        value thresholds, this still returns the model's best bettable selection so
+        the match gets a tracked pick. Only HARD sanity gates apply — real odds must
+        exist and be in range, model prob must clear the absolute floor, and model-
+        market divergence must be ≤ 2x. Kelly stake is clamped to the minimum so the
+        pick carries a real (if small) stake. Returns None if nothing is bettable.
+        """
+        context = context or {}
+        ensemble = predictions.get("ensemble", {})
+
+        best = None  # (market, selection, prob, market_key, odds, divergence, ev)
+        for market, selection, prob, market_key in self._market_specs(ensemble):
+            if market_key in self.excluded_markets:
+                continue
+            if prob < self.high_ev_min_confidence:
+                continue
+            best_odds = self._find_best_odds(
+                odds_data, market, selection,
+                home_team_name=home_team_name, away_team_name=away_team_name,
+            )
+            if not best_odds or best_odds < self.min_odds or best_odds > self.max_odds:
+                continue
+            implied = 1.0 / best_odds if best_odds > 0 else 0
+            divergence = prob / implied if implied > 0 else 0
+            if divergence > 2.0:
+                continue  # model wildly off market — treat as data error, never bet
+            ev = self.calculate_expected_value(prob, best_odds)
+            if best is None or ev > best[6]:
+                best = (market, selection, prob, market_key, best_odds, divergence, ev)
+
+        if best is None:
+            return None
+
+        market, selection, prob, market_key, best_odds, divergence, ev = best
+        opening = self._find_opening_odds(
+            odds_data, market, selection,
+            home_team_name=home_team_name, away_team_name=away_team_name,
+        )
+        agreement_info = self._check_model_agreement(
+            predictions, market_key, selection,
+            features_dict=context.get("features_dict"),
+        )
+        kelly_pct = self.kelly_criterion(
+            prob, best_odds, agreement=agreement_info.get("agreement"),
+        )
+        kelly_pct = max(kelly_pct, self.min_kelly_stake)  # ensure a real minimum stake
+        risk = self._assess_risk(prob, best_odds, ev)
+        xg_info = self._build_xg_insight(context, ensemble, market, selection)
+        reasoning = self._build_reasoning(
+            market, selection, prob, best_odds, ev, context, agreement_info, xg_info,
+        )
+        return BetRecommendation(
+            match=match_name,
+            match_id=match_id,
+            market=market,
+            selection=selection,
+            odds=best_odds,
+            predicted_probability=round(prob, 4),
+            expected_value=round(ev, 4),
+            confidence=round(prob, 4),
+            kelly_stake_percentage=round(kelly_pct, 2),
+            recommended_stake=round(kelly_pct, 2),
+            reasoning=reasoning,
+            risk_level=risk,
+            injury_impact=context.get("injury_impact", ""),
+            h2h_insight=context.get("h2h_insight", ""),
+            form_insight=context.get("form_insight", ""),
+            used_fallback_odds=False,
+            league=league,
+            model_agreement=agreement_info.get("agreement", ""),
+            models_for=agreement_info.get("models_for", ""),
+            models_against=agreement_info.get("models_against", ""),
+            home_xg_avg=context.get("home_xg_avg", 0.0),
+            away_xg_avg=context.get("away_xg_avg", 0.0),
+            xg_edge=xg_info.get("insight", ""),
+            predicted_xg=xg_info.get("predicted_xg", ""),
+            contrarian_value=round(divergence, 2),
+            opening_odds=round(opening, 2) if opening else 0.0,
+        )
 
     @staticmethod
     def calculate_expected_value(probability: float, odds: float) -> float:

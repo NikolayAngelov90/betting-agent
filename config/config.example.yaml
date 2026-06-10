@@ -145,6 +145,11 @@ betting:
   max_stake_percentage: 4.0 # Hard cap: maximum 4% of bankroll per bet
   max_picks_per_league: 5   # Portfolio: cap exposure per league per day
   max_total_kelly_pct: 0    # Portfolio: 0 = disabled (show all picks)
+  # WC mode: save a tracked pick for EVERY World Cup match even when no value
+  # edge exists (highest-EV selection, staked at the Kelly minimum). National-team
+  # competitions only — club leagues keep value-only discipline. Set false to
+  # revert to value-bets-only for the WC too.
+  wc_pick_every_match: true
   # Scale Kelly stake by model agreement level. Reduces exposure when models disagree.
   # Markets to exclude from picks. Use market_key names from value_calculator.
   # Available: home_win, draw, away_win, over_1.5, over_2.5, over_3.5,

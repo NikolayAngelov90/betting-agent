@@ -746,6 +746,28 @@ class FootballBettingAgent:
             home_team_name=home_team_name, away_team_name=away_team_name,
             match_id=match_id, league=league,
         )
+
+        # WC "pick every match": when a World Cup fixture produces no value bet,
+        # still save the model's single best bettable selection so every match
+        # gets a tracked pick. Gated to national-team competitions so club leagues
+        # keep their value-only discipline. Toggle via betting.wc_pick_every_match.
+        if not recommendations:
+            from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+            if (league in NATIONAL_TEAM_LEAGUES
+                    and self.config.get("betting.wc_pick_every_match", True)):
+                best = self.value_calculator.find_best_bet(
+                    predictions, odds_data, match_name, context,
+                    home_team_name=home_team_name, away_team_name=away_team_name,
+                    match_id=match_id, league=league,
+                )
+                if best:
+                    recommendations = [best]
+                    logger.info(
+                        f"WC pick-every-match: {match_name} → {best.selection} "
+                        f"@ {best.odds:.2f} (EV {best.expected_value:+.1%}, "
+                        f"conf {best.confidence:.0%}; no value edge)"
+                    )
+
         for rec in recommendations:
             rec.match_date = match_date
 
