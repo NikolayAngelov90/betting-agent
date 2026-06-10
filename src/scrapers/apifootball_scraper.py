@@ -476,10 +476,16 @@ class APIFootballScraper(BaseScraper):
         # 1. Fetch yesterday's results (free plan only allows yesterday+today+tomorrow)
         await self.fetch_recent_results(days_back=1)
 
-        # 2. Fetch today's fixtures only (CI runs daily — tomorrow handled next run)
-        # Also populates self._today_fixture_count for dynamic budget allocation below.
+        # 2. Fetch today's fixtures. Also populates self._today_fixture_count.
         today = date.today()
         await self._fetch_fixtures_by_date(today)
+
+        # 3a. WC is hosted in North America (UTC-4 to UTC-7). Late evening matches
+        # (e.g. 9 PM ET = 01:00 UTC) fall on the next UTC calendar day. Fetch
+        # tomorrow too so those fixtures are in DB before picks are generated.
+        _wc_league_id = LEAGUE_ID_MAP.get("world/fifa-world-cup")
+        if _wc_league_id and _wc_league_id in self._tracked_league_ids:
+            await self._fetch_fixtures_by_date(today + timedelta(days=1))
 
         # 3. Fetch real bookmaker odds for today's fixtures (time-sensitive — expires today).
         # Budget is dynamic: total remaining minus injury-scraper reserve so we never

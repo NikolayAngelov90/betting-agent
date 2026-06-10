@@ -954,7 +954,13 @@ class FootballBettingAgent:
 
         with self.db.get_session() as session:
             day_start = datetime.combine(target, datetime.min.time())
-            day_end = day_start + timedelta(days=1)
+            # WC 2026 is in North America (UTC-4 to UTC-7). Late evening matches
+            # (e.g. 9 PM ET = 01:00 UTC) fall on the next UTC calendar day.
+            # Extend the pick window to 30 hours so those fixtures are included.
+            _wc_leagues = {"world/fifa-world-cup"}
+            _configured_leagues = set(self.config.get("scraping.flashscore_leagues", []))
+            _wc_only = bool(_wc_leagues & _configured_leagues)
+            day_end = day_start + timedelta(hours=30 if _wc_only else 24)
             # Only include matches that haven't kicked off yet — skip finished
             # matches and those already in progress (match_date is kickoff time).
             # DB stores UTC datetimes so compare against UTC, not local time.
