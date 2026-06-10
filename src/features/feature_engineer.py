@@ -87,6 +87,8 @@ class FeatureEngineer:
                         "referee": m.referee or "",
                         "match_date": m.match_date,
                         "venue": m.venue,
+                        "round": m.round,
+                        "season": m.season,
                     }
                     all_team_ids.add(m.home_team_id)
                     all_team_ids.add(m.away_team_id)
@@ -416,6 +418,28 @@ class FeatureEngineer:
         if not for_training:
             weather = self._get_weather_features(_venue, _match_date, league=league)
             features.update(weather)
+
+        # 15. WC / national-tournament features (group-stage form, knockout flag).
+        # Resolved from the match_meta preload when available; falls back to DB.
+        _meta_wc = (self._preload_cache or {}).get("match_meta", {}).get(match_id)
+        _wc_round = _meta_wc["round"] if _meta_wc else None
+        _wc_season = _meta_wc["season"] if _meta_wc else None
+        if _wc_round is None or _wc_season is None:
+            try:
+                with self.db.get_session() as _wsess:
+                    _wm = _wsess.get(Match, match_id)
+                    if _wm:
+                        _wc_round = _wm.round
+                        _wc_season = _wm.season
+            except Exception:
+                pass
+        wc_feat = self._get_wc_tournament_features(
+            home_id, away_id, league,
+            round_name=_wc_round,
+            season=_wc_season or "",
+            match_date=_match_date,
+        )
+        features.update(wc_feat)
 
         logger.debug(f"Generated {len(features)} features for match {match_id}")
         return features
@@ -1128,6 +1152,101 @@ class FeatureEngineer:
             return self._weather_service.get_match_weather(venue, md, country_code=country_code)
         except Exception as exc:
             logger.debug(f"Weather features failed: {exc}")
+            return defaults
+
+    def _get_wc_tournament_features(
+        self,
+        home_id: int,
+        away_id: int,
+        league: str,
+        round_name: str,
+        season: str,
+        match_date,
+    ) -> dict:
+        """WC-specific features: group stage standing, tournament form, round stage.
+
+        For group stage matches these features capture how many points / goal
+        difference each team has accumulated so far in the tournament — a proxy
+        for desperation, confidence, and qualification pressure.
+
+        Round classification:
+          - "Group Stage - N" → wc_is_group_stage=1, wc_is_knockout=0
+          - All other rounds  → wc_is_group_stage=0, wc_is_knockout=1
+        """
+        defaults = {
+            "wc_is_group_stage": 0, "wc_is_knockout": 0,
+            "wc_home_points": 0, "wc_away_points": 0,
+            "wc_home_gd": 0, "wc_away_gd": 0,
+            "wc_home_matches_played": 0, "wc_away_matches_played": 0,
+            "wc_home_goals_for": 0, "wc_away_goals_for": 0,
+            "wc_points_diff": 0, "wc_gd_diff": 0,
+        }
+
+        try:
+            from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+            if league not in NATIONAL_TEAM_LEAGUES:
+                return defaults
+
+            # Determine round stage.
+            rn = (round_name or "").lower()
+            is_group = "group stage" in rn
+            defaults["wc_is_group_stage"] = int(is_group)
+            defaults["wc_is_knockout"] = int(not is_group)
+
+            # Query all completed WC matches for this season played BEFORE this match.
+            cutoff = match_date if match_date else None
+            with self.db.get_session() as session:
+                from sqlalchemy import or_ as _or
+                q = session.query(Match).filter(
+                    Match.league == league,
+                    Match.season == season,
+                    Match.is_fixture == False,
+                    Match.home_goals.isnot(None),
+                    _or(
+                        Match.home_team_id.in_([home_id, away_id]),
+                        Match.away_team_id.in_([home_id, away_id]),
+                    ),
+                )
+                if cutoff:
+                    q = q.filter(Match.match_date < cutoff)
+                past_matches = q.all()
+
+            def _team_stats(team_id):
+                pts = gd = gf = mp = 0
+                for m in past_matches:
+                    if m.home_team_id == team_id:
+                        hg, ag = m.home_goals, m.away_goals
+                        mp += 1
+                        gf += hg
+                        gd += hg - ag
+                        pts += 3 if hg > ag else (1 if hg == ag else 0)
+                    elif m.away_team_id == team_id:
+                        hg, ag = m.home_goals, m.away_goals
+                        mp += 1
+                        gf += ag
+                        gd += ag - hg
+                        pts += 3 if ag > hg else (1 if ag == hg else 0)
+                return pts, gd, gf, mp
+
+            h_pts, h_gd, h_gf, h_mp = _team_stats(home_id)
+            a_pts, a_gd, a_gf, a_mp = _team_stats(away_id)
+
+            return {
+                "wc_is_group_stage": int(is_group),
+                "wc_is_knockout": int(not is_group),
+                "wc_home_points": h_pts,
+                "wc_away_points": a_pts,
+                "wc_home_gd": h_gd,
+                "wc_away_gd": a_gd,
+                "wc_home_matches_played": h_mp,
+                "wc_away_matches_played": a_mp,
+                "wc_home_goals_for": h_gf,
+                "wc_away_goals_for": a_gf,
+                "wc_points_diff": h_pts - a_pts,
+                "wc_gd_diff": h_gd - a_gd,
+            }
+        except Exception as exc:
+            logger.debug(f"WC tournament features failed: {exc}")
             return defaults
 
     def _prefix_dict(self, d: dict, prefix: str) -> dict:

@@ -561,6 +561,7 @@ class APIFootballScraper(BaseScraper):
             match_ts = fix.get("fixture", {}).get("timestamp")
             status_short = fix.get("fixture", {}).get("status", {}).get("short", "")
             referee = fix.get("fixture", {}).get("referee") or ""
+            round_name = fix.get("league", {}).get("round") or None
 
             if not home_name or not away_name:
                 continue
@@ -657,6 +658,8 @@ class APIFootballScraper(BaseScraper):
                     match = session.get(Match, match_id)
                     if match:
                         match.apifootball_id = fixture_id
+                        if round_name and not match.round:
+                            match.round = round_name
                         if referee and not match.referee:
                             match.referee = referee
                         if venue_city and not match.venue:
@@ -693,7 +696,8 @@ class APIFootballScraper(BaseScraper):
                         away_team_id=away_team_id,
                         match_date=match_dt,
                         league=league_key,
-                        season=self._get_season(match_dt),
+                        season=self._season_from_fixture(fix, match_dt, league_key),
+                        round=round_name,
                         is_fixture=is_fixture,
                         apifootball_id=fixture_id,
                         referee=referee or None,
@@ -1302,13 +1306,30 @@ class APIFootballScraper(BaseScraper):
                     return m.id
         return None
 
-    def _get_season(self, dt: datetime) -> str:
-        """Determine the season string from a match date (e.g. '2025/2026')."""
+    def _get_season(self, dt: datetime, league: str = None) -> str:
+        """Determine the season string from a match date.
+
+        International tournaments (WC, Euros, etc.) run in a single calendar
+        year and API-Football uses that year as the season key — return "2026"
+        not "2025/2026" for a June 2026 WC match.
+        """
+        from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+        if league and league in NATIONAL_TEAM_LEAGUES:
+            return str(dt.year)
         year = dt.year
         if dt.month >= 7:
             return f"{year}/{year + 1}"
         else:
             return f"{year - 1}/{year}"
+
+    def _season_from_fixture(self, fix: dict, match_dt: datetime, league_key: str) -> str:
+        """Return season string, preferring the API-provided season value."""
+        api_season = fix.get("league", {}).get("season")
+        if api_season is not None:
+            # API-Football returns an integer season year for all competitions.
+            # Use it directly — this is more reliable than deriving from date.
+            return str(api_season)
+        return self._get_season(match_dt, league=league_key)
 
     # ---- Odds fetching ----
 
@@ -1619,6 +1640,7 @@ class APIFootballScraper(BaseScraper):
             match_ts = fix.get("fixture", {}).get("timestamp")
             status_short = fix.get("fixture", {}).get("status", {}).get("short", "")
             referee = fix.get("fixture", {}).get("referee") or ""
+            round_name = fix.get("league", {}).get("round") or None
 
             if not home_name or not away_name or not match_ts:
                 continue
@@ -1681,6 +1703,8 @@ class APIFootballScraper(BaseScraper):
                     match = session.get(Match, match_id)
                     if match:
                         match.apifootball_id = fixture_id
+                        if round_name and not match.round:
+                            match.round = round_name
                         if referee and not match.referee:
                             match.referee = referee
                         if venue_city and not match.venue:
@@ -1708,7 +1732,8 @@ class APIFootballScraper(BaseScraper):
                         away_team_id=away_team_id,
                         match_date=match_dt,
                         league=league_key,
-                        season=self._get_season(match_dt),
+                        season=self._season_from_fixture(fix, match_dt, league_key),
+                        round=round_name,
                         is_fixture=is_fixture,
                         apifootball_id=fixture_id,
                         referee=referee or None,

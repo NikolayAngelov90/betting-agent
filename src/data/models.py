@@ -93,6 +93,9 @@ class Match(Base):
     penalty_home_score = Column(Integer)
     penalty_away_score = Column(Integer)
 
+    # Round / stage name (from API-Football, e.g. "Group Stage - 1", "Quarter-finals")
+    round = Column(String(100))
+
     # API-Football fixture ID for cross-referencing
     apifootball_id = Column(Integer)
 
