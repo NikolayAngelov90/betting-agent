@@ -157,15 +157,51 @@ class MatchBriefingService:
         if not self.config.get("briefings.enabled", True):
             logger.info("Briefings disabled via config")
             return False
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            logger.warning("Briefings skipped: ANTHROPIC_API_KEY not set")
+        backend = self._resolve_backend()
+        if backend is None:
+            logger.warning(
+                "Briefings skipped: no auth available — set CLAUDE_CODE_OAUTH_TOKEN "
+                "(Pro subscription, $0 extra) or ANTHROPIC_API_KEY (per-token credits)"
+            )
             return False
-        try:
-            import anthropic  # noqa: F401
-        except ImportError:
-            logger.warning("Briefings skipped: anthropic package not installed")
-            return False
+        if backend == "anthropic_api":
+            try:
+                import anthropic  # noqa: F401
+            except ImportError:
+                logger.warning("Briefings skipped: anthropic package not installed")
+                return False
         return True
+
+    def _resolve_backend(self):
+        """Pick the LLM backend for briefings.
+
+        claude_code  — headless Claude Code CLI billed to the Claude Pro
+                       subscription (CLAUDE_CODE_OAUTH_TOKEN). $0 extra.
+        anthropic_api — direct API with ANTHROPIC_API_KEY (per-token credits).
+
+        The configured backend is used when its auth is present; otherwise we
+        fall back to whichever auth exists so briefings never silently die.
+        Returns None when neither is available.
+        """
+        preferred = self.config.get("briefings.backend", "claude_code")
+        has_token = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
+        has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        if preferred == "claude_code":
+            if has_token:
+                return "claude_code"
+            if has_key:
+                logger.info(
+                    "Briefings: CLAUDE_CODE_OAUTH_TOKEN not set — falling back to "
+                    "the Anthropic API (this consumes paid credits)"
+                )
+                return "anthropic_api"
+        else:
+            if has_key:
+                return "anthropic_api"
+            if has_token:
+                logger.info("Briefings: ANTHROPIC_API_KEY not set — using Claude Code subscription")
+                return "claude_code"
+        return None
 
     def _wc_fixtures(self, window_hours: int, min_minutes_ahead: int = 0,
                      max_minutes_ahead: int = None) -> list:
@@ -438,9 +474,6 @@ class MatchBriefingService:
         Returns (briefing_text, decision) where decision is a dict
         {action: KEEP|PASS|CHANGE, market_key, confidence} or None.
         """
-        from anthropic import AsyncAnthropic
-
-        client = AsyncAnthropic()  # reads ANTHROPIC_API_KEY from env
         language = self.config.get("briefings.language", "Bulgarian")
         menu = menu or []
 
@@ -516,6 +549,22 @@ class MatchBriefingService:
             f"{decision_block}"
         )
 
+        backend = self._resolve_backend()
+        if backend == "claude_code":
+            text_out = await self._call_claude_code(system, user, match_name)
+        else:
+            text_out = await self._call_anthropic_api(system, user, match_name)
+
+        decision = self._parse_decision(text_out) if menu else None
+        # Strip the machine-readable block from the user-facing briefing.
+        clean = _DECISION_RE.sub("", text_out).strip()
+        return clean, decision
+
+    async def _call_anthropic_api(self, system: str, user: str, match_name: str) -> str:
+        """Direct Anthropic API path (ANTHROPIC_API_KEY — paid per-token credits)."""
+        from anthropic import AsyncAnthropic
+
+        client = AsyncAnthropic()  # reads ANTHROPIC_API_KEY from env
         tools = [{"type": "web_search_20260209", "name": "web_search"}]
 
         messages = [{"role": "user", "content": user}]
@@ -534,7 +583,7 @@ class MatchBriefingService:
                 )
             except Exception as e:
                 logger.warning(f"Claude briefing call failed for {match_name}: {e}")
-                return "", None
+                return ""
 
             if resp.stop_reason == "pause_turn":
                 messages = [
@@ -547,11 +596,64 @@ class MatchBriefingService:
                 b.text for b in resp.content if getattr(b, "type", "") == "text"
             ).strip()
             break
+        return text_out
 
-        decision = self._parse_decision(text_out) if menu else None
-        # Strip the machine-readable block from the user-facing briefing.
-        clean = _DECISION_RE.sub("", text_out).strip()
-        return clean, decision
+    async def _call_claude_code(self, system: str, user: str, match_name: str) -> str:
+        """Headless Claude Code path — billed to the Claude Pro subscription
+        (CLAUDE_CODE_OAUTH_TOKEN), $0 in API credits.
+
+        Runs `claude -p` with only WebSearch/WebFetch allowed, in a temp cwd so
+        no repo CLAUDE.md/project context pollutes the prompt. ANTHROPIC_API_KEY
+        is stripped from the child env so the CLI can never silently bill the
+        paid API instead of the subscription.
+        """
+        import asyncio
+        import shutil
+        import tempfile
+
+        exe = shutil.which("claude")
+        if not exe:
+            logger.warning(
+                "Briefings: `claude` CLI not found on PATH — install with "
+                "`npm install -g @anthropic-ai/claude-code`"
+            )
+            return ""
+
+        env = dict(os.environ)
+        env.pop("ANTHROPIC_API_KEY", None)  # subscription billing only — never credits
+
+        prompt = f"{system}\n\n{user}"
+        tmpdir = tempfile.mkdtemp(prefix="briefing_")
+        cmd = [
+            exe, "-p", prompt,
+            "--model", "sonnet",  # Pro-plan Claude Code model
+            "--allowedTools", "WebSearch,WebFetch",
+            "--output-format", "text",
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                cwd=tmpdir,
+            )
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=480)
+            except asyncio.TimeoutError:
+                proc.kill()
+                logger.warning(f"Claude Code briefing timed out (480s) for {match_name}")
+                return ""
+            if proc.returncode != 0:
+                logger.warning(
+                    f"Claude Code briefing failed for {match_name} "
+                    f"(exit {proc.returncode}): {err.decode(errors='replace')[:400]}"
+                )
+                return ""
+            return out.decode(errors="replace").strip()
+        except Exception as e:
+            logger.warning(f"Claude Code briefing error for {match_name}: {e}")
+            return ""
 
     @staticmethod
     def _parse_decision(text: str):

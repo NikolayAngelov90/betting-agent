@@ -183,6 +183,13 @@ notifications:
 briefings:
   enabled: true               # master switch for --briefing / --prematch-briefing
   language: Bulgarian         # language the briefing prose is written in
+  # backend: which Claude to use for the research + briefing.
+  #   claude_code   — headless Claude Code CLI billed to the Claude Pro
+  #                   subscription (CLAUDE_CODE_OAUTH_TOKEN secret). $0 extra.
+  #                   Runs on Sonnet. Falls back to anthropic_api if the token
+  #                   is missing but ANTHROPIC_API_KEY is set.
+  #   anthropic_api — direct API (ANTHROPIC_API_KEY), Opus 4.8, per-token credits.
+  backend: claude_code
   # finalize_picks: the briefing LLM makes the FINAL call on each WC bet — it can
   # KEEP the model's pick, PASS (veto → the saved pick is dropped), or CHANGE to a
   # different selection that has real bookmaker odds. The saved pick in the DB is

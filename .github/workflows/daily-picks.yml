@@ -19,6 +19,9 @@ jobs:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Claude Pro subscription auth for briefings (claude_code backend, $0 extra).
+      # Generate locally with `claude setup-token`.
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       # Use the secret when configured; otherwise fall back to the explicit
       # dev opt-in so existing CI runs don't break before the secret is added.
       MODEL_HMAC_KEY: ${{ secrets.MODEL_HMAC_KEY }}
@@ -171,9 +174,13 @@ jobs:
           restore-keys: |
             briefings-sent-
 
+      - name: Install Claude Code CLI (briefings via Pro subscription)
+        run: npm install -g @anthropic-ai/claude-code
+        continue-on-error: true
+
       - name: Post AI preview briefings (WC matches, no lineups)
         run: python -m src.agent.betting_agent --briefing
-        timeout-minutes: 30
+        timeout-minutes: 45
         continue-on-error: true
 
       - name: Save briefings-sent guard
