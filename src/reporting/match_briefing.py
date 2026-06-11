@@ -704,9 +704,14 @@ class MatchBriefingService:
                 logger.warning(f"Claude Code briefing timed out (480s) for {match_name}")
                 return ""
             if proc.returncode != 0:
+                # Claude Code writes most errors (usage limits, auth) to STDOUT
+                # in -p mode — log both streams or failures are undiagnosable.
+                _err = err.decode(errors="replace").strip()
+                _out = out.decode(errors="replace").strip()
                 logger.warning(
                     f"Claude Code briefing failed for {match_name} "
-                    f"(exit {proc.returncode}): {err.decode(errors='replace')[:400]}"
+                    f"(exit {proc.returncode}): stderr={_err[:300]!r} "
+                    f"stdout={_out[-300:]!r}"
                 )
                 return ""
             return out.decode(errors="replace").strip()

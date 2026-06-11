@@ -609,6 +609,26 @@ class TelegramNotifier:
             logger.info("Telegram message sent")
             return msg
         except Exception as e:
+            # Telegram groups silently become supergroups (e.g. when settings
+            # change) and the chat id is REPLACED. Auto-retry with the new id
+            # and warn loudly so the configured id gets updated.
+            new_id = getattr(e, "new_chat_id", None)
+            if new_id:
+                logger.warning(
+                    f"Telegram group migrated: chat id {self.chat_id} -> {new_id}. "
+                    f"Retrying with the new id — UPDATE TELEGRAM_CHAT_ID in the "
+                    f"config/secrets to silence this warning."
+                )
+                self.chat_id = str(new_id)
+                try:
+                    msg = await bot.send_message(
+                        chat_id=self.chat_id, text=text, parse_mode="HTML",
+                    )
+                    logger.info("Telegram message sent (after chat migration)")
+                    return msg
+                except Exception as e2:
+                    logger.error(f"Failed to send after chat migration: {e2}")
+                    return None
             logger.error(f"Failed to send Telegram message: {e}")
             return None
 
