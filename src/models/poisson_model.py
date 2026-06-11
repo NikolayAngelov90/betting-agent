@@ -16,8 +16,18 @@ MAX_GOALS = 10  # Maximum goals to consider in probability calculations
 
 # National-team competitions: Poisson strengths are estimated exclusively from
 # international match data so club-league performance does not contaminate WC
-# team ratings.  Add future international leagues (EURO, Copa America) here.
-NATIONAL_TEAM_LEAGUES = frozenset({"world/fifa-world-cup"})
+# team ratings.  Qualifiers and friendlies provide the historical depth that
+# WC editions alone cannot (many 2026 finalists missed WC 2022).
+NATIONAL_TEAM_LEAGUES = frozenset({
+    "world/fifa-world-cup",
+    "world/friendlies",
+    "world/wc-qualification-africa",
+    "world/wc-qualification-asia",
+    "world/wc-qualification-concacaf",
+    "world/wc-qualification-europe",
+    "world/wc-qualification-oceania",
+    "world/wc-qualification-south-america",
+})
 
 
 class PoissonModel:

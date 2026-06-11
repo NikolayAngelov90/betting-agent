@@ -271,6 +271,17 @@ LEAGUE_ID_MAP = {
     "europe/europa-conference-league": 848,
     # International — national team competitions
     "world/fifa-world-cup": 1,
+    # National-team competitions used for historical backfill (training data
+    # for WC predictions). Not in flashscore_leagues, so the daily fixture
+    # fetch ignores them (_tracked_league_ids filter); only --backfill-wc
+    # pulls them via backfill_competition_season().
+    "world/friendlies": 10,
+    "world/wc-qualification-africa": 29,
+    "world/wc-qualification-asia": 30,
+    "world/wc-qualification-concacaf": 31,
+    "world/wc-qualification-europe": 32,
+    "world/wc-qualification-oceania": 33,
+    "world/wc-qualification-south-america": 34,
 }
 
 # Reverse map: API-Football league ID -> our internal league key

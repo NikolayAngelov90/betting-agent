@@ -3911,33 +3911,39 @@ async def main():
             print(f"Briefings sent: {n}")
 
         elif command == "--backfill-wc":
-            print("Backfilling FIFA World Cup match history (2018, 2022, 2026)...")
-            wc_key = "world/fifa-world-cup"
-
-            # Step 1: FDO for WC 2018 and 2022 (competition code "WC").
-            print("  [1/2] football-data.org: fetching WC 2018 and 2022...")
-            fdo_saved = await agent.footballdataorg.backfill_historical_seasons(
-                seasons=[2018, 2022]
-            )
-            print(f"  FDO: {fdo_saved} new match records saved")
-
-            # Step 2: API-Football for WC 2022 + 2026 (fills gaps FDO may miss
-            # and fetches upcoming 2026 group-stage fixtures).
-            print("  [2/2] API-Football: fetching WC 2022 and 2026 fixtures...")
+            # National-team history backfill via API-Football. Coverage for the
+            # WC prediction models requires recent matches for EVERY finalist —
+            # WC editions alone are not enough (many 2026 teams missed WC 2022),
+            # so qualifiers and friendlies are the primary sources. football-
+            # data.org is not used: its free tier 403s on historical seasons.
+            print("Backfilling national-team match history via API-Football...")
+            _targets = [
+                ("world/fifa-world-cup", (2022, 2026)),
+                ("world/wc-qualification-europe", (2023, 2024, 2025)),
+                ("world/wc-qualification-south-america", (2023, 2024, 2025)),
+                ("world/wc-qualification-africa", (2023, 2024, 2025)),
+                ("world/wc-qualification-asia", (2023, 2024, 2025)),
+                ("world/wc-qualification-concacaf", (2023, 2024, 2025)),
+                ("world/wc-qualification-oceania", (2023, 2024, 2025)),
+                ("world/friendlies", (2025, 2026)),
+            ]
             total_created = 0
             total_updated = 0
-            for wc_season in (2022, 2026):
-                c, u = await agent.apifootball.backfill_competition_season(
-                    wc_key, wc_season
-                )
-                total_created += c
-                total_updated += u
-                print(f"  API-Football WC {wc_season}: {c} created, {u} updated")
-
+            for _league_key, _seasons in _targets:
+                for _season in _seasons:
+                    try:
+                        c, u = await agent.apifootball.backfill_competition_season(
+                            _league_key, _season
+                        )
+                    except Exception as _bf_err:
+                        print(f"  {_league_key} {_season}: FAILED ({_bf_err})")
+                        continue
+                    total_created += c
+                    total_updated += u
+                    print(f"  {_league_key} {_season}: {c} created, {u} updated")
             print(
-                f"World Cup backfill complete: "
-                f"{fdo_saved} FDO + {total_created} AF created, "
-                f"{total_updated} AF updated."
+                f"National-team backfill complete: "
+                f"{total_created} created, {total_updated} updated."
             )
 
         elif command == "--backfill-history":

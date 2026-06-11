@@ -13,6 +13,11 @@ on:
     - cron: '37 9 * * *'   # primary — 09:37 UTC (12:37 Sofia)
     - cron: '23 12 * * *'  # backup  — 12:23 UTC (15:23 Sofia)
   workflow_dispatch: # Allow manual trigger
+    inputs:
+      backfill_wc:
+        description: 'Run national-team history backfill (WC/qualifiers/friendlies) before the pipeline'
+        required: false
+        default: 'false'
 
 # Never let a delayed primary and the backup write to the DB at the same time —
 # the second run queues until the first finishes.
@@ -121,6 +126,12 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short
+        continue-on-error: true
+
+      - name: Backfill national-team history (on demand)
+        if: github.event.inputs.backfill_wc == 'true'
+        run: python -m src.agent.betting_agent --backfill-wc
+        timeout-minutes: 40
         continue-on-error: true
 
       - name: Run daily update (fixtures + odds, no Flashscore results)

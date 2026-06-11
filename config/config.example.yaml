@@ -50,9 +50,11 @@ scraping:
 
   off_season_leagues: []
 
-  # All club-league skips are irrelevant in WC mode — cleared.
-  # Re-populate when club leagues are re-enabled.
-  flashscore_skip_leagues: []
+  # Flashscore's WC pages are Cloudflare-blocked in CI (fixtures AND results
+  # time out ~90s each + alert noise). API-Football provides WC fixtures,
+  # results, and odds, so Flashscore adds nothing for this competition.
+  flashscore_skip_leagues:
+    - world/fifa-world-cup
 
   flashscore_skip_fixtures_leagues: []
 
