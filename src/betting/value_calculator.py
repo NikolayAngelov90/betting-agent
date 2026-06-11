@@ -364,13 +364,13 @@ class ValueBettingCalculator:
         context = context or {}
         ensemble = predictions.get("ensemble", {})
 
-        best = None  # (market, selection, prob, market_key, odds, divergence, ev)
+        # Gather every bettable selection (real odds in range). No confidence
+        # floor: this is the "pick every match" fallback, so even-match slates
+        # still yield a pick.
+        candidates = []  # (market, selection, prob, market_key, odds, divergence, ev)
         for market, selection, prob, market_key in self._market_specs(ensemble):
             if market_key in self.excluded_markets:
                 continue
-            # No confidence floor here: this is the "pick every match" fallback, so
-            # we accept the best available selection even on an even match. The
-            # divergence ≤ 2x guard below still rejects miscalibrated outliers.
             best_odds = self._find_best_odds(
                 odds_data, market, selection,
                 home_team_name=home_team_name, away_team_name=away_team_name,
@@ -379,14 +379,28 @@ class ValueBettingCalculator:
                 continue
             implied = 1.0 / best_odds if best_odds > 0 else 0
             divergence = prob / implied if implied > 0 else 0
-            if divergence > 2.0:
-                continue  # model wildly off market — treat as data error, never bet
             ev = self.calculate_expected_value(prob, best_odds)
-            if best is None or ev > best[6]:
-                best = (market, selection, prob, market_key, best_odds, divergence, ev)
+            candidates.append(
+                (market, selection, prob, market_key, best_odds, divergence, ev)
+            )
 
-        if best is None:
+        if not candidates:
             return None
+
+        # Forced picks must be SANE, not maximal-EV: with thin data the model's
+        # probabilities are noisy and max-EV selects the most mispriced longshot
+        # (e.g. Away Over 1.5 @ 6.50 on 31% confidence). Tier 1: highest EV among
+        # selections with modest odds and modest model-market divergence. Tier 2
+        # (nothing modest available): the model's most-likely selection — never
+        # a longshot.
+        sane = [
+            c for c in candidates
+            if c[4] <= 3.50 and c[5] <= 1.50  # odds ≤ 3.5, divergence ≤ 1.5x
+        ]
+        if sane:
+            best = max(sane, key=lambda c: c[6])  # highest EV among sane picks
+        else:
+            best = max(candidates, key=lambda c: c[2])  # highest model probability
 
         market, selection, prob, market_key, best_odds, divergence, ev = best
         return self._build_pick(

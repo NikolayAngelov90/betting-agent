@@ -282,6 +282,15 @@ LEAGUE_ID_MAP = {
     "world/wc-qualification-europe": 32,
     "world/wc-qualification-oceania": 33,
     "world/wc-qualification-south-america": 34,
+    # Continental tournaments — within the free plan's 2022-2024 season window.
+    # Critical for the WC hosts (Mexico/USA/Canada play no qualifiers).
+    "world/euro-championship": 4,
+    "world/uefa-nations-league": 5,
+    "world/africa-cup-of-nations": 6,
+    "world/asian-cup": 7,
+    "world/copa-america": 9,
+    "world/gold-cup": 22,
+    "world/concacaf-nations-league": 536,
 }
 
 # Reverse map: API-Football league ID -> our internal league key

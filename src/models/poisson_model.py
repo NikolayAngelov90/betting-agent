@@ -27,6 +27,13 @@ NATIONAL_TEAM_LEAGUES = frozenset({
     "world/wc-qualification-europe",
     "world/wc-qualification-oceania",
     "world/wc-qualification-south-america",
+    "world/euro-championship",
+    "world/uefa-nations-league",
+    "world/africa-cup-of-nations",
+    "world/asian-cup",
+    "world/copa-america",
+    "world/gold-cup",
+    "world/concacaf-nations-league",
 })
 
 

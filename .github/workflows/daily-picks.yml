@@ -128,8 +128,25 @@ jobs:
         run: python -m pytest tests/ -v --tb=short
         continue-on-error: true
 
-      - name: Backfill national-team history (on demand)
-        if: github.event.inputs.backfill_wc == 'true'
+      - name: Check national-team data coverage
+        id: natcov
+        run: |
+          LOW=$(python -c "
+          from src.data.database import get_db
+          from src.data.models import Match
+          from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+          db = get_db()
+          with db.get_session() as s:
+              n = s.query(Match).filter(
+                  Match.league.in_(list(NATIONAL_TEAM_LEAGUES)),
+                  Match.home_goals.isnot(None),
+              ).count()
+          print('true' if n < 1500 else 'false')" | tail -1)
+          echo "low=$LOW" >> "$GITHUB_OUTPUT"
+          echo "National-team coverage low: $LOW"
+
+      - name: Backfill national-team history (auto when coverage low, or on demand)
+        if: github.event.inputs.backfill_wc == 'true' || steps.natcov.outputs.low == 'true'
         run: python -m src.agent.betting_agent --backfill-wc
         timeout-minutes: 40
         continue-on-error: true

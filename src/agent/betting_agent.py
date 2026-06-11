@@ -3917,15 +3917,24 @@ async def main():
             # so qualifiers and friendlies are the primary sources. football-
             # data.org is not used: its free tier 403s on historical seasons.
             print("Backfilling national-team match history via API-Football...")
+            # IMPORTANT: the free plan only serves seasons 2022-2024 (verified in
+            # run 27339814324 — 2025/2026 requests return a plan error). All
+            # targets below are within that window. Friendlies are the ONLY
+            # source for the WC hosts (Mexico/USA/Canada play no qualifiers).
+            # Already-loaded comps (WC 2022, UEFA quals 2024, CAF quals 2023)
+            # dedupe to "0 created" at the cost of 1 request each.
             _targets = [
+                ("world/friendlies", (2022, 2023, 2024)),
+                ("world/euro-championship", (2024,)),
+                ("world/copa-america", (2024,)),
+                ("world/africa-cup-of-nations", (2023,)),
+                ("world/asian-cup", (2023,)),
+                ("world/gold-cup", (2023,)),
+                ("world/concacaf-nations-league", (2023, 2024)),
+                ("world/uefa-nations-league", (2022, 2024)),
                 ("world/fifa-world-cup", (2022, 2026)),
-                ("world/wc-qualification-europe", (2023, 2024, 2025)),
-                ("world/wc-qualification-south-america", (2023, 2024, 2025)),
-                ("world/wc-qualification-africa", (2023, 2024, 2025)),
-                ("world/wc-qualification-asia", (2023, 2024, 2025)),
-                ("world/wc-qualification-concacaf", (2023, 2024, 2025)),
-                ("world/wc-qualification-oceania", (2023, 2024, 2025)),
-                ("world/friendlies", (2025, 2026)),
+                ("world/wc-qualification-europe", (2024,)),
+                ("world/wc-qualification-africa", (2023,)),
             ]
             total_created = 0
             total_updated = 0
