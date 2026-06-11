@@ -85,15 +85,37 @@ _HTML_RULES = (
 
 
 def _kyiv(dt: datetime) -> str:
-    """Format a naive-UTC datetime as Kyiv local HH:MM."""
+    """Format a naive-UTC datetime as Bulgarian local HH:MM (Europe/Sofia)."""
     if dt is None:
         return "TBD"
     try:
         from zoneinfo import ZoneInfo
-        tz = ZoneInfo("Europe/Kiev")
+        tz = ZoneInfo("Europe/Sofia")
     except Exception:
         tz = timezone(timedelta(hours=3))  # EEST fallback
     return dt.replace(tzinfo=timezone.utc).astimezone(tz).strftime("%H:%M")
+
+
+# Bulgarian style guide injected into the prompt when briefings.language is
+# Bulgarian. The generic "write in Bulgarian" instruction produced stiff,
+# translated-sounding prose; this pins register and football terminology.
+_BG_STYLE_GUIDE = """
+СТИЛ НА БЪЛГАРСКИЯ ЕЗИК (задължително):
+- Пиши като български спортен журналист (стил Gong.bg / Sportal.bg) — жив,
+  естествен език, кратки изречения. НЕ превеждай буквално от английски.
+- Футболна терминология: "двубой/среща" (не "мач-ъп"), "стартов състав",
+  "контузени", "форма", "головe", "коефициент", "залог", "стойностен залог"
+  (value bet), "букмейкъри", "фаворит", "аутсайдер", "равенство".
+- Имена на отбори на български: Мексико, Южна Корея, Чехия, Бразилия и т.н.
+  Имена на играчи — в установената българска транскрипция (Килиан Мбапе,
+  Винисиус Жуниор).
+- Пазарите изписвай на български с английското в скоби при залога:
+  "Двата отбора да отбележат — Да (BTTS Yes)", "Над 2.5 гола (Over 2.5)",
+  "Победа за Мексико (Home Win)".
+- Секциите озаглави: 📜 Контекст, 📈 Форма, 🩹 Съставите, 🎯 Модел и пазар,
+  🔮 Присъда.
+- Накрая се препрочети: ако нещо звучи като машинен превод — пренапиши го.
+"""
 
 
 class MatchBriefingService:
@@ -437,12 +459,31 @@ class MatchBriefingService:
 
     def _header(self, analysis, round_name: str, lineups: dict) -> str:
         ko = _kyiv(analysis.match_date)
-        tag = "🟢 LINEUPS CONFIRMED" if lineups else "📋 PREVIEW"
-        rnd = f" · {round_name}" if round_name else ""
+        tag = "🟢 СЪСТАВИТЕ СА ОБЯВЕНИ" if lineups else "📋 ПРЕВЮ"
+        rnd = f" · {self._round_bg(round_name)}" if round_name else ""
         return (
-            f"<b>🏆 World Cup Briefing — {analysis.match_name}</b>\n"
-            f"<i>{tag}{rnd} · ⏰ {ko} Kyiv</i>"
+            f"<b>🏆 Световно първенство — {analysis.match_name}</b>\n"
+            f"<i>{tag}{rnd} · ⏰ {ko} ч. българско време</i>"
         )
+
+    @staticmethod
+    def _round_bg(round_name: str) -> str:
+        """Translate API-Football round names to Bulgarian for the header."""
+        rn = round_name or ""
+        low = rn.lower()
+        if "group stage" in low:
+            # "Group Stage - 1" → "Групова фаза, кръг 1"
+            num = rn.split("-")[-1].strip() if "-" in rn else ""
+            return f"Групова фаза, кръг {num}" if num.isdigit() else "Групова фаза"
+        return {
+            "round of 32": "1/16-финал",
+            "round of 16": "Осминафинал",
+            "quarter-finals": "Четвъртфинал",
+            "semi-finals": "Полуфинал",
+            "third place final": "Мач за 3-то място",
+            "3rd place final": "Мач за 3-то място",
+            "final": "Финал",
+        }.get(low, rn)
 
     def _build_dossier(self, analysis, round_name: str, lineups: dict) -> str:
         """Deterministic data block from our own model + DB. Fed to Claude as ground truth."""
@@ -451,7 +492,7 @@ class MatchBriefingService:
         lines = [f"MATCH: {analysis.match_name}"]
         if round_name:
             lines.append(f"STAGE: {round_name}")
-        lines.append(f"KICKOFF (Kyiv): {_kyiv(analysis.match_date)}")
+        lines.append(f"KICKOFF (Bulgarian time, EEST): {_kyiv(analysis.match_date)}")
 
         # Model prediction
         lines.append("")
@@ -584,6 +625,13 @@ class MatchBriefingService:
         else:
             decision_block = ""
 
+        _is_bg = language.strip().lower() in ("bulgarian", "български", "bg")
+        style_block = _BG_STYLE_GUIDE if _is_bg else (
+            f"Write in fluent, native-sounding {language} — the register of a "
+            f"professional sportswriter, never a literal translation. Re-read the "
+            f"final text and rewrite anything that sounds machine-translated."
+        )
+
         system = (
             f"You are an expert football analyst writing a concise, high-signal World Cup "
             f"match briefing for a Telegram betting channel. Do all your web research and "
@@ -594,7 +642,7 @@ class MatchBriefingService:
             f"current, factual information (storyline, recent form, head-to-head, team news, "
             f"injuries, betting market). Never invent lineups, injuries, or quotes; if "
             f"something is uncertain, say so. Be specific and cite what you found. "
-            + _HTML_RULES
+            + _HTML_RULES + "\n" + style_block
         )
 
         user = (
@@ -602,9 +650,9 @@ class MatchBriefingService:
             f"Here is our internal model dossier for {match_name} (treat these numbers as "
             f"ground truth from our prediction system — research everything else):\n\n"
             f"{dossier}\n\n"
-            f"Structure the briefing with emoji section headers (write the headers in "
-            f"{language}), e.g. storyline, form, team news, model & market, verdict. End the "
-            f"prose with a one-line 'Sources:' note listing the main outlets you used."
+            f"Structure the briefing with emoji section headers in {language} (follow the "
+            f"style guide's section names if one was given). End the prose with a one-line "
+            f"'Източници:' / 'Sources:' note listing the main outlets you used."
             f"{decision_block}"
         )
 
