@@ -180,7 +180,7 @@ jobs:
 
       - name: Post AI preview briefings (WC matches, no lineups)
         run: python -m src.agent.betting_agent --briefing
-        timeout-minutes: 45
+        timeout-minutes: 60
         continue-on-error: true
 
       - name: Save briefings-sent guard

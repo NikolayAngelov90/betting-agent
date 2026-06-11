@@ -34,6 +34,37 @@ _DECISION_RE = re.compile(
     r"<<<DECISION>>>(.*?)<<<END>>>", re.DOTALL | re.IGNORECASE
 )
 
+# Telegram HTML allows only a small tag set; we permit <b> and <i> per _HTML_RULES.
+_ALLOWED_TAG_RE = re.compile(r"</?(b|i)>", re.IGNORECASE)
+
+
+def _sanitize_telegram_html(text: str) -> str:
+    """Make LLM output safe for Telegram's HTML parse mode.
+
+    Escapes &, <, > everywhere EXCEPT the allowed <b>/<i> tags. If the allowed
+    tags are unbalanced (which Telegram rejects with a parse error, losing the
+    whole message), strips all tags and returns plain escaped text instead.
+    """
+    def _esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Balance check on allowed tags — unbalanced HTML is rejected by Telegram.
+    opens_b = len(re.findall(r"<b>", text, re.IGNORECASE))
+    closes_b = len(re.findall(r"</b>", text, re.IGNORECASE))
+    opens_i = len(re.findall(r"<i>", text, re.IGNORECASE))
+    closes_i = len(re.findall(r"</i>", text, re.IGNORECASE))
+    if opens_b != closes_b or opens_i != closes_i:
+        return _esc(_ALLOWED_TAG_RE.sub("", text))
+
+    parts = []
+    last = 0
+    for m in _ALLOWED_TAG_RE.finditer(text):
+        parts.append(_esc(text[last:m.start()]))
+        parts.append(m.group(0).lower())
+        last = m.end()
+    parts.append(_esc(text[last:]))
+    return "".join(parts)
+
 # Per-day record of (kind, match_id) already briefed, so the every-15-min
 # pre-match workflow (and any double daily run) never double-posts. Cached
 # across CI runs via actions/cache (see prematch-briefings.yml).
@@ -78,10 +109,20 @@ class MatchBriefingService:
     # ---- public entry points -------------------------------------------------
 
     async def run_preview_briefings(self) -> int:
-        """Briefing for every upcoming WC fixture today (no lineups). Returns count sent."""
+        """Briefing for every upcoming WC fixture today (no lineups). Returns count sent.
+
+        The window is anchored to the SAME bounds get_daily_picks uses (today
+        00:00 UTC + 30h) — not now+30h — so we only brief matches that have a
+        saved pick from this run, and tomorrow's matches are briefed by
+        tomorrow's run exactly once (the sent-guard is day-keyed).
+        """
         if not self._enabled():
             return 0
-        fixtures = self._wc_fixtures(window_hours=30, min_minutes_ahead=0)
+        now = datetime.utcnow()
+        day_start = datetime.combine(date.today(), datetime.min.time())
+        fixtures = self._wc_fixtures_between(
+            start=max(now, day_start), end=day_start + timedelta(hours=30)
+        )
         if not fixtures:
             logger.info("Briefings: no upcoming WC fixtures for preview")
             return 0
@@ -205,12 +246,16 @@ class MatchBriefingService:
 
     def _wc_fixtures(self, window_hours: int, min_minutes_ahead: int = 0,
                      max_minutes_ahead: int = None) -> list:
-        """Return WC fixture match IDs kicking off within the given window."""
+        """Return WC fixture match IDs kicking off within a now-relative window."""
         now = datetime.utcnow()
         start = now + timedelta(minutes=min_minutes_ahead)
         end = (now + timedelta(minutes=max_minutes_ahead)
                if max_minutes_ahead is not None
                else now + timedelta(hours=window_hours))
+        return self._wc_fixtures_between(start, end)
+
+    def _wc_fixtures_between(self, start: datetime, end: datetime) -> list:
+        """Return WC fixture match IDs with kickoff in [start, end] (UTC)."""
         with self.db.get_session() as session:
             rows = session.query(Match.id).filter(
                 Match.is_fixture == True,  # noqa: E712
@@ -281,7 +326,9 @@ class MatchBriefingService:
                 logger.warning(f"Could not apply briefing decision for {match_id}: {e}")
 
         header = self._header(analysis, round_name, lineups)
-        await self.telegram._send_chunked(f"{header}\n\n{briefing}")
+        await self.telegram._send_chunked(
+            f"{header}\n\n{_sanitize_telegram_html(briefing)}"
+        )
         self._mark_sent(kind, match_id)
         label = "PRE-MATCH (lineups)" if lineups else (
             "PRE-MATCH" if lineup_aware else "PREVIEW")
@@ -361,6 +408,18 @@ class MatchBriefingService:
                     f"{analysis.match_name}: no real odds — keeping original pick"
                 )
                 return
+            # If another pending pick on this match already holds the target
+            # selection, switching the primary would duplicate the bet —
+            # consolidate by dropping the primary instead.
+            for other in picks[1:]:
+                if other.selection == new.selection:
+                    session.delete(primary)
+                    session.commit()
+                    logger.info(
+                        f"Briefing SWITCH consolidated: {analysis.match_name} already "
+                        f"holds {new.selection} — dropped duplicate {primary.selection}"
+                    )
+                    return
             old_sel = primary.selection
             primary.market = new.market
             primary.selection = new.selection
