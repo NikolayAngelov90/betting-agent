@@ -148,7 +148,10 @@ jobs:
       - name: Backfill national-team history (auto when coverage low, or on demand)
         if: github.event.inputs.backfill_wc == 'true' || steps.natcov.outputs.low == 'true'
         run: python -m src.agent.betting_agent --backfill-wc
-        timeout-minutes: 40
+        # Supabase insert latency makes big seasons slow (~20 min per ~400
+        # matches); 40 min was hit mid-list on 2026-06-12. Targets are ordered
+        # most-recent-first so even a timeout keeps the valuable data.
+        timeout-minutes: 90
         continue-on-error: true
 
       - name: Run daily update (fixtures + odds, no Flashscore results)

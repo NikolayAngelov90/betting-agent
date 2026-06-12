@@ -1257,14 +1257,28 @@ class APIFootballScraper(BaseScraper):
         When apifootball_team_id is provided, it is stored on the team record
         so that backfill_team_history() can fetch historical seasons later.
         """
+        # National teams and clubs live in disjoint identity spaces. Without
+        # this partition, fuzzy matching crossed them: the USA national team
+        # ilike-matched the club "La%USA%nne" (Lausanne) and the WC fixture —
+        # plus its pick — was priced with Swiss club history.
+        from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+        _is_national = league in NATIONAL_TEAM_LEAGUES
+        _nat_list = list(NATIONAL_TEAM_LEAGUES)
+
         with self.db.get_session() as session:
             def _save_api_id(team):
                 if apifootball_team_id and not team.apifootball_team_id:
                     team.apifootball_team_id = apifootball_team_id
                     session.commit()
 
+            def _partition(query):
+                """Restrict any team lookup to the fixture's identity space."""
+                if _is_national:
+                    return query.filter(Team.league.in_(_nat_list))
+                return query.filter(Team.league.notin_(_nat_list))
+
             # 1. Exact match
-            team = session.query(Team).filter_by(name=name).first()
+            team = _partition(session.query(Team).filter_by(name=name)).first()
             if team:
                 _save_api_id(team)
                 return team.id
@@ -1272,15 +1286,15 @@ class APIFootballScraper(BaseScraper):
             # 2. Check alias map (API-Football name -> historical name)
             alias = TEAM_NAME_ALIASES.get(name)
             if alias:
-                team = session.query(Team).filter_by(name=alias).first()
+                team = _partition(session.query(Team).filter_by(name=alias)).first()
                 if team:
                     _save_api_id(team)
                     return team.id
 
             # 3. Forward fuzzy: DB names that contain the API name
-            team = session.query(Team).filter(
+            team = _partition(session.query(Team).filter(
                 Team.name.ilike(f"%{name}%")
-            ).first()
+            )).first()
             if team:
                 _save_api_id(team)
                 return team.id
@@ -1289,10 +1303,14 @@ class APIFootballScraper(BaseScraper):
             #    e.g. "Bayer Leverkusen" contains "Leverkusen"
             #    For CL/EL/ECL, teams are stored under domestic leagues — search all teams.
             name_lower = name.lower()
-            if league in self._INTERNATIONAL_LEAGUES:
-                # Search all teams (CL teams stored under domestic league keys)
+            if _is_national:
                 candidates = session.query(Team).filter(
-                    Team.league.notin_(self._INTERNATIONAL_LEAGUES)
+                    Team.league.in_(_nat_list)
+                ).all()
+            elif league in self._INTERNATIONAL_LEAGUES:
+                # Search all club teams (CL teams stored under domestic league keys)
+                candidates = session.query(Team).filter(
+                    Team.league.notin_(list(self._INTERNATIONAL_LEAGUES) + _nat_list)
                 ).all()
             else:
                 candidates = session.query(Team).filter_by(league=league).all()
@@ -1312,9 +1330,9 @@ class APIFootballScraper(BaseScraper):
             # 5. Try matching without common prefixes/suffixes (FC, SK, etc.)
             stripped = name.replace("FC ", "").replace("SK ", "").replace("SC ", "").replace("AC ", "").replace("AS ", "").replace("RC ", "").replace("KV ", "").replace("CF ", "").strip()
             if stripped != name:
-                team = session.query(Team).filter(
+                team = _partition(session.query(Team).filter(
                     Team.name.ilike(f"%{stripped}%")
-                ).first()
+                )).first()
                 if team:
                     _save_api_id(team)
                     return team.id
@@ -1703,6 +1721,9 @@ class APIFootballScraper(BaseScraper):
         created = 0
         updated = 0
 
+        import re as _re
+        _youth_re = _re.compile(r"\bU-?\d{2}\b", _re.IGNORECASE)
+
         for fix in fixtures:
             fixture_id = fix.get("fixture", {}).get("id")
             home_name = fix.get("teams", {}).get("home", {}).get("name", "")
@@ -1715,6 +1736,12 @@ class APIFootballScraper(BaseScraper):
             round_name = fix.get("league", {}).get("round") or None
 
             if not home_name or not away_name or not match_ts:
+                continue
+
+            # Youth internationals (U17/U20/U21/U23) appear in the Friendlies
+            # feed — irrelevant for senior WC models and a fuzzy-match hazard
+            # ("Brazil U23" must never feed the senior Brazil row).
+            if _youth_re.search(home_name) or _youth_re.search(away_name):
                 continue
 
             match_dt = datetime.utcfromtimestamp(match_ts)

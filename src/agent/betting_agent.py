@@ -3955,15 +3955,20 @@ async def main():
             # source for the WC hosts (Mexico/USA/Canada play no qualifiers).
             # Already-loaded comps (WC 2022, UEFA quals 2024, CAF quals 2023)
             # dedupe to "0 created" at the cost of 1 request each.
+            # Ordered MOST RECENT FIRST: the step can hit its CI timeout
+            # mid-list (friendlies seasons take ~20 min of Supabase inserts
+            # each), and recent matches matter most (Poisson half-life 180d).
+            # Friendlies 2022 dropped — too old to carry model weight.
             _targets = [
-                ("world/friendlies", (2022, 2023, 2024)),
+                ("world/friendlies", (2024,)),
                 ("world/euro-championship", (2024,)),
                 ("world/copa-america", (2024,)),
+                ("world/concacaf-nations-league", (2024, 2023)),
+                ("world/uefa-nations-league", (2024,)),
                 ("world/africa-cup-of-nations", (2023,)),
                 ("world/asian-cup", (2023,)),
                 ("world/gold-cup", (2023,)),
-                ("world/concacaf-nations-league", (2023, 2024)),
-                ("world/uefa-nations-league", (2022, 2024)),
+                ("world/friendlies", (2023,)),
                 ("world/fifa-world-cup", (2022, 2026)),
                 ("world/wc-qualification-europe", (2024,)),
                 ("world/wc-qualification-africa", (2023,)),

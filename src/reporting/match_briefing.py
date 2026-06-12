@@ -783,20 +783,36 @@ class MatchBriefingService:
             "--allowedTools", "WebSearch,WebFetch",
             "--output-format", "text",
         ]
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                cwd=tmpdir,
-            )
+        # CI runners research slowly — a real briefing took 4.5 min, and one hit
+        # the old 480s cap mid-research, costing the match its briefing for the
+        # day. 900s ceiling + one retry.
+        _TIMEOUT_S = 900
+        for _attempt in (1, 2):
             try:
-                out, err = await asyncio.wait_for(proc.communicate(), timeout=480)
-            except asyncio.TimeoutError:
-                proc.kill()
-                logger.warning(f"Claude Code briefing timed out (480s) for {match_name}")
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                    cwd=tmpdir,
+                )
+                try:
+                    out, err = await asyncio.wait_for(
+                        proc.communicate(), timeout=_TIMEOUT_S
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    logger.warning(
+                        f"Claude Code briefing timed out ({_TIMEOUT_S}s) for "
+                        f"{match_name} (attempt {_attempt}/2)"
+                    )
+                    if _attempt == 2:
+                        return ""
+            except Exception as e:
+                logger.warning(f"Claude Code briefing error for {match_name}: {e}")
                 return ""
+        try:
             if proc.returncode != 0:
                 # Claude Code writes most errors (usage limits, auth) to STDOUT
                 # in -p mode — log both streams or failures are undiagnosable.
