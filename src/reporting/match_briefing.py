@@ -344,6 +344,12 @@ class MatchBriefingService:
                 self._apply_decision(
                     match_id, decision, analysis, odds_data, home_name, away_name
                 )
+                # Freeze the match for the rest of the day: a later pipeline run
+                # (e.g. the backup cron) must not regenerate picks behind the
+                # final ruling — a vetoed bet once resurrected under a different
+                # selection because the sent-guard blocked the re-briefing that
+                # would have re-vetoed it. get_daily_picks honors this marker.
+                self._mark_sent("final", match_id)
             except Exception as e:
                 logger.warning(f"Could not apply briefing decision for {match_id}: {e}")
 

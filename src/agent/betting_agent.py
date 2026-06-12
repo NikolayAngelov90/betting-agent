@@ -1398,6 +1398,38 @@ class FootballBettingAgent:
         # over-concentrating risk on correlated outcomes.
         all_recommendations = self._filter_correlated_picks(all_recommendations)
 
+        # Matches the AI briefing already ruled on today are FROZEN: a later
+        # pipeline run must not resurrect a vetoed bet (it once came back under
+        # a different selection, dodging the (match, selection) dedup) or add
+        # picks behind the final decision. Markers are written by the briefing
+        # service ("final:<match_id>" in data/briefings_sent.json, cached
+        # across CI runs).
+        try:
+            import json as _json
+            _bs_path = Path("data/briefings_sent.json")
+            if _bs_path.exists():
+                _today_keys = _json.loads(_bs_path.read_text()).get(
+                    date.today().isoformat(), []
+                )
+                _final_ids = {
+                    int(k.split(":", 1)[1])
+                    for k in _today_keys
+                    if k.startswith("final:")
+                }
+                if _final_ids:
+                    _before = len(all_recommendations)
+                    all_recommendations = [
+                        r for r in all_recommendations if r.match_id not in _final_ids
+                    ]
+                    if len(all_recommendations) < _before:
+                        logger.info(
+                            f"Skipped {_before - len(all_recommendations)} pick(s) on "
+                            f"{len(_final_ids)} match(es) already finalized by the AI "
+                            f"briefing today (decisions are binding for the day)"
+                        )
+        except Exception as _fe:
+            logger.debug(f"Briefing-final filter skipped: {_fe}")
+
         # Daily exposure limit: cap total Kelly stake across all picks to
         # prevent over-betting even when many value picks are found.
         max_daily_exposure = self.config.get("betting.max_total_kelly_pct", 40.0)
