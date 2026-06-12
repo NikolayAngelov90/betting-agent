@@ -536,6 +536,14 @@ class MatchBriefingService:
 
         # Model prediction
         lines.append("")
+        if f.get("model_low_coverage"):
+            lines.append(
+                "⚠ MODEL COVERAGE WARNING: our database has little or no match "
+                "history for at least one of these teams, so the model numbers "
+                "below are WEAK PRIORS (league-average regression), not informed "
+                "estimates. Base your decision primarily on your own web research "
+                "(recent results, qualifying form, squad strength, market odds)."
+            )
         lines.append("OUR MODEL (ensemble Poisson+Elo+ML):")
         lines.append(
             f"  1X2: Home {ens.get('home_win', 0):.0%} / "

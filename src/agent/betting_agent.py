@@ -697,27 +697,43 @@ class FootballBettingAgent:
         # from any model (no Poisson strengths AND no Elo rating).
         # score-based check (< 0.50) was an edge case: two teams with only Elo
         # ratings scored exactly 0.50 and slipped through despite 0% historical data.
+        #
+        # EXCEPTION — national-team competitions (WC): a pick and a briefing must
+        # exist for EVERY match. The Poisson/Elo models degrade gracefully for
+        # unknown teams (league-average regression / default rating), so we
+        # proceed with bland predictions, flag them as low-coverage, and let the
+        # briefing LLM's web research carry the final decision.
         coverage = self.predictor.check_coverage(home_id, away_id)
         home_has_data = coverage["home_poisson"] or coverage["home_elo"]
         away_has_data = coverage["away_poisson"] or coverage["away_elo"]
-        if not home_has_data or not away_has_data:
+        low_coverage = not home_has_data or not away_has_data
+        if low_coverage:
+            from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
             missing = []
             if not home_has_data:
                 missing.append("home")
             if not away_has_data:
                 missing.append("away")
-            logger.info(
-                f"Skipping {match_name}: no historical data for {'/'.join(missing)} team "
-                f"(coverage {coverage['score']:.0%})"
-            )
-            return MatchAnalysis(
-                match_id=match_id, match_name=match_name, match_date=match_date,
-                league=league, features={}, predictions={}, recommendations=[],
-                injury_report={},
+            if league not in NATIONAL_TEAM_LEAGUES:
+                logger.info(
+                    f"Skipping {match_name}: no historical data for {'/'.join(missing)} team "
+                    f"(coverage {coverage['score']:.0%})"
+                )
+                return MatchAnalysis(
+                    match_id=match_id, match_name=match_name, match_date=match_date,
+                    league=league, features={}, predictions={}, recommendations=[],
+                    injury_report={},
+                )
+            logger.warning(
+                f"Low coverage for {match_name} ({'/'.join(missing)} team, "
+                f"{coverage['score']:.0%}) — proceeding anyway (WC: every match "
+                f"gets a pick + briefing; model output flagged as weak prior)"
             )
 
         # Generate features
         features = await self.feature_engineer.create_features(match_id)
+        if low_coverage:
+            features["model_low_coverage"] = 1
         feature_vector = self.feature_engineer.create_feature_vector(features)
         feature_names = self.feature_engineer.get_feature_names(features)
 
