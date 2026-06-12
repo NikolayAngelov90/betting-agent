@@ -338,18 +338,19 @@ class MatchBriefingService:
         if not briefing:
             return False
 
-        # Apply Claude's final decision to the persisted pick (KEEP/PASS/CHANGE).
+        # Apply Claude's final decision to the persisted pick (KEEP/CHANGE).
         if finalize and decision:
             try:
-                self._apply_decision(
+                bound = self._apply_decision(
                     match_id, decision, analysis, odds_data, home_name, away_name
                 )
-                # Freeze the match for the rest of the day: a later pipeline run
-                # (e.g. the backup cron) must not regenerate picks behind the
-                # final ruling — a vetoed bet once resurrected under a different
-                # selection because the sent-guard blocked the re-briefing that
-                # would have re-vetoed it. get_daily_picks honors this marker.
-                self._mark_sent("final", match_id)
+                # Freeze the match for the rest of the day ONLY when the decision
+                # bound to a real saved pick: later pipeline runs must not
+                # regenerate picks behind the final ruling. When no pick existed,
+                # freezing would block the pick from ever being created today
+                # (USA vs Paraguay, 2026-06-12).
+                if bound:
+                    self._mark_sent("final", match_id)
             except Exception as e:
                 logger.warning(f"Could not apply briefing decision for {match_id}: {e}")
 
@@ -392,16 +393,18 @@ class MatchBriefingService:
         return odds_data, home_name, away_name
 
     def _apply_decision(self, match_id, decision, analysis, odds_data,
-                        home_name, away_name):
+                        home_name, away_name) -> bool:
         """Apply the LLM verdict to today's saved pick for this match.
 
         KEEP  → leave the saved pick unchanged.
-        PASS  → delete the saved pick (Claude vetoed — no bet placed).
         CHANGE→ rebuild the pick for the chosen market_key and overwrite the row.
+
+        Returns True only when the decision actually bound to a saved pick —
+        the caller writes the day-freeze marker ONLY then. Freezing a match
+        whose decision applied to nothing once blocked the pick from ever
+        being created that day (USA vs Paraguay, 2026-06-12).
         """
         action = (decision.get("action") or "").upper()
-        if action != "CHANGE":
-            return  # KEEP (PASS no longer exists) or unrecognised → no DB change
 
         with self.db.get_session() as session:
             picks = session.query(SavedPick).filter(
@@ -411,7 +414,9 @@ class MatchBriefingService:
             ).order_by(SavedPick.expected_value.desc()).all()
             if not picks:
                 logger.info(f"Briefing decision {action}: no saved pick for match {match_id}")
-                return
+                return False
+            if action != "CHANGE":
+                return True  # KEEP on an existing pick → decision is binding
             primary = picks[0]
 
             # CHANGE
@@ -426,7 +431,7 @@ class MatchBriefingService:
                     f"Briefing CHANGE to '{market_key}' rejected for "
                     f"{analysis.match_name}: no real odds — keeping original pick"
                 )
-                return
+                return True
             # If another pending pick on this match already holds the target
             # selection, switching the primary would duplicate the bet —
             # consolidate by dropping the primary instead.
@@ -438,7 +443,7 @@ class MatchBriefingService:
                         f"Briefing SWITCH consolidated: {analysis.match_name} already "
                         f"holds {new.selection} — dropped duplicate {primary.selection}"
                     )
-                    return
+                    return True
             old_sel = primary.selection
             primary.market = new.market
             primary.selection = new.selection
@@ -453,6 +458,7 @@ class MatchBriefingService:
                 f"Briefing SWITCH: {analysis.match_name} {old_sel} → "
                 f"{new.selection} @ {new.odds:.2f} (Claude's call)"
             )
+            return True
 
     # Bulgarian display names for tracked selections (footer is code-generated).
     _SELECTION_BG = {
