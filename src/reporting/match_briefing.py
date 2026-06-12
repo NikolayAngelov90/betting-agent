@@ -354,8 +354,9 @@ class MatchBriefingService:
                 logger.warning(f"Could not apply briefing decision for {match_id}: {e}")
 
         header = self._header(analysis, round_name, lineups)
+        footer = self._final_bet_footer(match_id) if finalize else ""
         await self.telegram._send_chunked(
-            f"{header}\n\n{_sanitize_telegram_html(briefing)}"
+            f"{header}\n\n{_sanitize_telegram_html(briefing)}{footer}"
         )
         self._mark_sent(kind, match_id)
         label = "PRE-MATCH (lineups)" if lineups else (
@@ -399,8 +400,8 @@ class MatchBriefingService:
         CHANGE→ rebuild the pick for the chosen market_key and overwrite the row.
         """
         action = (decision.get("action") or "").upper()
-        if action not in ("PASS", "CHANGE"):
-            return  # KEEP or unrecognised → no DB change
+        if action != "CHANGE":
+            return  # KEEP (PASS no longer exists) or unrecognised → no DB change
 
         with self.db.get_session() as session:
             picks = session.query(SavedPick).filter(
@@ -412,16 +413,6 @@ class MatchBriefingService:
                 logger.info(f"Briefing decision {action}: no saved pick for match {match_id}")
                 return
             primary = picks[0]
-
-            if action == "PASS":
-                for p in picks:
-                    session.delete(p)
-                session.commit()
-                logger.info(
-                    f"Briefing VETO: dropped {len(picks)} pick(s) for "
-                    f"{analysis.match_name} (Claude passed)"
-                )
-                return
 
             # CHANGE
             market_key = decision.get("market_key")
@@ -462,6 +453,49 @@ class MatchBriefingService:
                 f"Briefing SWITCH: {analysis.match_name} {old_sel} → "
                 f"{new.selection} @ {new.odds:.2f} (Claude's call)"
             )
+
+    # Bulgarian display names for tracked selections (footer is code-generated).
+    _SELECTION_BG = {
+        "Home Win": "Победа за домакина",
+        "Away Win": "Победа за госта",
+        "Draw": "Равенство",
+        "Over 1.5 Goals": "Над 1.5 гола",
+        "Over 2.5 Goals": "Над 2.5 гола",
+        "Over 3.5 Goals": "Над 3.5 гола",
+        "Under 1.5 Goals": "Под 1.5 гола",
+        "Under 2.5 Goals": "Под 2.5 гола",
+        "Under 3.5 Goals": "Под 3.5 гола",
+        "BTTS Yes": "Двата отбора да отбележат — Да",
+        "BTTS No": "Двата отбора да отбележат — Не",
+        "Home Over 1.5": "Домакинът над 1.5 гола",
+        "Away Over 1.5": "Гостът над 1.5 гола",
+    }
+
+    def _final_bet_footer(self, match_id: int) -> str:
+        """Authoritative footer with the FINAL tracked bet(s), read back from the
+        DB after the decision was applied. Guarantees the Telegram message can
+        never contradict what is actually tracked (e.g. when a CHANGE was
+        rejected for missing odds after the prose was already written)."""
+        try:
+            with self.db.get_session() as session:
+                rows = session.query(
+                    SavedPick.selection, SavedPick.odds, SavedPick.kelly_stake_percentage
+                ).filter(
+                    SavedPick.match_id == match_id,
+                    SavedPick.pick_date == date.today(),
+                    SavedPick.result.is_(None),
+                ).all()
+        except Exception as e:
+            logger.debug(f"Final-bet footer failed for {match_id}: {e}")
+            return ""
+        if not rows:
+            return "\n\n📌 <b>Финален залог:</b> няма записан залог за този двубой"
+        lines = []
+        for sel, odds, stake in rows:
+            bg = self._SELECTION_BG.get(sel, sel)
+            stake_txt = f" · залог {stake:.1f}%" if stake else ""
+            lines.append(f"📌 <b>Финален залог:</b> {bg} ({sel}) @ {odds:.2f}{stake_txt}")
+        return "\n\n" + "\n".join(lines)
 
     def _header(self, analysis, round_name: str, lineups: dict) -> str:
         ko = _kyiv(analysis.match_date)
@@ -603,7 +637,9 @@ class MatchBriefingService:
                 "form, head-to-head, team news/injuries, and the betting market angle."
             )
 
-        # Decision authority: confirm / veto / switch among real-odds selections.
+        # Decision authority: confirm or switch among real-odds selections.
+        # There is NO pass/veto — the channel carries a bet on every WC match,
+        # so Claude's job is to pick the SAFEST/BEST selection, not to opt out.
         if menu:
             menu_lines = "\n".join(
                 f"  - market_key={m['market_key']} | {m['selection']} @ {m['odds']} "
@@ -611,19 +647,23 @@ class MatchBriefingService:
                 for m in menu
             )
             decision_block = (
-                "\n\nYOU MAKE THE FINAL CALL ON THE BET. After your research, decide one of:\n"
+                "\n\nYOU MAKE THE FINAL CALL ON THE BET. A bet is ALWAYS placed on this "
+                "match — opting out is not available. Your goal: the BEST POSSIBLE "
+                "prediction at odds above 1.50 — the selection most likely to win at a "
+                "meaningful price, not a longshot. After your research, decide one of:\n"
                 "  KEEP   — back our model's current pick as-is.\n"
-                "  PASS   — no bet on this match (your research says the pick is unsafe).\n"
-                "  CHANGE — switch to a different selection from the menu below that your "
-                "research supports better.\n"
+                "  CHANGE — switch to the selection from the menu below that your research "
+                "supports best (if you dislike the current pick, choose the safest "
+                "alternative rather than no bet).\n"
                 "You may ONLY choose a CHANGE target from this menu (these are the selections "
                 "the bookmakers actually price):\n"
                 f"{menu_lines}\n\n"
-                "Explain your decision inside the briefing (in the verdict section). Then, as the "
-                "VERY LAST thing in your reply, append this exact machine-readable block "
-                "(keys in English, nothing after it):\n"
+                "Explain your decision inside the briefing (in the verdict section), but do "
+                "NOT state final odds there — a footer with the final tracked bet and live "
+                "odds is appended automatically. Then, as the VERY LAST thing in your reply, "
+                "append this exact machine-readable block (keys in English, nothing after it):\n"
                 "<<<DECISION>>>\n"
-                "action: KEEP|PASS|CHANGE\n"
+                "action: KEEP|CHANGE\n"
                 "market_key: <one key from the menu, required only if action is CHANGE>\n"
                 "confidence: <your confidence 0.0-1.0>\n"
                 "<<<END>>>"
@@ -787,7 +827,11 @@ class MatchBriefingService:
             k, _, v = line.partition(":")
             out[k.strip().lower()] = v.strip()
         action = (out.get("action") or "").upper()
-        if action not in ("KEEP", "PASS", "CHANGE"):
+        if action == "PASS":
+            # Veto authority was removed (user decision: a bet on EVERY match).
+            # If the model still emits PASS, treat it as KEEP.
+            action = "KEEP"
+        if action not in ("KEEP", "CHANGE"):
             return None
         decision = {"action": action, "market_key": out.get("market_key") or None}
         try:

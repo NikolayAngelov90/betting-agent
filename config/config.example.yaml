@@ -193,9 +193,10 @@ briefings:
   #   anthropic_api — direct API (ANTHROPIC_API_KEY), Opus 4.8, per-token credits.
   backend: claude_code
   # finalize_picks: the briefing LLM makes the FINAL call on each WC bet — it can
-  # KEEP the model's pick, PASS (veto → the saved pick is dropped), or CHANGE to a
-  # different selection that has real bookmaker odds. The saved pick in the DB is
-  # updated to the LLM's decision, so settlement/ROI reflect its final call.
+  # KEEP the model's pick or CHANGE to a different selection with real bookmaker
+  # odds (no veto: a bet is always placed; goal = best prediction at odds > 1.50).
+  # The saved pick is updated to the decision and a code-generated footer shows
+  # the final tracked bet, so the message can never contradict the DB.
   finalize_picks: true
   # Currently scoped to the FIFA World Cup. Preview briefings (no lineups) run in
   # the daily pipeline (one per match).
