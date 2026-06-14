@@ -97,6 +97,15 @@ class PoissonModel:
                 logger.warning("No match data available for Poisson model fitting")
                 return
 
+            # Reset accumulators so a SECOND fit() in the same process starts
+            # clean. Without this, _national_team_avgs still held the collapsed
+            # floats from the prior fit and .append() crashed with
+            # "'float' object has no attribute 'append'" — the tuning pipeline
+            # refits twice (as-of-date, then full data). _team_strengths is
+            # rebuilt by key so it's safe, but the national-team dicts are not.
+            self._national_team_avgs = {}
+            self._national_team_strengths = {}
+
             # Compute time-decay weight per match
             def match_weight(m):
                 if m.match_date is None:
