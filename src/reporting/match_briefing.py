@@ -100,21 +100,29 @@ def _kyiv(dt: datetime) -> str:
 # Bulgarian. The generic "write in Bulgarian" instruction produced stiff,
 # translated-sounding prose; this pins register and football terminology.
 _BG_STYLE_GUIDE = """
-СТИЛ НА БЪЛГАРСКИЯ ЕЗИК (задължително):
-- Пиши като български спортен журналист (стил Gong.bg / Sportal.bg) — жив,
-  естествен език, кратки изречения. НЕ превеждай буквално от английски.
-- Футболна терминология: "двубой/среща" (не "мач-ъп"), "стартов състав",
-  "контузени", "форма", "головe", "коефициент", "залог", "стойностен залог"
-  (value bet), "букмейкъри", "фаворит", "аутсайдер", "равенство".
-- Имена на отбори на български: Мексико, Южна Корея, Чехия, Бразилия и т.н.
-  Имена на играчи — в установената българска транскрипция (Килиан Мбапе,
-  Винисиус Жуниор).
-- Пазарите изписвай на български с английското в скоби при залога:
+СТИЛ НА БЪЛГАРСКИЯ ЕЗИК (задължително — пишеш за български телеграм канал):
+- Пиши като опитен български спортен журналист (регистър на Gong.bg / Sportal.bg /
+  Dsport) — жив, уверен, аналитичен тон, кратки и ясни изречения. НЕ превеждай
+  дума по дума от английски; мисли на български.
+- Никакви англицизми и калки. Примери за ПРАВИЛНО: "двубой/среща/сблъсък" (НЕ
+  "мач-ъп"), "стартови състави", "контузени/наказани", "серия/форма", "головете",
+  "головна разлика", "коефициент", "залог", "стойностен залог", "букмейкъри",
+  "фаворит", "аутсайдер", "равенство", "головаво натоварване", "автобус/нисък блок",
+  "пресинг", "владение на топката", "головете и в двете врати".
+- Имена на държави/отбори на български: Саудитска Арабия, Уругвай, Мексико, Южна
+  Корея, Чехия, Бразилия, Кот д'Ивоар, Хърватия и т.н. Имена на играчи и треньори
+  в утвърдена българска транскрипция (Килиан Мбапе, Винисиус Жуниор, Лаутаро
+  Мартинес).
+- Пазарите — на български, с английския термин в скоби ЕДИНСТВЕНО първия път:
   "Двата отбора да отбележат — Да (BTTS Yes)", "Над 2.5 гола (Over 2.5)",
-  "Победа за Мексико (Home Win)".
-- Секциите озаглави: 📜 Контекст, 📈 Форма, 🩹 Съставите, 🎯 Модел и пазар,
-  🔮 Присъда.
-- Накрая се препрочети: ако нещо звучи като машинен превод — пренапиши го.
+  "Победа за Уругвай (Away Win)".
+- Бъди КОНКРЕТЕН, не общ: цитирай реални факти от търсенето — последни 4-5 резултата,
+  точни голове, ключови контузени по име, голова статистика, очна ставка (Н2Н),
+  пазарни коефициенти. Избягвай празни клишета ("ще бъде интересен двубой").
+- Секции (използвай точно тези заглавия): 📜 Контекст, 📈 Форма и статистика,
+  🩹 Контузени и състави, 🎯 Нашата прогноза и пазарът, 🔮 Заключение.
+- Дължина: стегнато, ~250-400 думи. Накрая се препрочети и пренапиши всичко, което
+  звучи като машинен превод или ученическо съчинение.
 """
 
 
@@ -330,7 +338,13 @@ class MatchBriefingService:
             except Exception as e:
                 logger.debug(f"available_selections failed for {match_id}: {e}")
 
-        dossier = self._build_dossier(analysis, round_name, lineups)
+        # Anchor the dossier to the ACTUAL saved pick (the tracked bet), not a
+        # fresh re-analysis — find_best_bet is non-deterministic across runs
+        # (odds move), so re-deriving here gave Claude a different selection than
+        # what was saved, and a KEEP then contradicted the footer (Saudi Arabia
+        # vs Uruguay: prose kept "BTTS Yes" but tracked bet was Over 2.5).
+        saved_pick = self._current_saved_pick(match_id)
+        dossier = self._build_dossier(analysis, round_name, lineups, saved_pick)
         briefing, decision = await self._research_and_write(
             analysis.match_name, dossier, lineup_aware=lineup_aware,
             has_lineups=bool(lineups), menu=menu if finalize else [],
@@ -531,7 +545,27 @@ class MatchBriefingService:
             "final": "Финал",
         }.get(low, rn)
 
-    def _build_dossier(self, analysis, round_name: str, lineups: dict) -> str:
+    def _current_saved_pick(self, match_id: int):
+        """Return (selection, odds, market) of today's tracked pick for this match,
+        or None — the dossier anchors to this so the briefing reasons about the
+        bet that is actually saved, not a re-derived one."""
+        try:
+            with self.db.get_session() as session:
+                row = session.query(
+                    SavedPick.selection, SavedPick.odds, SavedPick.market
+                ).filter(
+                    SavedPick.match_id == match_id,
+                    SavedPick.pick_date == date.today(),
+                    SavedPick.result.is_(None),
+                ).order_by(SavedPick.expected_value.desc()).first()
+                if row:
+                    return {"selection": row[0], "odds": row[1], "market": row[2]}
+        except Exception as e:
+            logger.debug(f"_current_saved_pick failed for {match_id}: {e}")
+        return None
+
+    def _build_dossier(self, analysis, round_name: str, lineups: dict,
+                       saved_pick: dict = None) -> str:
         """Deterministic data block from our own model + DB. Fed to Claude as ground truth."""
         ens = analysis.predictions.get("ensemble", {}) or {}
         f = analysis.features or {}
@@ -571,19 +605,19 @@ class MatchBriefingService:
                 f"away {int(f.get('wc_away_points', 0))}pts (GD {int(f.get('wc_away_gd', 0)):+d})"
             )
 
-        # Value picks
-        recs = analysis.recommendations or []
+        # Current tracked pick — anchored to the SAVED bet (what KEEP refers to
+        # and what the footer will show), so prose, decision and footer agree.
         lines.append("")
-        if recs:
-            lines.append("OUR VALUE PICK(S):")
-            for r in recs[:4]:
-                agr = f", {r.model_agreement}" if getattr(r, "model_agreement", None) else ""
-                lines.append(
-                    f"  {r.selection} @ {r.odds:.2f} "
-                    f"(EV {r.expected_value:+.0%}, conf {r.confidence:.0%}{agr})"
-                )
+        if saved_pick:
+            lines.append(
+                f"OUR CURRENT PICK (the bet on the slate right now): "
+                f"{saved_pick['selection']} @ {saved_pick['odds']:.2f}. "
+                f"KEEP means back exactly this; CHANGE means replace it."
+            )
         else:
-            lines.append("OUR VALUE PICK(S): none — no edge vs market on this match.")
+            lines.append(
+                "OUR CURRENT PICK: none yet — choose the best selection from the menu."
+            )
 
         # Injuries (our scraped data). get_injury_summary returns an `injuries`
         # list of dicts; key_players_out is a count, not names.
@@ -647,8 +681,12 @@ class MatchBriefingService:
         else:
             task = (
                 "Write a rich pre-match PREVIEW (the match is hours away, so no confirmed "
-                "lineups exist — do not invent any). Search the web for the storyline, recent "
-                "form, head-to-head, team news/injuries, and the betting market angle."
+                "lineups exist — do not invent any). Run SEVERAL web searches to gather "
+                "CONCRETE facts: each team's last 4-5 results with scores, their current "
+                "form/streak, the head-to-head record, confirmed injuries/suspensions by "
+                "player name, what's at stake (qualification scenario), and the current "
+                "bookmaker odds. Build the briefing around those specific facts — no vague "
+                "filler. If a search returns nothing for a thin-data team, say so plainly."
             )
 
         # Decision authority: confirm or switch among real-odds selections.
