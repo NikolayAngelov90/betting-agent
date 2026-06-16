@@ -350,16 +350,23 @@ class ValueBettingCalculator:
     def find_best_bet(self, predictions: Dict, odds_data: List[Dict],
                       match_name: str = "", context: Dict = None,
                       home_team_name: str = "", away_team_name: str = "",
-                      match_id: int = 0, league: str = "") -> Optional[BetRecommendation]:
-        """Return the single highest-EV bet for a match, bypassing the value and
+                      match_id: int = 0, league: str = "",
+                      prefer_market: bool = False) -> Optional[BetRecommendation]:
+        """Return the single best bet for a match, bypassing the value and
         confidence gates used by find_value_bets.
 
         Used for "pick every match" mode (WC): when no selection clears the normal
-        value thresholds, this still returns the model's best bettable selection so
-        the match gets a tracked pick. Only HARD sanity gates apply — real odds must
-        exist and be in range, model prob must clear the absolute floor, and model-
-        market divergence must be ≤ 2x. Kelly stake is clamped to the minimum so the
-        pick carries a real (if small) stake. Returns None if nothing is bettable.
+        value thresholds, this still returns the best bettable selection so the
+        match gets a tracked pick. Only HARD sanity gates apply — real odds must
+        exist and be in range. Kelly stake is clamped to the minimum so the pick
+        carries a real (if small) stake. Returns None if nothing is bettable.
+
+        prefer_market=True (set for thin-data / low-coverage WC fixtures): pick the
+        selection the MARKET rates most likely (shortest odds ≥ floor) instead of
+        the model's highest-EV selection. Settled data showed the model is
+        systematically overconfident and has no edge, so on matches where it has
+        almost no history, the market favourite maximises win rate — which is what
+        a thin-data prediction should optimise for.
         """
         context = context or {}
         ensemble = predictions.get("ensemble", {})
@@ -387,20 +394,29 @@ class ValueBettingCalculator:
         if not candidates:
             return None
 
-        # Forced picks must be SANE, not maximal-EV: with thin data the model's
-        # probabilities are noisy and max-EV selects the most mispriced longshot
-        # (e.g. Away Over 1.5 @ 6.50 on 31% confidence). Tier 1: highest EV among
-        # selections with modest odds and modest model-market divergence. Tier 2
-        # (nothing modest available): the model's most-likely selection — never
-        # a longshot.
-        sane = [
-            c for c in candidates
-            if c[4] <= 3.50 and c[5] <= 1.50  # odds ≤ 3.5, divergence ≤ 1.5x
-        ]
-        if sane:
-            best = max(sane, key=lambda c: c[6])  # highest EV among sane picks
+        if prefer_market:
+            # Thin-data WC: trust the market, not the model's noisy probs. Pick the
+            # selection with the highest market-implied probability (shortest odds)
+            # at or above the odds floor → maximises win rate. Prefer the core
+            # markets (1X2 / Over-Under) over team-goal props for a cleaner call.
+            _core = {"home_win", "draw", "away_win",
+                     "over_1.5", "over_2.5", "btts_yes"}
+            pool = [c for c in candidates if c[3] in _core] or candidates
+            best = min(pool, key=lambda c: c[4])  # lowest odds = market favourite
         else:
-            best = max(candidates, key=lambda c: c[2])  # highest model probability
+            # Forced picks must be SANE, not maximal-EV: with thin data the model's
+            # probabilities are noisy and max-EV selects the most mispriced longshot
+            # (e.g. Away Over 1.5 @ 6.50 on 31% confidence). Tier 1: highest EV among
+            # selections with modest odds and modest model-market divergence. Tier 2
+            # (nothing modest available): the model's most-likely selection.
+            sane = [
+                c for c in candidates
+                if c[4] <= 3.50 and c[5] <= 1.50  # odds ≤ 3.5, divergence ≤ 1.5x
+            ]
+            if sane:
+                best = max(sane, key=lambda c: c[6])  # highest EV among sane picks
+            else:
+                best = max(candidates, key=lambda c: c[2])  # highest model probability
 
         market, selection, prob, market_key, best_odds, divergence, ev = best
         return self._build_pick(

@@ -7,8 +7,14 @@ Includes real bookmaker odds via the /odds endpoint.
 
 import asyncio
 import os
+import re
 from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional
+
+# Youth/age-group national sides (U17/U20/U21/U23, etc.) leak into the WC and
+# friendlies feeds — they are irrelevant for senior WC models and pollute the
+# slate ("Iran U23 vs New Zealand"). Filtered out wherever fixtures are created.
+_YOUTH_TEAM_RE = re.compile(r"\bU-?\d{2}\b", re.IGNORECASE)
 
 from src.scrapers.base_scraper import BaseScraper
 from src.data.models import Match, Team, Odds
@@ -637,6 +643,8 @@ class APIFootballScraper(BaseScraper):
 
             if not home_name or not away_name:
                 continue
+            if _YOUTH_TEAM_RE.search(home_name) or _YOUTH_TEAM_RE.search(away_name):
+                continue  # skip youth/age-group sides (e.g. "Iran U23")
 
             match_dt = datetime.utcfromtimestamp(match_ts) if match_ts else None
             if not match_dt:
@@ -1721,9 +1729,6 @@ class APIFootballScraper(BaseScraper):
         created = 0
         updated = 0
 
-        import re as _re
-        _youth_re = _re.compile(r"\bU-?\d{2}\b", _re.IGNORECASE)
-
         for fix in fixtures:
             fixture_id = fix.get("fixture", {}).get("id")
             home_name = fix.get("teams", {}).get("home", {}).get("name", "")
@@ -1741,7 +1746,7 @@ class APIFootballScraper(BaseScraper):
             # Youth internationals (U17/U20/U21/U23) appear in the Friendlies
             # feed — irrelevant for senior WC models and a fuzzy-match hazard
             # ("Brazil U23" must never feed the senior Brazil row).
-            if _youth_re.search(home_name) or _youth_re.search(away_name):
+            if _YOUTH_TEAM_RE.search(home_name) or _YOUTH_TEAM_RE.search(away_name):
                 continue
 
             match_dt = datetime.utcfromtimestamp(match_ts)

@@ -161,6 +161,7 @@ betting:
     - under_2.5
     - under_3.5
     - btts_no
+    - over_3.5    # proven loser in settled data: 38% win, -14% ROI over 32 picks
   kelly_agreement_scale:
     unanimous: 1.0
     majority: 0.80

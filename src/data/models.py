@@ -213,6 +213,7 @@ class SavedPick(Base):
     kelly_stake_percentage = Column(Float)
     risk_level = Column(String(20))
     used_fallback_odds = Column(Boolean, default=False)
+    model_agreement = Column(String(20))  # unanimous/majority/split/solo — for analysis & filtering
 
     # Result (NULL = pending)
     result = Column(String(10))       # 'win', 'loss', 'void', or NULL

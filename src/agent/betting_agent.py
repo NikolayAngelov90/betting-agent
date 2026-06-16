@@ -771,17 +771,23 @@ class FootballBettingAgent:
             from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
             if (league in NATIONAL_TEAM_LEAGUES
                     and self.config.get("betting.wc_pick_every_match", True)):
+                # On low-coverage WC fixtures the model is essentially blind, so
+                # let the MARKET pick the favourite (maximise win rate) instead of
+                # chasing the model's noisy EV. The briefing LLM (live web
+                # research) can still CHANGE the selection afterward.
                 best = self.value_calculator.find_best_bet(
                     predictions, odds_data, match_name, context,
                     home_team_name=home_team_name, away_team_name=away_team_name,
                     match_id=match_id, league=league,
+                    prefer_market=bool(low_coverage),
                 )
                 if best:
                     recommendations = [best]
+                    _basis = "market favourite (thin data)" if low_coverage else "model EV"
                     logger.info(
                         f"WC pick-every-match: {match_name} → {best.selection} "
                         f"@ {best.odds:.2f} (EV {best.expected_value:+.1%}, "
-                        f"conf {best.confidence:.0%}; no value edge)"
+                        f"conf {best.confidence:.0%}; {_basis})"
                     )
 
         for rec in recommendations:
@@ -1545,6 +1551,7 @@ class FootballBettingAgent:
                     kelly_stake_percentage=float(pick.kelly_stake_percentage),
                     risk_level=pick.risk_level,
                     used_fallback_odds=pick.used_fallback_odds,
+                    model_agreement=getattr(pick, "model_agreement", None),
                 )
                 session.add(saved)
                 new_picks.append(pick)
