@@ -75,10 +75,14 @@ models:
     xgboost: 0.35
     random_forest: 0.20
     elo: 0.20
-  # Weight for blending bookmaker over/under and BTTS implied probabilities
-  # with Poisson-derived goal predictions. 0.40 = 40% bookmaker, 60% Poisson.
-  # Set to 0.0 to disable blending (pure Poisson for goals markets).
-  bookmaker_blend_weight: 0.40
+  # Weight for blending bookmaker implied probabilities (over/under, BTTS AND
+  # 1X2) with the model's own predictions. 0.60 = 60% bookmaker, 40% model.
+  # Raised from 0.40 on 2026-06-15: settled-pick data (755 picks) showed the
+  # model is systematically overconfident with no edge (predicted 50-55% won
+  # only 39%), so its "+EV" was fictional. Leaning harder on the well-calibrated
+  # market shrinks those fake edges → fewer but better-calibrated picks.
+  # Set to 0.0 to disable (pure model); raise toward 1.0 to trust the market more.
+  bookmaker_blend_weight: 0.60
   # Weight for blending the dedicated GoalsMLModel over/under prediction
   # with Poisson+bookmaker. 0.25 = 25% ML, 75% Poisson+bookmaker.
   # Set to 0.0 to disable. GoalsMLModel must be trained via --train first.
