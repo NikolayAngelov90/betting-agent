@@ -1299,10 +1299,20 @@ class APIFootballScraper(BaseScraper):
                     _save_api_id(team)
                     return team.id
 
+            # Youth/age-group rows ("Czech Republic U16") must never be returned
+            # for a senior fixture — fuzzy steps below otherwise matched
+            # "Czech Republic" → "Czech Republic U16". Senior incoming names are
+            # already youth-filtered upstream, so excluding youth rows here is safe.
+            def _first_senior(query):
+                for t in query.limit(10).all():
+                    if not _YOUTH_TEAM_RE.search(t.name or ""):
+                        return t
+                return None
+
             # 3. Forward fuzzy: DB names that contain the API name
-            team = _partition(session.query(Team).filter(
+            team = _first_senior(_partition(session.query(Team).filter(
                 Team.name.ilike(f"%{name}%")
-            )).first()
+            )))
             if team:
                 _save_api_id(team)
                 return team.id
@@ -1323,6 +1333,9 @@ class APIFootballScraper(BaseScraper):
             else:
                 candidates = session.query(Team).filter_by(league=league).all()
 
+            # Never let a senior fixture resolve to a youth/age-group row.
+            candidates = [c for c in candidates if not _YOUTH_TEAM_RE.search(c.name or "")]
+
             for candidate in candidates:
                 cname = candidate.name
                 if len(cname) >= 5 and cname.lower() in name_lower:
@@ -1338,9 +1351,9 @@ class APIFootballScraper(BaseScraper):
             # 5. Try matching without common prefixes/suffixes (FC, SK, etc.)
             stripped = name.replace("FC ", "").replace("SK ", "").replace("SC ", "").replace("AC ", "").replace("AS ", "").replace("RC ", "").replace("KV ", "").replace("CF ", "").strip()
             if stripped != name:
-                team = _partition(session.query(Team).filter(
+                team = _first_senior(_partition(session.query(Team).filter(
                     Team.name.ilike(f"%{stripped}%")
-                )).first()
+                )))
                 if team:
                     _save_api_id(team)
                     return team.id
