@@ -468,9 +468,10 @@ class MatchBriefingService:
             primary.kelly_stake_percentage = new.kelly_stake_percentage
             primary.risk_level = new.risk_level
             session.commit()
+            _reason = (decision.get("reason") or "").strip() or "no reason given"
             logger.info(
                 f"Briefing SWITCH: {analysis.match_name} {old_sel} → "
-                f"{new.selection} @ {new.odds:.2f} (Claude's call)"
+                f"{new.selection} @ {new.odds:.2f} (Claude's call — {_reason})"
             )
             return True
 
@@ -699,25 +700,33 @@ class MatchBriefingService:
                 for m in menu
             )
             decision_block = (
-                "\n\nYOU MAKE THE FINAL CALL ON THE BET. A bet is ALWAYS placed on this "
-                "match — opting out is not available. Your goal: the BEST POSSIBLE "
-                "prediction at odds above 1.50 — the selection most likely to win at a "
-                "meaningful price, not a longshot. After your research, decide one of:\n"
-                "  KEEP   — back our model's current pick as-is.\n"
-                "  CHANGE — switch to the selection from the menu below that your research "
-                "supports best (if you dislike the current pick, choose the safest "
-                "alternative rather than no bet).\n"
-                "You may ONLY choose a CHANGE target from this menu (these are the selections "
-                "the bookmakers actually price):\n"
+                "\n\nFINAL CALL ON THE BET — DEFAULT TO KEEP.\n"
+                "Our statistical model (Poisson + Elo + ML, blended with the market) is the "
+                "primary predictor and has been performing WELL — KEEP is the right answer "
+                "the large majority of the time. Your job is NOT to find a 'better' market; "
+                "it is to catch the rare case where concrete, current information makes the "
+                "model's pick clearly unsafe.\n"
+                "  KEEP   — back the model's current pick. Choose this UNLESS you have a "
+                "specific, verifiable reason not to.\n"
+                "  CHANGE — only when your web research surfaces HARD evidence that "
+                "invalidates the current pick: a confirmed key injury/suspension, confirmed "
+                "heavy rotation/rest, a manager statement, or a clear, cited form/matchup "
+                "fact. A general feeling, vibes, or 'another market looks a bit safer' is "
+                "NOT sufficient — in that case KEEP. Do NOT habitually switch to "
+                "'Home Over 1.5' or any single market.\n"
+                "If you CHANGE, pick ONLY from this menu (the selections bookmakers price):\n"
                 f"{menu_lines}\n\n"
-                "Explain your decision inside the briefing (in the verdict section), but do "
-                "NOT state final odds there — a footer with the final tracked bet and live "
-                "odds is appended automatically. Then, as the VERY LAST thing in your reply, "
-                "append this exact machine-readable block (keys in English, nothing after it):\n"
+                "Your verdict section MUST state plainly whether you KEEP or CHANGE, and that "
+                "MUST match the machine block below — never say you are changing in the prose "
+                "and then KEEP (or vice versa). Do NOT state final odds in the prose; an "
+                "authoritative footer with the tracked bet is appended automatically. As the "
+                "VERY LAST thing in your reply append this exact block (English keys, nothing "
+                "after it):\n"
                 "<<<DECISION>>>\n"
                 "action: KEEP|CHANGE\n"
                 "market_key: <one key from the menu, required only if action is CHANGE>\n"
                 "confidence: <your confidence 0.0-1.0>\n"
+                "reason: <one short phrase; for CHANGE name the hard evidence>\n"
                 "<<<END>>>"
             )
         else:
@@ -901,7 +910,11 @@ class MatchBriefingService:
             action = "KEEP"
         if action not in ("KEEP", "CHANGE"):
             return None
-        decision = {"action": action, "market_key": out.get("market_key") or None}
+        decision = {
+            "action": action,
+            "market_key": out.get("market_key") or None,
+            "reason": out.get("reason") or "",
+        }
         try:
             decision["confidence"] = float(out.get("confidence", ""))
         except (TypeError, ValueError):
