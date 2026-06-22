@@ -608,6 +608,17 @@ class PoissonModel:
         return float(np.sum(matrix[1:, 1:]))
 
     def _most_likely_score(self, matrix: np.ndarray) -> str:
-        """Find the most likely scoreline."""
-        idx = np.unravel_index(np.argmax(matrix), matrix.shape)
-        return f"{idx[0]}-{idx[1]}"
+        """Most likely scoreline = each team's most likely goal count (marginal modes).
+
+        NOT the argmax joint cell: the Dixon-Coles low-score correction (rho<0)
+        inflates the 1-1 and 0-0 cells, so the single most-probable EXACT score is
+        often a draw even for a heavy favourite (France 80% to win showed "1-1").
+        That contradicts the win% and xG and confuses readers. The marginal modes
+        — most likely home goals × most likely away goals — track the xG and the
+        favourite (France xG 2.0 / Iraq 1.0 → "2-0"), which is what people expect
+        from a "most likely score" line. Aggregate markets (1X2/O-U/BTTS) still use
+        the full DC matrix; only this display value changes.
+        """
+        home_mode = int(np.argmax(matrix.sum(axis=1)))  # most likely home goals
+        away_mode = int(np.argmax(matrix.sum(axis=0)))   # most likely away goals
+        return f"{home_mode}-{away_mode}"
