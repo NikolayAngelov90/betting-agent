@@ -1518,9 +1518,26 @@ class FootballBettingAgent:
         if not picks:
             return []
 
+        from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
         new_picks: List[BetRecommendation] = []
         with self.db.get_session() as session:
             for pick in picks:
+                # WC "pick every match" = EXACTLY ONE pick per match per day.
+                # A later run (e.g. the backup after the primary briefing failed
+                # on the Pro session limit and the match wasn't frozen) would
+                # otherwise regenerate a DIFFERENT forced selection — the
+                # (match, selection) dedup below lets it through, producing two
+                # tracked picks + a double-pick footer (Norway vs Senegal:
+                # Home Win + Over 2.5). Enforce one-per-match for national-team
+                # leagues regardless of selection.
+                if pick.league in NATIONAL_TEAM_LEAGUES:
+                    dup = session.query(SavedPick).filter(
+                        SavedPick.match_id == pick.match_id,
+                        SavedPick.pick_date == pick_date,
+                    ).first()
+                    if dup:
+                        continue
+
                 # Skip if already saved (same match + selection + date)
                 existing = session.query(SavedPick).filter(
                     SavedPick.match_id == pick.match_id,
