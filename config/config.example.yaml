@@ -197,6 +197,12 @@ briefings:
   #                   is missing but ANTHROPIC_API_KEY is set.
   #   anthropic_api — direct API (ANTHROPIC_API_KEY), Opus 4.8, per-token credits.
   backend: claude_code
+  # api_fallback: when the claude_code backend comes back empty (most often the
+  # shared Claude Pro 5-hour session limit), retry that single briefing via the
+  # Anthropic API so the match still gets covered. Requires funded ANTHROPIC_API_KEY
+  # credits; if the balance is empty it simply fails gracefully (no briefing, as
+  # before). Set false to never spend API credits.
+  api_fallback: true
   # finalize_picks: the briefing LLM makes the FINAL call on each WC bet — it can
   # KEEP the model's pick or CHANGE to a different selection with real bookmaker
   # odds (no veto: a bet is always placed; goal = best prediction at odds > 1.50).

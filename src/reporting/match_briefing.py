@@ -764,6 +764,20 @@ class MatchBriefingService:
         backend = self._resolve_backend()
         if backend == "claude_code":
             text_out = await self._call_claude_code(system, user, match_name)
+            # Resilience: Claude Code shares the Pro 5-hour quota with the user's
+            # own usage and periodically returns "session limit reached", which
+            # zeroed out whole briefing runs (Jun 16 & Jun 22). When it comes back
+            # empty, fall back to the paid Anthropic API for THIS briefing so the
+            # match still gets covered. Only fires on failure, only if an API key
+            # is present, and is config-gated.
+            if (not text_out
+                    and os.environ.get("ANTHROPIC_API_KEY")
+                    and self.config.get("briefings.api_fallback", True)):
+                logger.warning(
+                    f"Claude Code unavailable for {match_name} (likely Pro session "
+                    f"limit) — falling back to the Anthropic API (uses paid credits)"
+                )
+                text_out = await self._call_anthropic_api(system, user, match_name)
         else:
             text_out = await self._call_anthropic_api(system, user, match_name)
 
