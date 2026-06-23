@@ -394,6 +394,42 @@ class ValueBettingCalculator:
         if not candidates:
             return None
 
+        # Mismatch handling (strong favourite vs weak rival). Settled WC data:
+        # BTTS Yes loses in routs because the underdog gets shut out (France 3-0
+        # Iraq, Canada 6-0 Qatar, Brazil 3-0 Haiti, Spain 4-0 Saudi). In those
+        # games the FAVOURITE'S Over 1.5 / Over 2.5 wins instead. So when one side
+        # is a clear favourite, drop BTTS and the underdog's team-total, and pick
+        # the favourite's goal markets by win probability.
+        hw = ensemble.get("home_win", 0.0)
+        aw = ensemble.get("away_win", 0.0)
+        fav_prob = max(hw, aw)
+        is_mismatch = fav_prob >= 0.60
+        if is_mismatch:
+            fav_home = hw >= aw
+            fav_over_key = "home_over_1.5" if fav_home else "away_over_1.5"
+            dog_over_key = "away_over_1.5" if fav_home else "home_over_1.5"
+            fav_win_key = "home_win" if fav_home else "away_win"
+            # Drop bets that need the weak side to score / win.
+            drop = {"btts_yes", dog_over_key,
+                    "home_win" if not fav_home else "away_win", "draw"}
+            pool = [c for c in candidates if c[3] not in drop] or candidates
+            # Preference order: favourite scores 2+ → match has 3+ goals →
+            # favourite wins. Pick the first tier that's priced; within it, the
+            # higher model probability.
+            for tier in ([fav_over_key], ["over_2.5"], [fav_win_key], ["over_1.5"]):
+                tier_pool = [c for c in pool if c[3] in tier]
+                if tier_pool:
+                    best = max(tier_pool, key=lambda c: c[2])
+                    market, selection, prob, market_key, best_odds, divergence, ev = best
+                    return self._build_pick(
+                        predictions, ensemble, context, match_name, match_id, league,
+                        odds_data, market, selection, prob, market_key, best_odds,
+                        home_team_name=home_team_name, away_team_name=away_team_name,
+                    )
+            # No favourite-friendly market priced → fall through to generic logic
+            # on the reduced pool.
+            candidates = pool
+
         if prefer_market:
             # Thin-data WC: trust the market, not the model's noisy probs. Pick the
             # selection with the highest market-implied probability (shortest odds)
