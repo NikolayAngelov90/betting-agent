@@ -403,9 +403,16 @@ class ValueBettingCalculator:
         hw = ensemble.get("home_win", 0.0)
         aw = ensemble.get("away_win", 0.0)
         fav_prob = max(hw, aw)
-        is_mismatch = fav_prob >= 0.60
+        fav_home = hw >= aw
+        # Underdog's expected goals — the real reason BTTS fails in routs is the
+        # weak side being very unlikely to score. Require BOTH a very strong
+        # favourite AND a low-xG underdog so this only fires on genuine routs,
+        # not ordinary 60/40 games where the underdog can still score.
+        dog_xg = ensemble.get("away_xg", 1.5) if fav_home else ensemble.get("home_xg", 1.5)
+        fav_prob_min = self.config.betting.get("wc_mismatch_fav_prob", 0.65)
+        dog_xg_max = self.config.betting.get("wc_mismatch_dog_xg", 1.10)
+        is_mismatch = fav_prob >= fav_prob_min and dog_xg <= dog_xg_max
         if is_mismatch:
-            fav_home = hw >= aw
             fav_over_key = "home_over_1.5" if fav_home else "away_over_1.5"
             dog_over_key = "away_over_1.5" if fav_home else "home_over_1.5"
             fav_win_key = "home_win" if fav_home else "away_win"
