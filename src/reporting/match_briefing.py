@@ -782,8 +782,31 @@ class MatchBriefingService:
             text_out = await self._call_anthropic_api(system, user, match_name)
 
         decision = self._parse_decision(text_out) if menu else None
-        # Strip the machine-readable block from the user-facing briefing.
-        clean = _DECISION_RE.sub("", text_out).strip()
+        # Audit log so prose-vs-decision mismatches are visible in CI: did the
+        # model emit a parseable decision block, and what did it decide?
+        if menu:
+            _block_found = bool(_DECISION_RE.search(text_out or ""))
+            if decision:
+                logger.info(
+                    f"Briefing decision [{match_name}]: action={decision['action']} "
+                    f"market_key={decision.get('market_key')} "
+                    f"reason={decision.get('reason')!r} (block_found={_block_found})"
+                )
+            else:
+                logger.warning(
+                    f"Briefing decision [{match_name}]: NO parseable decision block "
+                    f"(block_found={_block_found}) — pick left unchanged. "
+                    f"Output tail: {(text_out or '')[-200:]!r}"
+                )
+        # Strip the machine-readable block from the user-facing briefing — both the
+        # wrapped form and any unwrapped trailing field lines (action:/market_key:
+        # /confidence:/reason:) the model may have emitted without the markers.
+        clean = _DECISION_RE.sub("", text_out)
+        clean = re.sub(
+            r"(?im)^\s*(action|market_key|confidence|reason)\s*[:=].*$", "", clean
+        )
+        clean = re.sub(r"<<<\s*/?\s*(DECISION|END)\s*>>>", "", clean, flags=re.IGNORECASE)
+        clean = clean.strip()
         return clean, decision
 
     async def _call_anthropic_api(self, system: str, user: str, match_name: str) -> str:
@@ -795,13 +818,14 @@ class MatchBriefingService:
 
         messages = [{"role": "user", "content": user}]
         text_out = ""
-        # Server-side web search runs a sampling loop; it may return pause_turn if it
-        # hits the iteration cap. Re-send to resume, with a safety bound.
+        # max_tokens must cover adaptive thinking + several web searches + the
+        # full Bulgarian briefing; 4096 was being consumed by thinking/search and
+        # the final text came back empty. 16000 gives ample room.
         for _ in range(6):
             try:
                 resp = await client.messages.create(
                     model=_BRIEFING_MODEL,
-                    max_tokens=4096,
+                    max_tokens=16000,
                     thinking={"type": "adaptive"},
                     system=system,
                     tools=tools,
@@ -811,6 +835,8 @@ class MatchBriefingService:
                 logger.warning(f"Claude briefing call failed for {match_name}: {e}")
                 return ""
 
+            # Server-side web search may return pause_turn at the iteration cap —
+            # re-send to resume.
             if resp.stop_reason == "pause_turn":
                 messages = [
                     {"role": "user", "content": user},
@@ -821,6 +847,11 @@ class MatchBriefingService:
             text_out = "".join(
                 b.text for b in resp.content if getattr(b, "type", "") == "text"
             ).strip()
+            if not text_out and resp.stop_reason == "max_tokens":
+                logger.warning(
+                    f"Anthropic briefing for {match_name} hit max_tokens with no "
+                    f"text (thinking/search consumed the budget)"
+                )
             break
         return text_out
 
@@ -904,17 +935,32 @@ class MatchBriefingService:
 
     @staticmethod
     def _parse_decision(text: str):
-        """Extract the <<<DECISION>>> block into {action, market_key, confidence}."""
-        m = _DECISION_RE.search(text or "")
-        if not m:
-            return None
-        body = m.group(1)
+        """Extract the decision into {action, market_key, confidence, reason}.
+
+        Robust to the model dropping or mangling the <<<DECISION>>> wrapper: if the
+        strict block is absent, fall back to scanning for `action:`/`market_key:`/
+        etc. lines anywhere in the text. This was a real failure mode — the
+        headless Claude Code agent sometimes omitted the wrapper, so the decision
+        parsed as None and CHANGE was silently never applied while the prose said
+        it was changing.
+        """
+        text = text or ""
+        m = _DECISION_RE.search(text)
+        if m:
+            body = m.group(1)
+        else:
+            # Loose fallback: only the field lines, no wrapper. Require an
+            # explicit action line so we don't pick up the word "action" in prose.
+            if not re.search(r"^\s*action\s*[:=]\s*(KEEP|CHANGE|PASS)\b",
+                             text, re.IGNORECASE | re.MULTILINE):
+                return None
+            body = text
         out = {}
         for line in body.splitlines():
-            if ":" not in line:
-                continue
-            k, _, v = line.partition(":")
-            out[k.strip().lower()] = v.strip()
+            mm = re.match(r"\s*(action|market_key|confidence|reason)\s*[:=]\s*(.+)",
+                          line, re.IGNORECASE)
+            if mm:
+                out[mm.group(1).strip().lower()] = mm.group(2).strip()
         action = (out.get("action") or "").upper()
         if action == "PASS":
             # Veto authority was removed (user decision: a bet on EVERY match).
