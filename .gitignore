@@ -45,7 +45,7 @@ config/config.yaml
 .vscode/
 .idea/
 *.swp
-.claude/
+.claude/settings.local.json
 
 # Separate MCP server projects (not part of betting agent)
 mcp-servers/
@@ -54,9 +54,11 @@ mcp-servers/
 Thumbs.db
 .DS_Store
 
-# BMAD output and runtime
+# BMAD Method v6
 _bmad-output/
 _bmad/_memory/
+_bmad/config.user.toml
+_bmad/custom/*.user.toml
 
 # Testing
 .pytest_cache/
