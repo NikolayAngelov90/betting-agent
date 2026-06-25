@@ -2158,6 +2158,10 @@ class APIFootballScraper(BaseScraper):
 
                     if not home_name or not away_name or not match_ts:
                         continue
+                    # Never ingest youth/age-group sides (U17-U23) — they pollute
+                    # senior team history and are a fuzzy-match hazard.
+                    if _YOUTH_TEAM_RE.search(home_name) or _YOUTH_TEAM_RE.search(away_name):
+                        continue
 
                     goals = fix.get("goals", {})
                     home_goals = goals.get("home")

@@ -711,6 +711,48 @@ class TestValidationLeakageFix:
             "(all val samples from class-0 region, model strongly predicts class 0)"
         )
 
+    def test_train_val_split_is_chronological_no_shuffle(self):
+        """The 80/20 hold-out must be the chronological tail, never shuffled.
+
+        Guards against a future regression that introduces train_test_split with
+        shuffle=True (or otherwise reorders rows), which would leak future form
+        into training. We install a recorder 'model' and assert the final
+        full-train fit received exactly the chronological first 80% of labels.
+        """
+        from unittest.mock import patch
+        from src.models.ml_models import MLModels
+
+        class _Recorder:
+            def __init__(self):
+                self.train_y = None
+
+            def fit(self, X, y):
+                self.train_y = np.asarray(y).copy()
+                return self
+
+            def predict(self, X):
+                return np.zeros(len(X), dtype=int)
+
+        N = 50
+        rng = np.random.default_rng(3)
+        X = rng.random((N, 4)).astype(np.float32)
+        X[:, 0] = np.arange(N, dtype=np.float32)  # ordered, non-constant
+        # Chronological labels: first 80% class 0, last 20% class 1.
+        y = np.array([0] * 40 + [1] * 10)
+
+        ml = MLModels()
+        rec = _Recorder()
+        # 'chrono_rec' is NOT in _CALIBRATE_MODELS, so it goes through the plain
+        # model.fit(X_train, y_train) path on the full chronological train split.
+        with patch.object(ml, "_init_models", side_effect=lambda: setattr(ml, "models", {"chrono_rec": rec})):
+            ml.fit(X, y, feature_names=[f"f{i}" for i in range(4)])
+
+        assert rec.train_y is not None, "model was never trained"
+        assert list(rec.train_y) == [0] * 40, (
+            "train split is not the chronological head — a shuffle/reorder leaked "
+            "the last-20% hold-out into training"
+        )
+
 
 class TestMLTrainingFailureTelegramAlert:
     """Story 4.2 — Telegram alert when ML is excluded by calibration gate."""

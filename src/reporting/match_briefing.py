@@ -37,6 +37,15 @@ _DECISION_RE = re.compile(
 # Telegram HTML allows only a small tag set; we permit <b> and <i> per _HTML_RULES.
 _ALLOWED_TAG_RE = re.compile(r"</?(b|i)>", re.IGNORECASE)
 
+# Switch-language used to detect prose that implies a pick change while the
+# machine decision said KEEP (Bulgarian + English). Heuristic, for an audit warning.
+_SWITCH_PROSE_RE = re.compile(
+    r"\b(сменям|смяна|променям|преминавам|залагам вместо|вместо това залаг|"
+    r"switch(?:ing)? to|chang(?:e|ing) (?:the|our|my) (?:pick|bet|selection)|"
+    r"instead I'?d back|I'?ll back .* instead)\b",
+    re.IGNORECASE,
+)
+
 
 def _sanitize_telegram_html(text: str) -> str:
     """Make LLM output safe for Telegram's HTML parse mode.
@@ -807,6 +816,17 @@ class MatchBriefingService:
         )
         clean = re.sub(r"<<<\s*/?\s*(DECISION|END)\s*>>>", "", clean, flags=re.IGNORECASE)
         clean = clean.strip()
+
+        # M3: flag prose-vs-decision divergence. If the machine decision is KEEP
+        # but the user-facing prose strongly implies a switch (BG/EN switch verbs),
+        # the message will contradict the tracked bet — log it so it's auditable.
+        if menu and decision and decision["action"] == "KEEP":
+            if _SWITCH_PROSE_RE.search(clean):
+                logger.warning(
+                    f"Briefing prose/decision divergence [{match_name}]: decision is "
+                    f"KEEP but prose contains switch-language — message may read as a "
+                    f"change while the tracked pick is unchanged. Review the verdict wording."
+                )
         return clean, decision
 
     async def _call_anthropic_api(self, system: str, user: str, match_name: str) -> str:

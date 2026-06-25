@@ -176,11 +176,13 @@ jobs:
         continue-on-error: true
 
       - name: Run daily update (fixtures + odds, no Flashscore results)
+        id: update
         run: python -m src.agent.betting_agent --update --skip-ml-retrain
         timeout-minutes: 65
         continue-on-error: true
 
       - name: Settle yesterday's predictions
+        id: settle1
         run: python -m src.agent.betting_agent --settle
         timeout-minutes: 15
         continue-on-error: true
@@ -239,6 +241,7 @@ jobs:
             briefings-sent-
 
       - name: Generate and send picks
+        id: picks
         run: python -m src.agent.betting_agent --picks --force
         timeout-minutes: 60
         continue-on-error: true
@@ -248,6 +251,7 @@ jobs:
         continue-on-error: true
 
       - name: Post AI preview briefings (WC matches, no lineups)
+        id: briefing
         run: python -m src.agent.betting_agent --briefing
         timeout-minutes: 60
         continue-on-error: true
@@ -260,16 +264,69 @@ jobs:
           key: briefings-sent-${{ github.run_id }}
 
       - name: Scrape Flashscore results for all leagues (post-picks)
+        id: results
         if: always()
         run: python -m src.agent.betting_agent --update-results
         timeout-minutes: 60
         continue-on-error: true
 
       - name: Settle late results (post update-results)
+        id: settle2
         if: always()
         run: python -m src.agent.betting_agent --settle
         timeout-minutes: 15
         continue-on-error: true
+
+      # Loud failure alert: every core step above runs with continue-on-error so
+      # the pipeline never half-aborts, but that also keeps the JOB green on a
+      # crash — a silent no-pick / no-briefing day. This step inspects each step's
+      # outcome and sends ONE Telegram alert if any critical step failed, so a
+      # real crash is never invisible.
+      - name: Alert on critical step failure
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          O_UPDATE: ${{ steps.update.outcome }}
+          O_SETTLE1: ${{ steps.settle1.outcome }}
+          O_PICKS: ${{ steps.picks.outcome }}
+          O_BRIEFING: ${{ steps.briefing.outcome }}
+          O_RESULTS: ${{ steps.results.outcome }}
+          O_SETTLE2: ${{ steps.settle2.outcome }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'EOF'
+          import os, urllib.request, json
+          steps = {
+              "update": os.environ.get("O_UPDATE", ""),
+              "settle (pre-picks)": os.environ.get("O_SETTLE1", ""),
+              "picks": os.environ.get("O_PICKS", ""),
+              "briefing": os.environ.get("O_BRIEFING", ""),
+              "update-results": os.environ.get("O_RESULTS", ""),
+              "settle (post-results)": os.environ.get("O_SETTLE2", ""),
+          }
+          # outcome is 'success', 'failure', 'skipped', or '' (never ran)
+          failed = [n for n, o in steps.items() if o == "failure"]
+          if not failed:
+              print("All critical steps OK:", steps)
+          else:
+              token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+              chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+              run_url = os.environ.get("RUN_URL", "")
+              msg = ("⚠️ Daily picks: step(s) FAILED — "
+                     + ", ".join(failed)
+                     + f"\nThe run stayed green (continue-on-error). Logs: {run_url}")
+              print(msg)
+              if token and chat_id:
+                  data = json.dumps({"chat_id": chat_id, "text": msg}).encode()
+                  try:
+                      urllib.request.urlopen(
+                          f"https://api.telegram.org/bot{token}/sendMessage",
+                          data=data, timeout=10,
+                      )
+                  except Exception as e:
+                      print(f"Telegram alert failed: {e}")
+          EOF
 
       - name: Send weekly performance report (Sundays only)
         if: always()

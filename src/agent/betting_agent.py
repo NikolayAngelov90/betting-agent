@@ -1834,12 +1834,28 @@ class FootballBettingAgent:
                             _d = _match.match_date.date() if hasattr(_match.match_date, "date") else _match.match_date
                             stale_dates.add(_d)
             if stale_dates:
-                logger.info(
-                    f"Settle: {len(stale_dates)} stale date(s) with no result — "
-                    f"fetching from API-Football: {sorted(stale_dates)}"
-                )
-                for _d in sorted(stale_dates):
-                    await self.apifootball._fetch_fixtures_by_date(_d)
+                # Quota guard: this fetch shares the 100/day API-Football budget
+                # with --update's odds fetch. Don't drain it for old results —
+                # skip when the remaining budget is low, and fetch at most the 2
+                # most-recent stale dates (older results rarely arrive late and
+                # aren't worth starving today's odds).
+                _remaining = self.apifootball.remaining_budget()
+                _MIN_BUDGET = 25
+                if _remaining < _MIN_BUDGET:
+                    logger.warning(
+                        f"Settle: {len(stale_dates)} stale date(s) but only "
+                        f"{_remaining} API requests left (<{_MIN_BUDGET}) — "
+                        f"skipping stale-result fetch to preserve odds budget"
+                    )
+                else:
+                    _to_fetch = sorted(stale_dates, reverse=True)[:2]
+                    logger.info(
+                        f"Settle: {len(stale_dates)} stale date(s) with no result — "
+                        f"fetching {len(_to_fetch)} most-recent from API-Football: "
+                        f"{_to_fetch} (budget {_remaining})"
+                    )
+                    for _d in _to_fetch:
+                        await self.apifootball._fetch_fixtures_by_date(_d)
         except Exception as _exc:
             logger.warning(f"Settle: API-Football stale-result pre-fetch failed: {_exc}")
 
@@ -1939,8 +1955,25 @@ class FootballBettingAgent:
                 if not match or match.home_goals is None or match.away_goals is None:
                     continue  # Match not completed yet
 
-                hg = match.home_goals
-                ag = match.away_goals
+                # Settle on the 90-MINUTE (regulation) score. Bookmakers settle
+                # 1X2 / Over-Under / BTTS / Team-Goals on 90 minutes only — extra
+                # time and penalties (WC knockouts from the Round of 32 on) do NOT
+                # count. match.home_goals/away_goals include extra-time goals for
+                # AET fixtures; regulation_home_goals/away_goals hold the 90' score.
+                # Fall back to the full score for group games (no ET, regulation
+                # not separately stored).
+                if (match.regulation_home_goals is not None
+                        and match.regulation_away_goals is not None):
+                    hg = match.regulation_home_goals
+                    ag = match.regulation_away_goals
+                    if hg != match.home_goals or ag != match.away_goals:
+                        logger.info(
+                            f"Settling {pick.match_name} on 90-min score {hg}-{ag} "
+                            f"(final incl. extra time was {match.home_goals}-{match.away_goals})"
+                        )
+                else:
+                    hg = match.home_goals
+                    ag = match.away_goals
                 total = hg + ag
                 btts = hg > 0 and ag > 0
 
@@ -1990,8 +2023,12 @@ class FootballBettingAgent:
                     continue  # leave result = None so we don't poison stats
 
                 pick.result = "win" if won else "loss"
-                pick.actual_home_goals = hg
-                pick.actual_away_goals = ag
+                # Store the FINAL score (incl. ET) in actual_* — this is what the
+                # score-mismatch re-settlement check compares against match.home_goals;
+                # storing the regulation score here would make every AET match look
+                # mismatched and re-settle forever. `won` was decided on regulation.
+                pick.actual_home_goals = match.home_goals
+                pick.actual_away_goals = match.away_goals
                 pick.settled_at = utcnow()
 
                 settled.append({
@@ -2006,6 +2043,31 @@ class FootballBettingAgent:
                     "home_xg": match.home_xg,
                     "away_xg": match.away_xg,
                 })
+
+            # Stuck-pick sweep: a pick whose match is >10 days old and still has
+            # no result will never settle (result was never found) and silently
+            # inflates the pending count forever. Void it (result='void' is
+            # excluded from win/loss stats) so pending reflects only live picks.
+            _STUCK_DAYS = 10
+            _stuck_cutoff = date.today() - timedelta(days=_STUCK_DAYS)
+            _voided = 0
+            for _p in session.query(SavedPick).filter(SavedPick.result.is_(None)).all():
+                _pd = _p.pick_date
+                if isinstance(_pd, str):
+                    try:
+                        _pd = date.fromisoformat(_pd)
+                    except Exception:
+                        _pd = None
+                if _pd and _pd < _stuck_cutoff:
+                    _p.result = "void"
+                    _p.settled_at = utcnow()
+                    _voided += 1
+                    logger.warning(
+                        f"Stuck-pick void: {_p.match_name} | {_p.selection} "
+                        f"(pick_date {_p.pick_date}, never settled in {_STUCK_DAYS}d)"
+                    )
+            if _voided:
+                logger.warning(f"Voided {_voided} stuck pick(s) older than {_STUCK_DAYS} days")
 
             session.commit()
 

@@ -899,6 +899,14 @@ class FlashscoreScraper(BaseScraper):
     def _parse_match_date(element, default: datetime, is_result: bool = False) -> datetime:
         """Extract match date/time from a row element, returning *default* on failure.
 
+        TIMEZONE NOTE: the returned datetime is Flashscore's *displayed local time*,
+        stored naive and NOT converted to UTC — unlike API-Football and
+        football-data.org, which store naive UTC. This is a known inconsistency.
+        It does not affect the World Cup pipeline (WC fixtures come from
+        API-Football in UTC; Flashscore WC scraping is skipped), and the
+        settlement/pick windows are widened to tolerate a few hours of offset for
+        club leagues. Do NOT assume this value is UTC.
+
         Args:
             element: Selenium WebElement for the match row.
             default: Fallback datetime if parsing fails.

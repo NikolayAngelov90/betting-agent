@@ -20,7 +20,14 @@ class DatabaseManager:
     def __init__(self, config=None):
         self.config = config or get_config()
         self.engine = self._create_engine()
-        self.SessionLocal = sessionmaker(bind=self.engine)
+        # expire_on_commit=False: get_session() commits on every context exit,
+        # which by default EXPIRES all loaded objects — so any ORM row read inside
+        # a `with` block and then touched after it would re-fetch (or, once the
+        # session is closed, raise/return stale data). That detached-instance trap
+        # has bitten this codebase twice. Keeping attributes populated after commit
+        # removes the footgun; sessions here are short-lived so staleness isn't a
+        # concern. Code that needs fresh data still re-queries inside a new session.
+        self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
 
     @property
     def is_postgres(self) -> bool:
