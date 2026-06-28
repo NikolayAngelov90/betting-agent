@@ -468,13 +468,18 @@ class MatchBriefingService:
                     )
                     return True
             old_sel = primary.selection
+            # Cast numerics to plain float — build_selection_pick carries numpy
+            # scalars (round() on model probs → np.float64), and under numpy 2.x
+            # those render as 'np.float64(..)' in SQL, aborting the UPDATE. The
+            # global adapter in database.py also covers this; the float() here
+            # mirrors _save_picks and keeps the write correct under SQLite too.
             primary.market = new.market
             primary.selection = new.selection
-            primary.odds = new.odds
-            primary.predicted_probability = new.predicted_probability
-            primary.expected_value = new.expected_value
-            primary.confidence = new.confidence
-            primary.kelly_stake_percentage = new.kelly_stake_percentage
+            primary.odds = float(new.odds)
+            primary.predicted_probability = float(new.predicted_probability)
+            primary.expected_value = float(new.expected_value)
+            primary.confidence = float(new.confidence)
+            primary.kelly_stake_percentage = float(new.kelly_stake_percentage)
             primary.risk_level = new.risk_level
             session.commit()
             _reason = (decision.get("reason") or "").strip() or "no reason given"

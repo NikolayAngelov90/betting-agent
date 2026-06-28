@@ -14,6 +14,39 @@ from src.utils.logger import get_logger
 logger = get_logger()
 
 
+def _register_numpy_psycopg2_adapters():
+    """Teach psycopg2 how to serialize numpy scalar types.
+
+    Model code produces numpy scalars (e.g. ``round(prob, 4)`` returns an
+    ``np.float64``). ``np.float64`` *subclasses* ``float``, so psycopg2 routes
+    it through its float adapter, which renders the value with ``repr()``.
+    Under numpy 2.x ``repr(np.float64(2.75))`` is the string ``'np.float64(2.75)'``
+    — so the literal ``np.float64(2.75)`` ends up in the SQL and Postgres reads
+    ``np.`` as ``schema.function`` → ``InvalidSchemaName: schema "np" does not
+    exist``. That silently aborted every briefing CHANGE write (the pick was
+    never switched). Registering explicit adapters makes any numpy scalar render
+    as a plain numeric/boolean literal, everywhere, for good.
+
+    Guarded: psycopg2 is only present when a PostgreSQL driver is installed
+    (pure-SQLite local dev may not have it), so failures here are non-fatal.
+    """
+    try:
+        import numpy as np
+        from psycopg2.extensions import register_adapter, AsIs, Float
+
+        register_adapter(np.float64, lambda v: Float(float(v)))
+        register_adapter(np.float32, lambda v: Float(float(v)))
+        register_adapter(np.int64, lambda v: AsIs(int(v)))
+        register_adapter(np.int32, lambda v: AsIs(int(v)))
+        register_adapter(np.int16, lambda v: AsIs(int(v)))
+        register_adapter(np.bool_, lambda v: AsIs("true" if bool(v) else "false"))
+    except Exception as e:  # pragma: no cover - depends on optional deps
+        logger.debug(f"numpy/psycopg2 adapter registration skipped: {e}")
+
+
+_register_numpy_psycopg2_adapters()
+
+
 class DatabaseManager:
     """Manages database connections, sessions, and operations."""
 
