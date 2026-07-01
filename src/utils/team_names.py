@@ -30,6 +30,22 @@ NAME_ALIASES: dict = {
     # Dinamo Bucharest abbreviations ("Din." prefix)
     "din. bucuresti": "dinamo bucuresti",
     "din bucuresti": "dinamo bucuresti",
+    # National teams — different sources use different names for the same side.
+    # Without these, token/prefix logic can't equate them ("usa" shares no token
+    # with "united states"), so a second Match row is created for the same
+    # fixture and it gets briefed/picked twice (USA vs Bosnia, 2026-07-02).
+    "united states": "usa",
+    "united states of america": "usa",
+    "bosnia-herzegovina": "bosnia and herzegovina",
+    "bosnia & herzegovina": "bosnia and herzegovina",
+    "bosnia and herzegovina": "bosnia and herzegovina",
+    "korea republic": "south korea",
+    "republic of korea": "south korea",
+    "korea dpr": "north korea",
+    "ivory coast": "cote d'ivoire",
+    "china pr": "china",
+    "czechia": "czech republic",
+    "cabo verde": "cape verde",
 }
 
 

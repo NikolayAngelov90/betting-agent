@@ -294,15 +294,76 @@ class MatchBriefingService:
         return self._wc_fixtures_between(start, end)
 
     def _wc_fixtures_between(self, start: datetime, end: datetime) -> list:
-        """Return WC fixture match IDs with kickoff in [start, end] (UTC)."""
+        """Return WC fixture match IDs with kickoff in [start, end] (UTC).
+
+        Deduplicates fixtures: different data sources create separate Match rows
+        for the same game under name variants (API-Football "USA" vs
+        football-data.org "United States"), which produced TWO briefings for the
+        same match (USA vs Bosnia, 2026-07-02). get_daily_picks already dedups
+        the pick side the same way; without this the briefing side did not.
+        Two rows are the same fixture when they share the league, kick off within
+        3h of each other, and both team names match. The survivor is the row with
+        the most odds, then an API-Football id, then the lowest match_id (stable).
+        """
+        from src.utils.team_names import team_names_similar
         with self.db.get_session() as session:
-            rows = session.query(Match.id).filter(
+            rows = session.query(Match).filter(
                 Match.is_fixture == True,  # noqa: E712
                 Match.league.in_(_WC_LEAGUES),
                 Match.match_date >= start,
                 Match.match_date <= end,
             ).order_by(Match.match_date.asc()).all()
-        return [r[0] for r in rows]
+
+            cands = []
+            for m in rows:
+                ht = session.get(Team, m.home_team_id)
+                at = session.get(Team, m.away_team_id)
+                cands.append({
+                    "id": m.id,
+                    "home": ht.name if ht else "",
+                    "away": at.name if at else "",
+                    "league": m.league,
+                    "dt": m.match_date,
+                    "afid": m.apifootball_id,
+                    "odds": session.query(Odds).filter(Odds.match_id == m.id).count(),
+                })
+
+        def _hours_apart(a, b):
+            return abs((a - b).total_seconds()) / 3600
+
+        def _better(x, y):
+            """True if x is a better survivor than y."""
+            return (x["odds"], x["afid"] is not None, -x["id"]) > (
+                y["odds"], y["afid"] is not None, -y["id"])
+
+        kept: list = []
+        for c in cands:
+            dup = None
+            for k in kept:
+                if (k["league"] == c["league"]
+                        and _hours_apart(k["dt"], c["dt"]) <= 3
+                        and team_names_similar(k["home"], c["home"])
+                        and team_names_similar(k["away"], c["away"])):
+                    dup = k
+                    break
+            if dup is None:
+                kept.append(c)
+            elif _better(c, dup):
+                logger.info(
+                    f"Briefing dedup: {c['home']} vs {c['away']} — keeping "
+                    f"match {c['id']} (odds={c['odds']}, afid={c['afid']}) over "
+                    f"{dup['id']} (odds={dup['odds']}, afid={dup['afid']})"
+                )
+                kept[kept.index(dup)] = c
+            else:
+                logger.info(
+                    f"Briefing dedup: {c['home']} vs {c['away']} — dropping "
+                    f"duplicate match {c['id']} (odds={c['odds']}, afid={c['afid']}), "
+                    f"keeping {dup['id']}"
+                )
+
+        kept.sort(key=lambda c: c["dt"])
+        return [c["id"] for c in kept]
 
     async def _briefing_for(self, match_id: int, lineup_aware: bool) -> bool:
         """Build the dossier, optionally fetch lineups, ask Claude, post to Telegram."""
