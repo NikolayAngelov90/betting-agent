@@ -613,16 +613,23 @@ class APIFootballScraper(BaseScraper):
         created = 0
         updated = 0
 
-        # Pre-load all existing apifootball_id → match_id for this date in one query.
-        # This avoids a per-fixture DB round-trip (1s Neon latency) for existing fixtures.
-        day_start = datetime.combine(target_date, datetime.min.time())
-        day_end = day_start + timedelta(days=1)
+        # Pre-load existing apifootball_id → match_id for the fixtures in THIS
+        # batch, scoped by afid (NOT by date). A date-scoped lookup can miss a
+        # fixture already stored under a different date — /fixtures?date= can
+        # return the same fixture on more than one calendar day (timezone /
+        # midnight rollover), and the miss would send it down the slow path and
+        # create a SECOND row for the same afid. Matching on afid globally
+        # guarantees one row per fixture. Same query cost (one round-trip,
+        # bounded by the batch), just the correct scope.
+        _batch_afids = [
+            fix.get("fixture", {}).get("id")
+            for fix in fixtures
+            if fix.get("fixture", {}).get("id")
+        ]
         with self.db.get_session() as session:
             existing_rows = session.query(Match.id, Match.apifootball_id).filter(
-                Match.apifootball_id.isnot(None),
-                Match.match_date >= day_start,
-                Match.match_date < day_end,
-            ).all()
+                Match.apifootball_id.in_(_batch_afids),
+            ).all() if _batch_afids else []
         _afid_to_match_id = {row.apifootball_id: row.id for row in existing_rows}
 
         for fix in fixtures:

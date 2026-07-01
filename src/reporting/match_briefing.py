@@ -340,10 +340,18 @@ class MatchBriefingService:
         for c in cands:
             dup = None
             for k in kept:
-                if (k["league"] == c["league"]
-                        and _hours_apart(k["dt"], c["dt"]) <= 3
-                        and team_names_similar(k["home"], c["home"])
-                        and team_names_similar(k["away"], c["away"])):
+                # Same API-Football id ⇒ same fixture, even if the two rows carry
+                # different dates (the scraper briefly stored one fixture under
+                # two dates). This is the reliable key; the team+time match below
+                # only catches cross-source rows that have no shared afid.
+                same_afid = c["afid"] is not None and c["afid"] == k["afid"]
+                same_fixture = (
+                    k["league"] == c["league"]
+                    and _hours_apart(k["dt"], c["dt"]) <= 3
+                    and team_names_similar(k["home"], c["home"])
+                    and team_names_similar(k["away"], c["away"])
+                )
+                if same_afid or same_fixture:
                     dup = k
                     break
             if dup is None:

@@ -19,10 +19,14 @@ from src.utils.config import get_config
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(tmp_path, monkeypatch):
+    # Defence in depth: conftest already strips DATABASE_URL, but make doubly
+    # sure this DB-writing test can never reach production Postgres.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     mgr = DatabaseManager(config=SimpleNamespace(
         database={"sqlite_path": str(tmp_path / "dedup_test.db")}
     ))
+    assert not mgr.is_postgres, "test DB must be SQLite, not production Postgres"
     mgr.create_tables()
     return mgr
 

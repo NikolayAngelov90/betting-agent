@@ -1041,7 +1041,7 @@ class FootballBettingAgent:
             # "Manchester City"). Keep the record with more odds or with
             # flashscore_id (better enrichment data).
             from src.utils.team_names import team_names_similar as _nm
-            # seen_list: [(match_id, home_name, league, match_date)]
+            # seen_list: [(match_id, home_name, away_name, league, match_date, afid)]
             seen_list: list = []
             dedup_ids: list = []
 
@@ -1051,14 +1051,23 @@ class FootballBettingAgent:
 
             for f in fixtures:
                 ht = session.get(Team, f.home_team_id)
+                at = session.get(Team, f.away_team_id)
                 h_name = ht.name if ht else ""
-                # Check if we've seen a match in same league within 2h window
+                a_name = at.name if at else ""
+                # Same fixture if the API-Football id matches (reliable even when
+                # the two rows carry different dates — the scraper briefly stored
+                # one fixture under two dates), OR same league + kickoff within 2h
+                # + both team names match (cross-source rows with no shared afid).
                 dup_idx = None
-                for idx, (existing_id, existing_home, e_league, e_dt) in enumerate(seen_list):
-                    if e_league == f.league and _hours_apart(e_dt, f.match_date) <= 2:
-                        if _nm(h_name, existing_home):
-                            dup_idx = idx
-                            break
+                for idx, (e_id, e_home, e_away, e_league, e_dt, e_afid) in enumerate(seen_list):
+                    same_afid = f.apifootball_id is not None and f.apifootball_id == e_afid
+                    same_fixture = (
+                        e_league == f.league and _hours_apart(e_dt, f.match_date) <= 2
+                        and _nm(h_name, e_home) and _nm(a_name, e_away)
+                    )
+                    if same_afid or same_fixture:
+                        dup_idx = idx
+                        break
                 if dup_idx is not None:
                     # Keep the one with more odds data
                     existing_id = seen_list[dup_idx][0]
@@ -1067,12 +1076,12 @@ class FootballBettingAgent:
                     if new_odds > old_odds:
                         dedup_ids.remove(existing_id)
                         dedup_ids.append(f.id)
-                        seen_list[dup_idx] = (f.id, h_name, f.league, f.match_date)
+                        seen_list[dup_idx] = (f.id, h_name, a_name, f.league, f.match_date, f.apifootball_id)
                         logger.debug(f"Dedup: replaced fixture {existing_id} with {f.id} ({h_name}, more odds)")
                     else:
                         logger.debug(f"Dedup: skipping duplicate fixture {f.id} ({h_name}, fewer odds)")
                 else:
-                    seen_list.append((f.id, h_name, f.league, f.match_date))
+                    seen_list.append((f.id, h_name, a_name, f.league, f.match_date, f.apifootball_id))
                     dedup_ids.append(f.id)
 
             fixture_ids = dedup_ids
