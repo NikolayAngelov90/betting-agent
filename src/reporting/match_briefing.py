@@ -980,6 +980,19 @@ class MatchBriefingService:
         client = AsyncAnthropic()  # reads ANTHROPIC_API_KEY from env
         tools = [{"type": "web_search_20260209", "name": "web_search"}]
 
+        # Prompt caching: the system prompt (role + HTML rules + BG style guide)
+        # and the web_search tool are IDENTICAL across every per-match review in a
+        # run — only the per-match dossier in the user message varies. Put ONE
+        # explicit cache breakpoint on the system block (render order is
+        # tools → system → messages, so this caches tools + system together).
+        # Calls 2..N in the run — all within the 5-minute TTL — then read that
+        # prefix at ~0.1× instead of full input price. We do NOT use top-level
+        # `cache_control` (automatic caching): it would place the breakpoint on
+        # the LAST block, which here is the varying user dossier — a guaranteed
+        # cache write with no read (the documented common mistake).
+        cached_system = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
         messages = [{"role": "user", "content": user}]
         text_out = ""
         # max_tokens must cover adaptive thinking + several web searches + the
@@ -991,13 +1004,28 @@ class MatchBriefingService:
                     model=_BRIEFING_MODEL,
                     max_tokens=16000,
                     thinking={"type": "adaptive"},
-                    system=system,
+                    system=cached_system,
                     tools=tools,
                     messages=messages,
                 )
             except Exception as e:
                 logger.warning(f"Claude briefing call failed for {match_name}: {e}")
                 return ""
+
+            # Cache telemetry — a non-zero cache_read on the 2nd+ match of a run
+            # confirms the system+tools prefix is being reused. Zero reads across
+            # a run means a silent invalidator crept into the system prompt.
+            try:
+                _u = resp.usage
+                logger.debug(
+                    f"Briefing API usage [{match_name}]: "
+                    f"cache_read={getattr(_u, 'cache_read_input_tokens', 0)} "
+                    f"cache_write={getattr(_u, 'cache_creation_input_tokens', 0)} "
+                    f"input={getattr(_u, 'input_tokens', 0)} "
+                    f"output={getattr(_u, 'output_tokens', 0)}"
+                )
+            except Exception:
+                pass
 
             # Server-side web search may return pause_turn at the iteration cap —
             # re-send to resume.
