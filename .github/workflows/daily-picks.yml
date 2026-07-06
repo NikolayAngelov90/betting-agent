@@ -28,7 +28,9 @@ concurrency:
 jobs:
   daily-picks:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Raised from 180: the picks step now also runs Claude's per-match review
+    # (KEEP/CHANGE) on every WC + club pick before sending, which adds time.
+    timeout-minutes: 240
 
     env:
       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
@@ -240,20 +242,17 @@ jobs:
           restore-keys: |
             briefings-sent-
 
-      - name: Generate and send picks
-        id: picks
-        run: python -m src.agent.betting_agent --picks --force
-        timeout-minutes: 60
-        continue-on-error: true
-
-      - name: Install Claude Code CLI (briefings via Pro subscription)
+      # Claude Code CLI must be installed BEFORE picks: the --picks step now runs
+      # Claude's per-match review (KEEP/CHANGE) on every pick before sending the
+      # summary. No separate briefing step — briefing articles are not posted.
+      - name: Install Claude Code CLI (pick review via Pro subscription)
         run: npm install -g @anthropic-ai/claude-code
         continue-on-error: true
 
-      - name: Post AI preview briefings (WC matches, no lineups)
-        id: briefing
-        run: python -m src.agent.betting_agent --briefing
-        timeout-minutes: 60
+      - name: Generate, review, and send picks
+        id: picks
+        run: python -m src.agent.betting_agent --picks --force
+        timeout-minutes: 150
         continue-on-error: true
 
       - name: Save briefings-sent guard
@@ -290,7 +289,6 @@ jobs:
           O_UPDATE: ${{ steps.update.outcome }}
           O_SETTLE1: ${{ steps.settle1.outcome }}
           O_PICKS: ${{ steps.picks.outcome }}
-          O_BRIEFING: ${{ steps.briefing.outcome }}
           O_RESULTS: ${{ steps.results.outcome }}
           O_SETTLE2: ${{ steps.settle2.outcome }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -300,8 +298,7 @@ jobs:
           steps = {
               "update": os.environ.get("O_UPDATE", ""),
               "settle (pre-picks)": os.environ.get("O_SETTLE1", ""),
-              "picks": os.environ.get("O_PICKS", ""),
-              "briefing": os.environ.get("O_BRIEFING", ""),
+              "picks (incl. review)": os.environ.get("O_PICKS", ""),
               "update-results": os.environ.get("O_RESULTS", ""),
               "settle (post-results)": os.environ.get("O_SETTLE2", ""),
           }

@@ -202,6 +202,64 @@ class MatchBriefingService:
                 logger.warning(f"Pre-match briefing failed for match {match_id}: {e}")
         return sent
 
+    async def finalize_picks_with_claude(self, picks: list) -> int:
+        """Run Claude's per-match review on each saved pick (WC + club leagues).
+
+        For every match with a pick, Claude researches the game and makes the
+        final KEEP/CHANGE call, which is written to the tracked pick in the DB.
+        The in-memory pick objects are then synced to the (possibly switched)
+        selection so the Telegram picks summary matches what is actually tracked.
+        NO briefing article is posted — the picks summary is the only output.
+
+        Returns the number of matches reviewed. Gracefully no-ops (returns 0)
+        when briefings are disabled or no Claude auth is available, leaving the
+        model's picks untouched.
+        """
+        if not picks or not self._enabled():
+            return 0
+        by_match: dict = {}
+        for p in picks:
+            if getattr(p, "match_id", None):
+                by_match.setdefault(p.match_id, []).append(p)
+        reviewed = 0
+        for match_id, recs in by_match.items():
+            try:
+                if await self._briefing_for(match_id, lineup_aware=False,
+                                            post_to_telegram=False):
+                    reviewed += 1
+                # Sync even when the match was already reviewed today (returns
+                # False) — the DB holds the final pick and the fresh rec must
+                # reflect it.
+                self._sync_recs_from_db(match_id, recs)
+            except Exception as e:
+                logger.warning(f"Pick review failed for match {match_id}: {e}")
+        logger.info(
+            f"Claude reviewed {reviewed}/{len(by_match)} match(es); no briefings posted")
+        return reviewed
+
+    def _sync_recs_from_db(self, match_id: int, recs: list) -> None:
+        """Copy the post-decision SavedPick fields back onto the in-memory pick
+        objects for a match, so the Telegram summary reflects any Claude switch.
+        The highest-EV rec maps to the highest-EV saved pick (the one the review
+        can switch); extra recs on the same match are left as-is."""
+        with self.db.get_session() as session:
+            rows = session.query(SavedPick).filter(
+                SavedPick.match_id == match_id,
+                SavedPick.pick_date == date.today(),
+                SavedPick.result.is_(None),
+            ).order_by(SavedPick.expected_value.desc()).all()
+            rows = [
+                (r.market, r.selection, r.odds, r.predicted_probability,
+                 r.expected_value, r.confidence, r.kelly_stake_percentage, r.risk_level)
+                for r in rows
+            ]
+        if not rows:
+            return
+        for rec, row in zip(sorted(recs, key=lambda r: r.expected_value, reverse=True), rows):
+            (rec.market, rec.selection, rec.odds, rec.predicted_probability,
+             rec.expected_value, rec.confidence, rec.kelly_stake_percentage,
+             rec.risk_level) = row
+
     # ---- idempotency guard ---------------------------------------------------
 
     def _load_sent(self) -> dict:
@@ -373,9 +431,17 @@ class MatchBriefingService:
         kept.sort(key=lambda c: c["dt"])
         return [c["id"] for c in kept]
 
-    async def _briefing_for(self, match_id: int, lineup_aware: bool) -> bool:
-        """Build the dossier, optionally fetch lineups, ask Claude, post to Telegram."""
-        kind = "prematch" if lineup_aware else "preview"
+    async def _briefing_for(self, match_id: int, lineup_aware: bool,
+                            post_to_telegram: bool = True) -> bool:
+        """Build the dossier, ask Claude, finalize the pick, and (optionally) post.
+
+        post_to_telegram=False runs the full research + KEEP/CHANGE decision and
+        writes it to the tracked pick, but posts NO briefing article — used by the
+        "predictions only" review path where the daily picks summary is the sole
+        Telegram output.
+        """
+        kind = "review" if not post_to_telegram else (
+            "prematch" if lineup_aware else "preview")
         if self._already_sent(kind, match_id):
             logger.info(f"Briefing already sent today [{kind}] for match {match_id} — skipping")
             return False
@@ -446,12 +512,16 @@ class MatchBriefingService:
             except Exception as e:
                 logger.warning(f"Could not apply briefing decision for {match_id}: {e}")
 
+        self._mark_sent(kind, match_id)
+        if not post_to_telegram:
+            logger.info(f"Pick reviewed (no briefing posted): {analysis.match_name}")
+            return True
+
         header = self._header(analysis, round_name, lineups)
         footer = self._final_bet_footer(match_id) if finalize else ""
         await self.telegram._send_chunked(
             f"{header}\n\n{_sanitize_telegram_html(briefing)}{footer}"
         )
-        self._mark_sent(kind, match_id)
         label = "PRE-MATCH (lineups)" if lineups else (
             "PRE-MATCH" if lineup_aware else "PREVIEW")
         logger.info(f"Briefing sent [{label}]: {analysis.match_name}")

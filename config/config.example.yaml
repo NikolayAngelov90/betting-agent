@@ -4,14 +4,24 @@
 
 scraping:
   # -------------------------------------------------------------------------
-  # WC 2026 MODE (June 11 – July 19, 2026)
-  # Only the FIFA World Cup is active. Club leagues are paused and commented
-  # out below — re-enable after the tournament ends.
+  # WC 2026 + summer club return (as of July 2026)
+  # The World Cup is still active (final July 19), and the club leagues that
+  # resume in early July are re-enabled: the two Nordic summer leagues and the
+  # three UEFA qualifying competitions (all have first-leg/round fixtures in the
+  # July 6–13 window). The rest of the club leagues stay paused (commented out)
+  # until their seasons start in August — add them back here as they return.
   # -------------------------------------------------------------------------
   flashscore_leagues:
     - world/fifa-world-cup
+    # Nordic summer leagues (mid-season through the summer)
+    - sweden/allsvenskan
+    - norway/eliteserien
+    # UEFA qualifying rounds start early July
+    - europe/champions-league
+    - europe/europa-league
+    - europe/europa-conference-league
 
-  # Club leagues — PAUSED for WC 2026 (re-enable ~August 2026)
+  # Club leagues — PAUSED until their 2026/27 seasons start (~August 2026)
   # flashscore_leagues:
   #   # Top 5 Leagues
   #   - england/premier-league
@@ -25,10 +35,6 @@ scraping:
   #   - belgium/jupiler-pro-league
   #   - turkey/super-lig
   #   - scotland/premiership
-  #   # European Competitions
-  #   - europe/champions-league
-  #   - europe/europa-league
-  #   - europe/europa-conference-league
   #   # Lower English divisions
   #   - england/championship
   #   - england/league-one
@@ -42,9 +48,6 @@ scraping:
   #   - switzerland/super-league
   #   - greece/super-league
   #   - denmark/superliga
-  #   # Nordic leagues
-  #   - norway/eliteserien
-  #   - sweden/allsvenskan
   #   - poland/ekstraklasa
   #   - romania/liga-1
 
@@ -184,18 +187,23 @@ notifications:
   telegram_chat_id: "YOUR_CHAT_ID"       # Override via TELEGRAM_CHAT_ID env var
   send_daily_picks: true
   send_live_alerts: false
-  # WC mode: suppress the bulk "Daily Value Picks" Telegram summary so the
-  # per-match AI briefings (which make the final bet call) are the single source
-  # of truth in the channel. Picks are still saved to the DB and printed to the
-  # console. Set false to restore the bulk summary alongside briefings.
-  suppress_picks_summary: true
+  # Send the "Daily Value Picks" Telegram summary. Briefing ARTICLES are no
+  # longer posted (see briefings.send_to_telegram: false) — the picks summary is
+  # the single Telegram output. Claude still reviews every pick before it is
+  # sent; the summary shows the finalized (possibly switched) selection.
+  suppress_picks_summary: false
 
 # AI match briefings (Claude Opus 4.8 + server-side web search).
 # Requires ANTHROPIC_API_KEY env var (GitHub secret). When unset, briefing
 # commands no-op gracefully so the rest of the pipeline is unaffected.
 briefings:
-  enabled: true               # master switch for --briefing / --prematch-briefing
-  language: Bulgarian         # language the briefing prose is written in
+  enabled: true               # master switch for the Claude pick review
+  # send_to_telegram: post the full briefing ARTICLE to Telegram. false = Claude
+  # still researches each match and finalizes the pick (KEEP/CHANGE), but no
+  # article is posted — only the daily picks summary goes out. This is the
+  # "predictions only" mode: keep Claude's per-match check, drop the briefings.
+  send_to_telegram: false
+  language: Bulgarian         # language the briefing prose is written in (when posted)
   # backend: which Claude to use for the research + briefing.
   #   claude_code   — headless Claude Code CLI billed to the Claude Pro
   #                   subscription (CLAUDE_CODE_OAUTH_TOKEN secret). $0 extra.
@@ -215,8 +223,8 @@ briefings:
   # The saved pick is updated to the decision and a code-generated footer shows
   # the final tracked bet, so the message can never contradict the DB.
   finalize_picks: true
-  # Currently scoped to the FIFA World Cup. Preview briefings (no lineups) run in
-  # the daily pipeline (one per match).
+  # Claude reviews EVERY saved pick before it is sent — WC every-match picks and
+  # club-league value picks alike — as part of the --picks step.
 
 logging:
   level: INFO

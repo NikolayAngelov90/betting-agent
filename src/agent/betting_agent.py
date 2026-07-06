@@ -3692,18 +3692,33 @@ async def main():
             if not picks:
                 print("No value picks found for today.")
             else:
-                # WC mode: the per-match AI briefings are the authoritative Telegram
-                # output (they finalize the bet), so the bulk picks summary is
-                # suppressed to avoid posting provisional picks the briefing may veto
-                # or switch. Picks are still saved to the DB and printed to console.
+                # Claude reviews EVERY pick (WC every-match + club value picks),
+                # making the final KEEP/CHANGE call on each tracked bet. No
+                # briefing article is posted (briefings.send_to_telegram=false);
+                # the picks summary below is the only Telegram output and it
+                # reflects Claude's finalized selection. Runs before the send so
+                # switches are reflected; no-ops if briefings are disabled or no
+                # Claude auth is present (model picks sent as-is).
+                if agent.config.get("briefings.enabled", True) and agent.config.get(
+                    "briefings.finalize_picks", True
+                ):
+                    try:
+                        from src.reporting.match_briefing import MatchBriefingService
+                        reviewer = MatchBriefingService(agent)
+                        await reviewer.finalize_picks_with_claude(new_picks or picks)
+                    except Exception as _rev_e:
+                        logger.warning(
+                            f"Claude pick review failed — sending model picks as-is: {_rev_e}"
+                        )
+                # WC mode kept the bulk summary suppressed while briefings were
+                # authoritative; with briefings off, the summary IS the output.
                 _suppress_summary = agent.config.get(
                     "notifications.suppress_picks_summary", False
                 )
                 if _suppress_summary:
                     print(
                         f"\nBulk picks summary suppressed "
-                        f"(notifications.suppress_picks_summary) — per-match briefings "
-                        f"are authoritative. {len(new_picks)} new pick(s) saved."
+                        f"(notifications.suppress_picks_summary). {len(new_picks)} new pick(s) saved."
                     )
                 # Send to Telegram only the picks that are NEW this run.
                 # On a re-run on the same day, previously-sent picks are excluded
