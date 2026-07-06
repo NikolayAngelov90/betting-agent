@@ -6,6 +6,7 @@ No briefing article is posted in this mode.
 """
 
 import asyncio
+import re
 from datetime import date, datetime
 from types import SimpleNamespace
 
@@ -15,6 +16,8 @@ from src.data.database import DatabaseManager
 from src.data.models import Team, Match, SavedPick
 from src.reporting.match_briefing import MatchBriefingService
 from src.utils.config import get_config
+
+_CYRILLIC = re.compile(r"[Ѐ-ӿ]")
 
 
 @pytest.fixture
@@ -87,3 +90,59 @@ def test_finalize_noop_without_claude_auth(db, monkeypatch):
 
 def test_finalize_empty_picks(db):
     assert asyncio.run(_svc(db).finalize_picks_with_claude([])) == 0
+
+
+def _decision_svc():
+    """Service with no DB/agent needed — _research_and_write only uses config."""
+    return MatchBriefingService(SimpleNamespace(
+        db=None, config=get_config(), telegram=None, agent=None))
+
+
+def test_decision_only_returns_no_prose_and_english_prompt(monkeypatch):
+    """Review path: Claude returns ONLY a decision, prompt is English (no bg)."""
+    svc = _decision_svc()
+    captured = {}
+
+    async def fake_api(system, user, match_name):
+        captured["system"] = system
+        captured["user"] = user
+        return ("<<<DECISION>>>\naction: CHANGE\nmarket_key: home_over_1.5\n"
+                "confidence: 0.62\nreason: strong favourite\n<<<END>>>")
+
+    monkeypatch.setattr(svc, "_resolve_backend", lambda: "anthropic_api")
+    monkeypatch.setattr(svc, "_call_anthropic_api", fake_api)
+
+    menu = [{"market_key": "home_over_1.5", "selection": "Home Over 1.5",
+             "odds": 1.55, "probability": 0.6}]
+    briefing, decision = asyncio.run(svc._research_and_write(
+        "USA vs Bosnia", "model dossier here", lineup_aware=False,
+        has_lineups=False, menu=menu, decision_only=True))
+
+    # No briefing prose is returned or generated.
+    assert briefing == ""
+    assert decision["action"] == "CHANGE"
+    assert decision["market_key"] == "home_over_1.5"
+    # The decision-only prompt is English and forbids prose — no Bulgarian.
+    assert "ONLY the decision block" in captured["system"]
+    assert "Do NOT write an article" in captured["system"]
+    assert not _CYRILLIC.search(captured["system"])
+    assert not _CYRILLIC.search(captured["user"])
+
+
+def test_decision_only_no_menu_skips_api_call(monkeypatch):
+    """No priced selections ⇒ no decision, and the API is never called."""
+    svc = _decision_svc()
+    called = {"api": False}
+
+    async def fake_api(system, user, match_name):
+        called["api"] = True
+        return "x"
+
+    monkeypatch.setattr(svc, "_resolve_backend", lambda: "anthropic_api")
+    monkeypatch.setattr(svc, "_call_anthropic_api", fake_api)
+
+    briefing, decision = asyncio.run(svc._research_and_write(
+        "USA vs Bosnia", "dossier", lineup_aware=False, has_lineups=False,
+        menu=[], decision_only=True))
+    assert briefing == "" and decision is None
+    assert called["api"] is False

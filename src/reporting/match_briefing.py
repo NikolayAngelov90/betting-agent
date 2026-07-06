@@ -435,10 +435,10 @@ class MatchBriefingService:
                             post_to_telegram: bool = True) -> bool:
         """Build the dossier, ask Claude, finalize the pick, and (optionally) post.
 
-        post_to_telegram=False runs the full research + KEEP/CHANGE decision and
-        writes it to the tracked pick, but posts NO briefing article — used by the
-        "predictions only" review path where the daily picks summary is the sole
-        Telegram output.
+        post_to_telegram=False is the DECISION-ONLY review path: Claude researches
+        the match and only verifies or switches the tracked pick — it writes no
+        briefing article and translates nothing. The daily picks summary is the
+        sole Telegram output.
         """
         kind = "review" if not post_to_telegram else (
             "prematch" if lineup_aware else "preview")
@@ -492,8 +492,17 @@ class MatchBriefingService:
         briefing, decision = await self._research_and_write(
             analysis.match_name, dossier, lineup_aware=lineup_aware,
             has_lineups=bool(lineups), menu=menu if finalize else [],
+            decision_only=not post_to_telegram,
         )
-        if not briefing:
+        # Review path posts nothing, so a decision is all we need. Full-briefing
+        # path bails if the model produced no prose to post.
+        if post_to_telegram and not briefing:
+            return False
+        if not post_to_telegram and not decision:
+            logger.info(
+                f"Pick review [{analysis.match_name}]: no decision returned — "
+                f"model pick left unchanged"
+            )
             return False
 
         # Apply Claude's final decision to the persisted pick (KEEP/CHANGE).
@@ -810,14 +819,24 @@ class MatchBriefingService:
 
     async def _research_and_write(self, match_name: str, dossier: str,
                                   lineup_aware: bool, has_lineups: bool,
-                                  menu: list = None):
+                                  menu: list = None, decision_only: bool = False):
         """Call Claude Opus 4.8 with server-side web search.
 
         Returns (briefing_text, decision) where decision is a dict
         {action: KEEP|PASS|CHANGE, market_key, confidence} or None.
+
+        decision_only=True is the pick-review path: Claude ONLY verifies or
+        switches the model's pick and returns just the decision block — no
+        briefing article is written and nothing is translated. briefing_text is
+        "" in that mode.
         """
         language = self.config.get("briefings.language", "Bulgarian")
         menu = menu or []
+
+        # Review path with no priced selections ⇒ nothing to verify/switch
+        # against, so there's no decision to make. Skip the API call entirely.
+        if decision_only and not menu:
+            return "", None
 
         if has_lineups:
             task = (
@@ -914,6 +933,38 @@ class MatchBriefingService:
             f"{decision_block}"
         )
 
+        if decision_only:
+            # Pick-review override: a lean, ENGLISH, decision-ONLY prompt. No
+            # briefing article and no translation — Claude just verifies or
+            # switches the model's pick. (menu is guaranteed non-empty here.)
+            system = (
+                "You are a football betting analyst. Use the web_search tool to research "
+                "the match — recent form and results, head-to-head, injuries and suspensions "
+                "by player name, what is at stake, and the current bookmaker odds — then pick "
+                "the selection MOST LIKELY TO WIN from the menu. Do NOT write an article, a "
+                "preview, or any prose, and do NOT translate anything into another language — "
+                "reply with ONLY the decision block below. Never invent lineups or injuries; "
+                "if data is thin, lean on the model probabilities in the dossier."
+            )
+            user = (
+                "Verify or change the model's current pick for this match.\n\n"
+                f"Internal model dossier for {match_name} (treat these numbers as ground "
+                f"truth from our prediction system — research everything else):\n\n"
+                f"{dossier}\n\n"
+                "Pick the selection MOST LIKELY TO WIN at odds of at least 1.50; prefer safe, "
+                "high-probability outcomes over coin-flips. Choose ONLY from this menu (the "
+                "selections bookmakers price); each line shows the model's probability and "
+                "the odds:\n"
+                f"{menu_lines}\n\n"
+                "Reply with ONLY this block (English keys, nothing before or after it):\n"
+                "<<<DECISION>>>\n"
+                "action: KEEP|CHANGE\n"
+                "market_key: <one key from the menu, required only if action is CHANGE>\n"
+                "confidence: <your win probability for the final pick, 0.0-1.0>\n"
+                "reason: <one short phrase: why this selection is the most likely to win>\n"
+                "<<<END>>>"
+            )
+
         backend = self._resolve_backend()
         if backend == "claude_code":
             text_out = await self._call_claude_code(system, user, match_name)
@@ -951,6 +1002,11 @@ class MatchBriefingService:
                     f"(block_found={_block_found}) — pick left unchanged. "
                     f"Output tail: {(text_out or '')[-200:]!r}"
                 )
+        # Pick-review path: no briefing prose to clean or return — the decision
+        # (already parsed above) is the entire deliverable.
+        if decision_only:
+            return "", decision
+
         # Strip the machine-readable block from the user-facing briefing — both the
         # wrapped form and any unwrapped trailing field lines (action:/market_key:
         # /confidence:/reason:) the model may have emitted without the markers.
