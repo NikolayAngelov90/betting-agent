@@ -95,6 +95,12 @@ class FootballBettingAgent:
         # Track leagues scraped within this process lifetime (for dedup
         # between settle and daily_update even when no new results are found).
         self._scraped_leagues: set = set()
+        # Per-run memo for analyze_fixture: get_daily_picks analyzes every fixture,
+        # then the Claude pick-review re-analyzes each saved pick — reusing the
+        # cached MatchAnalysis avoids running feature engineering + prediction
+        # twice per match. Cleared at the start of get_daily_picks so each run is
+        # fresh; keyed by match_id.
+        self._analysis_cache: dict = {}
 
         # Reset stale ml=0.0 calibration on a fresh database. The cached
         # calibration.json may carry ml=0.0 from the old proxy-formula bug;
@@ -663,6 +669,11 @@ class FootballBettingAgent:
         Returns:
             MatchAnalysis with predictions and recommendations
         """
+        if not hasattr(self, "_analysis_cache"):
+            self._analysis_cache = {}
+        cached = self._analysis_cache.get(match_id)
+        if cached is not None:
+            return cached
         logger.info(f"Analyzing match {match_id}")
 
         with self.db.get_session() as session:
@@ -707,8 +718,8 @@ class FootballBettingAgent:
         home_has_data = coverage["home_poisson"] or coverage["home_elo"]
         away_has_data = coverage["away_poisson"] or coverage["away_elo"]
         low_coverage = not home_has_data or not away_has_data
+        from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
         if low_coverage:
-            from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
             missing = []
             if not home_has_data:
                 missing.append("home")
@@ -728,6 +739,18 @@ class FootballBettingAgent:
                 f"Low coverage for {match_name} ({'/'.join(missing)} team, "
                 f"{coverage['score']:.0%}) — proceeding anyway (WC: every match "
                 f"gets a pick + briefing; model output flagged as weak prior)"
+            )
+        elif league not in NATIONAL_TEAM_LEAGUES and coverage["score"] < 0.5:
+            # Both teams have SOME history but it's thin/stale (e.g. a club league
+            # just resumed after the WC pause) — predictions regress to the mean,
+            # so selections rarely clear the confidence floor and the league
+            # produces few/no picks. Surface it so the thinness is visible rather
+            # than hiding inside per-match value rejections. Self-heals as results
+            # accumulate; a one-off --backfill-history speeds it up.
+            logger.warning(
+                f"Thin model coverage for {match_name} (league {league}, "
+                f"score {coverage['score']:.0%}) — predictions will be low-"
+                f"confidence until the league accumulates more results"
             )
 
         # Generate features
@@ -793,7 +816,7 @@ class FootballBettingAgent:
         for rec in recommendations:
             rec.match_date = match_date
 
-        return MatchAnalysis(
+        result = MatchAnalysis(
             match_id=match_id,
             match_name=match_name,
             match_date=match_date,
@@ -803,6 +826,8 @@ class FootballBettingAgent:
             recommendations=recommendations,
             injury_report=injury_report,
         )
+        self._analysis_cache[match_id] = result
+        return result
 
     def _merge_flashscore_targets(self, static_leagues: list, db_leagues: set) -> list:
         """Return static config leagues extended with any DB-derived leagues not already listed.
@@ -944,6 +969,10 @@ class FootballBettingAgent:
             Tuple of (picks, new_picks, dropped_picks)
         """
         target = target_date or date.today()
+        # Fresh analysis memo for this pick run (reused by the Claude review).
+        if not hasattr(self, "_analysis_cache"):
+            self._analysis_cache = {}
+        self._analysis_cache.clear()
 
         # Reload calibration from disk if it was updated by a recent --train/--tune.
         # This ensures picks always use the freshest model weights without a restart.
@@ -1644,6 +1673,13 @@ class FootballBettingAgent:
             "europe/europa-conference-league",
             "austria/bundesliga",
             "denmark/superliga",
+            # Nordic summer leagues return the full ~90-match season on the
+            # results page; re-upserting all of them each run took ~18 min per
+            # league on high-latency Postgres. Cap to the most-recent 25 — the
+            # season backlog is already stored and new results always land in
+            # that slice. (Observed 2026-07-06.)
+            "sweden/allsvenskan",
+            "norway/eliteserien",
         }
         # Skip leagues excluded from all Flashscore scraping
         _fs_skip_results = set(self.config.get("scraping.flashscore_skip_leagues", []))

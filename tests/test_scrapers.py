@@ -78,13 +78,24 @@ class TestInjuryScraper:
         scraper = InjuryScraper(config={}, apifootball=None)
         assert scraper.apifootball is None
 
-    def test_get_injury_summary_empty(self):
-        from src.scrapers.injury_scraper import InjuryScraper
+    def test_get_injury_summary_empty(self, tmp_path, monkeypatch):
         import asyncio
+        from types import SimpleNamespace
+        from src.data.database import DatabaseManager
+        from src.scrapers.injury_scraper import InjuryScraper
+        # Isolate from the global/production DB. get_injury_summary() queries the
+        # injuries table, so the test DB must have the schema — otherwise SQLite
+        # raises "no such table: injuries" (previously masked because the test
+        # silently used the production Postgres DB, which has the table).
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        mgr = DatabaseManager(config=SimpleNamespace(
+            database={"sqlite_path": str(tmp_path / "injuries_test.db")}
+        ))
+        assert not mgr.is_postgres, "test DB must be SQLite, not production Postgres"
+        mgr.create_tables()
         scraper = InjuryScraper(config={}, apifootball=None)
-        summary = asyncio.run(
-            scraper.get_injury_summary(team_id=99999)
-        )
+        scraper.db = mgr  # override the global get_db() with the isolated one
+        summary = asyncio.run(scraper.get_injury_summary(team_id=99999))
         assert summary["total_injured"] == 0
         assert summary["injuries"] == []
 

@@ -447,19 +447,19 @@ class ValueBettingCalculator:
             pool = [c for c in candidates if c[3] in _core] or candidates
             best = min(pool, key=lambda c: c[4])  # lowest odds = market favourite
         else:
-            # Forced picks must be SANE, not maximal-EV: with thin data the model's
-            # probabilities are noisy and max-EV selects the most mispriced longshot
-            # (e.g. Away Over 1.5 @ 6.50 on 31% confidence). Tier 1: highest EV among
-            # selections with modest odds and modest model-market divergence. Tier 2
-            # (nothing modest available): the model's most-likely selection.
+            # Forced picks must be SANE and SAFE, not maximal-EV: settled data shows
+            # the model has no EV edge and is overconfident, so max-EV just selects
+            # the most mispriced longshot — which is exactly how forced WC picks
+            # ended up at coin-flip confidence (Portugal vs Spain: Home Over 1.5 @
+            # 3.00, 39%). For a "pick every match" bet with no value mandate, the
+            # right objective is WIN PROBABILITY. Restrict to sane odds/divergence,
+            # then take the model's most-likely selection within that pool.
             sane = [
                 c for c in candidates
                 if c[4] <= 3.50 and c[5] <= 1.50  # odds ≤ 3.5, divergence ≤ 1.5x
             ]
-            if sane:
-                best = max(sane, key=lambda c: c[6])  # highest EV among sane picks
-            else:
-                best = max(candidates, key=lambda c: c[2])  # highest model probability
+            pool = sane or candidates
+            best = max(pool, key=lambda c: c[2])  # highest model win probability
 
         market, selection, prob, market_key, best_odds, divergence, ev = best
         return self._build_pick(

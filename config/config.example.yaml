@@ -61,7 +61,13 @@ scraping:
 
   flashscore_skip_fixtures_leagues: []
 
-  flashscore_skip_results_leagues: []
+  # UEFA qualifying results pages time out on Flashscore in CI (Cloudflare, same
+  # as the WC) — ~2.5 min wasted per league, 0 results scraped. API-Football
+  # covers their results, so skip the Flashscore results scrape for them.
+  flashscore_skip_results_leagues:
+    - europe/champions-league
+    - europe/europa-league
+    - europe/europa-conference-league
 
   update_interval_hours: 6
   headless: true
