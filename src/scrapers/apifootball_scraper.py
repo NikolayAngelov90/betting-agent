@@ -2153,7 +2153,18 @@ class APIFootballScraper(BaseScraper):
                     league_id = fix.get("league", {}).get("id")
                     league_key = ID_TO_LEAGUE.get(league_id)
                     if not league_key:
-                        continue  # Skip leagues we don't track
+                        # The team-history endpoint returns the team's FULL season
+                        # including its domestic league. These used to be skipped,
+                        # which discarded almost the entire history of qualifying-
+                        # round minnows (Kairat's Kazakh league, Flora's Estonian
+                        # league, ...) — the API request was paid but nothing was
+                        # stored, so their coverage never improved. Store them
+                        # under a derived per-country slug instead: they feed
+                        # Poisson/Elo strengths and the coverage score, and can
+                        # never produce picks (not in the configured league list).
+                        _country = (fix.get("league", {}).get("country")
+                                    or "unknown").strip().lower().replace(" ", "-")
+                        league_key = f"other/{_country}"
 
                     home_name = fix.get("teams", {}).get("home", {}).get("name", "")
                     away_name = fix.get("teams", {}).get("away", {}).get("name", "")

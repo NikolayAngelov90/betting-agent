@@ -606,11 +606,15 @@ class FootballBettingAgent:
         except Exception as e:
             logger.warning(f"ML retrain failed: {e}")
 
-        # 6b. Targeted backfill for low-coverage teams in today's fixtures.
+        # 6b. Targeted backfill for low-coverage teams in today's AND tomorrow's
+        # fixtures. Tomorrow's fixtures already exist (created a day ahead), so
+        # backfilling their teams today spreads the API quota across two days and
+        # the data is ready when the fixture is actually analyzed — qualifying
+        # rounds bring many unknown minnows at once (12 on 2026-07-08).
         try:
             _today = date.today()
             _start = datetime.combine(_today, datetime.min.time())
-            _end = _start + timedelta(days=1)
+            _end = _start + timedelta(days=2)
             with self.db.get_session() as _sess:
                 _fixtures = _sess.query(Match).filter(
                     Match.is_fixture == True,
@@ -625,10 +629,13 @@ class FootballBettingAgent:
                     if not cov["away_poisson"] or not cov["away_elo"]:
                         _low_cov_team_ids.add(_m.away_team_id)
             if _low_cov_team_ids:
-                _backfill_budget = min(15, self.apifootball.remaining_budget())
+                # 25-request cap: enough for ~8 team-seasons a day while leaving
+                # plenty of the 100/day quota for odds + injuries + settlement.
+                _backfill_budget = min(25, self.apifootball.remaining_budget())
                 logger.info(
-                    f"Found {len(_low_cov_team_ids)} low-coverage teams in today's fixtures — "
-                    f"triggering targeted backfill (budget: {_backfill_budget})"
+                    f"Found {len(_low_cov_team_ids)} low-coverage teams in today's/"
+                    f"tomorrow's fixtures — triggering targeted backfill "
+                    f"(budget: {_backfill_budget})"
                 )
                 if _backfill_budget > 0:
                     _budget_before = self.apifootball.remaining_budget()
@@ -659,6 +666,24 @@ class FootballBettingAgent:
             logger.debug(f"clear_league_cache failed: {_e}")
 
         logger.info("Daily update cycle complete")
+
+    def _should_force_pick(self, league: str, coverage_score: float) -> bool:
+        """Whether a fixture with NO value pick still gets a forced tracked pick.
+
+        National-team competitions (WC): every match, per betting.wc_pick_every_match.
+        Club fixtures: only when the model has decent data on both teams —
+        coverage_score >= betting.club_pick_min_coverage (0 disables). Keeps
+        well-known matchups from producing empty days while minnows the model
+        has never seen stay no-bet.
+        """
+        from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+        if league in NATIONAL_TEAM_LEAGUES:
+            return bool(self.config.get("betting.wc_pick_every_match", True))
+        try:
+            min_cov = float(self.config.get("betting.club_pick_min_coverage", 0.75) or 0)
+        except (TypeError, ValueError):
+            return False
+        return min_cov > 0 and coverage_score >= min_cov
 
     async def analyze_fixture(self, match_id: int) -> MatchAnalysis:
         """Run complete analysis on a single fixture.
@@ -786,14 +811,20 @@ class FootballBettingAgent:
             match_id=match_id, league=league,
         )
 
-        # WC "pick every match": when a World Cup fixture produces no value bet,
-        # still save the model's single best bettable selection so every match
-        # gets a tracked pick. Gated to national-team competitions so club leagues
-        # keep their value-only discipline. Toggle via betting.wc_pick_every_match.
+        # Forced picks: when a fixture produces no value bet, still save the
+        # single best bettable selection so the match gets a tracked pick —
+        # for two fixture classes:
+        #   1. National-team competitions (WC): EVERY match gets a pick
+        #      (betting.wc_pick_every_match).
+        #   2. Club fixtures where the model actually KNOWS the teams —
+        #      coverage >= betting.club_pick_min_coverage (default 0.75; 0
+        #      disables). Prevents whole no-pick days (2026-07-08: 7 qualifying
+        #      fixtures, 0 picks) without betting blind on minnows the model
+        #      has never seen. Claude's review still verifies/switches it.
         if not recommendations:
             from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
-            if (league in NATIONAL_TEAM_LEAGUES
-                    and self.config.get("betting.wc_pick_every_match", True)):
+            _is_national = league in NATIONAL_TEAM_LEAGUES
+            if self._should_force_pick(league, coverage["score"]):
                 # On low-coverage WC fixtures the model is essentially blind, so
                 # let the MARKET pick the favourite (maximise win rate) instead of
                 # chasing the model's noisy EV. The briefing LLM (live web
@@ -805,10 +836,13 @@ class FootballBettingAgent:
                     prefer_market=bool(low_coverage),
                 )
                 if best:
+                    best.is_forced = True  # one-per-match guard in _save_picks
                     recommendations = [best]
                     _basis = "market favourite (thin data)" if low_coverage else "model EV"
+                    _kind = ("WC pick-every-match" if _is_national
+                             else f"Club pick (coverage {coverage['score']:.0%})")
                     logger.info(
-                        f"WC pick-every-match: {match_name} → {best.selection} "
+                        f"{_kind}: {match_name} → {best.selection} "
                         f"@ {best.odds:.2f} (EV {best.expected_value:+.1%}, "
                         f"conf {best.confidence:.0%}; {_basis})"
                     )
@@ -1577,7 +1611,11 @@ class FootballBettingAgent:
                 # tracked picks + a double-pick footer (Norway vs Senegal:
                 # Home Win + Over 2.5). Enforce one-per-match for national-team
                 # leagues regardless of selection.
-                if pick.league in NATIONAL_TEAM_LEAGUES:
+                # Same guard for coverage-gated club forced picks: a later run
+                # would otherwise regenerate a different forced selection (odds
+                # move) and slip past the (match, selection) dedup below.
+                if (pick.league in NATIONAL_TEAM_LEAGUES
+                        or getattr(pick, "is_forced", False)):
                     dup = session.query(SavedPick).filter(
                         SavedPick.match_id == pick.match_id,
                         SavedPick.pick_date == pick_date,

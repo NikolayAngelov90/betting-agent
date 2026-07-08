@@ -165,6 +165,12 @@ betting:
   # competitions only — club leagues keep value-only discipline. Set false to
   # revert to value-bets-only for the WC too.
   wc_pick_every_match: true
+  # Club fixtures: when NO selection clears the value gates but the model has
+  # decent data on both teams (coverage score >= this), still save one forced
+  # pick (market-blend best selection, Claude-reviewed) so well-known matchups
+  # don't produce empty days. Minnows below the threshold stay no-bet.
+  # 0 disables (value-only clubs). Added 2026-07-08 (7 fixtures, 0 picks day).
+  club_pick_min_coverage: 0.75
   # WC "very strong favourite" routs: when the favourite's win prob >= and the
   # underdog's expected goals <=, the forced pick drops BTTS / underdog markets
   # (the weak side rarely scores) and backs the favourite's Over 1.5 / Over 2.5.
