@@ -127,6 +127,12 @@ def test_decision_only_returns_no_prose_and_english_prompt(monkeypatch):
     assert "Do NOT write an article" in captured["system"]
     assert not _CYRILLIC.search(captured["system"])
     assert not _CYRILLIC.search(captured["user"])
+    # De-anchoring: the menu shows the market-implied probability alongside the
+    # model's (1.55 odds -> 65%), and the prompt warns the model is overconfident
+    # and prefers shorter odds on close calls.
+    assert "market 65%" in captured["user"]
+    assert "OVERCONFIDENT" in captured["user"]
+    assert "SHORTER odds" in captured["user"]
 
 
 def test_decision_only_no_menu_skips_api_call(monkeypatch):
@@ -146,3 +152,33 @@ def test_decision_only_no_menu_skips_api_call(monkeypatch):
         menu=[], decision_only=True))
     assert briefing == "" and decision is None
     assert called["api"] is False
+
+
+def test_apply_decision_records_keep_on_saved_pick(db):
+    """The review outcome must be persisted so KEEP-vs-CHANGE win rates are
+    measurable — a KEEP ruling stamps review_action/review_reason on the pick."""
+    with db.get_session() as s:
+        h, a = Team(name="Argentina"), Team(name="Egypt")
+        s.add_all([h, a]); s.flush()
+        m = Match(home_team_id=h.id, away_team_id=a.id,
+                  match_date=datetime(2026, 7, 8, 19, 0),
+                  league="world/fifa-world-cup", is_fixture=True)
+        s.add(m); s.flush()
+        s.add(SavedPick(match_id=m.id, pick_date=date.today(),
+                        match_name="Argentina vs Egypt", league="world/fifa-world-cup",
+                        market="over_under", selection="Over 2.5 Goals", odds=1.70,
+                        predicted_probability=0.6, expected_value=0.02, confidence=0.6,
+                        kelly_stake_percentage=1.0, risk_level="low"))
+        s.commit()
+        mid = m.id
+
+    svc = _svc(db)
+    bound = svc._apply_decision(
+        mid, {"action": "KEEP", "reason": "market and research agree"},
+        None, [], "", "")
+    assert bound is True
+    with db.get_session() as s:
+        row = s.query(SavedPick).filter(SavedPick.match_id == mid).one()
+        assert row.review_action == "KEEP"
+        assert row.review_reason == "market and research agree"
+        assert row.selection == "Over 2.5 Goals"  # unchanged by KEEP

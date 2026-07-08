@@ -1360,11 +1360,20 @@ class FootballBettingAgent:
         self.feature_engineer._preload_cache = None  # free memory after analysis
 
         all_recommendations = []
+        _skipped_coverage = 0
         for mid, result in zip(fixture_ids, analyses):
             if isinstance(result, Exception):
                 logger.error(f"Error analyzing match {mid}: {result}")
                 continue
+            if not result.predictions:
+                _skipped_coverage += 1  # analyze_fixture bailed on zero coverage
             all_recommendations.extend(result.recommendations)
+        if _skipped_coverage:
+            logger.info(
+                f"Coverage summary: {_skipped_coverage}/{len(fixture_ids)} fixtures "
+                f"skipped for missing historical data (no pick possible) — expected "
+                f"for qualifying-round minnows; --backfill-history can close gaps"
+            )
 
         # Sort order: EV × confidence × agreement bonus × contrarian bonus.
         # Contrarian picks (model significantly disagrees with market) get

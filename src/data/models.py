@@ -214,6 +214,10 @@ class SavedPick(Base):
     risk_level = Column(String(20))
     used_fallback_odds = Column(Boolean, default=False)
     model_agreement = Column(String(20))  # unanimous/majority/split/solo — for analysis & filtering
+    # Claude pick-review outcome (NULL = not reviewed). Makes the review's value
+    # measurable: win rate of KEEP vs CHANGE picks answers "does the review help?"
+    review_action = Column(String(10))    # 'KEEP' or 'CHANGE'
+    review_reason = Column(String(500))   # Claude's one-line justification
 
     # Result (NULL = pending)
     result = Column(String(10))       # 'win', 'loss', 'void', or NULL

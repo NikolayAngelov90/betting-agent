@@ -576,6 +576,9 @@ class MatchBriefingService:
         being created that day (USA vs Paraguay, 2026-06-12).
         """
         action = (decision.get("action") or "").upper()
+        _review_reason = ((decision.get("reason") or "").strip() or None)
+        if _review_reason:
+            _review_reason = _review_reason[:500]
 
         with self.db.get_session() as session:
             picks = session.query(SavedPick).filter(
@@ -587,7 +590,12 @@ class MatchBriefingService:
                 logger.info(f"Briefing decision {action}: no saved pick for match {match_id}")
                 return False
             if action != "CHANGE":
-                return True  # KEEP on an existing pick → decision is binding
+                # KEEP on an existing pick → decision is binding. Record it so the
+                # review's contribution is measurable (KEEP vs CHANGE win rates).
+                picks[0].review_action = "KEEP"
+                picks[0].review_reason = _review_reason
+                session.commit()
+                return True
             primary = picks[0]
 
             # CHANGE
@@ -602,12 +610,17 @@ class MatchBriefingService:
                     f"Briefing CHANGE to '{market_key}' rejected for "
                     f"{analysis.match_name}: no real odds — keeping original pick"
                 )
+                primary.review_action = "KEEP"
+                primary.review_reason = f"CHANGE to {market_key} rejected: no real odds"
+                session.commit()
                 return True
             # If another pending pick on this match already holds the target
             # selection, switching the primary would duplicate the bet —
             # consolidate by dropping the primary instead.
             for other in picks[1:]:
                 if other.selection == new.selection:
+                    other.review_action = "CHANGE"
+                    other.review_reason = _review_reason
                     session.delete(primary)
                     session.commit()
                     logger.info(
@@ -629,6 +642,8 @@ class MatchBriefingService:
             primary.confidence = float(new.confidence)
             primary.kelly_stake_percentage = float(new.kelly_stake_percentage)
             primary.risk_level = new.risk_level
+            primary.review_action = "CHANGE"
+            primary.review_reason = _review_reason
             session.commit()
             _reason = (decision.get("reason") or "").strip() or "no reason given"
             logger.info(
@@ -707,6 +722,39 @@ class MatchBriefingService:
             "3rd place final": "Мач за 3-то място",
             "final": "Финал",
         }.get(low, rn)
+
+    def _recent_selection_stats(self, days: int = 30, min_n: int = 8) -> str:
+        """Live per-selection win rates from recently settled picks, formatted for
+        the decision prompt (e.g. 'BTTS Yes: 14/32 won (44%)').
+
+        Injected so the review LLM judges against ACTUAL results instead of the
+        model's overconfident probabilities — and stays current as performance
+        shifts, unlike hard-coded numbers. Returns "" when there isn't enough
+        settled data (or on any error) so the prompt degrades gracefully.
+        """
+        try:
+            from datetime import timedelta
+            cutoff = date.today() - timedelta(days=days)
+            with self.db.get_session() as session:
+                rows = session.query(
+                    SavedPick.selection, SavedPick.result
+                ).filter(
+                    SavedPick.result.in_(["win", "loss"]),
+                    SavedPick.pick_date >= cutoff,
+                ).all()
+            agg: dict = {}
+            for sel, res in rows:
+                n, w = agg.get(sel, (0, 0))
+                agg[sel] = (n + 1, w + (1 if res == "win" else 0))
+            lines = [
+                f"  - {sel}: {w}/{n} won ({100 * w / n:.0f}%)"
+                for sel, (n, w) in sorted(agg.items(), key=lambda kv: -kv[1][0])
+                if n >= min_n
+            ]
+            return "\n".join(lines)
+        except Exception as e:
+            logger.debug(f"_recent_selection_stats failed: {e}")
+            return ""
 
     def _current_saved_pick(self, match_id: int):
         """Return (selection, odds, market) of today's tracked pick for this match,
@@ -866,10 +914,37 @@ class MatchBriefingService:
         # There is NO pass/veto — the channel carries a bet on every WC match,
         # so Claude's job is to pick the SAFEST/BEST selection, not to opt out.
         if menu:
+            # Show BOTH probabilities per line. The market-implied number is
+            # historically the better-calibrated one; labelling only the model's
+            # made the LLM argmax the model column ("highest model probability"
+            # appeared in every decision reason on 2026-07-07) — which is exactly
+            # the signal we know is overconfident.
             menu_lines = "\n".join(
                 f"  - market_key={m['market_key']} | {m['selection']} @ {m['odds']} "
-                f"(model {m['probability']:.0%})"
+                f"(model {m['probability']:.0%}, market "
+                f"{(m.get('implied_probability') or 1.0 / m['odds']):.0%})"
                 for m in menu
+            )
+            stats_block = self._recent_selection_stats()
+            judge_block = (
+                "HOW TO JUDGE WIN PROBABILITY — in this order:\n"
+                "  1. YOUR web research: form, goals scored/conceded, injuries, "
+                "motivation, matchup.\n"
+                "  2. The MARKET probability on each menu line (1/odds) — "
+                "historically well calibrated.\n"
+                "  3. The model probability LAST: our model is known to be "
+                "OVERCONFIDENT (settled picks land ~5-10pp below its numbers, worst "
+                "on BTTS), so never justify a choice mainly by 'highest model "
+                "probability'. If the model and the market disagree, trust the "
+                "market plus your research.\n"
+                "Selection guidance from our settled results: when two options are "
+                "close, take the one with SHORTER odds (our 1.50-1.80 picks win ~70%; "
+                "1.80-2.20 picks win ~45%). Choose BTTS Yes only when your research "
+                "gives a concrete positive reason BOTH teams score (both attacks "
+                "scoring regularly AND both defences conceding) — it is our most "
+                "over-picked and worst-performing selection.\n"
+                + (f"Our settled picks by selection, last 30 days:\n{stats_block}\n"
+                   if stats_block else "")
             )
             decision_block = (
                 "\n\nFINAL CALL ON THE BET — pick the selection MOST LIKELY TO WIN.\n"
@@ -879,12 +954,8 @@ class MatchBriefingService:
                 "  KEEP   — the model's current pick is already the most likely winner.\n"
                 "  CHANGE — your research (recent form, goals, injuries, matchup, market) "
                 "shows another selection from the menu is MORE LIKELY TO WIN. Switch to it.\n"
-                "Prefer safe, high-probability outcomes over coin-flips: a strong favourite "
-                "scoring 2+ (Home/Away Over 1.5), a clear winner, or both-teams-to-score when "
-                "two attacking sides meet are all good, high-hit-rate choices. Pick purely on "
-                "win probability, not on price — but stay at or above 1.50.\n"
-                "Choose ONLY from this menu (the selections bookmakers price); each line shows "
-                "the model's probability and the odds:\n"
+                f"{judge_block}"
+                "Choose ONLY from this menu (the selections bookmakers price):\n"
                 f"{menu_lines}\n\n"
                 "Your verdict section MUST state plainly whether you KEEP or CHANGE, and that "
                 "MUST match the machine block below — never say you are changing in the prose "
@@ -944,7 +1015,8 @@ class MatchBriefingService:
                 "the selection MOST LIKELY TO WIN from the menu. Do NOT write an article, a "
                 "preview, or any prose, and do NOT translate anything into another language — "
                 "reply with ONLY the decision block below. Never invent lineups or injuries; "
-                "if data is thin, lean on the model probabilities in the dossier."
+                "if research comes up thin, prefer the selection the MARKET rates most likely "
+                "(shortest odds on the menu) — not the model's number."
             )
             user = (
                 "Verify or change the model's current pick for this match.\n\n"
@@ -952,9 +1024,9 @@ class MatchBriefingService:
                 f"truth from our prediction system — research everything else):\n\n"
                 f"{dossier}\n\n"
                 "Pick the selection MOST LIKELY TO WIN at odds of at least 1.50; prefer safe, "
-                "high-probability outcomes over coin-flips. Choose ONLY from this menu (the "
-                "selections bookmakers price); each line shows the model's probability and "
-                "the odds:\n"
+                "high-probability outcomes over coin-flips.\n"
+                f"{judge_block}"
+                "Choose ONLY from this menu (the selections bookmakers price):\n"
                 f"{menu_lines}\n\n"
                 "Reply with ONLY this block (English keys, nothing before or after it):\n"
                 "<<<DECISION>>>\n"

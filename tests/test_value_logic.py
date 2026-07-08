@@ -292,3 +292,63 @@ class TestOverLineMonotonicity:
         # And the corresponding under lines should sum to 1 with their over twin
         assert ens["over_1.5"] + ens["under_1.5"] == pytest.approx(1.0, abs=1e-3)
         assert ens["over_2.5"] + ens["under_2.5"] == pytest.approx(1.0, abs=1e-3)
+
+
+# --------------------------------------------------------------------------- #
+# Forced-pick (WC pick-every-match) ranking + review menu
+# --------------------------------------------------------------------------- #
+
+
+class TestForcedPickBlend:
+    """find_best_bet must rank by a 50/50 model+market blend, not pure model
+    probability — the model over-rates BTTS (44% actual win on 32 picks since
+    2026-06-11 despite 52-60% model probs), so pure-model argmax kept routing
+    forced picks into the worst-performing market."""
+
+    def _calc_with_odds(self, odds_by_selection):
+        from types import SimpleNamespace
+        calc = _make_calc()
+        calc.min_odds = 1.50
+        calc.config = SimpleNamespace(betting={})  # mismatch thresholds -> defaults
+        calc._find_best_odds = (
+            lambda odds_data, market, selection, **kw:
+            odds_by_selection.get(selection, 0)
+        )
+        # Capture the chosen candidate instead of building a full pick.
+        calc._build_pick = (
+            lambda predictions, ensemble, context, match_name, match_id, league,
+            odds_data, market, selection, prob, market_key, best_odds, **kw:
+            SimpleNamespace(selection=selection, market_key=market_key,
+                            odds=best_odds, predicted_probability=prob)
+        )
+        return calc
+
+    def test_blend_prefers_market_favourite_over_inflated_model_prob(self):
+        # Model says BTTS Yes 56% (its highest) but the market prices it at 2.00
+        # (50%). Over 2.5 is model 52% but priced 1.60 (62.5% market). Blend:
+        # BTTS 0.53 < Over 0.57 -> the pick must be Over 2.5, not BTTS.
+        calc = self._calc_with_odds({"BTTS Yes": 2.00, "Over 2.5 Goals": 1.60})
+        predictions = {"ensemble": {
+            "btts_yes": 0.56, "over_2.5": 0.52,
+            "home_win": 0.40, "away_win": 0.30,  # no mismatch (fav < 0.65)
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}])
+        assert pick.market_key == "over_2.5"
+
+    def test_pure_model_winner_still_chosen_when_market_agrees(self):
+        # When the model's most-likely selection is ALSO the market favourite,
+        # the blend must not change the outcome.
+        calc = self._calc_with_odds({"BTTS Yes": 2.40, "Over 2.5 Goals": 1.65})
+        predictions = {"ensemble": {
+            "btts_yes": 0.45, "over_2.5": 0.58,
+            "home_win": 0.40, "away_win": 0.30,
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}])
+        assert pick.market_key == "over_2.5"
+
+    def test_available_selections_includes_implied_probability(self):
+        calc = self._calc_with_odds({"BTTS Yes": 2.00})
+        menu = calc.available_selections(
+            {"ensemble": {"btts_yes": 0.56}}, odds_data=[{"x": 1}])
+        assert len(menu) == 1
+        assert menu[0]["implied_probability"] == pytest.approx(0.5, abs=1e-4)

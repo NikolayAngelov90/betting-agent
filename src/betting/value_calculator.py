@@ -453,13 +453,18 @@ class ValueBettingCalculator:
             # ended up at coin-flip confidence (Portugal vs Spain: Home Over 1.5 @
             # 3.00, 39%). For a "pick every match" bet with no value mandate, the
             # right objective is WIN PROBABILITY. Restrict to sane odds/divergence,
-            # then take the model's most-likely selection within that pool.
+            # then rank by a 50/50 BLEND of model and market-implied probability:
+            # pure model prob kept routing into the model's inflated markets
+            # (BTTS Yes: 44% win on 32 picks since 6/11 despite 52-60% model
+            # probs), while the market number is the better-calibrated estimator
+            # (odds 1.5-1.8 picks won 70%). The blend keeps model signal but
+            # lets the market pull choices back toward genuinely likely outcomes.
             sane = [
                 c for c in candidates
                 if c[4] <= 3.50 and c[5] <= 1.50  # odds ≤ 3.5, divergence ≤ 1.5x
             ]
             pool = sane or candidates
-            best = max(pool, key=lambda c: c[2])  # highest model win probability
+            best = max(pool, key=lambda c: 0.5 * c[2] + 0.5 * (1.0 / c[4]))
 
         market, selection, prob, market_key, best_odds, divergence, ev = best
         return self._build_pick(
@@ -490,6 +495,10 @@ class ValueBettingCalculator:
             out.append({
                 "market": market, "selection": selection, "market_key": market_key,
                 "probability": round(prob, 4), "odds": round(best_odds, 2),
+                # Market-implied win probability (1/odds). Historically better
+                # calibrated than the model's number — surfaced so the review
+                # LLM can weigh it instead of anchoring on the model prob.
+                "implied_probability": round(1.0 / best_odds, 4),
             })
         return out
 
