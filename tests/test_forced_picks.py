@@ -119,3 +119,36 @@ def test_club_value_picks_unaffected_by_forced_guard(db):
     saved1 = agent._save_picks([_pick(mid, "Over 2.5 Goals")], today)
     saved2 = agent._save_picks([_pick(mid, "Home Over 1.5")], today)
     assert len(saved1) == 1 and len(saved2) == 1
+
+
+def test_unanalyzable_today_flags_zero_history_club_fixture(db):
+    """Club fixture with a zero-history team is flagged; fixtures with history
+    on both sides and national-team fixtures are not."""
+    today_noon = datetime.combine(date.today(), datetime.min.time()).replace(hour=15)
+    with db.get_session() as s:
+        known1, known2 = Team(name="Malmo FF"), Team(name="Hacken")
+        minnow = Team(name="Tre Fiori")
+        nat1, nat2 = Team(name="France"), Team(name="Morocco")
+        s.add_all([known1, known2, minnow, nat1, nat2]); s.flush()
+        # History for the known club teams only.
+        s.add(Match(home_team_id=known1.id, away_team_id=known2.id,
+                    match_date=datetime(2026, 5, 1, 18, 0), league="sweden/allsvenskan",
+                    is_fixture=False, home_goals=2, away_goals=1))
+        analyzable = Match(home_team_id=known1.id, away_team_id=known2.id,
+                           match_date=today_noon, league="sweden/allsvenskan",
+                           is_fixture=True)
+        blind = Match(home_team_id=minnow.id, away_team_id=known1.id,
+                      match_date=today_noon, league="europe/champions-league",
+                      is_fixture=True)
+        wc = Match(home_team_id=nat1.id, away_team_id=nat2.id,
+                   match_date=today_noon, league="world/fifa-world-cup",
+                   is_fixture=True)
+        s.add_all([analyzable, blind, wc]); s.flush()
+        ids = {"analyzable": analyzable.id, "blind": blind.id, "wc": wc.id}
+        s.commit()
+
+    agent = _agent(db=db)
+    skip = agent._unanalyzable_today()
+    assert ids["blind"] in skip, "zero-history club fixture must be flagged"
+    assert ids["analyzable"] not in skip, "fixture with history must not be flagged"
+    assert ids["wc"] not in skip, "national-team fixtures are never flagged"

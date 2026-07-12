@@ -1145,7 +1145,9 @@ class MatchBriefingService:
             # a run means a silent invalidator crept into the system prompt.
             try:
                 _u = resp.usage
-                logger.debug(
+                # info (not debug): CI logs run at INFO, and this is the only
+                # signal that prompt caching is working on the paid path.
+                logger.info(
                     f"Briefing API usage [{match_name}]: "
                     f"cache_read={getattr(_u, 'cache_read_input_tokens', 0)} "
                     f"cache_write={getattr(_u, 'cache_creation_input_tokens', 0)} "

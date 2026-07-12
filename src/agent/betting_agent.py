@@ -443,6 +443,18 @@ class FootballBettingAgent:
             logger.warning(f"Empty-league Telegram alert failed (non-fatal): {e}")
 
         # 2b. API-Football (fixtures, xG, advanced stats, odds).
+        # Before spending quota: flag today's fixtures that CANNOT be analyzed
+        # (non-national league + a team with zero completed matches — the exact
+        # class analyze_fixture skips). Odds + injuries skip them, preserving
+        # budget for the coverage backfill that would actually fix those teams.
+        # (2026-07-09: 23/26 unanalyzable qualifying fixtures ate ~95 requests
+        # and left the backfill a budget of 2.) Fixtures created seconds later
+        # inside update() aren't flagged — fixtures normally exist a day ahead.
+        try:
+            self.apifootball.skip_analysis_match_ids = self._unanalyzable_today()
+        except Exception as _sk_e:
+            logger.debug(f"skip-set computation failed (non-fatal): {_sk_e}")
+            self.apifootball.skip_analysis_match_ids = set()
         try:
             await asyncio.wait_for(self.apifootball.update(), timeout=1080)  # 18 min cap
             logger.info("API-Football update complete")
@@ -666,6 +678,47 @@ class FootballBettingAgent:
             logger.debug(f"clear_league_cache failed: {_e}")
 
         logger.info("Daily update cycle complete")
+
+    def _unanalyzable_today(self) -> set:
+        """Match IDs of today's fixtures that analysis will certainly skip.
+
+        A non-national fixture is skipped by analyze_fixture when either team
+        has NO historical data at all. Detecting that from the DB (zero
+        completed matches for the team) is model-independent and cheap, so the
+        odds/injury fetchers can avoid spending quota on those fixtures.
+        National-team fixtures are never flagged (WC: every match analyzed).
+        """
+        from sqlalchemy import or_ as _or
+        from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+        _start = datetime.combine(date.today(), datetime.min.time())
+        _end = _start + timedelta(days=1)
+        skip: set = set()
+        with self.db.get_session() as session:
+            fixtures = session.query(Match).filter(
+                Match.is_fixture == True,  # noqa: E712
+                Match.match_date >= _start,
+                Match.match_date < _end,
+            ).all()
+            club = [m for m in fixtures if (m.league or "") not in NATIONAL_TEAM_LEAGUES]
+            # One count query per distinct team (bounded: 2×fixtures).
+            counts: dict = {}
+            for m in club:
+                for tid in (m.home_team_id, m.away_team_id):
+                    if tid not in counts:
+                        counts[tid] = session.query(Match.id).filter(
+                            Match.is_fixture == False,  # noqa: E712
+                            Match.home_goals.isnot(None),
+                            _or(Match.home_team_id == tid, Match.away_team_id == tid),
+                        ).count()
+            for m in club:
+                if counts.get(m.home_team_id, 0) == 0 or counts.get(m.away_team_id, 0) == 0:
+                    skip.add(m.id)
+        if skip:
+            logger.info(
+                f"Flagged {len(skip)}/{len(fixtures)} of today's fixtures as "
+                f"unanalyzable (zero-history team) — odds/injury quota will skip them"
+            )
+        return skip
 
     def _should_force_pick(self, league: str, coverage_score: float) -> bool:
         """Whether a fixture with NO value pick still gets a forced tracked pick.

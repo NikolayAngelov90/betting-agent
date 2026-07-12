@@ -405,6 +405,13 @@ class APIFootballScraper(BaseScraper):
         self._quota_exhausted = False  # Set True on first quota error; skips all further calls
         self._plan_restricted = False  # Set True on first plan error; skips season-restricted endpoints
         self._logged_unknown_bets: set = set()  # Suppress repeated unknown bet type logs
+        # Match IDs the agent knows CANNOT be analyzed today (non-national
+        # fixtures where a team has zero history — analyze_fixture skips them).
+        # Odds/injury fetching skips these so the quota isn't burned on fixtures
+        # that produce no pick: on 2026-07-09, 23/26 qualifying fixtures were
+        # unanalyzable, odds+injuries ate ~95 requests, and the coverage
+        # backfill — the thing that would FIX those teams — got a budget of 2.
+        self.skip_analysis_match_ids: set = set()
         self._today_fixture_count = 0  # Updated after _fetch_fixtures_by_date(today)
         self._rate_limit_retries = 0  # Count 429-triggered retries for telemetry
         self._account_suspended = False  # Set True when API returns account-suspended error
@@ -1505,6 +1512,23 @@ class APIFootballScraper(BaseScraper):
                 logger.debug("No upcoming fixtures need odds")
                 return 0
 
+            # Don't spend odds budget on fixtures the agent already knows it
+            # cannot analyze (zero-history minnows) — no analysis means the odds
+            # are never used, and the saved requests fund the coverage backfill.
+            # getattr: tests build the scraper via __new__, bypassing __init__.
+            _skip_ids = getattr(self, "skip_analysis_match_ids", None) or set()
+            if _skip_ids:
+                skipped = [m for m in upcoming if m.id in _skip_ids]
+                upcoming = [m for m in upcoming if m.id not in _skip_ids]
+                if skipped:
+                    logger.info(
+                        f"Odds fetch: skipping {len(skipped)} unanalyzable fixture(s) "
+                        f"(zero-coverage teams) — budget preserved for backfill"
+                    )
+            if not upcoming:
+                logger.debug("No analyzable fixtures need odds")
+                return 0
+
             # Build list of (match_id, apifootball_id, league) tuples
             fixture_list = [
                 (m.id, m.apifootball_id, m.league or "")
@@ -2133,7 +2157,14 @@ class APIFootballScraper(BaseScraper):
 
             logger.info(f"Backfilling history for {team_name} ({current_count} matches currently)")
 
-            for season in seasons:
+            # Newest season first, and STOP once the team has enough matches:
+            # one season (~30 matches) usually clears min_matches, so fetching
+            # all three seasons per team tripled the cost for no coverage gain
+            # (48 low-coverage teams on 2026-07-09 vs ~8 team-seasons/day).
+            team_saved = 0
+            for season in sorted(seasons, reverse=True):
+                if current_count + team_saved >= min_matches:
+                    break
                 used = self._requests_today - requests_before
                 if used >= max_budget:
                     break
@@ -2216,6 +2247,7 @@ class APIFootballScraper(BaseScraper):
                         saved += 1
 
                 if saved > 0:
+                    team_saved += saved
                     logger.info(f"Saved {saved} historical matches for {team_name} (season {season})")
 
         total_used = self._requests_today - requests_before

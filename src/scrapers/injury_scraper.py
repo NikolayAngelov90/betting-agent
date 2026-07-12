@@ -88,9 +88,13 @@ class InjuryScraper:
                 .distinct()
                 .all()
             )
+            # Skip fixtures the agent flagged as unanalyzable (zero-coverage
+            # teams) — same rationale as the odds fetch: injury data for a match
+            # that never gets analyzed is wasted quota.
+            _skip = getattr(self.apifootball, "skip_analysis_match_ids", set()) or set()
             fixture_list = [
                 (m.id, m.apifootball_id, m.home_team_id, m.away_team_id)
-                for m in fixtures
+                for m in fixtures if m.id not in _skip
             ]
 
             # Find teams that already have fresh injury data fetched today
