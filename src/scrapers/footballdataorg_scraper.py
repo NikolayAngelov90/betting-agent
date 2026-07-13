@@ -372,16 +372,48 @@ class FootballDataOrgScraper:
                 if not home_name or not away_name:
                     continue
                 duration = score_obj.get("duration", "REGULAR")
+                reg_home = reg_away = None
                 if duration != "REGULAR":
-                    # FDO fullTime = 90-min score even for AET/penalty matches,
-                    # so settlement logic is correct. Log so operators can verify.
-                    logger.warning(
-                        f"FDO: {home_name} vs {away_name} ({league}) "
-                        f"went to {duration} — settling on 90-min score "
-                        f"{home_goals}-{away_goals} (penalty goals excluded)"
-                    )
+                    # FDO v4 fullTime is NOT the 90-minute score: it includes
+                    # extra time, and for shootout matches even the shootout
+                    # goals (observed: Argentina-Switzerland 1-1 aet, 3-1 final →
+                    # fullTime 3-1; Switzerland-Colombia 0-0 aet, 4-3 pens →
+                    # fullTime 4-3). The 90' score lives in score.regularTime —
+                    # store it so 90-minute settlement (C1) works even when
+                    # API-Football never supplies the regulation score.
+                    rt = score_obj.get("regularTime") or {}
+                    reg_home, reg_away = rt.get("home"), rt.get("away")
+                    if duration == "PENALTY_SHOOTOUT":
+                        pens = score_obj.get("penalties") or {}
+                        if pens.get("home") is not None and pens.get("away") is not None:
+                            # Final-score convention = incl. extra time, EXCL.
+                            # shootout goals (matches API-Football's goals field).
+                            home_goals -= pens["home"]
+                            away_goals -= pens["away"]
+                        if (pens.get("home") is None
+                                or home_goals < 0 or away_goals < 0):
+                            logger.warning(
+                                f"FDO: {home_name} vs {away_name} ({league}) went to "
+                                f"penalties but the payload lacks a usable breakdown "
+                                f"(fullTime incl. shootout) — skipping score write"
+                            )
+                            continue
+                    if reg_home is not None:
+                        logger.info(
+                            f"FDO: {home_name} vs {away_name} ({league}) went to "
+                            f"{duration} — final {home_goals}-{away_goals}, regulation "
+                            f"{reg_home}-{reg_away} stored for 90-min settlement"
+                        )
+                    else:
+                        logger.warning(
+                            f"FDO: {home_name} vs {away_name} ({league}) went to "
+                            f"{duration} but regularTime is missing — storing final "
+                            f"{home_goals}-{away_goals} only (90-min settlement will "
+                            f"need the regulation score from API-Football)"
+                        )
                 updated = self._apply_score(
-                    league, home_name, away_name, target, home_goals, away_goals
+                    league, home_name, away_name, target, home_goals, away_goals,
+                    reg_home=reg_home, reg_away=reg_away,
                 )
                 total += updated
 
@@ -397,8 +429,17 @@ class FootballDataOrgScraper:
         match_date: date,
         home_goals: int,
         away_goals: int,
+        reg_home: int = None,
+        reg_away: int = None,
     ) -> int:
-        """Find an unscored DB match and write the result. Returns 1 if updated."""
+        """Write a result to the matching DB match. Returns 1 if updated.
+
+        Unscored match → final score (+ regulation score for AET/pens matches,
+        so 90-minute settlement never falls back to the ET-inclusive final).
+        Already-scored match missing the regulation score → backfill regulation
+        only (idempotent; covers scores first written by a source without a
+        90-minute breakdown).
+        """
         date_start = datetime.combine(match_date, datetime.min.time())
         date_end = date_start + timedelta(days=1)
 
@@ -422,12 +463,45 @@ class FootballDataOrgScraper:
                     match.home_goals = home_goals
                     match.away_goals = away_goals
                     match.is_fixture = False
+                    if reg_home is not None and match.regulation_home_goals is None:
+                        match.regulation_home_goals = reg_home
+                        match.regulation_away_goals = reg_away
                     session.commit()
                     logger.debug(
                         f"FDO score: {ht.name} {home_goals}-{away_goals} {at.name} "
                         f"({league})"
                     )
                     return 1
+
+            # Regulation backfill: the final score is already stored (usually by
+            # API-Football) but the 90-minute score is missing for an AET/pens
+            # match — write regulation only, never touch the stored final.
+            if reg_home is not None:
+                scored = (
+                    session.query(Match)
+                    .filter(
+                        Match.league == league,
+                        Match.match_date >= date_start,
+                        Match.match_date < date_end,
+                        Match.home_goals.isnot(None),
+                        Match.regulation_home_goals.is_(None),
+                    )
+                    .all()
+                )
+                for match in scored:
+                    ht = session.get(Team, match.home_team_id)
+                    at = session.get(Team, match.away_team_id)
+                    if not ht or not at:
+                        continue
+                    if _names_match(home_name, ht.name) and _names_match(away_name, at.name):
+                        match.regulation_home_goals = reg_home
+                        match.regulation_away_goals = reg_away
+                        session.commit()
+                        logger.info(
+                            f"FDO: backfilled regulation score {reg_home}-{reg_away} "
+                            f"for {ht.name} vs {at.name} ({league})"
+                        )
+                        return 1
         return 0
 
     # ------------------------------------------------------------------
