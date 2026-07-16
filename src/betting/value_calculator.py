@@ -351,7 +351,8 @@ class ValueBettingCalculator:
                       match_name: str = "", context: Dict = None,
                       home_team_name: str = "", away_team_name: str = "",
                       match_id: int = 0, league: str = "",
-                      prefer_market: bool = False) -> Optional[BetRecommendation]:
+                      prefer_market: bool = False,
+                      min_blend_prob: float = 0.0) -> Optional[BetRecommendation]:
         """Return the single best bet for a match, bypassing the value and
         confidence gates used by find_value_bets.
 
@@ -370,6 +371,8 @@ class ValueBettingCalculator:
         """
         context = context or {}
         ensemble = predictions.get("ensemble", {})
+        from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+        _is_club = bool(league) and league not in NATIONAL_TEAM_LEAGUES
 
         # Gather every bettable selection (real odds in range). No confidence
         # floor: this is the "pick every match" fallback, so even-match slates
@@ -377,6 +380,13 @@ class ValueBettingCalculator:
         candidates = []  # (market, selection, prob, market_key, odds, divergence, ev)
         for market, selection, prob, market_key in self._market_specs(ensemble):
             if market_key in self.excluded_markets:
+                continue
+            # Club FORCED picks never take BTTS Yes: settled data shows it is
+            # the worst club selection (33% win, -42% ROI since 6/11 on top of
+            # 44% at the WC). The value path (find_value_bets) and the Claude
+            # review menu still offer it — with research support it can come
+            # back via a SWITCH, just never as the blind default.
+            if market_key == "btts_yes" and _is_club:
                 continue
             best_odds = self._find_best_odds(
                 odds_data, market, selection,
@@ -427,6 +437,8 @@ class ValueBettingCalculator:
                 tier_pool = [c for c in pool if c[3] in tier]
                 if tier_pool:
                     best = max(tier_pool, key=lambda c: c[2])
+                    if not self._blend_clears_floor(best, min_blend_prob, match_name):
+                        continue  # try the next (usually shorter-odds) tier
                     market, selection, prob, market_key, best_odds, divergence, ev = best
                     return self._build_pick(
                         predictions, ensemble, context, match_name, match_id, league,
@@ -466,12 +478,37 @@ class ValueBettingCalculator:
             pool = sane or candidates
             best = max(pool, key=lambda c: 0.5 * c[2] + 0.5 * (1.0 / c[4]))
 
+        # Quality floor for forced picks (club fixtures set min_blend_prob): when
+        # neither the model nor the market makes the best selection likely enough,
+        # NO pick beats a known-bad one — a 46%-confidence forced pick is the
+        # profile that historically wins ~37% (La Fiorita, 2026-07-14).
+        if not self._blend_clears_floor(best, min_blend_prob, match_name):
+            return None
+
         market, selection, prob, market_key, best_odds, divergence, ev = best
         return self._build_pick(
             predictions, ensemble, context, match_name, match_id, league, odds_data,
             market, selection, prob, market_key, best_odds,
             home_team_name=home_team_name, away_team_name=away_team_name,
         )
+
+    @staticmethod
+    def _blend_clears_floor(candidate, min_blend_prob: float, match_name: str) -> bool:
+        """True when the candidate's blended win probability (50% model prob +
+        50% market-implied) meets the forced-pick quality floor. Always True
+        when no floor is set (min_blend_prob <= 0, e.g. WC pick-every-match)."""
+        if min_blend_prob <= 0:
+            return True
+        _, _, prob, market_key, best_odds, _, _ = candidate
+        blend = 0.5 * prob + 0.5 * (1.0 / best_odds)
+        if blend >= min_blend_prob:
+            return True
+        logger.info(
+            f"  {match_name}: forced pick suppressed — {market_key} blend "
+            f"{blend:.0%} below floor {min_blend_prob:.0%} (neither model nor "
+            f"market rates it likely enough)"
+        )
+        return False
 
     def available_selections(self, predictions: Dict, odds_data: List[Dict],
                              home_team_name: str = "", away_team_name: str = "") -> List[Dict]:

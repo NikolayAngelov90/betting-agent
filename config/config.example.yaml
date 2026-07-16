@@ -171,6 +171,11 @@ betting:
   # don't produce empty days. Minnows below the threshold stay no-bet.
   # 0 disables (value-only clubs). Added 2026-07-08 (7 fixtures, 0 picks day).
   club_pick_min_coverage: 0.75
+  # Quality floor for club forced picks: the chosen selection's blended win
+  # probability (50% model + 50% market-implied) must reach this or NO pick is
+  # made for the match. Blocks coin-flips neither source believes in (a 46%-conf
+  # forced pick lost 2026-07-14; that profile wins ~37% historically). 0 disables.
+  club_pick_min_blend: 0.55
   # WC "very strong favourite" routs: when the favourite's win prob >= and the
   # underdog's expected goals <=, the forced pick drops BTTS / underdog markets
   # (the weak side rarely scores) and backs the favourite's Over 1.5 / Over 2.5.

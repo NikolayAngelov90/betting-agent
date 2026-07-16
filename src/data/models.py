@@ -133,7 +133,7 @@ class Player(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
-    team_id = Column(Integer, ForeignKey('teams.id'))
+    team_id = Column(Integer, ForeignKey('teams.id'), index=True)
     position = Column(String(50))
     is_key_player = Column(Boolean, default=False)
 
@@ -151,8 +151,8 @@ class Injury(Base):
     __tablename__ = 'injuries'
 
     id = Column(Integer, primary_key=True)
-    player_id = Column(Integer, ForeignKey('players.id'))
-    team_id = Column(Integer, ForeignKey('teams.id'))
+    player_id = Column(Integer, ForeignKey('players.id'), index=True)
+    team_id = Column(Integer, ForeignKey('teams.id'), index=True)
     injury_type = Column(String(100))
     start_date = Column(Date)
     status = Column(String(50))  # 'out', 'doubtful', 'available'
@@ -198,7 +198,9 @@ class SavedPick(Base):
     __tablename__ = 'saved_picks'
 
     id = Column(Integer, primary_key=True)
-    match_id = Column(Integer, ForeignKey('matches.id'), nullable=False)
+    # index: hit by every per-match dedup, review lookup, footer read, and
+    # settlement join — flagged by the Supabase performance advisor.
+    match_id = Column(Integer, ForeignKey('matches.id'), nullable=False, index=True)
     pick_date = Column(Date, nullable=False)
     match_name = Column(String(200))
     league = Column(String(100))

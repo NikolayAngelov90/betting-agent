@@ -133,6 +133,9 @@ def test_decision_only_returns_no_prose_and_english_prompt(monkeypatch):
     assert "market 65%" in captured["user"]
     assert "OVERCONFIDENT" in captured["user"]
     assert "SHORTER odds" in captured["user"]
+    # Switch-more guidance (KEEP 53% vs CHANGE 92% in tracked results): Claude
+    # is told not to defer to the saved pick out of caution.
+    assert "SWITCH decisions have materially outperformed" in captured["user"]
 
 
 def test_decision_only_no_menu_skips_api_call(monkeypatch):
@@ -182,3 +185,37 @@ def test_apply_decision_records_keep_on_saved_pick(db):
         assert row.review_action == "KEEP"
         assert row.review_reason == "market and research agree"
         assert row.selection == "Over 2.5 Goals"  # unchanged by KEEP
+
+
+def test_recent_review_stats_formats_keep_change(db):
+    """KEEP/CHANGE win rates are computed from settled reviewed picks."""
+    with db.get_session() as s:
+        h, a = Team(name="A"), Team(name="B")
+        s.add_all([h, a]); s.flush()
+        m = Match(home_team_id=h.id, away_team_id=a.id,
+                  match_date=datetime(2026, 7, 10, 18, 0),
+                  league="world/fifa-world-cup", is_fixture=False,
+                  home_goals=1, away_goals=0)
+        s.add(m); s.flush()
+        # 7 KEEP (3 wins), 5 CHANGE (5 wins) — 12 settled reviewed picks.
+        for i in range(7):
+            s.add(SavedPick(match_id=m.id, pick_date=date.today(),
+                            match_name="A vs B", league="world/fifa-world-cup",
+                            market="1X2", selection="Home Win", odds=1.7,
+                            review_action="KEEP",
+                            result="win" if i < 3 else "loss"))
+        for i in range(5):
+            s.add(SavedPick(match_id=m.id, pick_date=date.today(),
+                            match_name="A vs B", league="world/fifa-world-cup",
+                            market="1X2", selection="Home Win", odds=1.7,
+                            review_action="CHANGE", result="win"))
+        s.commit()
+
+    out = _svc(db)._recent_review_stats()
+    assert "CHANGE: 5/5 won (100%)" in out
+    assert "KEEP: 3/7 won (43%)" in out
+
+
+def test_recent_review_stats_empty_below_minimum(db):
+    """Fewer than 10 settled reviewed picks -> no stats line (too noisy)."""
+    assert _svc(db)._recent_review_stats() == ""

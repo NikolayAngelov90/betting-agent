@@ -352,3 +352,81 @@ class TestForcedPickBlend:
             {"ensemble": {"btts_yes": 0.56}}, odds_data=[{"x": 1}])
         assert len(menu) == 1
         assert menu[0]["implied_probability"] == pytest.approx(0.5, abs=1e-4)
+
+
+class TestClubForcedPickGuards:
+    """Option C hardening (2026-07-16): club forced picks never take BTTS Yes
+    (33% win / -42% ROI in clubs) and must clear a blended-probability floor."""
+
+    def _calc(self, odds_by_selection):
+        from types import SimpleNamespace
+        calc = _make_calc()
+        calc.min_odds = 1.50
+        calc.config = SimpleNamespace(betting={})
+        calc._find_best_odds = (
+            lambda odds_data, market, selection, **kw:
+            odds_by_selection.get(selection, 0)
+        )
+        calc._build_pick = (
+            lambda predictions, ensemble, context, match_name, match_id, league,
+            odds_data, market, selection, prob, market_key, best_odds, **kw:
+            SimpleNamespace(selection=selection, market_key=market_key,
+                            odds=best_odds, predicted_probability=prob)
+        )
+        return calc
+
+    def test_club_forced_pick_never_btts(self):
+        # BTTS Yes has the best blend (0.61) but the league is a club competition
+        # -> it must be excluded and Over 2.5 (blend 0.57) chosen instead.
+        calc = self._calc({"BTTS Yes": 1.60, "Over 2.5 Goals": 1.70})
+        predictions = {"ensemble": {
+            "btts_yes": 0.60, "over_2.5": 0.55,
+            "home_win": 0.40, "away_win": 0.30,
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}],
+                                  league="europe/champions-league")
+        assert pick.market_key == "over_2.5"
+
+    def test_national_forced_pick_can_still_take_btts(self):
+        calc = self._calc({"BTTS Yes": 1.60, "Over 2.5 Goals": 1.70})
+        predictions = {"ensemble": {
+            "btts_yes": 0.60, "over_2.5": 0.55,
+            "home_win": 0.40, "away_win": 0.30,
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}],
+                                  league="world/fifa-world-cup")
+        assert pick.market_key == "btts_yes"
+
+    def test_blend_floor_suppresses_weak_club_pick(self):
+        # Model 46% @ 1.70 (market 59%) -> blend 52% < 55% floor -> NO pick.
+        # This is the exact La Fiorita profile from 2026-07-14.
+        calc = self._calc({"Away Over 1.5": 1.70})
+        predictions = {"ensemble": {
+            "away_over_1.5": 0.46, "home_win": 0.30, "away_win": 0.40,
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}],
+                                  league="europe/champions-league",
+                                  min_blend_prob=0.55)
+        assert pick is None
+
+    def test_no_floor_keeps_wc_pick(self):
+        # WC pick-every-match passes min_blend_prob=0 -> same candidate is kept.
+        calc = self._calc({"Away Over 1.5": 1.70})
+        predictions = {"ensemble": {
+            "away_over_1.5": 0.46, "home_win": 0.30, "away_win": 0.40,
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}],
+                                  league="world/fifa-world-cup",
+                                  min_blend_prob=0.0)
+        assert pick is not None and pick.market_key == "away_over_1.5"
+
+    def test_floor_passes_strong_club_pick(self):
+        # Model 62% @ 1.55 (market 65%) -> blend 63% >= 55% -> pick made.
+        calc = self._calc({"Home Over 1.5": 1.55})
+        predictions = {"ensemble": {
+            "home_over_1.5": 0.62, "home_win": 0.40, "away_win": 0.20,
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}],
+                                  league="europe/champions-league",
+                                  min_blend_prob=0.55)
+        assert pick is not None and pick.market_key == "home_over_1.5"

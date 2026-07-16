@@ -756,6 +756,40 @@ class MatchBriefingService:
             logger.debug(f"_recent_selection_stats failed: {e}")
             return ""
 
+    def _recent_review_stats(self, days: int = 45) -> str:
+        """Live KEEP-vs-CHANGE win rates from settled reviewed picks, e.g.
+        'KEEP: 14/26 won (54%) | CHANGE: 7/8 won (88%)'.
+
+        Injected into the decision prompt so Claude sees that its switches have
+        materially outperformed its keeps — evidence-based encouragement to act
+        on research instead of deferring to the saved pick. Returns "" when
+        there isn't enough data (or on any error).
+        """
+        try:
+            from datetime import timedelta
+            cutoff = date.today() - timedelta(days=days)
+            with self.db.get_session() as session:
+                rows = session.query(
+                    SavedPick.review_action, SavedPick.result
+                ).filter(
+                    SavedPick.review_action.isnot(None),
+                    SavedPick.result.in_(["win", "loss"]),
+                    SavedPick.pick_date >= cutoff,
+                ).all()
+            agg: dict = {}
+            for action, res in rows:
+                n, w = agg.get(action, (0, 0))
+                agg[action] = (n + 1, w + (1 if res == "win" else 0))
+            if sum(n for n, _ in agg.values()) < 10:
+                return ""  # too little data to be meaningful
+            return " | ".join(
+                f"{action}: {w}/{n} won ({100 * w / n:.0f}%)"
+                for action, (n, w) in sorted(agg.items())
+            )
+        except Exception as e:
+            logger.debug(f"_recent_review_stats failed: {e}")
+            return ""
+
     def _current_saved_pick(self, match_id: int):
         """Return (selection, odds, market) of today's tracked pick for this match,
         or None — the dossier anchors to this so the briefing reasons about the
@@ -926,6 +960,7 @@ class MatchBriefingService:
                 for m in menu
             )
             stats_block = self._recent_selection_stats()
+            review_stats = self._recent_review_stats()
             judge_block = (
                 "HOW TO JUDGE WIN PROBABILITY — in this order:\n"
                 "  1. YOUR web research: form, goals scored/conceded, injuries, "
@@ -943,6 +978,13 @@ class MatchBriefingService:
                 "gives a concrete positive reason BOTH teams score (both attacks "
                 "scoring regularly AND both defences conceding) — it is our most "
                 "over-picked and worst-performing selection.\n"
+                "Do NOT default to keeping the saved pick out of caution: in our "
+                "tracked results your SWITCH decisions have materially outperformed "
+                "your keeps, so when your research identifies a selection more "
+                "likely to win, CHANGE to it — deference to the saved pick is not "
+                "a safety strategy.\n"
+                + (f"Your own track record here: {review_stats}\n"
+                   if review_stats else "")
                 + (f"Our settled picks by selection, last 30 days:\n{stats_block}\n"
                    if stats_block else "")
             )

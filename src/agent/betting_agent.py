@@ -882,11 +882,19 @@ class FootballBettingAgent:
                 # let the MARKET pick the favourite (maximise win rate) instead of
                 # chasing the model's noisy EV. The briefing LLM (live web
                 # research) can still CHANGE the selection afterward.
+                # Club forced picks carry a quality floor: blended (model+market)
+                # win probability must reach betting.club_pick_min_blend or no
+                # pick is made. WC pick-every-match stays unfloored (a pick must
+                # always exist; the Claude review is its safety net).
+                _blend_floor = 0.0 if _is_national else float(
+                    self.config.get("betting.club_pick_min_blend", 0.55) or 0
+                )
                 best = self.value_calculator.find_best_bet(
                     predictions, odds_data, match_name, context,
                     home_team_name=home_team_name, away_team_name=away_team_name,
                     match_id=match_id, league=league,
                     prefer_market=bool(low_coverage),
+                    min_blend_prob=_blend_floor,
                 )
                 if best:
                     best.is_forced = True  # one-per-match guard in _save_picks
