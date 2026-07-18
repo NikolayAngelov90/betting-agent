@@ -20,6 +20,15 @@ scraping:
     - europe/champions-league
     - europe/europa-league
     - europe/europa-conference-league
+    # 2026/27 domestic seasons as they start (verified start dates):
+    - romania/liga-1            # started 2026-07-17
+    - bulgaria/efbet-league     # started 2026-07-17 (user request; NB Flashscore
+                                # slug is efbet-league, not parva-liga)
+    # Coming next — enable on/after their first round:
+    #   poland/ekstraklasa       2026-07-24
+    #   switzerland/super-league 2026-07-24
+    #   denmark/superliga        2026-07-26
+    #   belgium/jupiler-pro-league 2026-08-07
 
   # Club leagues — PAUSED until their 2026/27 seasons start (~August 2026)
   # flashscore_leagues:
@@ -49,7 +58,6 @@ scraping:
   #   - greece/super-league
   #   - denmark/superliga
   #   - poland/ekstraklasa
-  #   - romania/liga-1
 
   off_season_leagues: []
 
@@ -227,7 +235,12 @@ briefings:
   #                   Runs on Sonnet. Falls back to anthropic_api if the token
   #                   is missing but ANTHROPIC_API_KEY is set.
   #   anthropic_api — direct API (ANTHROPIC_API_KEY), Opus 4.8, per-token credits.
-  backend: claude_code
+  # TEMPORARY (2026-07-16): pinned to anthropic_api so the pick review NEVER
+  # touches the Claude Pro subscription quota (user needs the full Pro session
+  # budget elsewhere for the next days). The API path prompt-caches the system
+  # prompt, so per-match cost stays low (~$0.10-0.15). Flip back to claude_code
+  # to return to $0 subscription billing.
+  backend: anthropic_api
   # api_fallback: when the claude_code backend comes back empty (most often the
   # shared Claude Pro 5-hour session limit), retry that single briefing via the
   # Anthropic API so the match still gets covered. Requires funded ANTHROPIC_API_KEY

@@ -272,6 +272,7 @@ LEAGUE_ID_MAP = {
     "finland/veikkausliiga": 244,
     "poland/ekstraklasa": 106,
     "romania/liga-1": 283,
+    "bulgaria/efbet-league": 172,  # First Professional League (Parva Liga)
     "europe/champions-league": 2,
     "europe/europa-league": 3,
     "europe/europa-conference-league": 848,
