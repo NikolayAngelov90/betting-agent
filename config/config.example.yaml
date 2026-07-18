@@ -184,6 +184,11 @@ betting:
   # made for the match. Blocks coin-flips neither source believes in (a 46%-conf
   # forced pick lost 2026-07-14; that profile wins ~37% historically). 0 disables.
   club_pick_min_blend: 0.55
+  # Model-EV floor for club forced picks: skip the pick when the model's EV for
+  # the selection is worse than this. Settled data (41 club forced picks since
+  # 2026-07-08): EV >= -5% won 61.5% (+8.5% ROI); deeper-negative EV won 53.6%
+  # (~-13% ROI at 1.5-1.6 odds). null disables.
+  club_pick_min_ev: -0.05
   # WC "very strong favourite" routs: when the favourite's win prob >= and the
   # underdog's expected goals <=, the forced pick drops BTTS / underdog markets
   # (the weak side rarely scores) and backs the favourite's Over 1.5 / Over 2.5.

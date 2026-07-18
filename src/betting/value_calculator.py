@@ -352,7 +352,8 @@ class ValueBettingCalculator:
                       home_team_name: str = "", away_team_name: str = "",
                       match_id: int = 0, league: str = "",
                       prefer_market: bool = False,
-                      min_blend_prob: float = 0.0) -> Optional[BetRecommendation]:
+                      min_blend_prob: float = 0.0,
+                      min_forced_ev: float = None) -> Optional[BetRecommendation]:
         """Return the single best bet for a match, bypassing the value and
         confidence gates used by find_value_bets.
 
@@ -437,7 +438,8 @@ class ValueBettingCalculator:
                 tier_pool = [c for c in pool if c[3] in tier]
                 if tier_pool:
                     best = max(tier_pool, key=lambda c: c[2])
-                    if not self._blend_clears_floor(best, min_blend_prob, match_name):
+                    if not self._clears_forced_floors(best, min_blend_prob,
+                                                     min_forced_ev, match_name):
                         continue  # try the next (usually shorter-odds) tier
                     market, selection, prob, market_key, best_odds, divergence, ev = best
                     return self._build_pick(
@@ -478,11 +480,11 @@ class ValueBettingCalculator:
             pool = sane or candidates
             best = max(pool, key=lambda c: 0.5 * c[2] + 0.5 * (1.0 / c[4]))
 
-        # Quality floor for forced picks (club fixtures set min_blend_prob): when
-        # neither the model nor the market makes the best selection likely enough,
-        # NO pick beats a known-bad one — a 46%-confidence forced pick is the
-        # profile that historically wins ~37% (La Fiorita, 2026-07-14).
-        if not self._blend_clears_floor(best, min_blend_prob, match_name):
+        # Quality floors for forced picks (club fixtures set them): when neither
+        # the model nor the market makes the best selection likely enough — or
+        # the model actively disputes the price — NO pick beats a known-bad one.
+        if not self._clears_forced_floors(best, min_blend_prob, min_forced_ev,
+                                          match_name):
             return None
 
         market, selection, prob, market_key, best_odds, divergence, ev = best
@@ -493,22 +495,38 @@ class ValueBettingCalculator:
         )
 
     @staticmethod
-    def _blend_clears_floor(candidate, min_blend_prob: float, match_name: str) -> bool:
-        """True when the candidate's blended win probability (50% model prob +
-        50% market-implied) meets the forced-pick quality floor. Always True
-        when no floor is set (min_blend_prob <= 0, e.g. WC pick-every-match)."""
-        if min_blend_prob <= 0:
-            return True
-        _, _, prob, market_key, best_odds, _, _ = candidate
-        blend = 0.5 * prob + 0.5 * (1.0 / best_odds)
-        if blend >= min_blend_prob:
-            return True
-        logger.info(
-            f"  {match_name}: forced pick suppressed — {market_key} blend "
-            f"{blend:.0%} below floor {min_blend_prob:.0%} (neither model nor "
-            f"market rates it likely enough)"
-        )
-        return False
+    def _clears_forced_floors(candidate, min_blend_prob: float,
+                              min_forced_ev, match_name: str) -> bool:
+        """Forced-pick quality gates; both must pass (each skippable).
+
+        1. Blend floor (min_blend_prob > 0): blended win probability
+           (50% model + 50% market-implied) must reach the floor — blocks picks
+           NEITHER source rates likely (46%-conf profile wins ~37%).
+        2. Model-EV floor (min_forced_ev is not None): the model's EV for the
+           selection must not be worse than the floor — blocks picks the model
+           actively disputes. Settled club forced picks since 2026-07-08:
+           EV >= -5% won 61.5% (+8.5% ROI); EV below -5% won 53.6% (~-13% ROI —
+           at 1.5-1.6 odds, 54% is a losing hit rate).
+        WC pick-every-match passes 0/None so a pick always exists there.
+        """
+        _, _, prob, market_key, best_odds, _, ev = candidate
+        if min_blend_prob > 0:
+            blend = 0.5 * prob + 0.5 * (1.0 / best_odds)
+            if blend < min_blend_prob:
+                logger.info(
+                    f"  {match_name}: forced pick suppressed — {market_key} blend "
+                    f"{blend:.0%} below floor {min_blend_prob:.0%} (neither model "
+                    f"nor market rates it likely enough)"
+                )
+                return False
+        if min_forced_ev is not None and ev < min_forced_ev:
+            logger.info(
+                f"  {match_name}: forced pick suppressed — {market_key} model EV "
+                f"{ev:+.1%} below floor {min_forced_ev:+.1%} (model disputes the "
+                f"price; that cohort loses ~13% ROI)"
+            )
+            return False
+        return True
 
     def available_selections(self, predictions: Dict, odds_data: List[Dict],
                              home_team_name: str = "", away_team_name: str = "") -> List[Dict]:

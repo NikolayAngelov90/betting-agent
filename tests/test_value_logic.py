@@ -430,3 +430,60 @@ class TestClubForcedPickGuards:
                                   league="europe/champions-league",
                                   min_blend_prob=0.55)
         assert pick is not None and pick.market_key == "home_over_1.5"
+
+
+class TestClubForcedPickEvFloor:
+    """EV floor (2026-07-18): club forced picks the model actively disputes
+    (EV below betting.club_pick_min_ev) are suppressed — that cohort ran
+    ~-13% ROI while EV >= -5% ran +8.5%."""
+
+    def _calc(self, odds_by_selection):
+        from types import SimpleNamespace
+        calc = _make_calc()
+        calc.min_odds = 1.50
+        calc.config = SimpleNamespace(betting={})
+        calc._find_best_odds = (
+            lambda odds_data, market, selection, **kw:
+            odds_by_selection.get(selection, 0)
+        )
+        calc._build_pick = (
+            lambda predictions, ensemble, context, match_name, match_id, league,
+            odds_data, market, selection, prob, market_key, best_odds, **kw:
+            SimpleNamespace(selection=selection, market_key=market_key,
+                            odds=best_odds, predicted_probability=prob)
+        )
+        return calc
+
+    def test_deep_negative_ev_suppressed(self):
+        # Model 55% @ 1.55 -> EV = -14.75%. Blend 59.8% passes the blend floor,
+        # but the model disputes the price -> suppressed (Astana/Yelimay profile).
+        calc = self._calc({"Home Over 1.5": 1.55})
+        predictions = {"ensemble": {
+            "home_over_1.5": 0.55, "home_win": 0.40, "away_win": 0.20,
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}],
+                                  league="europe/europa-conference-league",
+                                  min_blend_prob=0.55, min_forced_ev=-0.05)
+        assert pick is None
+
+    def test_mild_negative_ev_passes(self):
+        # Model 63% @ 1.55 -> EV = -2.4% (>= -5%) and blend 63% -> pick made.
+        calc = self._calc({"Home Over 1.5": 1.55})
+        predictions = {"ensemble": {
+            "home_over_1.5": 0.63, "home_win": 0.40, "away_win": 0.20,
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}],
+                                  league="europe/europa-conference-league",
+                                  min_blend_prob=0.55, min_forced_ev=-0.05)
+        assert pick is not None and pick.market_key == "home_over_1.5"
+
+    def test_wc_unaffected_when_floor_none(self):
+        # WC passes min_forced_ev=None -> even a deep-negative-EV pick stands.
+        calc = self._calc({"Home Over 1.5": 1.55})
+        predictions = {"ensemble": {
+            "home_over_1.5": 0.55, "home_win": 0.40, "away_win": 0.20,
+        }}
+        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}],
+                                  league="world/fifa-world-cup",
+                                  min_blend_prob=0.0, min_forced_ev=None)
+        assert pick is not None and pick.market_key == "home_over_1.5"
