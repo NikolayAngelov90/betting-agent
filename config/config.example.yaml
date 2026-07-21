@@ -4,31 +4,33 @@
 
 scraping:
   # -------------------------------------------------------------------------
-  # WC 2026 + summer club return (as of July 2026)
-  # The World Cup is still active (final July 19), and the club leagues that
-  # resume in early July are re-enabled: the two Nordic summer leagues and the
-  # three UEFA qualifying competitions (all have first-leg/round fixtures in the
-  # July 6–13 window). The rest of the club leagues stay paused (commented out)
-  # until their seasons start in August — add them back here as they return.
+  # POST-WC CLUB SEASON (WC 2026 ended 2026-07-19 — removed from the list).
+  # Active: Nordic summer leagues, UEFA qualifying, and 2026/27 domestic
+  # seasons as they kick off. Enable each commented league on its start date.
   # -------------------------------------------------------------------------
   flashscore_leagues:
-    - world/fifa-world-cup
     # Nordic summer leagues (mid-season through the summer)
     - sweden/allsvenskan
     - norway/eliteserien
-    # UEFA qualifying rounds start early July
+    # UEFA qualifying rounds (through August)
     - europe/champions-league
     - europe/europa-league
     - europe/europa-conference-league
-    # 2026/27 domestic seasons as they start (verified start dates):
+    # 2026/27 domestic seasons (verified start dates):
     - romania/liga-1            # started 2026-07-17
-    - bulgaria/efbet-league     # started 2026-07-17 (user request; NB Flashscore
-                                # slug is efbet-league, not parva-liga)
-    # Coming next — enable on/after their first round:
-    #   poland/ekstraklasa       2026-07-24
-    #   switzerland/super-league 2026-07-24
-    #   denmark/superliga        2026-07-26
+    - bulgaria/efbet-league     # started 2026-07-17 (Flashscore slug is
+                                # efbet-league, not parva-liga)
+    - poland/ekstraklasa        # starts 2026-07-24
+    - switzerland/super-league  # starts 2026-07-24
+    - denmark/superliga         # starts 2026-07-26
+    - scotland/premiership      # starts 2026-08-01
+    # Enable on their start dates:
     #   belgium/jupiler-pro-league 2026-08-07
+    #   netherlands/eredivisie     2026-08-07
+    #   germany/2-bundesliga       2026-08-07
+    #   austria/bundesliga         ~2026-08-01 (verify)
+    #   germany/bundesliga         2026-08-28
+    #   (England/Spain/Italy/France top flights + lower divisions: mid/late Aug)
 
   # Club leagues — PAUSED until their 2026/27 seasons start (~August 2026)
   # flashscore_leagues:
@@ -135,6 +137,14 @@ models:
   bayesian_prior_strength: 10
   # Use xG instead of raw goals for Poisson attack/defense strengths when
   # xG data is available. Falls back to raw goals for matches without xG.
+  # Isotonic probability calibration (docs/calibration-plan.md). Evaluated
+  # 2026-07-21 and NOT enabled: the acceptance backtest failed — July's
+  # predictions are already well calibrated (raw eval buckets within ±3pp)
+  # after the 0.60 bookmaker blend + market-anchored pipeline, so applying the
+  # June-fitted map over-corrected (+12pp underconfident, Brier worse). The map
+  # is refit after every settle and a 30-day drift check is logged; flip this
+  # to true if the drift check warns that overconfidence has returned.
+  probability_calibration_enabled: false
   poisson_use_xg: true
   # Minimum fraction of matches with xG data required before xG-based
   # strengths are used for a team (0.35 = at least 35% of matches need xG).

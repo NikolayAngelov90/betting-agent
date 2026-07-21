@@ -1,9 +1,31 @@
-# Probability Calibration Layer — staged for after the WC final (2026-07-19)
+# Probability Calibration Layer
 
-**Status: STAGED — do not implement before the World Cup final has settled.**
-The pipeline is currently winning (62%+ since 2026-07-08) and this change
-reshapes every probability, EV, threshold, and Kelly stake — it needs a
-backtest, not a mid-tournament hot-swap.
+**Status: EVALUATED 2026-07-21 — built, backtested, NOT ENABLED (acceptance
+criteria failed in the right direction).**
+
+The time-split backtest (fit on 819 picks ≤ 06-30, evaluated on 91 picks
+07-01+) showed:
+
+- **Eval Brier got WORSE with calibration** (0.240 raw → 0.267 calibrated).
+- **The raw July predictions are already calibrated**: eval buckets
+  pred 51% → actual 50% (−1pp), 59% → 62% (+3pp), 67% → 70% (+3pp).
+- The June-era overconfidence this plan targeted was removed by the process
+  changes shipped in the meantime (bookmaker blend 0.60, market-blend forced
+  picks, blend/EV floors, market-anchored Claude review). Applying the
+  June-fitted map to July over-corrects (+12pp underconfident) and would gut
+  pick volume.
+
+**What shipped instead:** `src/models/probability_calibration.py`
+(ProbabilityCalibrator — isotonic per market family, persisted to
+`data/models/probability_calibration.json`), applied in `EnsemblePredictor`
+behind `models.probability_calibration_enabled` (**default false**), refit
+after every settle in `learn_from_settled()` with a logged 30-day drift check.
+**If the drift check warns (actual − predicted < −5pp over 30d), flip the flag
+to true** — the freshly-fitted map activates without code changes.
+
+---
+
+*Original design below, kept for the day the flag is needed.*
 
 ## Why (the evidence, from 871 settled picks as of 2026-07-16)
 

@@ -3242,6 +3242,40 @@ class FootballBettingAgent:
         except Exception as e:
             logger.warning(f"EV calibration failed: {e}")
 
+        # 3.4. Isotonic probability calibration: refit from all settled picks and
+        # persist (DORMANT unless models.probability_calibration_enabled — the
+        # 2026-07-21 acceptance backtest showed current predictions are already
+        # calibrated; see docs/calibration-plan.md). Also log a drift check on
+        # the last ~30 days so returning overconfidence is visible in CI logs.
+        try:
+            from src.models.probability_calibration import (
+                ProbabilityCalibrator, SELECTION_FAMILY)
+            _pc = ProbabilityCalibrator()
+            if _pc.fit_from_db(self.db):
+                _pc.save()
+                self.predictor.prob_calibrator = _pc
+            from datetime import timedelta as _td
+            _cut = date.today() - _td(days=30)
+            with self.db.get_session() as _s:
+                _recent = _s.query(
+                    SavedPick.predicted_probability, SavedPick.result
+                ).filter(SavedPick.result.in_(["win", "loss"]),
+                         SavedPick.pick_date >= _cut).all()
+            if len(_recent) >= 25:
+                _pred = sum(float(p) for p, _ in _recent) / len(_recent)
+                _act = sum(1 for _, r in _recent if r == "win") / len(_recent)
+                _gap = _act - _pred
+                _msg = (f"Calibration drift check (last 30d, n={len(_recent)}): "
+                        f"avg predicted {_pred:.0%} vs actual {_act:.0%} "
+                        f"(gap {_gap:+.0%})")
+                if _gap < -0.05:
+                    logger.warning(_msg + " — overconfidence returning; consider "
+                                   "models.probability_calibration_enabled: true")
+                else:
+                    logger.info(_msg)
+        except Exception as e:
+            logger.warning(f"Probability calibration refit failed: {e}")
+
         # 3.5. Per-market calibration from pick outcomes (goals/BTTS markets).
         # Uses SavedPick.predicted_probability vs actual win/loss to measure how
         # well-calibrated the ensemble is per market — supplements the 1X2-only

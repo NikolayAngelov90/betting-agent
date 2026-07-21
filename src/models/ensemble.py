@@ -59,6 +59,17 @@ class EnsemblePredictor:
         # Applied via center-shrink in predict(): factor<1 shrinks predictions toward 0.5.
         # Updated by FootballBettingAgent.calibrate_from_pick_outcomes() after each settle.
         self.pick_calibration: dict = {}
+
+        # Isotonic probability calibration (docs/calibration-plan.md). DORMANT
+        # by default: the 2026-07-21 acceptance backtest showed July predictions
+        # are already well calibrated (raw eval buckets within ±3pp) after the
+        # 0.60 bookmaker blend + market-anchored pipeline — applying the
+        # June-fitted map over-corrected (+12pp underconfident, Brier worse).
+        # The map is refit after every settle and drift is logged; flip
+        # models.probability_calibration_enabled to true if overconfidence
+        # returns.
+        from src.models.probability_calibration import ProbabilityCalibrator
+        self.prob_calibrator = ProbabilityCalibrator.load()
         _pick_cal_path = Path("data/models/pick_calibration.json")
         if _pick_cal_path.exists():
             try:
@@ -421,6 +432,31 @@ class EnsemblePredictor:
                     results["ensemble"][key] = round(
                         results["ensemble"][key] * (1 - penalty) + prior * penalty, 4
                     )
+
+        # Optional isotonic calibration (default OFF — see __init__ note).
+        if (self.config.get("models.probability_calibration_enabled", False)
+                and self.prob_calibrator.is_fitted):
+            ens = results["ensemble"]
+            # 1X2: calibrate then renormalize to a proper distribution.
+            trio = {k: self.prob_calibrator.apply(k, ens[k])
+                    for k in ("home_win", "draw", "away_win")}
+            tot = sum(trio.values()) or 1.0
+            for k, v in trio.items():
+                ens[k] = round(v / tot, 4)
+            # Over/Under lines and BTTS: calibrate the over/yes side, keep the
+            # complement consistent.
+            for line in ("1.5", "2.5", "3.5"):
+                if f"over_{line}" in ens:
+                    c = self.prob_calibrator.apply(f"over_{line}", ens[f"over_{line}"])
+                    ens[f"over_{line}"] = round(c, 4)
+                    ens[f"under_{line}"] = round(1.0 - c, 4)
+            if "btts_yes" in ens:
+                c = self.prob_calibrator.apply("btts_yes", ens["btts_yes"])
+                ens["btts_yes"] = round(c, 4)
+                ens["btts_no"] = round(1.0 - c, 4)
+            for k in ("home_over_1.5", "away_over_1.5"):
+                if k in ens:
+                    ens[k] = round(self.prob_calibrator.apply(k, ens[k]), 4)
 
         return results
 
