@@ -250,12 +250,13 @@ briefings:
   #                   Runs on Sonnet. Falls back to anthropic_api if the token
   #                   is missing but ANTHROPIC_API_KEY is set.
   #   anthropic_api — direct API (ANTHROPIC_API_KEY), Opus 4.8, per-token credits.
-  # TEMPORARY (2026-07-16): pinned to anthropic_api so the pick review NEVER
-  # touches the Claude Pro subscription quota (user needs the full Pro session
-  # budget elsewhere for the next days). The API path prompt-caches the system
-  # prompt, so per-match cost stays low (~$0.10-0.15). Flip back to claude_code
-  # to return to $0 subscription billing.
-  backend: anthropic_api
+  # 2026-07-22: back to claude_code — subscription FIRST ($0 billing), and when
+  # the shared Pro 5-hour session limit is hit mid-run the `claude` CLI returns
+  # empty, so api_fallback (below) covers that single briefing via the paid API.
+  # Net effect: use the subscription until it's exhausted, then spend credits.
+  # (Was pinned to anthropic_api 2026-07-16 to spare the Pro budget; that hold
+  # is lifted.)
+  backend: claude_code
   # api_fallback: when the claude_code backend comes back empty (most often the
   # shared Claude Pro 5-hour session limit), retry that single briefing via the
   # Anthropic API so the match still gets covered. Requires funded ANTHROPIC_API_KEY

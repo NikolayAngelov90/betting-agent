@@ -4054,9 +4054,14 @@ async def main():
             except Exception as _pe:
                 logger.warning(f"Could not query yesterday's pending picks: {_pe}")
 
-            # Send settlement report to Telegram — fires even when 0 settled but
-            # there are pending picks from yesterday, so operators see named stuck picks.
-            if (settled_picks or pending_from_yesterday) and agent.telegram.enabled:
+            # Send settlement report to Telegram ONLY when something newly settled.
+            # A report with 0 newly-settled picks (which just re-lists the same
+            # still-pending picks) was firing on EVERY --settle call: settle1 +
+            # settle2 per run x primary + backup = up to 4 duplicate "Settled: 0"
+            # messages a day (observed 2026-07-21). Stuck pending picks still ride
+            # along inside the real settlement report via pending_picks, so they
+            # stay visible without the standalone duplicates.
+            if settled_picks and agent.telegram.enabled:
                 await agent.telegram.send_settlement_report(
                     settled_picks, stats, pending_picks=pending_from_yesterday
                 )

@@ -2,16 +2,13 @@ name: Daily Betting Picks
 
 on:
   schedule:
-    # WC 2026 timing (from the full FIFA schedule via football-data.org):
-    # earliest first kickoff of any NA match day is 16:00 UTC / 19:00 Sofia
-    # (Jun 15/18/21, Jul 1/7). Requirement: pipeline DONE >=1h before first KO
-    # with ~1h runtime => must START by 14:00 UTC. GitHub's scheduler has
-    # delayed this repo's cron by 0.5-5.7h (observed), hence the early primary
-    # plus a backup. All steps are idempotent (picks dedup by match+selection,
-    # briefings sent-guard), so the backup is a cheap no-op when the primary
-    # already succeeded. Off-hour minutes dodge top-of-hour congestion.
-    - cron: '37 9 * * *'   # primary — 09:37 UTC (12:37 Sofia)
-    - cron: '23 12 * * *'  # backup  — 12:23 UTC (15:23 Sofia)
+    # One daily run. The WC (which forced a 16:00-UTC kickoff deadline and a
+    # second "backup" cron to survive GitHub's 0.5-5.7h scheduler delays) is
+    # over; club matches kick off in the evening, hours after this ~11:00-UTC
+    # run finishes even when the scheduler is late — so a single run has ample
+    # buffer and the backup cron was removed (2026-07-22). Off-hour minute
+    # dodges top-of-hour congestion. Manual re-runs available via dispatch.
+    - cron: '37 9 * * *'   # 09:37 UTC (12:37 Sofia)
   workflow_dispatch: # Allow manual trigger
     inputs:
       backfill_wc:
@@ -19,8 +16,8 @@ on:
         required: false
         default: 'false'
 
-# Never let a delayed primary and the backup write to the DB at the same time —
-# the second run queues until the first finishes.
+# Serialize runs so a manual dispatch can never write to the DB at the same
+# time as the scheduled run — the second queues until the first finishes.
 concurrency:
   group: daily-picks
   cancel-in-progress: false
@@ -178,26 +175,8 @@ jobs:
         timeout-minutes: 90
         continue-on-error: true
 
-      # Backup-run gate: the two daily crons mean a second (backup) run fires even
-      # when the primary already succeeded. When today's pipeline already
-      # completed, the picks are day-frozen, so re-fetching fixtures/odds in
-      # --update is ~15 min of wasted work. Detect a date-keyed marker written by
-      # the earlier run and skip --update. Settlement + late-results scraping
-      # still run (that's the backup's real value).
-      - name: Compute date
-        id: d
-        run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-
-      - name: Detect if today's pipeline already completed (backup-run gate)
-        id: gate
-        uses: actions/cache/restore@v5
-        with:
-          path: .pipeline-complete
-          key: pipeline-complete-${{ steps.d.outputs.today }}
-
       - name: Run daily update (fixtures + odds, no Flashscore results)
         id: update
-        if: steps.gate.outputs.cache-hit != 'true'
         run: python -m src.agent.betting_agent --update --skip-ml-retrain
         timeout-minutes: 65
         continue-on-error: true
@@ -280,20 +259,6 @@ jobs:
         with:
           path: data/briefings_sent.json
           key: briefings-sent-${{ github.run_id }}
-
-      # Mark today's pipeline complete so a later (backup) run skips --update.
-      # Only on a successful picks step — a failed primary leaves no marker, so
-      # the backup runs the full pipeline as intended.
-      - name: Write pipeline-complete marker
-        if: steps.picks.outcome == 'success'
-        run: date -u +%FT%TZ > .pipeline-complete
-
-      - name: Save pipeline-complete marker
-        if: steps.picks.outcome == 'success'
-        uses: actions/cache/save@v5
-        with:
-          path: .pipeline-complete
-          key: pipeline-complete-${{ steps.d.outputs.today }}
 
       - name: Scrape Flashscore results for all leagues (post-picks)
         id: results
