@@ -84,6 +84,29 @@ def _tok_match(t1: str, t2: str) -> bool:
     return SequenceMatcher(None, t1, t2).ratio() >= 0.75
 
 
+def same_team_strict(name_a: str, name_b: str) -> bool:
+    """Conservative same-team test used when writing team rows (dedup on create).
+
+    True ONLY when the two names are the same club beyond reasonable doubt:
+    normalized-equal, or identical token sets after stripping club tags
+    (FC/SK/…), diacritics, and curated aliases. It does NO fuzzy-ratio matching,
+    so it will never merge distinct same-city clubs — "AC Milan" vs "Inter
+    Milan", "Sheffield United" vs "Sheffield Wednesday", "Malmo" vs "Malmo BI"
+    all stay separate — while still collapsing pure spelling variants:
+    "Malmö FF" == "Malmo FF", "FC Copenhagen" == "Copenhagen", "PSG" == "Paris
+    Saint-Germain" (via alias). Prefer this over `team_names_similar` at the
+    write path, where a false merge (two clubs' history fused) is far costlier
+    than a missed one (a duplicate row a later pass can still reconcile).
+    """
+    a, b = _norm(name_a), _norm(name_b)
+    if a == b:
+        return True
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta or not tb:
+        return False
+    return set(ta) == set(tb)
+
+
 def team_names_similar(name_a: str, name_b: str) -> bool:
     """Return True if two team names likely refer to the same team.
 

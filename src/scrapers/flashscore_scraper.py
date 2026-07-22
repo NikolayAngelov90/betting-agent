@@ -1672,13 +1672,26 @@ class FlashscoreScraper(BaseScraper):
     }
 
     def _get_or_create_team(self, session, team_name: str, league: str) -> Team:
-        """Get existing team or create a new one."""
+        """Get existing team or create a new one.
+
+        Flashscore rows carry no API-Football id, so name is the only join key.
+        After the exact-name lookup we try a STRICT same-team match (diacritics,
+        club tags, curated aliases — no fuzzy ratio) against teams already in
+        this league, so a spelling variant scraped here ("Malmö FF" vs the
+        stored "Malmo FF") attaches to the existing club instead of creating a
+        duplicate row. Strict matching keeps distinct same-city clubs apart.
+        """
         team_name = self._TEAM_NAME_MAP.get(team_name, team_name)
         team = session.query(Team).filter_by(name=team_name).first()
-        if not team:
-            team = Team(name=team_name, league=league)
-            session.add(team)
-            session.flush()
+        if team:
+            return team
+        from src.utils.team_names import same_team_strict
+        for cand in session.query(Team).filter_by(league=league).all():
+            if same_team_strict(team_name, cand.name):
+                return cand
+        team = Team(name=team_name, league=league)
+        session.add(team)
+        session.flush()
         return team
 
     # Re-exported from src.utils.team_names for backward compatibility.

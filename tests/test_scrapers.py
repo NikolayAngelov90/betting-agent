@@ -70,6 +70,53 @@ class TestAPIFootballScraper:
         assert len(calls) == 2  # both tiers called
 
 
+class TestTeamDedupByApiId:
+    """_get_or_create_team_id must key on API-Football's numeric team id before
+    falling back to name matching — otherwise a name variant from a later
+    response spawns a parallel row and splits the club's history."""
+
+    def _scraper(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+        from src.data.database import DatabaseManager
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        mgr = DatabaseManager(config=SimpleNamespace(
+            database={"sqlite_path": str(tmp_path / "teamdedup_test.db")}
+        ))
+        assert not mgr.is_postgres, "test DB must be SQLite, not production Postgres"
+        mgr.create_tables()
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper.db = mgr
+        return scraper, mgr
+
+    def test_matches_existing_row_by_api_id_despite_name_variant(self, tmp_path, monkeypatch):
+        from src.data.models import Team
+        scraper, mgr = self._scraper(tmp_path, monkeypatch)
+        with mgr.get_session() as s:
+            t = Team(name="Paris Saint-Germain", league="france/ligue-1",
+                     apifootball_team_id=85)
+            s.add(t); s.flush(); existing_id = t.id
+            s.commit()
+        # A later API response names the same club "Paris SG" — must resolve to
+        # the SAME row via api id, not create a second one.
+        got = scraper._get_or_create_team_id("Paris SG", "france/ligue-1",
+                                             apifootball_team_id=85)
+        assert got == existing_id
+        with mgr.get_session() as s:
+            assert s.query(Team).filter_by(apifootball_team_id=85).count() == 1
+
+    def test_two_name_variants_same_api_id_converge_to_one_row(self, tmp_path, monkeypatch):
+        from src.data.models import Team
+        scraper, mgr = self._scraper(tmp_path, monkeypatch)
+        id1 = scraper._get_or_create_team_id("Arsenal", "england/premier-league",
+                                             apifootball_team_id=42)
+        id2 = scraper._get_or_create_team_id("Arsenal FC", "england/premier-league",
+                                             apifootball_team_id=42)
+        assert id1 == id2
+        with mgr.get_session() as s:
+            assert s.query(Team).filter_by(apifootball_team_id=42).count() == 1
+
+
 class TestInjuryScraper:
     """Tests for injury scraper."""
 

@@ -1300,6 +1300,20 @@ class APIFootballScraper(BaseScraper):
                     return query.filter(Team.league.in_(_nat_list))
                 return query.filter(Team.league.notin_(_nat_list))
 
+            # 0. Strongest key: API-Football's own team id. Names differ between
+            #    sources and even between API responses ("Paris SG" vs "Paris
+            #    Saint Germain"), but the numeric id is stable — so match on it
+            #    FIRST. Without this, name-first matching created a parallel row
+            #    whenever the name varied, splitting a club's history across two
+            #    ids (53 clubs affected as of 2026-07-22: Arsenal 5+37, Chelsea
+            #    17+36, …). Keying on the id makes ingestion converge on one row.
+            if apifootball_team_id:
+                team = _partition(session.query(Team).filter_by(
+                    apifootball_team_id=apifootball_team_id
+                )).first()
+                if team:
+                    return team.id
+
             # 1. Exact match
             team = _partition(session.query(Team).filter_by(name=name)).first()
             if team:
