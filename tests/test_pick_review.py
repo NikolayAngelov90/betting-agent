@@ -157,6 +157,41 @@ def test_decision_only_no_menu_skips_api_call(monkeypatch):
     assert called["api"] is False
 
 
+def test_claude_code_short_circuits_after_session_limit(monkeypatch):
+    """Once the Pro session limit is hit, later matches must skip the doomed
+    `claude -p` spawn and go straight to the API fallback (observed 2026-07-22:
+    the limit was already exhausted, so all 5 picks each spawned a dead
+    subprocess before falling back)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    svc = _decision_svc()
+    calls = {"cc": 0, "api": 0}
+
+    async def fake_cc(system, user, match_name):
+        calls["cc"] += 1
+        svc._claude_code_exhausted = True  # simulate a "session limit" response
+        return ""
+
+    async def fake_api(system, user, match_name):
+        calls["api"] += 1
+        return "<<<DECISION>>>\naction: KEEP\nconfidence: 0.6\nreason: ok\n<<<END>>>"
+
+    monkeypatch.setattr(svc, "_resolve_backend", lambda: "claude_code")
+    monkeypatch.setattr(svc, "_call_claude_code", fake_cc)
+    monkeypatch.setattr(svc, "_call_anthropic_api", fake_api)
+
+    menu = [{"market_key": "home_over_1.5", "selection": "Home Over 1.5",
+             "odds": 1.55, "probability": 0.6}]
+    # Match 1: tries Claude Code (fails + flags exhaustion) -> API fallback.
+    asyncio.run(svc._research_and_write("A vs B", "d", lineup_aware=False,
+                has_lineups=False, menu=menu, decision_only=True))
+    # Match 2: already exhausted -> straight to API, no second spawn.
+    asyncio.run(svc._research_and_write("C vs D", "d", lineup_aware=False,
+                has_lineups=False, menu=menu, decision_only=True))
+
+    assert calls["cc"] == 1, "claude_code must be spawned only once, then short-circuited"
+    assert calls["api"] == 2, "both matches must still be covered via the API fallback"
+
+
 def test_apply_decision_records_keep_on_saved_pick(db):
     """The review outcome must be persisted so KEEP-vs-CHANGE win rates are
     measurable — a KEEP ruling stamps review_action/review_reason on the pick."""

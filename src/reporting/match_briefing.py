@@ -144,6 +144,10 @@ class MatchBriefingService:
         self.config = agent.config
         self.db = agent.db
         self.telegram = agent.telegram
+        # Set True once the Claude Pro session limit is hit this run. The limit
+        # doesn't reset mid-run, so after the first "session limit" every further
+        # `claude -p` spawn is doomed — skip straight to the API fallback.
+        self._claude_code_exhausted = False
 
     # ---- public entry points -------------------------------------------------
 
@@ -1081,21 +1085,28 @@ class MatchBriefingService:
 
         backend = self._resolve_backend()
         if backend == "claude_code":
-            text_out = await self._call_claude_code(system, user, match_name)
-            # Resilience: Claude Code shares the Pro 5-hour quota with the user's
-            # own usage and periodically returns "session limit reached", which
-            # zeroed out whole briefing runs (Jun 16 & Jun 22). When it comes back
-            # empty, fall back to the paid Anthropic API for THIS briefing so the
-            # match still gets covered. Only fires on failure, only if an API key
-            # is present, and is config-gated.
-            if (not text_out
-                    and os.environ.get("ANTHROPIC_API_KEY")
-                    and self.config.get("briefings.api_fallback", True)):
-                logger.warning(
-                    f"Claude Code unavailable for {match_name} (likely Pro session "
-                    f"limit) — falling back to the Anthropic API (uses paid credits)"
-                )
+            can_fallback = (bool(os.environ.get("ANTHROPIC_API_KEY"))
+                            and self.config.get("briefings.api_fallback", True))
+            # Once the shared Pro 5-hour session limit is hit, it won't reset
+            # mid-run — so for every remaining match skip the doomed `claude -p`
+            # spawn and go straight to the API (observed 2026-07-22: the limit
+            # was already exhausted at CI time, so all 5 picks each spawned a
+            # dead subprocess before falling back).
+            if self._claude_code_exhausted and can_fallback:
                 text_out = await self._call_anthropic_api(system, user, match_name)
+            else:
+                text_out = await self._call_claude_code(system, user, match_name)
+                # Resilience: Claude Code shares the Pro 5-hour quota with the
+                # user's own usage and periodically returns "session limit
+                # reached", which zeroed out whole briefing runs (Jun 16 & Jun
+                # 22). When it comes back empty, fall back to the paid Anthropic
+                # API for THIS briefing so the match still gets covered.
+                if not text_out and can_fallback:
+                    logger.warning(
+                        f"Claude Code unavailable for {match_name} (likely Pro session "
+                        f"limit) — falling back to the Anthropic API (uses paid credits)"
+                    )
+                    text_out = await self._call_anthropic_api(system, user, match_name)
         else:
             text_out = await self._call_anthropic_api(system, user, match_name)
 
@@ -1286,6 +1297,11 @@ class MatchBriefingService:
                 # in -p mode — log both streams or failures are undiagnosable.
                 _err = err.decode(errors="replace").strip()
                 _out = out.decode(errors="replace").strip()
+                # Session/usage-limit errors persist for the rest of the run —
+                # flag it so subsequent matches skip Claude Code entirely.
+                if ("session limit" in _out.lower() or "usage limit" in _out.lower()
+                        or "session limit" in _err.lower() or "usage limit" in _err.lower()):
+                    self._claude_code_exhausted = True
                 logger.warning(
                     f"Claude Code briefing failed for {match_name} "
                     f"(exit {proc.returncode}): stderr={_err[:300]!r} "
