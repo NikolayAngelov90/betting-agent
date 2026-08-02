@@ -2142,6 +2142,7 @@ class FootballBettingAgent:
                 sel = pick.selection
                 resolved = True
                 won = False
+                is_void = False  # Draw No Bet pushes the stake on a draw
 
                 if sel == "Home Win":
                     won = hg > ag
@@ -2161,14 +2162,34 @@ class FootballBettingAgent:
                     won = total > 3.5
                 elif sel == "Under 3.5 Goals":
                     won = total < 3.5
+                elif sel == "Over 4.5 Goals":
+                    won = total > 4.5
+                elif sel == "Under 4.5 Goals":
+                    won = total < 4.5
                 elif sel == "BTTS Yes":
                     won = btts
                 elif sel == "BTTS No":
                     won = not btts
+                elif sel == "Home Over 0.5":
+                    won = hg >= 1
+                elif sel == "Away Over 0.5":
+                    won = ag >= 1
                 elif sel == "Home Over 1.5":
                     won = hg >= 2
                 elif sel == "Away Over 1.5":
                     won = ag >= 2
+                elif sel == "Double Chance 1X":
+                    won = hg >= ag          # home win or draw
+                elif sel == "Double Chance X2":
+                    won = ag >= hg          # away win or draw
+                elif sel == "Double Chance 12":
+                    won = hg != ag          # home or away win
+                elif sel == "DNB Home":
+                    is_void = hg == ag      # draw → stake refunded
+                    won = hg > ag
+                elif sel == "DNB Away":
+                    is_void = hg == ag
+                    won = ag > hg
                 else:
                     resolved = False
 
@@ -2181,7 +2202,7 @@ class FootballBettingAgent:
                     )
                     continue  # leave result = None so we don't poison stats
 
-                pick.result = "win" if won else "loss"
+                pick.result = "void" if is_void else ("win" if won else "loss")
                 # Store the FINAL score (incl. ET) in actual_* — this is what the
                 # score-mismatch re-settlement check compares against match.home_goals;
                 # storing the regulation score here would make every AET match look
@@ -3639,6 +3660,22 @@ class FootballBettingAgent:
         # Team-level overs imply high-scoring match → correlated with Over 3.5
         ("Home Over 1.5", "Over 3.5 Goals"),
         ("Away Over 1.5", "Over 3.5 Goals"),
+        # Double Chance / Draw No Bet overlap heavily with their component 1X2
+        # outcomes — never bet the same underlying result twice on one match.
+        ("Home Win", "Double Chance 1X"), ("Home Win", "Double Chance 12"),
+        ("Home Win", "DNB Home"),
+        ("Away Win", "Double Chance X2"), ("Away Win", "Double Chance 12"),
+        ("Away Win", "DNB Away"),
+        ("Draw", "Double Chance 1X"), ("Draw", "Double Chance X2"),
+        ("DNB Home", "Double Chance 1X"), ("DNB Home", "Double Chance 12"),
+        ("DNB Away", "Double Chance X2"), ("DNB Away", "Double Chance 12"),
+        ("Double Chance 1X", "Double Chance 12"),
+        ("Double Chance 1X", "Double Chance X2"),
+        ("Double Chance 12", "Double Chance X2"),
+        # "Team to score" (over 0.5) overlaps the team's over 1.5 and its win
+        ("Home Over 0.5", "Home Over 1.5"), ("Away Over 0.5", "Away Over 1.5"),
+        ("Home Win", "Home Over 0.5"), ("Away Win", "Away Over 0.5"),
+        ("BTTS Yes", "Home Over 0.5"), ("BTTS Yes", "Away Over 0.5"),
     }
 
     # Composite score used by both the main sort and the correlation filter,

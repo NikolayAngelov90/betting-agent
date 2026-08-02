@@ -338,11 +338,27 @@ BET_TYPE_MAP = {
             "Over 1.5": "Over 1.5", "Under 1.5": "Under 1.5",
             "Over 2.5": "Over 2.5", "Under 2.5": "Under 2.5",
             "Over 3.5": "Over 3.5", "Under 3.5": "Under 3.5",
+            "Over 4.5": "Over 4.5", "Under 4.5": "Under 4.5",
         },
     },
     "Both Teams Score": {
         "market_type": "btts",
         "selections": {"Yes": "Yes", "No": "No"},
+    },
+    # Double Chance — API-Football value labels are "Home/Draw", "Home/Away",
+    # "Draw/Away". Derived probs come from the 1X2 ensemble.
+    "Double Chance": {
+        "market_type": "double_chance",
+        "selections": {
+            "Home/Draw": "Double Chance 1X",
+            "Home/Away": "Double Chance 12",
+            "Draw/Away": "Double Chance X2",
+        },
+    },
+    # Draw No Bet — stake refunded on a draw (settled as void).
+    "Draw No Bet": {
+        "market_type": "draw_no_bet",
+        "selections": {"Home": "DNB Home", "Away": "DNB Away"},
     },
     # Team goal line markets — confirmed API-Football bet names (verified from live API)
     "Total - Home": {

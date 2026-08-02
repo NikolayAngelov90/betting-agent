@@ -458,6 +458,34 @@ class EnsemblePredictor:
                 if k in ens:
                     ens[k] = round(self.prob_calibrator.apply(k, ens[k]), 4)
 
+        # Derived markets (added 2026-08-02). Computed AFTER all blends,
+        # dampening, coverage-penalty and calibration so they stay consistent
+        # with the final 1X2/goals numbers.
+        ens = results["ensemble"]
+        # Match Over/Under 4.5, kept monotonic (P(over 4.5) <= P(over 3.5)).
+        o45 = min(poisson_pred.get("over_4.5", 0.0), ens.get("over_3.5", 1.0))
+        ens["over_4.5"] = round(o45, 4)
+        ens["under_4.5"] = round(1.0 - o45, 4)
+        # Team "to score" (over 0.5 per team) — the meaningful form of over 0.5
+        # (match over 0.5 is a ~94% non-market). Kept monotonic vs team over 1.5.
+        ens["home_over_0.5"] = round(
+            max(poisson_pred.get("home_over_0.5", 0.0), ens.get("home_over_1.5", 0.0)), 4)
+        ens["away_over_0.5"] = round(
+            max(poisson_pred.get("away_over_0.5", 0.0), ens.get("away_over_1.5", 0.0)), 4)
+        # Double Chance = union of two 1X2 outcomes (cap below 1.0).
+        h = ens.get("home_win", 0.0); d = ens.get("draw", 0.0); a = ens.get("away_win", 0.0)
+        ens["dc_1x"] = round(min(0.99, h + d), 4)
+        ens["dc_12"] = round(min(0.99, h + a), 4)
+        ens["dc_x2"] = round(min(0.99, d + a), 4)
+        # Draw No Bet = win probability conditional on a decisive result (draw
+        # refunds the stake, handled as a void at settlement).
+        _decisive = h + a
+        if _decisive > 0:
+            ens["dnb_home"] = round(h / _decisive, 4)
+            ens["dnb_away"] = round(a / _decisive, 4)
+        else:
+            ens["dnb_home"] = ens["dnb_away"] = 0.0
+
         return results
 
     def _weighted_average_1x2(self, poisson: Dict, elo: Dict,

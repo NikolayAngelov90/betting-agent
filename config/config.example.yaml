@@ -200,10 +200,10 @@ betting:
   #   under_1.5, under_2.5, under_3.5, btts_yes, btts_no, home_over_1.5, away_over_1.5
   excluded_markets:
     - under_1.5
-    - under_2.5
-    - under_3.5
     - btts_no
     - over_3.5    # proven loser in settled data: 38% win, -14% ROI over 32 picks
+    # under_2.5 / under_3.5 re-enabled 2026-08-02 (user request). NOTE: settled
+    # history had Under 2.5 at -32% ROI and Under 3.5 at -16% — watch them.
   kelly_agreement_scale:
     unanimous: 1.0
     majority: 0.80

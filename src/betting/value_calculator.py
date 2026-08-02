@@ -62,10 +62,13 @@ class ValueBettingCalculator:
         self.max_stake_pct = betting.get("max_stake_percentage", 5.0)
         _VALID_MARKET_KEYS = {
             "home_win", "draw", "away_win",
-            "over_1.5", "over_2.5", "over_3.5",
-            "under_1.5", "under_2.5", "under_3.5",
+            "over_1.5", "over_2.5", "over_3.5", "over_4.5",
+            "under_1.5", "under_2.5", "under_3.5", "under_4.5",
             "btts_yes", "btts_no",
+            "home_over_0.5", "away_over_0.5",   # team to score
             "home_over_1.5", "away_over_1.5",
+            "dc_1x", "dc_12", "dc_x2",       # double chance
+            "dnb_home", "dnb_away",          # draw no bet
         }
         raw_excluded = set(betting.get("excluded_markets", []))
         unknown = raw_excluded - _VALID_MARKET_KEYS
@@ -338,13 +341,22 @@ class ValueBettingCalculator:
             ("Over 1.5", "Over 1.5 Goals", ensemble.get("over_1.5", 0), "over_1.5"),
             ("Over 2.5", "Over 2.5 Goals", ensemble.get("over_2.5", 0), "over_2.5"),
             ("Over 3.5", "Over 3.5 Goals", ensemble.get("over_3.5", 0), "over_3.5"),
+            ("Over 4.5", "Over 4.5 Goals", ensemble.get("over_4.5", 0), "over_4.5"),
             ("Under 1.5", "Under 1.5 Goals", ensemble.get("under_1.5", 0), "under_1.5"),
             ("Under 2.5", "Under 2.5 Goals", ensemble.get("under_2.5", 0), "under_2.5"),
             ("Under 3.5", "Under 3.5 Goals", ensemble.get("under_3.5", 0), "under_3.5"),
+            ("Under 4.5", "Under 4.5 Goals", ensemble.get("under_4.5", 0), "under_4.5"),
             ("BTTS", "BTTS Yes", ensemble.get("btts_yes", 0), "btts_yes"),
             ("BTTS", "BTTS No", ensemble.get("btts_no", 0), "btts_no"),
+            ("Team Goals", "Home Over 0.5", ensemble.get("home_over_0.5", 0), "home_over_0.5"),
+            ("Team Goals", "Away Over 0.5", ensemble.get("away_over_0.5", 0), "away_over_0.5"),
             ("Team Goals", "Home Over 1.5", ensemble.get("home_over_1.5", 0), "home_over_1.5"),
             ("Team Goals", "Away Over 1.5", ensemble.get("away_over_1.5", 0), "away_over_1.5"),
+            ("Double Chance", "Double Chance 1X", ensemble.get("dc_1x", 0), "dc_1x"),
+            ("Double Chance", "Double Chance 12", ensemble.get("dc_12", 0), "dc_12"),
+            ("Double Chance", "Double Chance X2", ensemble.get("dc_x2", 0), "dc_x2"),
+            ("Draw No Bet", "DNB Home", ensemble.get("dnb_home", 0), "dnb_home"),
+            ("Draw No Bet", "DNB Away", ensemble.get("dnb_away", 0), "dnb_away"),
         ]
 
     def find_best_bet(self, predictions: Dict, odds_data: List[Dict],
@@ -721,11 +733,21 @@ class ValueBettingCalculator:
             "Under 1.5 Goals": ["Under 1.5", "Under 1.5 Goals"],
             "Over 3.5 Goals": ["Over 3.5", "Over 3.5 Goals"],
             "Under 3.5 Goals": ["Under 3.5", "Under 3.5 Goals"],
+            "Over 4.5 Goals": ["Over 4.5", "Over 4.5 Goals"],
+            "Under 4.5 Goals": ["Under 4.5", "Under 4.5 Goals"],
             "BTTS Yes": ["Yes", "BTTS Yes"],
             "BTTS No": ["No", "BTTS No"],
             # Team goal line markets (stored via API-Football team_goals market)
+            "Home Over 0.5": ["Home Over 0.5", "Home Team Over 0.5", "Home - Over 0.5"],
+            "Away Over 0.5": ["Away Over 0.5", "Away Team Over 0.5", "Away - Over 0.5"],
             "Home Over 1.5": ["Home Over 1.5", "Home Team Over 1.5", "Home - Over 1.5"],
             "Away Over 1.5": ["Away Over 1.5", "Away Team Over 1.5", "Away - Over 1.5"],
+            # Double Chance / Draw No Bet (stored via API-Football)
+            "Double Chance 1X": ["Double Chance 1X", "1X", "Home/Draw"],
+            "Double Chance 12": ["Double Chance 12", "12", "Home/Away"],
+            "Double Chance X2": ["Double Chance X2", "X2", "Draw/Away"],
+            "DNB Home": ["DNB Home", "Home"],
+            "DNB Away": ["DNB Away", "Away"],
         }
 
         valid_selections = selection_map.get(selection, [selection])
@@ -740,8 +762,12 @@ class ValueBettingCalculator:
             "Under 1.5": ["over_under", "totals"],
             "Over 3.5": ["over_under", "totals"],
             "Under 3.5": ["over_under", "totals"],
+            "Over 4.5": ["over_under", "totals"],
+            "Under 4.5": ["over_under", "totals"],
             "BTTS": ["btts"],
             "Team Goals": ["team_goals", "team_over_under"],
+            "Double Chance": ["double_chance"],
+            "Draw No Bet": ["draw_no_bet"],
         }
 
         valid_markets = market_map.get(market, [market])
@@ -824,10 +850,19 @@ class ValueBettingCalculator:
             "Under 1.5 Goals": ["Under 1.5", "Under 1.5 Goals"],
             "Over 3.5 Goals": ["Over 3.5", "Over 3.5 Goals"],
             "Under 3.5 Goals": ["Under 3.5", "Under 3.5 Goals"],
+            "Over 4.5 Goals": ["Over 4.5", "Over 4.5 Goals"],
+            "Under 4.5 Goals": ["Under 4.5", "Under 4.5 Goals"],
             "BTTS Yes": ["Yes", "BTTS Yes"],
             "BTTS No": ["No", "BTTS No"],
+            "Home Over 0.5": ["Home Over 0.5", "Home Team Over 0.5", "Home - Over 0.5"],
+            "Away Over 0.5": ["Away Over 0.5", "Away Team Over 0.5", "Away - Over 0.5"],
             "Home Over 1.5": ["Home Over 1.5", "Home Team Over 1.5", "Home - Over 1.5"],
             "Away Over 1.5": ["Away Over 1.5", "Away Team Over 1.5", "Away - Over 1.5"],
+            "Double Chance 1X": ["Double Chance 1X", "1X", "Home/Draw"],
+            "Double Chance 12": ["Double Chance 12", "12", "Home/Away"],
+            "Double Chance X2": ["Double Chance X2", "X2", "Draw/Away"],
+            "DNB Home": ["DNB Home", "Home"],
+            "DNB Away": ["DNB Away", "Away"],
         }
         market_map = {
             "1X2": ["1X2", "h2h"],
@@ -837,8 +872,12 @@ class ValueBettingCalculator:
             "Under 1.5": ["over_under", "totals"],
             "Over 3.5": ["over_under", "totals"],
             "Under 3.5": ["over_under", "totals"],
+            "Over 4.5": ["over_under", "totals"],
+            "Under 4.5": ["over_under", "totals"],
             "BTTS": ["btts"],
             "Team Goals": ["team_goals", "team_over_under"],
+            "Double Chance": ["double_chance"],
+            "Draw No Bet": ["draw_no_bet"],
         }
         valid_selections = [s for s in selection_map.get(selection, [selection]) if s]
         valid_markets = market_map.get(market, [market])

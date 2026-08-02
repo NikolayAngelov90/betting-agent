@@ -422,15 +422,19 @@ class PoissonModel:
         draw_prob = np.sum(np.diag(score_matrix))
         away_win_prob = np.sum(np.triu(score_matrix, 1))
 
-        # Over/Under
+        # Over/Under (match total). Over 0.5 is omitted here — as a MATCH total it
+        # is a ~94% near-certainty; "over 0.5" is only meaningful per TEAM (below).
         over_25_prob = self._over_under_prob(score_matrix, 2.5)
         over_15_prob = self._over_under_prob(score_matrix, 1.5)
         over_35_prob = self._over_under_prob(score_matrix, 3.5)
+        over_45_prob = self._over_under_prob(score_matrix, 4.5)
 
         # BTTS
         btts_prob = self._btts_prob(score_matrix)
 
-        # Team goal line: P(team scores 2+ goals)
+        # Team goal lines. Over 0.5 = P(team scores at least once) = "team to score".
+        home_over_05 = self._team_over_prob(score_matrix, 0.5, side="home")
+        away_over_05 = self._team_over_prob(score_matrix, 0.5, side="away")
         home_over_15 = self._team_over_prob(score_matrix, 1.5, side="home")
         away_over_15 = self._team_over_prob(score_matrix, 1.5, side="away")
 
@@ -443,9 +447,12 @@ class PoissonModel:
             "over_1.5": round(over_15_prob, 4),
             "over_2.5": round(over_25_prob, 4),
             "over_3.5": round(over_35_prob, 4),
+            "over_4.5": round(over_45_prob, 4),
             "under_2.5": round(1 - over_25_prob, 4),
             "btts_yes": round(btts_prob, 4),
             "btts_no": round(1 - btts_prob, 4),
+            "home_over_0.5": round(home_over_05, 4),
+            "away_over_0.5": round(away_over_05, 4),
             "home_over_1.5": round(home_over_15, 4),
             "away_over_1.5": round(away_over_15, 4),
             "most_likely_score": self._most_likely_score(score_matrix),
