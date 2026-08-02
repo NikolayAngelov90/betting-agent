@@ -144,7 +144,7 @@ class ValueBettingCalculator:
                 _reject("odds out of range")
                 continue
 
-            ev = self.calculate_expected_value(prob, best_odds)
+            ev = self._market_ev(prob, best_odds, market_key, ensemble)
             if ev < self.min_ev:
                 _reject("low EV")
                 continue
@@ -409,7 +409,7 @@ class ValueBettingCalculator:
                 continue
             implied = 1.0 / best_odds if best_odds > 0 else 0
             divergence = prob / implied if implied > 0 else 0
-            ev = self.calculate_expected_value(prob, best_odds)
+            ev = self._market_ev(prob, best_odds, market_key, ensemble)
             candidates.append(
                 (market, selection, prob, market_key, best_odds, divergence, ev)
             )
@@ -608,7 +608,7 @@ class ValueBettingCalculator:
         """
         implied = 1.0 / best_odds if best_odds > 0 else 0
         divergence = prob / implied if implied > 0 else 0
-        ev = self.calculate_expected_value(prob, best_odds)
+        ev = self._market_ev(prob, best_odds, market_key, ensemble)
         opening = self._find_opening_odds(
             odds_data, market, selection,
             home_team_name=home_team_name, away_team_name=away_team_name,
@@ -663,6 +663,22 @@ class ValueBettingCalculator:
         Positive EV means the bet has value.
         """
         return (probability * odds) - 1.0
+
+    def _market_ev(self, prob: float, odds: float, market_key: str,
+                   ensemble: Dict) -> float:
+        """EV that respects a market's payout structure.
+
+        For Draw No Bet the stake is REFUNDED on a draw, so the realised EV is
+        the conditional EV scaled by the probability of a decisive result
+        (1 − P(draw)). `prob` here is the conditional win prob P(win)/(1−P(draw)),
+        so plain `prob·odds − 1` would overstate EV by ~1/(1−draw) and make DNB
+        out-rank straight 1X2 unfairly. Every other market uses the plain EV.
+        """
+        ev = self.calculate_expected_value(prob, odds)
+        if market_key in ("dnb_home", "dnb_away"):
+            p_decisive = ensemble.get("home_win", 0.0) + ensemble.get("away_win", 0.0)
+            ev *= max(0.0, min(1.0, p_decisive))
+        return ev
 
     # Scale Kelly stake by model agreement level
     _KELLY_AGREEMENT_SCALE = {

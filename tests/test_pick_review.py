@@ -309,3 +309,24 @@ def test_claude_added_value_empty_below_minimum(db):
     agent = FootballBettingAgent.__new__(FootballBettingAgent)
     agent.db = db
     assert agent.get_claude_added_value() == {}
+
+
+def test_get_stats_excludes_void_from_roi(db):
+    """A void (DNB push) must not be booked as a full-stake loss in ROI."""
+    from datetime import date
+    from src.agent.betting_agent import FootballBettingAgent
+    agent = FootballBettingAgent.__new__(FootballBettingAgent)
+    agent.db = db
+    agent.predictor = SimpleNamespace(coverage_summary=lambda: {
+        "poisson_teams": 0, "elo_teams": 0, "ml_fitted": False})
+    with db.get_session() as s:
+        common = dict(pick_date=date.today(), market="1X2", selection="Home Win",
+                      kelly_stake_percentage=1.0, predicted_probability=0.5)
+        s.add(SavedPick(match_id=1, match_name="w", odds=2.0, result="win", **common))
+        s.add(SavedPick(match_id=2, match_name="l", odds=2.0, result="loss", **common))
+        s.add(SavedPick(match_id=3, match_name="v", odds=2.0, result="void", **common))
+        s.commit()
+    at = agent.get_stats()["all_time"]
+    assert at["total"] == 2, "void excluded from decided total (1 win + 1 loss)"
+    # decided profit = +1 (win) - 1 (loss) = 0 over staked 2 → ROI 0%, NOT -33%
+    assert abs(at["roi"]) < 1e-9

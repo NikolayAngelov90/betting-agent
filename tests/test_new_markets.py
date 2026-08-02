@@ -88,6 +88,17 @@ class TestNewMarketPlumbing:
                  "selection": "Home Over 0.5", "odds_value": 1.30}]
         assert c._find_best_odds(odds, "Team Goals", "Home Over 0.5") == 1.30
 
+    def test_market_ev_dnb_applies_draw_refund(self):
+        c = _calc()
+        ens = {"home_win": 0.50, "draw": 0.25, "away_win": 0.25}
+        # DNB conditional prob 0.667 @ 1.60 → generic EV 0.0672; refund factor
+        # (1-draw)=0.75 → 0.0504. A plain 1X2 market is unchanged.
+        ev_dnb = c._market_ev(0.667, 1.60, "dnb_home", ens)
+        assert abs(ev_dnb - 0.0504) < 0.003
+        ev_1x2 = c._market_ev(0.55, 2.0, "home_win", ens)
+        assert abs(ev_1x2 - 0.10) < 1e-9
+        assert ev_dnb < c.calculate_expected_value(0.667, 1.60)  # refund lowers it
+
     def test_double_chance_produces_value_bet(self):
         """End-to-end: dc_1x 0.80 vs 1.40 implied (0.714) is +EV → a pick."""
         c = _calc()

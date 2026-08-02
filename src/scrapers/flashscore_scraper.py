@@ -1802,6 +1802,16 @@ class FlashscoreScraper(BaseScraper):
                 Match.league == league,
                 Match.home_team_id == home_team.id,
                 Match.away_team_id == away_team.id,
+                # Only collapse re-scrapes of the SAME finished result:
+                #  - is_fixture == False → never overwrite a not-yet-played fixture
+                #    (fixture→result transition stays with steps 1-3's ±4h match);
+                #  - identical score → never merge two genuinely distinct meetings
+                #    of the same pairing within the window (cup replay, split-format
+                #    leagues that meet 3-4x). A future fixture has NULL goals, so
+                #    the score equality also excludes it.
+                Match.is_fixture == False,
+                Match.home_goals == match_data["home_goals"],
+                Match.away_goals == match_data["away_goals"],
                 Match.match_date >= match_date - wide,
                 Match.match_date <= match_date + wide,
             ).order_by(Match.match_date.asc()).first()

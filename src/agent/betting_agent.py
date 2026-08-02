@@ -1366,7 +1366,7 @@ class FootballBettingAgent:
                 with self.db.get_session() as _cs:
                     _recent_picks = (
                         _cs.query(SavedPick)
-                        .filter(SavedPick.result.isnot(None))
+                        .filter(SavedPick.result.isnot(None), SavedPick.result != "void")
                         .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
                         .limit(lookback)
                         .all()
@@ -2307,12 +2307,16 @@ class FootballBettingAgent:
                 total = wins + losses
                 win_rate = wins / total if total > 0 else 0.0
 
-                # Simulate ROI with Kelly stakes
-                total_staked = sum(p.kelly_stake_percentage for p in picks_list)
+                # Simulate ROI with Kelly stakes. Exclude 'void' (Draw No Bet
+                # pushes) — the stake is refunded, so it contributes 0 profit AND
+                # 0 staked; counting it as a full-stake loss (the old `else` path)
+                # understated ROI once DNB shipped.
+                decided = [p for p in picks_list if p.result in ("win", "loss")]
+                total_staked = sum(p.kelly_stake_percentage for p in decided)
                 total_profit = sum(
                     p.kelly_stake_percentage * (p.odds - 1) if p.result == "win"
                     else -p.kelly_stake_percentage
-                    for p in picks_list
+                    for p in decided
                 )
                 roi = total_profit / total_staked if total_staked > 0 else 0.0
 
@@ -2377,7 +2381,8 @@ class FootballBettingAgent:
                 label = f"{bucket_lo}-{bucket_hi}%"
                 bucket_picks = [
                     p for p in settled
-                    if p.predicted_probability is not None
+                    if p.result != "void"      # pushes have no win/loss outcome
+                    and p.predicted_probability is not None
                     and bucket_lo / 100 <= p.predicted_probability < bucket_hi / 100
                 ]
                 if bucket_picks:
@@ -2392,7 +2397,7 @@ class FootballBettingAgent:
             brier_samples = [
                 (p.predicted_probability, 1.0 if p.result == "win" else 0.0)
                 for p in settled
-                if p.predicted_probability is not None
+                if p.result != "void" and p.predicted_probability is not None
             ]
             brier_score = None
             if brier_samples:
@@ -2481,10 +2486,12 @@ class FootballBettingAgent:
             losses = sum(1 for p in picks if p["result"] == "loss")
             total = wins + losses
             win_rate = wins / total if total else 0.0
-            staked = sum(p["kelly"] for p in picks)
+            # ROI over decided picks only — 'void' (DNB push) refunds the stake.
+            decided = [p for p in picks if p["result"] in ("win", "loss")]
+            staked = sum(p["kelly"] for p in decided)
             profit = sum(
                 p["kelly"] * (p["odds"] - 1) if p["result"] == "win" else -p["kelly"]
-                for p in picks
+                for p in decided
             )
             roi = profit / staked if staked else 0.0
             avg_odds = sum(p["odds"] for p in picks) / len(picks) if picks else 0.0
@@ -2498,11 +2505,12 @@ class FootballBettingAgent:
 
         print("-" * len(header))
         cum_roi = cumulative_profit / cumulative_staked if cumulative_staked else 0.0
-        total_picks = len(rows)
         total_wins = sum(1 for r in rows if r["result"] == "win")
+        total_losses = sum(1 for r in rows if r["result"] == "loss")
+        total_decided = total_wins + total_losses   # exclude void pushes
         print(
-            f"{'ALL TIME':<10} {total_picks:>6} {total_wins:>5} {total_picks-total_wins:>5} "
-            f"{total_wins/total_picks if total_picks else 0:>7.1%} {cum_roi:>8.1%}"
+            f"{'ALL TIME':<10} {total_decided:>6} {total_wins:>5} {total_losses:>5} "
+            f"{total_wins/total_decided if total_decided else 0:>7.1%} {cum_roi:>8.1%}"
         )
 
     async def tune_ensemble_weights(self):
@@ -3602,7 +3610,7 @@ class FootballBettingAgent:
             with self.db.get_session() as session:
                 recent = (
                     session.query(SavedPick)
-                    .filter(SavedPick.result.isnot(None))
+                    .filter(SavedPick.result.isnot(None), SavedPick.result != "void")
                     .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
                     .limit(lookback)
                     .all()
@@ -3716,6 +3724,15 @@ class FootballBettingAgent:
         ("Home Over 0.5", "Home Over 1.5"), ("Away Over 0.5", "Away Over 1.5"),
         ("Home Win", "Home Over 0.5"), ("Away Win", "Away Over 0.5"),
         ("BTTS Yes", "Home Over 0.5"), ("BTTS Yes", "Away Over 0.5"),
+        # A team scoring (over 0.5) implies goals in the match
+        ("Home Over 0.5", "Over 1.5 Goals"), ("Away Over 0.5", "Over 1.5 Goals"),
+        # Nested goal lines — a higher line implies the lower one (and vice versa
+        # for unders); betting two rungs of the same ladder is one correlated bet.
+        ("Over 1.5 Goals", "Over 2.5 Goals"),
+        ("Over 2.5 Goals", "Over 3.5 Goals"),
+        ("Over 3.5 Goals", "Over 4.5 Goals"),
+        ("Under 2.5 Goals", "Under 3.5 Goals"),
+        ("Under 3.5 Goals", "Under 4.5 Goals"),
     }
 
     # Composite score used by both the main sort and the correlation filter,
