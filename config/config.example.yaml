@@ -4,62 +4,51 @@
 
 scraping:
   # -------------------------------------------------------------------------
-  # POST-WC CLUB SEASON (WC 2026 ended 2026-07-19 — removed from the list).
-  # Active: Nordic summer leagues, UEFA qualifying, and 2026/27 domestic
-  # seasons as they kick off. Enable each commented league on its start date.
+  # ALL MAPPED LEAGUES ENABLED (2026-08-02). Every club/continental league in
+  # LEAGUE_ID_MAP (apifootball_scraper.py) is scraped. Off-season leagues cost
+  # nothing until they kick off (0 fixtures = 0 odds requests), so pre-enabling
+  # is safe. BUDGET NOTE: on the API-Football FREE tier (100 requests/day, ~1
+  # request per match for odds), busy in-season weekends across all top
+  # divisions exceed 100 — odds (and therefore picks) will be PARTIAL on those
+  # days. Upgrade to a paid tier (7,500/day) for full coverage.
   # -------------------------------------------------------------------------
   flashscore_leagues:
-    # Nordic summer leagues (mid-season through the summer)
+    # Top-5 European leagues (start mid/late Aug 2026)
+    - england/premier-league
+    - spain/laliga
+    - germany/bundesliga
+    - italy/serie-a
+    - france/ligue-1
+    # Strong European leagues
+    - netherlands/eredivisie
+    - portugal/primeira-liga
+    - belgium/jupiler-pro-league
+    - turkey/super-lig
+    - greece/super-league
+    - austria/bundesliga
+    - switzerland/super-league
+    - scotland/premiership
+    # Nordic summer leagues (mid-season)
     - sweden/allsvenskan
     - norway/eliteserien
-    # UEFA qualifying rounds (through August)
+    - denmark/superliga
+    - finland/veikkausliiga
+    # Central / Eastern European leagues
+    - poland/ekstraklasa
+    - romania/liga-1
+    - bulgaria/efbet-league     # Flashscore slug is efbet-league, not parva-liga
+    # Second / lower divisions (highest odds-budget cost when in season)
+    - england/championship
+    - england/league-one
+    - england/league-two
+    - spain/laliga2
+    - germany/2-bundesliga
+    - italy/serie-b
+    - france/ligue-2
+    # UEFA club competitions (qualifying through group stage)
     - europe/champions-league
     - europe/europa-league
     - europe/europa-conference-league
-    # 2026/27 domestic seasons (verified start dates):
-    - romania/liga-1            # started 2026-07-17
-    - bulgaria/efbet-league     # started 2026-07-17 (Flashscore slug is
-                                # efbet-league, not parva-liga)
-    - poland/ekstraklasa        # starts 2026-07-24
-    - switzerland/super-league  # starts 2026-07-24
-    - denmark/superliga         # starts 2026-07-26
-    - scotland/premiership      # starts 2026-08-01
-    # Enable on their start dates:
-    #   belgium/jupiler-pro-league 2026-08-07
-    #   netherlands/eredivisie     2026-08-07
-    #   germany/2-bundesliga       2026-08-07
-    #   austria/bundesliga         ~2026-08-01 (verify)
-    #   germany/bundesliga         2026-08-28
-    #   (England/Spain/Italy/France top flights + lower divisions: mid/late Aug)
-
-  # Club leagues — PAUSED until their 2026/27 seasons start (~August 2026)
-  # flashscore_leagues:
-  #   # Top 5 Leagues
-  #   - england/premier-league
-  #   - spain/laliga
-  #   - germany/bundesliga
-  #   - italy/serie-a
-  #   - france/ligue-1
-  #   # Strong European Leagues
-  #   - netherlands/eredivisie
-  #   - portugal/primeira-liga
-  #   - belgium/jupiler-pro-league
-  #   - turkey/super-lig
-  #   - scotland/premiership
-  #   # Lower English divisions
-  #   - england/championship
-  #   - england/league-one
-  #   - england/league-two
-  #   # Second divisions & smaller European leagues
-  #   - spain/laliga2
-  #   - germany/2-bundesliga
-  #   - italy/serie-b
-  #   - france/ligue-2
-  #   - austria/bundesliga
-  #   - switzerland/super-league
-  #   - greece/super-league
-  #   - denmark/superliga
-  #   - poland/ekstraklasa
 
   off_season_leagues: []
 
