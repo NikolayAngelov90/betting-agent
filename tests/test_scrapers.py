@@ -149,6 +149,76 @@ class TestTeamDedupByApiId:
             assert s.query(Team).filter(Team.name == "Telstar").count() == 2
 
 
+class TestFlashscoreResultDedup:
+    """Re-scraped results must UPDATE the existing row, not duplicate it.
+
+    Flashscore result dates fall back to the scrape time when unparseable, so the
+    same finished match re-scraped on later days used to dodge the ±4h dedup and
+    insert a fresh row every day (7,054 such rows / ~15% of results by 2026-08-03)."""
+
+    def _scraper_db(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+        from src.data.database import DatabaseManager
+        from src.scrapers.flashscore_scraper import FlashscoreScraper
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        mgr = DatabaseManager(config=SimpleNamespace(
+            database={"sqlite_path": str(tmp_path / "fs_dedup.db")}))
+        assert not mgr.is_postgres, "test DB must be SQLite, not production Postgres"
+        mgr.create_tables()
+        sc = FlashscoreScraper.__new__(FlashscoreScraper)
+        sc._TEAM_NAME_MAP = {}
+        return sc, mgr
+
+    def _res(self, hg, ag, dt):
+        from datetime import datetime
+        return {"home_team": "Start", "away_team": "Viking",
+                "home_goals": hg, "away_goals": ag, "match_date": dt}
+
+    def test_rescraped_result_updates_not_duplicates(self, tmp_path, monkeypatch):
+        from datetime import datetime
+        from src.data.models import Match
+        sc, mgr = self._scraper_db(tmp_path, monkeypatch)
+        lg = "norway/eliteserien"
+        # Day 1 then 3 later re-scrapes of the SAME match, each with a scrape-time date.
+        for dt in (datetime(2026, 7, 30, 12, 36, 24), datetime(2026, 7, 31, 12, 12, 18),
+                   datetime(2026, 8, 1, 11, 36, 15), datetime(2026, 8, 2, 11, 39, 47)):
+            with mgr.get_session() as s:
+                sc._save_match(s, self._res(0, 3, dt), lg, is_fixture=False)
+                s.commit()
+        with mgr.get_session() as s:
+            assert s.query(Match).count() == 1, "re-scrapes must update, not duplicate"
+            m = s.query(Match).first()
+            assert m.match_date == datetime(2026, 7, 30, 12, 36, 24), "earliest date preserved"
+            assert (m.home_goals, m.away_goals) == (0, 3)
+
+    def test_distinct_opponents_not_merged(self, tmp_path, monkeypatch):
+        from datetime import datetime
+        from src.data.models import Match
+        sc, mgr = self._scraper_db(tmp_path, monkeypatch)
+        lg = "norway/eliteserien"
+        with mgr.get_session() as s:
+            sc._save_match(s, self._res(0, 3, datetime(2026, 7, 30, 12, 0)), lg, is_fixture=False)
+            sc._save_match(s, {"home_team": "Start", "away_team": "Rosenborg",
+                               "home_goals": 1, "away_goals": 1,
+                               "match_date": datetime(2026, 7, 30, 12, 0)}, lg, is_fixture=False)
+            s.commit()
+        with mgr.get_session() as s:
+            assert s.query(Match).count() == 2
+
+    def test_same_fixture_beyond_window_not_merged(self, tmp_path, monkeypatch):
+        """Same ordered pairing months apart = two real matches (next season)."""
+        from datetime import datetime
+        from src.data.models import Match
+        sc, mgr = self._scraper_db(tmp_path, monkeypatch)
+        lg = "norway/eliteserien"
+        with mgr.get_session() as s:
+            sc._save_match(s, self._res(0, 3, datetime(2026, 7, 30, 12, 0)), lg, is_fixture=False)
+            sc._save_match(s, self._res(2, 1, datetime(2026, 10, 20, 12, 0)), lg, is_fixture=False)
+            s.commit()
+        with mgr.get_session() as s:
+            assert s.query(Match).count() == 2
+
+
 class TestInjuryScraper:
     """Tests for injury scraper."""
 

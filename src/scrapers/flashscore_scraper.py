@@ -1786,6 +1786,28 @@ class FlashscoreScraper(BaseScraper):
                     )
                     return _apply_update(candidate)
 
+        # 3.5 Date-tolerant dedup for completed results. Flashscore result dates
+        # are unreliable — when the date can't be parsed off the results page it
+        # falls back to the scrape time (datetime.now()), so the SAME finished
+        # match re-scraped on later days lands >4h from the earlier copy, dodged
+        # steps 1-3, and created a fresh duplicate EVERY DAY (7,054 such rows by
+        # 2026-08-03, ~15% of all results). Two clubs meet at most once as an
+        # ordered (home, away) pair within a month, so match an existing row for
+        # the same exact teams + league within a wide window and UPDATE it. This
+        # also preserves the earlier, better-dated row (e.g. the API-Football
+        # fixture with the real kickoff) instead of piling on now()-dates.
+        if not is_fixture and match_data.get("home_goals") is not None:
+            wide = timedelta(days=30)
+            existing = session.query(Match).filter(
+                Match.league == league,
+                Match.home_team_id == home_team.id,
+                Match.away_team_id == away_team.id,
+                Match.match_date >= match_date - wide,
+                Match.match_date <= match_date + wide,
+            ).order_by(Match.match_date.asc()).first()
+            if existing:
+                return _apply_update(existing)
+
         # 4. No match found — create a new record
         match = Match(
             home_team_id=home_team.id,
