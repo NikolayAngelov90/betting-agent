@@ -1721,6 +1721,12 @@ class FootballBettingAgent:
                     risk_level=pick.risk_level,
                     used_fallback_odds=pick.used_fallback_odds,
                     model_agreement=getattr(pick, "model_agreement", None),
+                    # Snapshot the MODEL's original pick — Claude's review may later
+                    # overwrite market/selection/predicted_probability, but these
+                    # stay put so we can measure the review's true added value.
+                    model_market=pick.market,
+                    model_selection=pick.selection,
+                    model_probability=float(pick.predicted_probability),
                 )
                 session.add(saved)
                 new_picks.append(pick)
@@ -1914,6 +1920,38 @@ class FootballBettingAgent:
                 await self.telegram.send_alert(_alert)
             except Exception as _tg_err:
                 logger.warning(f"Could not send results-failure Telegram alert: {_tg_err}")
+
+    @staticmethod
+    def _grade_selection(sel: str, hg: int, ag: int):
+        """Grade one selection against a REGULATION score.
+
+        Returns 'win' / 'loss' / 'void' (Draw No Bet refunds on a draw), or None
+        when the selection name is unrecognised — the caller then leaves the pick
+        pending rather than silently defaulting to a loss (which once mis-settled
+        7 picks). Shared by the final-pick and the model's-original grading.
+        """
+        total = hg + ag
+        btts = hg > 0 and ag > 0
+        outcomes = {
+            "Home Win": hg > ag, "Draw": hg == ag, "Away Win": hg < ag,
+            "Over 1.5 Goals": total > 1.5, "Under 1.5 Goals": total < 1.5,
+            "Over 2.5 Goals": total > 2.5, "Under 2.5 Goals": total < 2.5,
+            "Over 3.5 Goals": total > 3.5, "Under 3.5 Goals": total < 3.5,
+            "Over 4.5 Goals": total > 4.5, "Under 4.5 Goals": total < 4.5,
+            "BTTS Yes": btts, "BTTS No": not btts,
+            "Home Over 0.5": hg >= 1, "Away Over 0.5": ag >= 1,
+            "Home Over 1.5": hg >= 2, "Away Over 1.5": ag >= 2,
+            "Double Chance 1X": hg >= ag,   # home win or draw
+            "Double Chance X2": ag >= hg,   # away win or draw
+            "Double Chance 12": hg != ag,   # home or away win
+        }
+        if sel in outcomes:
+            return "win" if outcomes[sel] else "loss"
+        if sel == "DNB Home":
+            return "void" if hg == ag else ("win" if hg > ag else "loss")
+        if sel == "DNB Away":
+            return "void" if hg == ag else ("win" if ag > hg else "loss")
+        return None
 
     async def settle_predictions(self):
         """Fetch recent results and settle pending picks.
@@ -2139,70 +2177,22 @@ class FootballBettingAgent:
                 # Determine actual outcome for the selection.
                 # Unknown selections must NOT silently default to "loss" — that
                 # masked a real bug in the past where 7 picks were wrongly settled.
-                sel = pick.selection
-                resolved = True
-                won = False
-                is_void = False  # Draw No Bet pushes the stake on a draw
-
-                if sel == "Home Win":
-                    won = hg > ag
-                elif sel == "Draw":
-                    won = hg == ag
-                elif sel == "Away Win":
-                    won = hg < ag
-                elif sel == "Over 2.5 Goals":
-                    won = total > 2.5
-                elif sel == "Under 2.5 Goals":
-                    won = total < 2.5
-                elif sel == "Over 1.5 Goals":
-                    won = total > 1.5
-                elif sel == "Under 1.5 Goals":
-                    won = total < 1.5
-                elif sel == "Over 3.5 Goals":
-                    won = total > 3.5
-                elif sel == "Under 3.5 Goals":
-                    won = total < 3.5
-                elif sel == "Over 4.5 Goals":
-                    won = total > 4.5
-                elif sel == "Under 4.5 Goals":
-                    won = total < 4.5
-                elif sel == "BTTS Yes":
-                    won = btts
-                elif sel == "BTTS No":
-                    won = not btts
-                elif sel == "Home Over 0.5":
-                    won = hg >= 1
-                elif sel == "Away Over 0.5":
-                    won = ag >= 1
-                elif sel == "Home Over 1.5":
-                    won = hg >= 2
-                elif sel == "Away Over 1.5":
-                    won = ag >= 2
-                elif sel == "Double Chance 1X":
-                    won = hg >= ag          # home win or draw
-                elif sel == "Double Chance X2":
-                    won = ag >= hg          # away win or draw
-                elif sel == "Double Chance 12":
-                    won = hg != ag          # home or away win
-                elif sel == "DNB Home":
-                    is_void = hg == ag      # draw → stake refunded
-                    won = hg > ag
-                elif sel == "DNB Away":
-                    is_void = hg == ag
-                    won = ag > hg
-                else:
-                    resolved = False
-
-                if not resolved:
+                graded = self._grade_selection(pick.selection, hg, ag)
+                if graded is None:
                     logger.error(
                         f"Cannot settle pick id={pick.id}: unknown selection "
-                        f"{sel!r} for {pick.match_name}. Pick left pending — "
+                        f"{pick.selection!r} for {pick.match_name}. Pick left pending — "
                         f"add a settlement branch for this market or correct the "
                         f"selection name."
                     )
                     continue  # leave result = None so we don't poison stats
 
-                pick.result = "void" if is_void else ("win" if won else "loss")
+                pick.result = graded
+                # Grade the MODEL's original pick too (equals the final on a KEEP),
+                # so Claude's added value — final win-rate vs what the model alone
+                # would have done — is a measured fact. Unknown/absent → leave NULL.
+                if pick.model_selection:
+                    pick.model_result = self._grade_selection(pick.model_selection, hg, ag)
                 # Store the FINAL score (incl. ET) in actual_* — this is what the
                 # score-mismatch re-settlement check compares against match.home_goals;
                 # storing the regulation score here would make every AET match look
@@ -2260,6 +2250,40 @@ class FootballBettingAgent:
             )
         logger.info(f"Settled {len(settled)} picks")
         return settled
+
+    def get_claude_added_value(self, days: int = 60) -> Dict:
+        """Measure Claude's TRUE added value on the picks it changed.
+
+        For settled, reviewed picks, compares the FINAL pick's win rate against
+        what the MODEL originally wanted (model_result). On CHANGE picks these are
+        different selections, so the gap = how much the review actually helped.
+        This is the number that answers "could the model stand alone without
+        Claude?". Voids excluded. Returns {} when too little data.
+        """
+        lookback = date.today() - timedelta(days=days)
+        with self.db.get_session() as session:
+            rows = session.query(SavedPick).filter(
+                SavedPick.review_action == "CHANGE",
+                SavedPick.result.isnot(None), SavedPick.result != "void",
+                SavedPick.model_result.isnot(None), SavedPick.model_result != "void",
+                SavedPick.pick_date >= lookback,
+            ).all()
+            pairs = [(p.result, p.model_result) for p in rows]
+        if len(pairs) < 10:
+            return {}
+
+        def _wr(vals):
+            n = sum(1 for v in vals if v in ("win", "loss"))
+            return (sum(1 for v in vals if v == "win") / n) if n else 0.0
+
+        final_wr = _wr([f for f, _ in pairs])
+        model_wr = _wr([m for _, m in pairs])
+        return {
+            "n_change": len(pairs),
+            "final_win_rate": round(final_wr, 3),
+            "model_orig_win_rate": round(model_wr, 3),
+            "delta_pp": round((final_wr - model_wr) * 100, 1),
+        }
 
     def get_stats(self) -> Dict:
         """Calculate prediction statistics over different time periods."""
@@ -3315,6 +3339,22 @@ class FootballBettingAgent:
                 f"ML models stale (last trained: {stale_info}) — "
                 f"skipping retrain during settle, will retrain on next --train/--update"
             )
+
+        # Claude added-value telemetry: how the picks Claude CHANGED actually did
+        # vs what the model alone wanted. This is the number that tells us whether
+        # the base model could stand on its own without the review.
+        try:
+            _cav = self.get_claude_added_value(days=60)
+            if _cav:
+                logger.info(
+                    f"Claude added-value (60d, {_cav['n_change']} CHANGE picks): "
+                    f"Claude's final {_cav['final_win_rate']:.0%} vs the model's "
+                    f"original {_cav['model_orig_win_rate']:.0%} "
+                    f"({_cav['delta_pp']:+.1f}pp) — positive = review still earning "
+                    f"its keep; near-zero = model can increasingly stand alone"
+                )
+        except Exception as _cav_e:
+            logger.debug(f"Claude added-value telemetry skipped: {_cav_e}")
 
         logger.info("Post-settlement learning complete")
 

@@ -220,6 +220,14 @@ class SavedPick(Base):
     # measurable: win rate of KEEP vs CHANGE picks answers "does the review help?"
     review_action = Column(String(10))    # 'KEEP' or 'CHANGE'
     review_reason = Column(String(500))   # Claude's one-line justification
+    # The MODEL's ORIGINAL pick, snapshotted at save time and never overwritten
+    # when Claude applies a CHANGE. Lets us measure Claude's true added value
+    # (final win-rate vs what the model alone would have done) and, later,
+    # distil it. On a KEEP these equal selection/market/predicted_probability.
+    model_market = Column(String(50))
+    model_selection = Column(String(100))
+    model_probability = Column(Float)
+    model_result = Column(String(10))     # win/loss/void of the model's ORIGINAL pick
 
     # Result (NULL = pending)
     result = Column(String(10))       # 'win', 'loss', 'void', or NULL

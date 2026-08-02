@@ -254,3 +254,58 @@ def test_recent_review_stats_formats_keep_change(db):
 def test_recent_review_stats_empty_below_minimum(db):
     """Fewer than 10 settled reviewed picks -> no stats line (too noisy)."""
     assert _svc(db)._recent_review_stats() == ""
+
+
+# --------------------------------------------------------------------------- #
+# Claude added-value measurement (model's-original vs final)                   #
+# --------------------------------------------------------------------------- #
+
+
+def test_grade_selection_covers_markets_and_dnb_void():
+    from src.agent.betting_agent import FootballBettingAgent as A
+    g = A._grade_selection
+    assert g("Home Win", 2, 0) == "win"
+    assert g("Away Win", 2, 0) == "loss"
+    assert g("Draw", 1, 1) == "win"
+    assert g("Double Chance 1X", 1, 1) == "win"      # draw counts for 1X
+    assert g("Double Chance 12", 1, 1) == "loss"     # draw loses 12
+    assert g("Over 2.5 Goals", 2, 1) == "win"
+    assert g("Under 2.5 Goals", 2, 1) == "loss"   # 3 goals → not under 2.5
+    assert g("Under 2.5 Goals", 1, 1) == "win"    # 2 goals → under 2.5
+    assert g("Home Over 0.5", 0, 2) == "loss"        # home failed to score
+    assert g("Away Over 0.5", 0, 2) == "win"
+    assert g("Over 4.5 Goals", 3, 3) == "win"
+    assert g("DNB Home", 1, 1) == "void"             # draw refunds
+    assert g("DNB Home", 2, 1) == "win"
+    assert g("DNB Away", 2, 1) == "loss"
+    assert g("Totally Unknown Bet", 1, 0) is None    # never defaults to loss
+
+
+def test_claude_added_value_measures_change_edge(db):
+    """CHANGE picks where Claude's final beat the model's original by a margin."""
+    from datetime import date
+    from src.agent.betting_agent import FootballBettingAgent
+    agent = FootballBettingAgent.__new__(FootballBettingAgent)
+    agent.db = db
+    with db.get_session() as s:
+        for i in range(10):
+            s.add(SavedPick(
+                match_id=2000 + i, pick_date=date.today(), match_name=f"m{i}",
+                market="1X2", selection="Home Win", odds=2.0,
+                predicted_probability=0.5, review_action="CHANGE",
+                result=("win" if i < 8 else "loss"),          # Claude 8/10
+                model_result=("win" if i < 4 else "loss"),    # model 4/10
+            ))
+        s.commit()
+    cav = agent.get_claude_added_value(days=365)
+    assert cav["n_change"] == 10
+    assert cav["final_win_rate"] == 0.8
+    assert cav["model_orig_win_rate"] == 0.4
+    assert cav["delta_pp"] == 40.0
+
+
+def test_claude_added_value_empty_below_minimum(db):
+    from src.agent.betting_agent import FootballBettingAgent
+    agent = FootballBettingAgent.__new__(FootballBettingAgent)
+    agent.db = db
+    assert agent.get_claude_added_value() == {}
