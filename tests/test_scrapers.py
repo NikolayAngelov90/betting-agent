@@ -116,6 +116,38 @@ class TestTeamDedupByApiId:
         with mgr.get_session() as s:
             assert s.query(Team).filter_by(apifootball_team_id=42).count() == 1
 
+    def test_new_api_id_with_namesake_name_creates_new_team_not_absorbed(self, tmp_path, monkeypatch):
+        """A qualifier minnow with its own API id must NOT be fuzzy-matched into a
+        similarly-named club. Real case: Vikingur Reykjavik (Iceland) was absorbed
+        into Viking FK (Norway) because 'viking' is a prefix of 'vikingur'."""
+        from src.data.models import Team
+        scraper, mgr = self._scraper(tmp_path, monkeypatch)
+        with mgr.get_session() as s:
+            s.add(Team(name="Viking", league="norway/eliteserien",
+                       apifootball_team_id=759)); s.commit()
+        got = scraper._get_or_create_team_id(
+            "Vikingur Reykjavik", "europe/champions-league", apifootball_team_id=888)
+        with mgr.get_session() as s:
+            viking = s.query(Team).filter_by(apifootball_team_id=759).one()
+            new = s.query(Team).filter_by(apifootball_team_id=888).one()
+            assert got == new.id and got != viking.id, "must be a NEW team, not Viking FK"
+            assert new.name == "Vikingur Reykjavik"
+
+    def test_exact_name_but_different_api_id_creates_new_team(self, tmp_path, monkeypatch):
+        """Two real clubs can share an exact name (different countries). A
+        different authoritative id must never reuse the existing row."""
+        from src.data.models import Team
+        scraper, mgr = self._scraper(tmp_path, monkeypatch)
+        with mgr.get_session() as s:
+            s.add(Team(name="Telstar", league="netherlands/eredivisie",
+                       apifootball_team_id=604)); s.commit()
+        got = scraper._get_or_create_team_id(
+            "Telstar", "europe/europa-conference-league", apifootball_team_id=999)
+        with mgr.get_session() as s:
+            assert s.query(Team).filter_by(apifootball_team_id=604).one().id != got
+            assert s.query(Team).filter_by(apifootball_team_id=999).one().id == got
+            assert s.query(Team).filter(Team.name == "Telstar").count() == 2
+
 
 class TestInjuryScraper:
     """Tests for injury scraper."""

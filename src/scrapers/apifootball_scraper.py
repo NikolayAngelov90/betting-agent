@@ -1314,9 +1314,18 @@ class APIFootballScraper(BaseScraper):
                 if team:
                     return team.id
 
+            # Collision guard: two different clubs can share a name/prefix
+            # ("Viking" FK Norway vs "Vikingur" Iceland; "Telstar" NL vs another).
+            # When the incoming fixture carries an authoritative API id, never
+            # reuse a row that already has a DIFFERENT id — they are different
+            # clubs. Only rows with a matching or absent id may be reused.
+            def _id_compatible(t):
+                return not (apifootball_team_id and t.apifootball_team_id
+                            and t.apifootball_team_id != apifootball_team_id)
+
             # 1. Exact match
             team = _partition(session.query(Team).filter_by(name=name)).first()
-            if team:
+            if team and _id_compatible(team):
                 _save_api_id(team)
                 return team.id
 
@@ -1324,68 +1333,71 @@ class APIFootballScraper(BaseScraper):
             alias = TEAM_NAME_ALIASES.get(name)
             if alias:
                 team = _partition(session.query(Team).filter_by(name=alias)).first()
-                if team:
+                if team and _id_compatible(team):
                     _save_api_id(team)
                     return team.id
 
-            # Youth/age-group rows ("Czech Republic U16") must never be returned
-            # for a senior fixture — fuzzy steps below otherwise matched
-            # "Czech Republic" → "Czech Republic U16". Senior incoming names are
-            # already youth-filtered upstream, so excluding youth rows here is safe.
-            def _first_senior(query):
-                for t in query.limit(10).all():
-                    if not _YOUTH_TEAM_RE.search(t.name or ""):
-                        return t
-                return None
+            # 3-5. FUZZY matching — ONLY when no authoritative API id is supplied.
+            # When API-Football gave us an id that we could not resolve by id
+            # (step 0) or exact/alias name (steps 1-2), this is a NEW club, even
+            # if its name resembles an existing one. Fuzzy-matching here caused
+            # the classic misidentification where a qualifier minnow was absorbed
+            # into a similarly-named club: "Vikingur Reykjavik" -> Viking FK,
+            # "Hapoel Be'er Sheva" -> Beerschot VA — pricing the wrong team.
+            # Fuzzy remains available for the Flashscore-only path (no id).
+            if not apifootball_team_id:
+                # Youth/age-group rows ("Czech Republic U16") must never be
+                # returned for a senior fixture — fuzzy steps below otherwise
+                # matched "Czech Republic" → "Czech Republic U16". Senior incoming
+                # names are already youth-filtered upstream, so this is safe.
+                def _first_senior(query):
+                    for t in query.limit(10).all():
+                        if not _YOUTH_TEAM_RE.search(t.name or ""):
+                            return t
+                    return None
 
-            # 3. Forward fuzzy: DB names that contain the API name
-            team = _first_senior(_partition(session.query(Team).filter(
-                Team.name.ilike(f"%{name}%")
-            )))
-            if team:
-                _save_api_id(team)
-                return team.id
-
-            # 4. Reverse fuzzy: API name contains a DB team name (for short DB names)
-            #    e.g. "Bayer Leverkusen" contains "Leverkusen"
-            #    For CL/EL/ECL, teams are stored under domestic leagues — search all teams.
-            name_lower = name.lower()
-            if _is_national:
-                candidates = session.query(Team).filter(
-                    Team.league.in_(_nat_list)
-                ).all()
-            elif league in self._INTERNATIONAL_LEAGUES:
-                # Search all club teams (CL teams stored under domestic league keys)
-                candidates = session.query(Team).filter(
-                    Team.league.notin_(list(self._INTERNATIONAL_LEAGUES) + _nat_list)
-                ).all()
-            else:
-                candidates = session.query(Team).filter_by(league=league).all()
-
-            # Never let a senior fixture resolve to a youth/age-group row.
-            candidates = [c for c in candidates if not _YOUTH_TEAM_RE.search(c.name or "")]
-
-            for candidate in candidates:
-                cname = candidate.name
-                if len(cname) >= 5 and cname.lower() in name_lower:
-                    _save_api_id(candidate)
-                    return candidate.id
-
-            # 4b. _names_similar fallback for same candidate pool
-            for candidate in candidates:
-                if self._names_similar(name, candidate.name):
-                    _save_api_id(candidate)
-                    return candidate.id
-
-            # 5. Try matching without common prefixes/suffixes (FC, SK, etc.)
-            stripped = name.replace("FC ", "").replace("SK ", "").replace("SC ", "").replace("AC ", "").replace("AS ", "").replace("RC ", "").replace("KV ", "").replace("CF ", "").strip()
-            if stripped != name:
+                # 3. Forward fuzzy: DB names that contain the API name
                 team = _first_senior(_partition(session.query(Team).filter(
-                    Team.name.ilike(f"%{stripped}%")
+                    Team.name.ilike(f"%{name}%")
                 )))
                 if team:
-                    _save_api_id(team)
                     return team.id
+
+                # 4. Reverse fuzzy: API name contains a DB team name (short names)
+                #    e.g. "Bayer Leverkusen" contains "Leverkusen". For CL/EL/ECL,
+                #    teams are stored under domestic leagues — search all teams.
+                name_lower = name.lower()
+                if _is_national:
+                    candidates = session.query(Team).filter(
+                        Team.league.in_(_nat_list)
+                    ).all()
+                elif league in self._INTERNATIONAL_LEAGUES:
+                    candidates = session.query(Team).filter(
+                        Team.league.notin_(list(self._INTERNATIONAL_LEAGUES) + _nat_list)
+                    ).all()
+                else:
+                    candidates = session.query(Team).filter_by(league=league).all()
+
+                candidates = [c for c in candidates if not _YOUTH_TEAM_RE.search(c.name or "")]
+
+                for candidate in candidates:
+                    cname = candidate.name
+                    if len(cname) >= 5 and cname.lower() in name_lower:
+                        return candidate.id
+
+                # 4b. _names_similar fallback for same candidate pool
+                for candidate in candidates:
+                    if self._names_similar(name, candidate.name):
+                        return candidate.id
+
+                # 5. Try matching without common prefixes/suffixes (FC, SK, etc.)
+                stripped = name.replace("FC ", "").replace("SK ", "").replace("SC ", "").replace("AC ", "").replace("AS ", "").replace("RC ", "").replace("KV ", "").replace("CF ", "").strip()
+                if stripped != name:
+                    team = _first_senior(_partition(session.query(Team).filter(
+                        Team.name.ilike(f"%{stripped}%")
+                    )))
+                    if team:
+                        return team.id
 
             # 6. Create new team
             country = league.split("/")[0].title() if "/" in league else ""
