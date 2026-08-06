@@ -595,7 +595,9 @@ class FlashscoreScraper(BaseScraper):
         db = get_db()
         cutoff = datetime.now() - timedelta(days=days_back)
         with db.get_session() as session:
-            matches_needing_stats = session.query(Match).filter(
+            matches_needing_stats = session.query(
+                Match.id, Match.flashscore_id,
+            ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
                 Match.home_shots.is_(None),
@@ -1686,9 +1688,12 @@ class FlashscoreScraper(BaseScraper):
         if team:
             return team
         from src.utils.team_names import same_team_strict
-        for cand in session.query(Team).filter_by(league=league).all():
-            if same_team_strict(team_name, cand.name):
-                return cand
+        # Scan on a two-column projection rather than whole Team rows — this
+        # runs once per scraped team name, and only the winner (if any) needs
+        # to be materialised as an ORM entity for the caller.
+        for cand_id, cand_name in session.query(Team.id, Team.name).filter_by(league=league):
+            if same_team_strict(team_name, cand_name):
+                return session.get(Team, cand_id)
         team = Team(name=team_name, league=league)
         session.add(team)
         session.flush()

@@ -16,8 +16,12 @@ from typing import Dict, List, Optional
 # slate ("Iran U23 vs New Zealand"). Filtered out wherever fixtures are created.
 _YOUTH_TEAM_RE = re.compile(r"\bU-?\d{2}\b", re.IGNORECASE)
 
+from sqlalchemy import func
+
 from src.scrapers.base_scraper import BaseScraper
 from src.data.models import Match, Team, Odds
+from src.data.sql_helpers import id_in
+from src.data.api_budget import ApiBudgetStore
 from src.data.database import get_db
 from src.utils.logger import get_logger
 
@@ -407,6 +411,11 @@ class APIFootballScraper(BaseScraper):
         self.db = get_db()
         self._requests_today = 0
         self._daily_limit = 100  # Free tier
+        # Cross-process quota. `_requests_today` remains as a per-process tally
+        # for logging and as the fallback when the api_budget table is absent,
+        # but the authoritative ceiling now lives in the database — seven CLI
+        # processes each starting from 0 made the "100/day" cap really ~700.
+        self._budget = ApiBudgetStore(self.db, "api-football", self._daily_limit)
 
         # Only process leagues that are configured in flashscore_leagues.
         # Prevents creating fixtures/odds for non-configured leagues that
@@ -434,9 +443,37 @@ class APIFootballScraper(BaseScraper):
         self._account_suspended = False  # Set True when API returns account-suspended error
         self._xg_all_failed = False  # Set True when xG backfill attempts all return None
 
+    def _shared_budget(self):
+        """The cross-process budget store, or None when unavailable.
+
+        `getattr` rather than plain attribute access: this class is also built
+        via ``__new__`` (tests, and any future partial construction), and budget
+        accounting must degrade to the per-process tally rather than raise.
+        """
+        store = getattr(self, "_budget", None)
+        if store is None:
+            return None
+        try:
+            return store if store.available() else None
+        except Exception:
+            return None
+
     def remaining_budget(self) -> int:
-        """Return remaining API requests available (excluding safety reserve)."""
+        """Remaining API requests available today, excluding the safety reserve.
+
+        Reads the shared counter when migration 002 is applied, so a second
+        process sees what the first already spent. Falls back to this process's
+        own tally otherwise.
+        """
+        store = self._shared_budget()
+        if store is not None:
+            return store.remaining(reserve=self.BUDGET_RESERVE)
         return max(0, self._daily_limit - self._requests_today - self.BUDGET_RESERVE)
+
+    def _budget_used(self) -> int:
+        """Requests spent today, across all processes when the table exists."""
+        store = self._shared_budget()
+        return store.used() if store is not None else self._requests_today
 
     async def _api_get(self, endpoint: str, params: dict = None) -> Optional[dict]:
         """Make an authenticated GET request to API-Football.
@@ -447,6 +484,18 @@ class APIFootballScraper(BaseScraper):
             return None
         if self._requests_today >= self._daily_limit:
             logger.warning("API-Football daily request limit reached, skipping")
+            self._quota_exhausted = True
+            return None
+
+        # Claim the request from the shared budget BEFORE spending it. Claiming
+        # first means a crash leaks the claim for the rest of the day — the safe
+        # direction: under-spending a quota costs freshness, over-spending costs
+        # money and can get the key suspended.
+        _shared = self._shared_budget()
+        if _shared is not None and not _shared.claim(1):
+            logger.warning(
+                "API-Football daily request limit reached (shared budget) — skipping"
+            )
             self._quota_exhausted = True
             return None
 
@@ -652,7 +701,7 @@ class APIFootballScraper(BaseScraper):
         ]
         with self.db.get_session() as session:
             existing_rows = session.query(Match.id, Match.apifootball_id).filter(
-                Match.apifootball_id.in_(_batch_afids),
+                id_in(session, Match.apifootball_id, _batch_afids),
             ).all() if _batch_afids else []
         _afid_to_match_id = {row.apifootball_id: row.id for row in existing_rows}
 
@@ -858,7 +907,7 @@ class APIFootballScraper(BaseScraper):
         """
         # Compute available budget: reserve room for injury-scraper that runs after this.
         injury_reserve = min(40, self._today_fixture_count + 10)
-        xg_budget = self._daily_limit - self._requests_today - self.BUDGET_RESERVE - injury_reserve
+        xg_budget = self._daily_limit - self._budget_used() - self.BUDGET_RESERVE - injury_reserve
         xg_budget = max(0, min(xg_budget, self.BUDGET_XG))
         if xg_budget == 0:
             logger.debug(
@@ -924,7 +973,7 @@ class APIFootballScraper(BaseScraper):
         # Fetch all stats first, then batch-write to DB in a single commit
         pending_updates: list = []
         for match_id, fixture_id in match_data:
-            if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
+            if self._budget_used() >= self._daily_limit - self.BUDGET_RESERVE:
                 logger.warning("Approaching API limit, stopping stats backfill")
                 break
 
@@ -1197,7 +1246,7 @@ class APIFootballScraper(BaseScraper):
         stats_done = 0
         pending_stats: list = []
         for match_id, fixture_id in stats_queue:
-            if self._requests_today >= self._daily_limit - 2:
+            if self._budget_used() >= self._daily_limit - 2:
                 logger.warning(f"API limit approached — stopping stats pass at {stats_done}")
                 break
             stats = await self._fetch_fixture_stats(fixture_id)
@@ -1227,7 +1276,7 @@ class APIFootballScraper(BaseScraper):
         detail_done = 0
         pending_details: list = []
         for match_id, fixture_id in detail_queue:
-            if self._requests_today >= self._daily_limit - 2:
+            if self._budget_used() >= self._daily_limit - 2:
                 logger.warning(f"API limit approached — stopping details pass at {detail_done}")
                 break
             detail = await self._fetch_fixture_detail(fixture_id)
@@ -1383,16 +1432,20 @@ class APIFootballScraper(BaseScraper):
                 #    e.g. "Bayer Leverkusen" contains "Leverkusen". For CL/EL/ECL,
                 #    teams are stored under domestic leagues — search all teams.
                 name_lower = name.lower()
+                # Read-only candidate pool — only .id and .name are consumed, so
+                # project them. The international branch otherwise pulled every
+                # club row in the DB (1,286 full rows) per unresolved name.
+                _cand_cols = (Team.id, Team.name)
                 if _is_national:
-                    candidates = session.query(Team).filter(
+                    candidates = session.query(*_cand_cols).filter(
                         Team.league.in_(_nat_list)
                     ).all()
                 elif league in self._INTERNATIONAL_LEAGUES:
-                    candidates = session.query(Team).filter(
+                    candidates = session.query(*_cand_cols).filter(
                         Team.league.notin_(list(self._INTERNATIONAL_LEAGUES) + _nat_list)
                     ).all()
                 else:
-                    candidates = session.query(Team).filter_by(league=league).all()
+                    candidates = session.query(*_cand_cols).filter_by(league=league).all()
 
                 candidates = [c for c in candidates if not _YOUTH_TEAM_RE.search(c.name or "")]
 
@@ -1512,7 +1565,7 @@ class APIFootballScraper(BaseScraper):
 
     async def _fetch_odds_guarded(self, sem, match_id: int, fixture_id: int, league: str) -> tuple:
         async with sem:
-            if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
+            if self._budget_used() >= self._daily_limit - self.BUDGET_RESERVE:
                 logger.debug(f"Quota limit reached — skipping odds for fixture {fixture_id}")
                 return (match_id, None, league)
             odds_data = await self._fetch_fixture_odds(fixture_id)
@@ -1531,7 +1584,7 @@ class APIFootballScraper(BaseScraper):
         # On Sat/Sun with 80+ fixtures this is much larger than the fixed BUDGET_ODDS=20.
         # injury_reserve = 1 request per fixture (fixture-level) + 10 team fallback, max 40.
         injury_reserve = min(40, self._today_fixture_count + 10)
-        odds_budget = self._daily_limit - self._requests_today - self.BUDGET_RESERVE - injury_reserve
+        odds_budget = self._daily_limit - self._budget_used() - self.BUDGET_RESERVE - injury_reserve
         # Allow up to fixture_count odds requests (one per match), min is old fixed cap.
         odds_cap = max(self.BUDGET_ODDS, self._today_fixture_count)
         odds_budget = max(0, min(odds_budget, odds_cap))
@@ -1712,6 +1765,7 @@ class APIFootballScraper(BaseScraper):
                 (r.bookmaker, r.market_type, r.selection): r
                 for r in existing_rows
             }
+            new_rows: list = []
 
             for entry in odds_response:
                 bookmakers = entry.get("bookmakers", [])
@@ -1760,21 +1814,59 @@ class APIFootballScraper(BaseScraper):
                                     existing.timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
                                 continue
 
-                            odds = Odds(
-                                match_id=match_id,
-                                bookmaker=bookie_name,
-                                market_type=market_type,
-                                selection=selection,
-                                odds_value=odds_value,
-                                opening_odds=odds_value,
-                            )
-                            session.add(odds)
-                            existing_index[key] = odds  # prevent re-insert on dup
+                            # Not in our snapshot — but another writer may have
+                            # inserted it since we read. A plain INSERT would
+                            # raise a unique violation on
+                            # ix_odds_match_bookie_market, and on PostgreSQL a
+                            # constraint violation aborts the WHOLE transaction:
+                            # not one lost odds row, every odds row for this
+                            # fixture, plus a re-raise that kills the step.
+                            # Upsert instead, so a concurrent writer costs
+                            # nothing.
+                            new_rows.append({
+                                "match_id": match_id,
+                                "bookmaker": bookie_name,
+                                "market_type": market_type,
+                                "selection": selection,
+                                "odds_value": odds_value,
+                                "opening_odds": odds_value,
+                                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None),
+                            })
+                            existing_index[key] = True  # prevent re-insert on dup
                             count += 1
 
+            if new_rows:
+                self._upsert_odds_rows(session, new_rows)
             session.commit()
 
         return count
+
+    @staticmethod
+    def _upsert_odds_rows(session, rows: list) -> None:
+        """INSERT ... ON CONFLICT DO UPDATE against ix_odds_match_bookie_market.
+
+        On conflict the row already exists, so behave exactly like the in-session
+        update path above: refresh odds_value and timestamp, and keep the
+        first-seen opening_odds — COALESCE falls back to the existing
+        odds_value, mirroring `if existing.opening_odds is None`.
+        """
+        from sqlalchemy.dialects import postgresql, sqlite
+
+        dialect = session.bind.dialect.name if session.bind is not None else ""
+        insert = postgresql.insert if dialect == "postgresql" else sqlite.insert
+
+        stmt = insert(Odds.__table__).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["match_id", "bookmaker", "market_type", "selection"],
+            set_={
+                "odds_value": stmt.excluded.odds_value,
+                "timestamp": stmt.excluded.timestamp,
+                "opening_odds": func.coalesce(
+                    Odds.__table__.c.opening_odds, Odds.__table__.c.odds_value
+                ),
+            },
+        )
+        session.execute(stmt)
 
     # ---- Historical data backfill ----
 
@@ -2064,7 +2156,7 @@ class APIFootballScraper(BaseScraper):
 
                     if fix_api_id not in fixture_cache:
                         used = self._requests_today - (self._requests_today - len(fixture_cache))
-                        if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
+                        if self._budget_used() >= self._daily_limit - self.BUDGET_RESERVE:
                             break
                         data = await self._api_get("/fixtures", {"id": fix_api_id})
                         fixture_cache[fix_api_id] = (
@@ -2143,7 +2235,7 @@ class APIFootballScraper(BaseScraper):
                 "Paris SG": "Paris Saint Germain",
             }
             for tid, name, cnt in still_missing[:10]:
-                if self._requests_today >= self._daily_limit - self.BUDGET_RESERVE:
+                if self._budget_used() >= self._daily_limit - self.BUDGET_RESERVE:
                     break
                 # Use override if available, otherwise sanitize the DB name
                 import re as _re

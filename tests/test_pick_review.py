@@ -7,7 +7,7 @@ No briefing article is posted in this mode.
 
 import asyncio
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -224,26 +224,30 @@ def test_apply_decision_records_keep_on_saved_pick(db):
 
 def test_recent_review_stats_formats_keep_change(db):
     """KEEP/CHANGE win rates are computed from settled reviewed picks."""
+    # One match per pick. The fixture used to hang all 12 picks off a single
+    # match with the same selection and date, which ix_saved_picks_dedup now
+    # (correctly) forbids — production cannot produce that state either, since
+    # a match yields at most a couple of picks with distinct selections.
     with db.get_session() as s:
         h, a = Team(name="A"), Team(name="B")
         s.add_all([h, a]); s.flush()
-        m = Match(home_team_id=h.id, away_team_id=a.id,
-                  match_date=datetime(2026, 7, 10, 18, 0),
-                  league="world/fifa-world-cup", is_fixture=False,
-                  home_goals=1, away_goals=0)
-        s.add(m); s.flush()
+
+        def _settled_pick(idx, action, result):
+            m = Match(home_team_id=h.id, away_team_id=a.id,
+                      match_date=datetime(2026, 7, 10, 18, 0) + timedelta(days=idx),
+                      league="world/fifa-world-cup", is_fixture=False,
+                      home_goals=1, away_goals=0)
+            s.add(m); s.flush()
+            s.add(SavedPick(match_id=m.id, pick_date=date.today(),
+                            match_name="A vs B", league="world/fifa-world-cup",
+                            market="1X2", selection="Home Win", odds=1.7,
+                            review_action=action, result=result))
+
         # 7 KEEP (3 wins), 5 CHANGE (5 wins) — 12 settled reviewed picks.
         for i in range(7):
-            s.add(SavedPick(match_id=m.id, pick_date=date.today(),
-                            match_name="A vs B", league="world/fifa-world-cup",
-                            market="1X2", selection="Home Win", odds=1.7,
-                            review_action="KEEP",
-                            result="win" if i < 3 else "loss"))
+            _settled_pick(i, "KEEP", "win" if i < 3 else "loss")
         for i in range(5):
-            s.add(SavedPick(match_id=m.id, pick_date=date.today(),
-                            match_name="A vs B", league="world/fifa-world-cup",
-                            market="1X2", selection="Home Win", odds=1.7,
-                            review_action="CHANGE", result="win"))
+            _settled_pick(7 + i, "CHANGE", "win")
         s.commit()
 
     out = _svc(db)._recent_review_stats()

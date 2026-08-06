@@ -6,6 +6,7 @@ from sqlalchemy import or_, and_
 
 from src.data.models import Match
 from src.data.database import get_db
+from src.features import preload_cache as _pc
 from src.utils.logger import get_logger
 
 logger = get_logger()
@@ -33,29 +34,27 @@ class H2HFeatures:
         Returns:
             Dictionary of H2H features
         """
-        if preload_cache is not None:
-            team_history = preload_cache.get("team_history", {})
-            # H2H matches appear in both teams' history; use union via seen_ids
-            seen_ids: set = set()
-            h2h_rows = []
-            for tid in (home_team_id, away_team_id):
-                for m in team_history.get(tid, []):
-                    if m["id"] not in seen_ids and m["home_goals"] is not None:
-                        is_h2h = (
-                            (m["home_team_id"] == home_team_id and m["away_team_id"] == away_team_id)
-                            or (m["home_team_id"] == away_team_id and m["away_team_id"] == home_team_id)
-                        )
-                        if is_h2h and (as_of_date is None or m["match_date"] < as_of_date):
-                            h2h_rows.append(m)
-                            seen_ids.add(m["id"])
-            h2h_rows.sort(key=lambda m: m["match_date"], reverse=True)
-            h2h_rows = h2h_rows[:limit]
+        # Dedicated pairing scope. Scanning team_history for meetings only worked
+        # while both teams' slices were untruncated — with the live 60-row /
+        # 365-day window, older meetings simply vanished and H2H silently
+        # shrank. _preload_h2h_history loads each pairing in full, and the
+        # accessor returns None if it cannot prove that, so the query below runs.
+        h2h_rows = _pc.h2h_rows(
+            preload_cache, home_team_id, away_team_id, limit=limit,
+            predicate=lambda m: (
+                m["home_goals"] is not None
+                and (as_of_date is None or m["match_date"] < as_of_date)
+            ),
+        )
+        if h2h_rows is not None:
             if not h2h_rows:
                 return self._empty_h2h()
             return self._calculate_h2h_from_dicts(h2h_rows, home_team_id, away_team_id)
 
         with self.db.get_session() as session:
-            query = session.query(Match).filter(
+            query = session.query(
+                Match.home_team_id, Match.home_goals, Match.away_goals,
+            ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
                 or_(

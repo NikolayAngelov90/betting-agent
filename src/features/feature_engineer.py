@@ -7,6 +7,8 @@ from typing import Optional
 
 from sqlalchemy import or_
 
+from src.data.sql_helpers import id_in
+from src.features import preload_cache as _pc
 from src.features.team_features import TeamFeatures
 from src.features.h2h_features import H2HFeatures
 from src.features.injury_features import InjuryFeatures
@@ -48,17 +50,47 @@ class FeatureEngineer:
 
     def preload_batch(self, match_ids: list,
                       cap_per_team: int = 60,
-                      cutoff_days: int = 365) -> None:
+                      cutoff_days: int = 365,
+                      league_cap: int = 2500,
+                      referee_cap: int = 30) -> None:
         """Bulk-preload all DB data needed for a list of fixtures into memory.
 
-        Replaces O(N) per-fixture DB round-trips with three bulk queries:
-          1. Match metadata for all match_ids (1 query)
-          2. All Odds rows for all match_ids (1 query)
-          3. Completed match history for all involved teams (1 query)
+        Replaces O(N) per-fixture DB round-trips with four bulk queries and two
+        scopes derived from data the process already holds:
+
+          1. Match metadata for all match_ids                        (query)
+          2. All Odds rows for all match_ids                         (query)
+          3. Completed match history for the fixtures' own teams     (query)
+          4. Referee history for the fixtures' referees              (query)
+          5. League-wide history, for standings                      (derived)
+          6. Head-to-head history per pairing                        (derived)
+
+        Scopes 4-6 exist because three feature families need context *wider*
+        than the two teams playing: standings rank the whole division, referee
+        stats span every match the official took, and H2H reaches back past a
+        team's recent-form window. Without them those lookups were answered from
+        the two-team scope and silently returned zeroed or truncated features —
+        see ``src/features/preload_cache.py`` for the full history.
+
+        5 and 6 are derived rather than queried because the completed-match
+        history is already in memory for Elo/Poisson (from the local Parquet
+        mirror), and it carries exactly the columns they need. Querying them
+        would have cost ~3.2 MB on a busy 32-league matchday for rows the
+        process already had.
+
+        Every cached scope records whether it is *complete*. Consumers go
+        through the accessors in ``preload_cache``, which return ``None`` when
+        the cache cannot prove it holds the same rows the live query would, and
+        the caller then runs that live query. Preload and live are therefore
+        equivalent by construction, not by coincidence.
 
         Args:
             cap_per_team: Max history rows per team (60 for live, 200 for training).
             cutoff_days: History window in days (365 for live, 0=no cutoff for training).
+            league_cap: Memory safety valve — a league with more completed
+                matches than this is dropped from the standings scope and its
+                standings fall back to live queries.
+            referee_cap: Rows per referee; matches the live query's LIMIT 30.
 
         Calling preload_batch is optional — if not called (or if it raises),
         create_features() falls back to per-fixture live queries with zero
@@ -70,15 +102,31 @@ class FeatureEngineer:
         try:
             # Init inside try so a mid-query exception never leaves a partial cache
             # that Story 1.2 consumers could incorrectly read.
-            self._preload_cache = {"match_meta": {}, "odds": {}, "team_history": {}}
+            self._preload_cache = {
+                "match_meta": {}, "odds": {}, "team_history": {},
+                "team_complete": set(),
+                "league_history": {}, "league_complete": set(),
+                "referee_history": {}, "referee_complete": set(),
+                "h2h_history": {}, "h2h_complete": set(),
+            }
 
             # ── Query 1: match metadata ───────────────────────────────────────
+            # Column-projected: the loop below copies eight fields out of the
+            # row, so asking for all 45 (SELECT matches.*) shipped ~4x the bytes
+            # needed. Same for queries 2 and 3.
             with self.db.get_session() as session:
-                fixture_rows = session.query(Match).filter(
-                    Match.id.in_(match_ids)
+                fixture_rows = session.query(
+                    Match.id, Match.home_team_id, Match.away_team_id,
+                    Match.league, Match.referee, Match.match_date,
+                    Match.venue, Match.round, Match.season,
+                ).filter(
+                    id_in(session, Match.id, match_ids)
                 ).all()
 
                 all_team_ids: set = set()
+                all_leagues: set = set()
+                all_referees: set = set()
+                all_pairs: set = set()
                 for m in fixture_rows:
                     self._preload_cache["match_meta"][m.id] = {
                         "home_team_id": m.home_team_id,
@@ -92,11 +140,19 @@ class FeatureEngineer:
                     }
                     all_team_ids.add(m.home_team_id)
                     all_team_ids.add(m.away_team_id)
+                    if m.league:
+                        all_leagues.add(m.league)
+                    if m.referee:
+                        all_referees.add(m.referee)
+                    all_pairs.add(_pc.h2h_key(m.home_team_id, m.away_team_id))
 
             # ── Query 2: odds for all fixtures ────────────────────────────────
             with self.db.get_session() as session:
-                odds_rows = session.query(Odds).filter(
-                    Odds.match_id.in_(match_ids)
+                odds_rows = session.query(
+                    Odds.match_id, Odds.market_type, Odds.bookmaker,
+                    Odds.selection, Odds.odds_value, Odds.opening_odds,
+                ).filter(
+                    id_in(session, Odds.match_id, match_ids)
                 ).all()
 
                 odds_by_match: dict = defaultdict(list)
@@ -116,15 +172,37 @@ class FeatureEngineer:
                     _hist_filter = [
                         Match.is_fixture == False,
                         Match.home_goals.isnot(None),
+                        # Array params, not IN lists: this clause binds the
+                        # SAME team set twice, so at 100x volume a plain IN
+                        # would put ~52,800 bind parameters in one statement
+                        # against PostgreSQL's 65,535 hard cap.
                         or_(
-                            Match.home_team_id.in_(all_team_ids),
-                            Match.away_team_id.in_(all_team_ids),
+                            id_in(session, Match.home_team_id, all_team_ids),
+                            id_in(session, Match.away_team_id, all_team_ids),
                         ),
                     ]
                     if cutoff_days > 0:
                         cutoff = _date.today() - timedelta(days=cutoff_days)
                         _hist_filter.append(Match.match_date >= cutoff)
-                    history_rows = session.query(Match).filter(
+                    history_rows = session.query(
+                        Match.id, Match.match_date,
+                        Match.home_team_id, Match.away_team_id,
+                        Match.league, Match.referee,
+                        Match.home_goals, Match.away_goals,
+                        Match.home_xg, Match.away_xg,
+                        Match.home_yellow_cards, Match.away_yellow_cards,
+                        Match.home_red_cards, Match.away_red_cards,
+                        Match.home_fouls, Match.away_fouls,
+                        Match.regulation_home_goals, Match.regulation_away_goals,
+                        Match.home_shots, Match.away_shots,
+                        Match.home_shots_on_target, Match.away_shots_on_target,
+                        Match.home_possession, Match.away_possession,
+                        Match.home_corners, Match.away_corners,
+                        Match.home_dangerous_attacks, Match.away_dangerous_attacks,
+                        Match.home_saves, Match.away_saves,
+                        Match.home_offsides, Match.away_offsides,
+                        Match.home_free_kicks, Match.away_free_kicks,
+                    ).filter(
                         *_hist_filter
                     ).order_by(Match.match_date.desc()).all()
 
@@ -178,16 +256,176 @@ class FeatureEngineer:
                             team_counts[m.away_team_id] += 1
 
                     self._preload_cache["team_history"] = dict(team_history)
+                    # A team's cached list is the WHOLE history only when no date
+                    # window was applied and the row cap was never reached.
+                    # Conservative on purpose: a wrong "complete" would serve a
+                    # short answer as if it were the full one.
+                    if cutoff_days <= 0:
+                        self._preload_cache["team_complete"] = {
+                            tid for tid in all_team_ids
+                            if team_counts[tid] < cap_per_team
+                        }
+
+            # ── Query 4: referee history ──────────────────────────────────────
+            if all_referees:
+                self._preload_referee_history(all_referees, referee_cap)
+
+            # ── Scopes 5 & 6: derived from the shared completed-match history ──
+            # Loaded once here rather than inside each builder — it is the same
+            # rows for both, and on a busy matchday that is 33k of them.
+            if all_leagues or all_pairs:
+                from src.data.match_history import get_completed_matches
+                _history = get_completed_matches(self.db)
+                if all_leagues:
+                    self._preload_league_history(_history, all_leagues, league_cap)
+                if all_pairs:
+                    self._preload_h2h_history(_history, all_pairs)
 
             logger.debug(
                 f"preload_batch: {len(self._preload_cache['match_meta'])} fixtures, "
                 f"{sum(len(v) for v in self._preload_cache['odds'].values())} odds rows, "
-                f"{len(self._preload_cache.get('team_history', {}))} teams of history"
+                f"{len(self._preload_cache.get('team_history', {}))} teams of history, "
+                f"{len(self._preload_cache.get('league_history', {}))} leagues, "
+                f"{len(self._preload_cache.get('referee_history', {}))} referees, "
+                f"{len(self._preload_cache.get('h2h_history', {}))} pairings"
             )
 
         except Exception as exc:
             logger.warning(f"preload_batch failed — falling back to per-fixture queries: {exc}")
             self._preload_cache = None
+
+    # ------------------------------------------------------------------ scopes
+
+    @staticmethod
+    def _lean_row(m) -> dict:
+        """Goal-only history row.
+
+        Carries the same keys the rich rows use for goals/ids/date/league so the
+        shared form maths works unchanged; the stat columns are simply absent,
+        and ``_calculate_form_from_dicts`` reads those with ``.get()`` and
+        ignores missing values exactly as it does for a match with no stats
+        recorded.
+        """
+        return {
+            "id": m.id,
+            "match_date": m.match_date,
+            "home_team_id": m.home_team_id,
+            "away_team_id": m.away_team_id,
+            "home_goals": m.home_goals,
+            "away_goals": m.away_goals,
+            "league": m.league,
+        }
+
+    def _preload_league_history(self, history: list, leagues: set,
+                                league_cap: int) -> None:
+        """Per-league, per-team history for ``_get_league_standings``.
+
+        Standings rank *every* club in the division, so this scope is far wider
+        than the fixture's two teams — on a busy 32-league matchday, querying it
+        would pull ~33,600 rows, essentially the whole table.
+
+        It does not need to. The process already holds the complete
+        completed-match history in memory for Elo/Poisson, sourced from the
+        local Parquet mirror (or, failing that, one projected read), and those
+        rows carry exactly the columns standings consume: ids, date, goals,
+        league. So this scope is *derived*, not fetched — zero extra egress, and
+        complete by construction rather than by a cap that might bite.
+
+        ``league_cap`` remains as a safety valve on memory: a league with more
+        completed matches than the cap is left out of the scope entirely, and
+        its standings fall back to live queries.
+        """
+        by_league: dict = defaultdict(lambda: defaultdict(list))
+        counts: dict = defaultdict(int)
+        # Newest-first, to match the ordering every consumer slices with.
+        for m in reversed(history):
+            if m.league not in leagues:
+                continue
+            counts[m.league] += 1
+            if counts[m.league] > league_cap:
+                continue
+            row = self._lean_row(m)
+            by_league[m.league][m.home_team_id].append(row)
+            by_league[m.league][m.away_team_id].append(row)
+
+        over_cap = {lg for lg, n in counts.items() if n > league_cap}
+        if over_cap:
+            logger.warning(
+                f"league history cap ({league_cap}) exceeded for {sorted(over_cap)} "
+                f"— their standings will use live queries"
+            )
+        self._preload_cache["league_history"] = {
+            lg: dict(teams) for lg, teams in by_league.items() if lg not in over_cap
+        }
+        self._preload_cache["league_complete"] = set(leagues) - over_cap
+
+    def _preload_referee_history(self, referees: set, referee_cap: int) -> None:
+        """Each referee's most recent matches inside the same 365-day window the
+        live query uses, capped at the live query's LIMIT."""
+        from sqlalchemy import func as _func
+
+        _ref_cutoff = _date.today() - timedelta(days=365)
+        with self.db.get_session() as session:
+            _rn = _func.row_number().over(
+                partition_by=Match.referee,
+                order_by=(Match.match_date.desc(), Match.id.desc()),
+            ).label("rn")
+            sub = session.query(
+                Match.id, Match.match_date, Match.referee,
+                Match.home_goals, Match.away_goals,
+                Match.home_yellow_cards, Match.away_yellow_cards,
+                Match.home_red_cards, Match.away_red_cards,
+                Match.home_fouls, Match.away_fouls,
+                _rn,
+            ).filter(
+                id_in(session, Match.referee, referees),
+                Match.is_fixture == False,  # noqa: E712
+                Match.home_goals.isnot(None),
+                Match.match_date >= _ref_cutoff,
+            ).subquery()
+            rows = session.query(sub).filter(sub.c.rn <= referee_cap).all()
+
+        by_ref: dict = defaultdict(list)
+        for m in rows:
+            by_ref[m.referee].append({
+                "id": m.id,
+                "match_date": m.match_date,
+                "referee": m.referee,
+                "home_goals": m.home_goals,
+                "away_goals": m.away_goals,
+                "home_yellow_cards": m.home_yellow_cards,
+                "away_yellow_cards": m.away_yellow_cards,
+                "home_red_cards": m.home_red_cards,
+                "away_red_cards": m.away_red_cards,
+                "home_fouls": m.home_fouls,
+                "away_fouls": m.away_fouls,
+            })
+
+        self._preload_cache["referee_history"] = dict(by_ref)
+        # Complete when we hold every qualifying match, not just the newest N —
+        # which matters once an as_of_date filter shrinks the slice further.
+        self._preload_cache["referee_complete"] = {
+            r for r in referees if len(by_ref.get(r, [])) < referee_cap
+        }
+
+    def _preload_h2h_history(self, history: list, pairs: set) -> None:
+        """All past meetings for each fixture's pairing.
+
+        Derived from the same in-memory history as the league scope. H2H needs
+        the *complete* record of a pairing — the previous implementation read it
+        out of the 60-row / 365-day team window, which silently halved the
+        meeting count for long-standing rivalries.
+        """
+        by_pair: dict = defaultdict(list)
+        for m in reversed(history):  # newest first
+            key = _pc.h2h_key(m.home_team_id, m.away_team_id)
+            if key not in pairs:
+                continue
+            by_pair[key].append(self._lean_row(m))
+
+        self._preload_cache["h2h_history"] = dict(by_pair)
+        # Every pairing is loaded in full, so all of them are exact.
+        self._preload_cache["h2h_complete"] = set(pairs)
 
     async def create_features(self, match_id: int, as_of_date=None,
                               for_training: bool = False) -> dict:
@@ -483,16 +721,16 @@ class FeatureEngineer:
             "xg_overperformance": 0.0, "xg_matches": 0,
         }
 
-        if self._preload_cache is not None:
-            cached_rows = self._preload_cache.get("team_history", {}).get(team_id, [])
-            filtered = [
-                m for m in cached_rows
-                if m["home_xg"] is not None
+        matches_data = _pc.team_rows(
+            self._preload_cache, team_id, limit=num_matches,
+            predicate=lambda m: (
+                m["home_xg"] is not None
                 and (as_of_date is None or m["match_date"] < as_of_date)
                 and (venue != "home" or m["home_team_id"] == team_id)
                 and (venue != "away" or m["away_team_id"] == team_id)
-            ]
-            matches_data = filtered[:num_matches]
+            ),
+        )
+        if matches_data is not None:
             if matches_data:
                 xg_for_list = []
                 xg_against_list = []
@@ -519,7 +757,10 @@ class FeatureEngineer:
             return empty
 
         with self.db.get_session() as session:
-            query = session.query(Match).filter(
+            query = session.query(
+                Match.home_team_id, Match.home_xg, Match.away_xg,
+                Match.home_goals, Match.away_goals,
+            ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
                 Match.home_xg.isnot(None),
@@ -587,19 +828,20 @@ class FeatureEngineer:
         if not referee:
             return empty
 
-        if self._preload_cache is not None:
-            seen_ids: set = set()
-            matches_data = []
-            for team_rows in self._preload_cache.get("team_history", {}).values():
-                for m in team_rows:
-                    if (m["id"] not in seen_ids
-                            and m.get("referee") == referee
-                            and m["home_goals"] is not None
-                            and (as_of_date is None or m["match_date"] < as_of_date)):
-                        matches_data.append(m)
-                        seen_ids.add(m["id"])
-            matches_data.sort(key=lambda m: m["match_date"], reverse=True)
-            matches_data = matches_data[:30]
+        # Dedicated referee scope. The old code scanned team_history — i.e. only
+        # the two teams playing this fixture — so a referee's "last 30 matches"
+        # was computed from however many of those two teams' games they happened
+        # to officiate, and the live query's 365-day window was not applied
+        # either. Both are now handled by _preload_referee_history, and a slice
+        # it cannot prove exact returns None so the live query below runs.
+        matches_data = _pc.referee_rows(
+            self._preload_cache, referee, limit=30,
+            predicate=lambda m: (
+                m["home_goals"] is not None
+                and (as_of_date is None or m["match_date"] < as_of_date)
+            ),
+        )
+        if matches_data is not None:
             if matches_data:
                 cards_list = []
                 yellow_list = []
@@ -637,7 +879,12 @@ class FeatureEngineer:
 
         with self.db.get_session() as session:
             _ref_cutoff = _date.today() - timedelta(days=365)
-            query = session.query(Match).filter(
+            query = session.query(
+                Match.home_yellow_cards, Match.away_yellow_cards,
+                Match.home_red_cards, Match.away_red_cards,
+                Match.home_goals, Match.away_goals,
+                Match.home_fouls, Match.away_fouls,
+            ).filter(
                 Match.referee == referee,
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
@@ -732,7 +979,10 @@ class FeatureEngineer:
                     return defaults
             else:
                 with self.db.get_session() as session:
-                    rows = session.query(Odds).filter(
+                    rows = session.query(
+                        Odds.market_type, Odds.bookmaker,
+                        Odds.selection, Odds.odds_value,
+                    ).filter(
                         Odds.match_id == match_id,
                         Odds.market_type.in_(["1X2", "over_under", "btts", "team_goals"]),
                     ).all()
@@ -869,7 +1119,10 @@ class FeatureEngineer:
                 ]
             else:
                 with self.db.get_session() as session:
-                    db_rows = session.query(Odds).filter(
+                    db_rows = session.query(
+                        Odds.market_type, Odds.selection,
+                        Odds.odds_value, Odds.opening_odds, Odds.bookmaker,
+                    ).filter(
                         Odds.match_id == match_id,
                         Odds.opening_odds.isnot(None),
                         Odds.bookmaker != "Flashscore",
@@ -952,7 +1205,9 @@ class FeatureEngineer:
 
         try:
             with self.db.get_session() as session:
-                query = session.query(Match).filter(
+                query = session.query(
+                    Match.home_goals, Match.away_goals,
+                ).filter(
                     Match.league == league,
                     Match.is_fixture == False,
                     Match.home_goals.isnot(None),
@@ -1073,14 +1328,20 @@ class FeatureEngineer:
             "fatigue_index": 0.0, "short_rest_count": 0,
         }
         try:
-            if self._preload_cache is not None:
-                cached_rows = self._preload_cache.get("team_history", {}).get(team_id, [])
-                recent_cached = [m for m in cached_rows if m["match_date"] < match_date][:10]
+            recent_cached = _pc.team_rows(
+                self._preload_cache, team_id, limit=10,
+                predicate=lambda m: m["match_date"] < match_date,
+            )
+            if recent_cached is not None:
                 return self._compute_situational_from_rows(recent_cached, team_id, match_date)
 
             with self.db.get_session() as session:
                 # Fetch last 10 matches (enough to cover 30 days for busy teams)
-                recent = session.query(Match).filter(
+                recent = session.query(
+                    Match.match_date, Match.home_team_id, Match.away_team_id,
+                    Match.home_goals, Match.away_goals,
+                    Match.regulation_home_goals, Match.regulation_away_goals,
+                ).filter(
                     Match.is_fixture == False,
                     Match.home_goals.isnot(None),
                     Match.match_date < match_date,

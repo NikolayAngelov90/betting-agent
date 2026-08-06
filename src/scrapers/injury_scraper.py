@@ -76,8 +76,14 @@ class InjuryScraper:
         with self.db.get_session() as session:
             # Only fetch injury data for fixtures with at least one odds record —
             # fixtures without odds have no pick interest and don't need injury context.
+            # Projected to the four fields the comprehension below reads. The
+            # old form was SELECT DISTINCT over all 47 match columns, which also
+            # made Postgres sort/dedupe on every one of them.
             fixtures = (
-                session.query(Match)
+                session.query(
+                    Match.id, Match.apifootball_id,
+                    Match.home_team_id, Match.away_team_id,
+                )
                 .join(Odds, Match.id == Odds.match_id)
                 .filter(
                     Match.is_fixture == True,

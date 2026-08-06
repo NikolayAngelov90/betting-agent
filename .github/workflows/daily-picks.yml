@@ -23,11 +23,95 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The national-team backfill is conditional and rarely runs, but its 90-minute
+  # budget counted against the main job's cap all the same. With it inline the
+  # step timeouts summed to 445 minutes inside a 240-minute job — so a slow day
+  # was cancelled by GitHub mid-step, and a cancelled job skips the alerting
+  # that `continue-on-error` normally preserves. Hoisting it into its own job
+  # gives it a real budget without stealing from the pipeline, and brings the
+  # main job's worst case (355 min) inside its cap.
+  backfill-wc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      MODEL_HMAC_KEY: ${{ secrets.MODEL_HMAC_KEY }}
+      BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      # Lean install: this job touches the database and API-Football only — no
+      # browser, no camoufox, no ML stack needed for a history backfill.
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Create config from example
+        run: cp config/config.example.yaml config/config.yaml
+      - name: Check national-team data coverage
+        id: natcov
+        run: |
+          LOW=$(python -c "
+          from datetime import datetime, timedelta
+          from sqlalchemy import or_
+          from src.data.database import get_db
+          from src.data.models import Match
+          from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+          db = get_db()
+          nat = list(NATIONAL_TEAM_LEAGUES)
+          with db.get_session() as s:
+              n = s.query(Match).filter(
+                  Match.league.in_(nat), Match.home_goals.isnot(None),
+              ).count()
+              # Aggregate count alone missed USA having ZERO matches while the
+              # total passed 1500 — also check every team playing in the next
+              # 48h for missing history.
+              now = datetime.utcnow()
+              fixtures = s.query(Match).filter(
+                  Match.league == 'world/fifa-world-cup',
+                  Match.is_fixture == True,
+                  Match.match_date >= now,
+                  Match.match_date <= now + timedelta(hours=48),
+              ).all()
+              bare = 0
+              for f in fixtures:
+                  for tid in (f.home_team_id, f.away_team_id):
+                      played = s.query(Match).filter(
+                          Match.league.in_(nat), Match.home_goals.isnot(None),
+                          or_(Match.home_team_id == tid, Match.away_team_id == tid),
+                      ).count()
+                      if played == 0:
+                          bare += 1
+          print('true' if (n < 1500 or bare > 0) else 'false')" | tail -1)
+          echo "low=$LOW" >> "$GITHUB_OUTPUT"
+          echo "National-team coverage low: $LOW"
+
+      # Auto-trigger preserved: the probe used to live in the main job and gate
+      # an inline step. It moves here with the work it gates, so a low-coverage
+      # day still backfills without anyone asking.
+      - name: Backfill national-team history (auto when coverage low, or on demand)
+        if: github.event.inputs.backfill_wc == 'true' || steps.natcov.outputs.low == 'true'
+        # Supabase insert latency makes big seasons slow (~20 min per ~400
+        # matches); 40 min was hit mid-list on 2026-06-12. Targets are ordered
+        # most-recent-first so even a timeout keeps the valuable data.
+        run: python -m src.agent.betting_agent --backfill-wc
+        continue-on-error: true
+
   daily-picks:
     runs-on: ubuntu-latest
-    # Raised from 180: the picks step now also runs Claude's per-match review
-    # (KEEP/CHANGE) on every WC + club pick before sending, which adds time.
-    timeout-minutes: 240
+    # `always()`: backfill-wc is skipped on almost every run, and a skipped
+    # dependency must not block the pipeline.
+    needs: [backfill-wc]
+    if: always()
+    # Worst case with backfill hoisted out: 65+15+50+150+60+15 = 355 min.
+    # Keep this at or above that sum — GitHub CANCELS the job at the cap rather
+    # than failing a step, which loses the whole day silently.
+    timeout-minutes: 360
 
     env:
       API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
@@ -51,7 +135,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Restore ML models cache
+      # data/models/ also carries match_history.parquet + its metadata — the
+      # local mirror of completed-match history. Restoring it here means the
+      # seven CLI steps below share one copy AND it survives to tomorrow's run,
+      # so each step syncs only the rows whose updated_at moved instead of
+      # re-reading the whole history from Supabase. Losing the cache is safe:
+      # the first sync just rebuilds the file from scratch.
+      - name: Restore ML models + history mirror cache
         uses: actions/cache/restore@v5
         with:
           path: |
@@ -128,53 +218,6 @@ jobs:
         run: python -m pytest tests/ -v --tb=short
         continue-on-error: true
 
-      - name: Check national-team data coverage
-        id: natcov
-        run: |
-          LOW=$(python -c "
-          from datetime import datetime, timedelta
-          from sqlalchemy import or_
-          from src.data.database import get_db
-          from src.data.models import Match
-          from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
-          db = get_db()
-          nat = list(NATIONAL_TEAM_LEAGUES)
-          with db.get_session() as s:
-              n = s.query(Match).filter(
-                  Match.league.in_(nat), Match.home_goals.isnot(None),
-              ).count()
-              # Aggregate count alone missed USA having ZERO matches while the
-              # total passed 1500 — also check every team playing in the next
-              # 48h for missing history.
-              now = datetime.utcnow()
-              fixtures = s.query(Match).filter(
-                  Match.league == 'world/fifa-world-cup',
-                  Match.is_fixture == True,
-                  Match.match_date >= now,
-                  Match.match_date <= now + timedelta(hours=48),
-              ).all()
-              bare = 0
-              for f in fixtures:
-                  for tid in (f.home_team_id, f.away_team_id):
-                      played = s.query(Match).filter(
-                          Match.league.in_(nat), Match.home_goals.isnot(None),
-                          or_(Match.home_team_id == tid, Match.away_team_id == tid),
-                      ).count()
-                      if played == 0:
-                          bare += 1
-          print('true' if (n < 1500 or bare > 0) else 'false')" | tail -1)
-          echo "low=$LOW" >> "$GITHUB_OUTPUT"
-          echo "National-team coverage low: $LOW"
-
-      - name: Backfill national-team history (auto when coverage low, or on demand)
-        if: github.event.inputs.backfill_wc == 'true' || steps.natcov.outputs.low == 'true'
-        run: python -m src.agent.betting_agent --backfill-wc
-        # Supabase insert latency makes big seasons slow (~20 min per ~400
-        # matches); 40 min was hit mid-list on 2026-06-12. Targets are ordered
-        # most-recent-first so even a timeout keeps the valuable data.
-        timeout-minutes: 90
-        continue-on-error: true
-
       - name: Run daily update (fixtures + odds, no Flashscore results)
         id: update
         run: python -m src.agent.betting_agent --update --skip-ml-retrain
@@ -247,6 +290,23 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code
         continue-on-error: true
 
+      # Scaling this step: analysis is per-fixture and parallelises, but the
+      # phase after it (ranking, per-match cap, correlation filter, and the
+      # daily `betting.max_total_kelly_pct` exposure cap) is a property of the
+      # whole day's slate — four shards each applying a 40% cap would stake
+      # 160%. So the split is analyse-then-collect, not run-the-pipeline-N-times:
+      #
+      #   matrix job i of N:
+      #     python -m src.agent.betting_agent --picks --force       #       --shard i/N --out data/candidates/candidates-00i.json
+      #     (upload data/candidates/ as an artifact)
+      #
+      #   collect job (needs: all shards, downloads the artifacts):
+      #     python -m src.agent.betting_agent --picks --collect data/candidates
+      #
+      # `--shard 1/1` is a no-op and behaves exactly like the line below, so a
+      # matrix of size 1 needs no collect job. Left single-process here
+      # deliberately: at current volume a matrix costs more in runner setup than
+      # it saves. See docs/production-review-100x.md (S1-1).
       - name: Generate, review, and send picks
         id: picks
         run: python -m src.agent.betting_agent --picks --force

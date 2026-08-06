@@ -200,38 +200,90 @@ class DatabaseManager:
                     except Exception as e:
                         logger.debug(f"Index {idx.name} creation skipped: {e}")
 
-    def prune_old_odds(self, keep_days: int = 400):
-        """Delete odds for matches older than keep_days to control DB size.
+    def prune_old_odds(self, keep_days: int = 400, batch_size: int = 500,
+                       max_batches: int = 200):
+        """Delete odds for matches older than keep_days, in bounded batches.
 
         Keeps all odds for matches within the retention window and any match
         that has an associated saved_pick (so we never lose betting history).
+
+        Why batched. The previous version was one unbounded DELETE whose plan
+        was a sequential scan of the whole odds table:
+
+            Delete on odds  (actual time=1770.371..1770.375 rows=0)
+              ->  Hash Join
+                    ->  Seq Scan on odds  (actual rows=214683)
+            Execution Time: 1773.721 ms
+
+        It scanned 214,683 of 317,657 rows to delete ZERO, every day, inside
+        daily_update(). At 100x volume that is a ~3-4 minute scan, and on the
+        days it does match it deletes millions of rows in a single transaction —
+        a long RowExclusiveLock, a WAL spike, and bloat for autovacuum to chase.
+
+        Now: victim match ids are resolved once off match_date (indexed by
+        ix_matches_match_date), then odds are deleted by primary key in
+        committed batches, so lock duration is bounded regardless of volume.
+
+        NOT EXISTS rather than NOT IN — the NULL-safe idiom, and it lets the
+        planner use an anti-join instead of materialising every picked match id.
         """
         from datetime import timedelta
+        from sqlalchemy import select
         from src.data.models import Odds, Match, SavedPick
         from src.utils.logger import utcnow
+
         cutoff = utcnow() - timedelta(days=keep_days)
-        with self.get_session() as session:
-            # Subquery: match IDs older than cutoff that have NO saved picks
-            old_match_ids = (
-                session.query(Match.id)
-                .filter(Match.match_date < cutoff)
-                .subquery()
-            )
-            pick_match_ids = (
-                session.query(SavedPick.match_id)
-                .distinct()
-                .subquery()
-            )
-            deleted = (
-                session.query(Odds)
-                .filter(
-                    Odds.match_id.in_(session.query(old_match_ids.c.id)),
-                    ~Odds.match_id.in_(session.query(pick_match_ids.c.match_id)),
+        total = 0
+        last_match_id = 0
+
+        for _ in range(max_batches):
+            with self.get_session() as session:
+                # Drive off `matches`, never off `odds`.
+                #
+                # The obvious rewrite — select victim ODDS rows filtered by a
+                # match subquery — plans badly: PostgreSQL performs the
+                # saved_picks anti-join over a full sequential scan of odds
+                # first, which measured 2,175 ms, WORSE than the original. This
+                # shape anti-joins 29k old matches against 1k picks off
+                # matches_pkey instead: 14 ms.
+                #
+                # The id cursor guarantees progress. Without it, a batch of old
+                # matches that happen to have no odds left would delete 0 rows
+                # and the loop would re-select the same matches forever.
+                victim_match_ids = [
+                    row[0]
+                    for row in session.query(Match.id)
+                    .filter(
+                        Match.match_date < cutoff,
+                        Match.id > last_match_id,
+                        ~select(SavedPick.id)
+                        .where(SavedPick.match_id == Match.id)
+                        .exists(),
+                    )
+                    .order_by(Match.id.asc())
+                    .limit(batch_size)
+                    .all()
+                ]
+                if not victim_match_ids:
+                    break
+                last_match_id = victim_match_ids[-1]
+                deleted = (
+                    session.query(Odds)
+                    .filter(Odds.match_id.in_(victim_match_ids))
+                    .delete(synchronize_session=False)
                 )
-                .delete(synchronize_session=False)
+            total += deleted
+        else:
+            logger.warning(
+                f"Odds prune stopped at the {max_batches}-batch cap "
+                f"({total:,} rows deleted) — will continue on the next run"
             )
-            if deleted:
-                logger.info(f"Pruned {deleted:,} old odds rows (matches before {cutoff.date()})")
+
+        if total:
+            logger.info(
+                f"Pruned {total:,} old odds rows (matches before {cutoff.date()})"
+            )
+        return total
 
     def drop_tables(self):
         """Drop all tables. Use with caution."""

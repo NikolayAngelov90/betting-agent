@@ -4,8 +4,8 @@ import math
 from datetime import date
 from typing import Dict, Tuple
 
-from src.data.models import Match
 from src.data.database import get_db
+from src.data.match_history import get_completed_matches
 from src.utils.config import get_config
 from src.utils.logger import get_logger
 
@@ -50,37 +50,32 @@ class EloRatingSystem:
         self.ratings = {}
         self.history = {}
 
+        # Egress: this used to be `session.query(Match)` — SELECT matches.*, all
+        # 45 columns (~329 B/row) for every completed match, with no LIMIT, on
+        # each of the ~10 fits per CI day. Elo reads exactly five of those
+        # columns. get_completed_matches serves a 9-column projection from a
+        # per-process cache, so the whole day costs one fetch per process.
         db = get_db()
-        with db.get_session() as session:
-            query = session.query(Match).filter(
-                Match.is_fixture == False,
-                Match.home_goals.isnot(None),
+        matches = get_completed_matches(db, league=league, as_of_date=as_of_date)
+
+        prev_year = None
+        for match in matches:
+            # Between-season regression toward the mean
+            m_date = match.match_date
+            m_year = m_date.year if m_date else None
+            if prev_year is not None and m_year is not None and m_year > prev_year:
+                for team_id in list(self.ratings.keys()):
+                    self.ratings[team_id] = (
+                        self.ratings[team_id] * (1 - regression_factor)
+                        + DEFAULT_ELO * regression_factor
+                    )
+            if m_year is not None:
+                prev_year = m_year
+
+            self._process_match(
+                match.home_team_id, match.away_team_id,
+                match.home_goals, match.away_goals,
             )
-            if league:
-                query = query.filter(Match.league == league)
-            if as_of_date is not None:
-                query = query.filter(Match.match_date < as_of_date)
-
-            matches = query.order_by(Match.match_date.asc()).all()
-
-            prev_year = None
-            for match in matches:
-                # Between-season regression toward the mean
-                m_date = match.match_date
-                m_year = m_date.year if m_date else None
-                if prev_year is not None and m_year is not None and m_year > prev_year:
-                    for team_id in list(self.ratings.keys()):
-                        self.ratings[team_id] = (
-                            self.ratings[team_id] * (1 - regression_factor)
-                            + DEFAULT_ELO * regression_factor
-                        )
-                if m_year is not None:
-                    prev_year = m_year
-
-                self._process_match(
-                    match.home_team_id, match.away_team_id,
-                    match.home_goals, match.away_goals,
-                )
 
         logger.info(f"Elo ratings calculated for {len(self.ratings)} teams")
 

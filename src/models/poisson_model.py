@@ -5,8 +5,8 @@ from datetime import date
 from scipy.stats import poisson
 from typing import Dict, Tuple
 
-from src.data.models import Match
 from src.data.database import get_db
+from src.data.match_history import get_completed_matches
 from src.utils.config import get_config
 from src.utils.logger import get_logger
 
@@ -81,250 +81,246 @@ class PoissonModel:
         decay_rate = np.log(2) / max(half_life, 1)
         today = date.today()
 
-        with self.db.get_session() as session:
-            query = session.query(Match).filter(
-                Match.is_fixture == False,
-                Match.home_goals.isnot(None),
-            )
-            if league:
-                query = query.filter(Match.league == league)
-            if as_of_date is not None:
-                query = query.filter(Match.match_date < as_of_date)
+        # Egress: this used to be `session.query(Match)` — SELECT matches.*,
+        # all 45 columns (~329 B/row) when the fit reads eight of them. The
+        # rows come from a per-process cache shared with Elo, so the ~10
+        # `predictor.fit()` calls a CI day make cost one fetch per process.
+        matches = get_completed_matches(
+            self.db, league=league, as_of_date=as_of_date,
+            limit=num_matches, newest_first=True,
+        )
+        if not matches:
+            logger.warning("No match data available for Poisson model fitting")
+            return
 
-            matches = query.order_by(Match.match_date.desc()).limit(num_matches).all()
+        # Reset accumulators so a SECOND fit() in the same process starts
+        # clean. Without this, _national_team_avgs still held the collapsed
+        # floats from the prior fit and .append() crashed with
+        # "'float' object has no attribute 'append'" — the tuning pipeline
+        # refits twice (as-of-date, then full data). _team_strengths is
+        # rebuilt by key so it's safe, but the national-team dicts are not.
+        self._national_team_avgs = {}
+        self._national_team_strengths = {}
 
-            if not matches:
-                logger.warning("No match data available for Poisson model fitting")
-                return
+        # Compute time-decay weight per match
+        def match_weight(m):
+            if m.match_date is None:
+                return 0.1
+            m_date = m.match_date.date() if hasattr(m.match_date, "date") else m.match_date
+            days = max(0, (today - m_date).days)
+            return float(np.exp(-decay_rate * days))
 
-            # Reset accumulators so a SECOND fit() in the same process starts
-            # clean. Without this, _national_team_avgs still held the collapsed
-            # floats from the prior fit and .append() crashed with
-            # "'float' object has no attribute 'append'" — the tuning pipeline
-            # refits twice (as-of-date, then full data). _team_strengths is
-            # rebuilt by key so it's safe, but the national-team dicts are not.
-            self._national_team_avgs = {}
-            self._national_team_strengths = {}
+        weights = [match_weight(m) for m in matches]
 
-            # Compute time-decay weight per match
-            def match_weight(m):
-                if m.match_date is None:
-                    return 0.1
-                m_date = m.match_date.date() if hasattr(m.match_date, "date") else m.match_date
-                days = max(0, (today - m_date).days)
-                return float(np.exp(-decay_rate * days))
+        # xG mode: use expected goals instead of raw goals when available.
+        # Falls back to raw goals for matches without xG data.
+        use_xg = self.config.get("models.poisson_use_xg", True)
+        xg_min_coverage = self.config.get("models.poisson_xg_min_coverage", 0.50)
+        xg_available = sum(1 for m in matches if m.home_xg is not None and m.home_xg > 0)
+        xg_fraction = xg_available / len(matches) if matches else 0
+        use_xg_global = use_xg and xg_fraction >= xg_min_coverage
 
-            weights = [match_weight(m) for m in matches]
+        def _goal_value(match, side_goals, side_xg):
+            """Return xG if available and enabled, else raw goals."""
+            if use_xg_global and side_xg is not None and side_xg > 0:
+                return side_xg
+            return side_goals
 
-            # xG mode: use expected goals instead of raw goals when available.
-            # Falls back to raw goals for matches without xG data.
-            use_xg = self.config.get("models.poisson_use_xg", True)
-            xg_min_coverage = self.config.get("models.poisson_xg_min_coverage", 0.50)
-            xg_available = sum(1 for m in matches if m.home_xg is not None and m.home_xg > 0)
-            xg_fraction = xg_available / len(matches) if matches else 0
-            use_xg_global = use_xg and xg_fraction >= xg_min_coverage
+        # Weighted global averages
+        home_goals_arr = np.array(
+            [_goal_value(m, m.home_goals, m.home_xg) for m in matches], dtype=float
+        )
+        away_goals_arr = np.array(
+            [_goal_value(m, m.away_goals, m.away_xg) for m in matches], dtype=float
+        )
+        w = np.array(weights)
+        w_sum = w.sum()
+        if w_sum > 0:
+            self.league_avg_home_goals = float(np.dot(w, home_goals_arr) / w_sum)
+            self.league_avg_away_goals = float(np.dot(w, away_goals_arr) / w_sum)
+        else:
+            self.league_avg_home_goals = float(np.mean(home_goals_arr))
+            self.league_avg_away_goals = float(np.mean(away_goals_arr))
 
-            def _goal_value(match, side_goals, side_xg):
-                """Return xG if available and enabled, else raw goals."""
-                if use_xg_global and side_xg is not None and side_xg > 0:
-                    return side_xg
-                return side_goals
+        # Weighted per-league averages for calibration
+        league_goals: dict = {}
+        for m, wt in zip(matches, weights):
+            lg = m.league or "unknown"
+            league_goals.setdefault(lg, {"home": [], "away": [], "w": []})
+            league_goals[lg]["home"].append(_goal_value(m, m.home_goals, m.home_xg))
+            league_goals[lg]["away"].append(_goal_value(m, m.away_goals, m.away_xg))
+            league_goals[lg]["w"].append(wt)
+        for lg, gdata in league_goals.items():
+            if len(gdata["home"]) >= 30:
+                lw = np.array(gdata["w"])
+                lw_sum = lw.sum()
+                if lw_sum > 0:
+                    self._league_avgs[lg] = {
+                        "home": float(np.dot(lw, gdata["home"]) / lw_sum),
+                        "away": float(np.dot(lw, gdata["away"]) / lw_sum),
+                    }
 
-            # Weighted global averages
-            home_goals_arr = np.array(
-                [_goal_value(m, m.home_goals, m.home_xg) for m in matches], dtype=float
-            )
-            away_goals_arr = np.array(
-                [_goal_value(m, m.away_goals, m.away_xg) for m in matches], dtype=float
-            )
-            w = np.array(weights)
-            w_sum = w.sum()
-            if w_sum > 0:
-                self.league_avg_home_goals = float(np.dot(w, home_goals_arr) / w_sum)
-                self.league_avg_away_goals = float(np.dot(w, away_goals_arr) / w_sum)
+        # Per-team attack and defense strengths (time-weighted)
+        team_stats: dict = {}
+        for match, wt in zip(matches, weights):
+            h_scored = _goal_value(match, match.home_goals, match.home_xg)
+            a_scored = _goal_value(match, match.away_goals, match.away_xg)
+            for team_id, scored, conceded, venue in [
+                (match.home_team_id, h_scored, a_scored, "home"),
+                (match.away_team_id, a_scored, h_scored, "away"),
+            ]:
+                if match.league:
+                    self._team_league[team_id] = match.league
+                if team_id not in team_stats:
+                    team_stats[team_id] = {
+                        "home_scored": [], "home_conceded": [],
+                        "away_scored": [], "away_conceded": [],
+                        "home_w": [], "away_w": [],
+                    }
+                team_stats[team_id][f"{venue}_scored"].append(scored)
+                team_stats[team_id][f"{venue}_conceded"].append(conceded)
+                team_stats[team_id][f"{venue}_w"].append(wt)
+
+        def _wavg(vals, wts, fallback):
+            if not vals:
+                return fallback
+            wts_arr = np.array(wts)
+            ws = wts_arr.sum()
+            if ws <= 0:
+                return float(np.mean(vals))
+            return float(np.dot(wts_arr, vals) / ws)
+
+        for team_id, stats in team_stats.items():
+            home_scored_avg = _wavg(stats["home_scored"], stats["home_w"], self.league_avg_home_goals)
+            away_scored_avg = _wavg(stats["away_scored"], stats["away_w"], self.league_avg_away_goals)
+            home_conceded_avg = _wavg(stats["home_conceded"], stats["home_w"], self.league_avg_away_goals)
+            away_conceded_avg = _wavg(stats["away_conceded"], stats["away_w"], self.league_avg_home_goals)
+
+            attack_strength = (
+                (home_scored_avg / self.league_avg_home_goals) +
+                (away_scored_avg / self.league_avg_away_goals)
+            ) / 2
+
+            defense_strength = (
+                (home_conceded_avg / self.league_avg_away_goals) +
+                (away_conceded_avg / self.league_avg_home_goals)
+            ) / 2
+
+            # Bayesian shrinkage: regress toward league-average (1.0) for
+            # teams with few observations.  A team with < shrinkage_cap
+            # matches is pulled toward the prior proportionally.
+            shrinkage_cap = self.config.get("models.shrinkage_sample_cap", 100)
+            total_matches = (len(stats["home_scored"])
+                             + len(stats["away_scored"]))
+            shrinkage = min(total_matches, shrinkage_cap) / shrinkage_cap
+            attack_strength = attack_strength * shrinkage + 1.0 * (1 - shrinkage)
+            defense_strength = defense_strength * shrinkage + 1.0 * (1 - shrinkage)
+
+            # Floor to prevent zero xG (e.g. team conceded 0 in small sample)
+            self._team_strengths[team_id] = {
+                "attack": max(attack_strength, 0.15),
+                "defense": max(defense_strength, 0.15),
+            }
+
+        # ----------------------------------------------------------------
+        # Separate national-team strength estimation
+        # Use ONLY international match data so that WC predictions are
+        # calibrated on international form, not club-league performance.
+        # ----------------------------------------------------------------
+        nat_matches_raw = [
+            (m, w) for m, w in zip(matches, weights)
+            if m.league in NATIONAL_TEAM_LEAGUES
+        ]
+        if nat_matches_raw:
+            nat_home_arr = np.array([
+                _goal_value(m, m.home_goals, m.home_xg) for m, _ in nat_matches_raw
+            ])
+            nat_away_arr = np.array([
+                _goal_value(m, m.away_goals, m.away_xg) for m, _ in nat_matches_raw
+            ])
+            nat_w = np.array([w for _, w in nat_matches_raw])
+            nat_w_sum = nat_w.sum()
+            if nat_w_sum > 0:
+                nat_avg_home = float(np.dot(nat_w, nat_home_arr) / nat_w_sum)
+                nat_avg_away = float(np.dot(nat_w, nat_away_arr) / nat_w_sum)
             else:
-                self.league_avg_home_goals = float(np.mean(home_goals_arr))
-                self.league_avg_away_goals = float(np.mean(away_goals_arr))
+                nat_avg_home = float(np.mean(nat_home_arr)) if len(nat_home_arr) else 1.4
+                nat_avg_away = float(np.mean(nat_away_arr)) if len(nat_away_arr) else 1.1
 
-            # Weighted per-league averages for calibration
-            league_goals: dict = {}
-            for m, wt in zip(matches, weights):
-                lg = m.league or "unknown"
-                league_goals.setdefault(lg, {"home": [], "away": [], "w": []})
-                league_goals[lg]["home"].append(_goal_value(m, m.home_goals, m.home_xg))
-                league_goals[lg]["away"].append(_goal_value(m, m.away_goals, m.away_xg))
-                league_goals[lg]["w"].append(wt)
-            for lg, gdata in league_goals.items():
-                if len(gdata["home"]) >= 30:
+            # Per-league averages for national team competitions
+            for m, wt in nat_matches_raw:
+                lg = m.league
+                self._national_team_avgs.setdefault(lg, {"home": [], "away": [], "w": []})
+                self._national_team_avgs[lg]["home"].append(
+                    _goal_value(m, m.home_goals, m.home_xg))
+                self._national_team_avgs[lg]["away"].append(
+                    _goal_value(m, m.away_goals, m.away_xg))
+                self._national_team_avgs[lg]["w"].append(wt)
+            # Collapse lists → weighted averages
+            for lg, gdata in self._national_team_avgs.items():
+                if isinstance(gdata["home"], list) and gdata["home"]:
                     lw = np.array(gdata["w"])
                     lw_sum = lw.sum()
                     if lw_sum > 0:
-                        self._league_avgs[lg] = {
+                        self._national_team_avgs[lg] = {
                             "home": float(np.dot(lw, gdata["home"]) / lw_sum),
                             "away": float(np.dot(lw, gdata["away"]) / lw_sum),
                         }
 
-            # Per-team attack and defense strengths (time-weighted)
-            team_stats: dict = {}
-            for match, wt in zip(matches, weights):
-                h_scored = _goal_value(match, match.home_goals, match.home_xg)
-                a_scored = _goal_value(match, match.away_goals, match.away_xg)
+            nat_team_stats: dict = {}
+            for m, wt in nat_matches_raw:
+                h_scored = _goal_value(m, m.home_goals, m.home_xg)
+                a_scored = _goal_value(m, m.away_goals, m.away_xg)
                 for team_id, scored, conceded, venue in [
-                    (match.home_team_id, h_scored, a_scored, "home"),
-                    (match.away_team_id, a_scored, h_scored, "away"),
+                    (m.home_team_id, h_scored, a_scored, "home"),
+                    (m.away_team_id, a_scored, h_scored, "away"),
                 ]:
-                    if match.league:
-                        self._team_league[team_id] = match.league
-                    if team_id not in team_stats:
-                        team_stats[team_id] = {
+                    if team_id not in nat_team_stats:
+                        nat_team_stats[team_id] = {
                             "home_scored": [], "home_conceded": [],
                             "away_scored": [], "away_conceded": [],
                             "home_w": [], "away_w": [],
                         }
-                    team_stats[team_id][f"{venue}_scored"].append(scored)
-                    team_stats[team_id][f"{venue}_conceded"].append(conceded)
-                    team_stats[team_id][f"{venue}_w"].append(wt)
+                    nat_team_stats[team_id][f"{venue}_scored"].append(scored)
+                    nat_team_stats[team_id][f"{venue}_conceded"].append(conceded)
+                    nat_team_stats[team_id][f"{venue}_w"].append(wt)
 
-            def _wavg(vals, wts, fallback):
-                if not vals:
-                    return fallback
-                wts_arr = np.array(wts)
-                ws = wts_arr.sum()
-                if ws <= 0:
-                    return float(np.mean(vals))
-                return float(np.dot(wts_arr, vals) / ws)
-
-            for team_id, stats in team_stats.items():
-                home_scored_avg = _wavg(stats["home_scored"], stats["home_w"], self.league_avg_home_goals)
-                away_scored_avg = _wavg(stats["away_scored"], stats["away_w"], self.league_avg_away_goals)
-                home_conceded_avg = _wavg(stats["home_conceded"], stats["home_w"], self.league_avg_away_goals)
-                away_conceded_avg = _wavg(stats["away_conceded"], stats["away_w"], self.league_avg_home_goals)
-
-                attack_strength = (
-                    (home_scored_avg / self.league_avg_home_goals) +
-                    (away_scored_avg / self.league_avg_away_goals)
-                ) / 2
-
-                defense_strength = (
-                    (home_conceded_avg / self.league_avg_away_goals) +
-                    (away_conceded_avg / self.league_avg_home_goals)
-                ) / 2
-
-                # Bayesian shrinkage: regress toward league-average (1.0) for
-                # teams with few observations.  A team with < shrinkage_cap
-                # matches is pulled toward the prior proportionally.
-                shrinkage_cap = self.config.get("models.shrinkage_sample_cap", 100)
-                total_matches = (len(stats["home_scored"])
-                                 + len(stats["away_scored"]))
-                shrinkage = min(total_matches, shrinkage_cap) / shrinkage_cap
-                attack_strength = attack_strength * shrinkage + 1.0 * (1 - shrinkage)
-                defense_strength = defense_strength * shrinkage + 1.0 * (1 - shrinkage)
-
-                # Floor to prevent zero xG (e.g. team conceded 0 in small sample)
-                self._team_strengths[team_id] = {
-                    "attack": max(attack_strength, 0.15),
-                    "defense": max(defense_strength, 0.15),
+            shrinkage_cap = self.config.get("models.shrinkage_sample_cap", 100)
+            for team_id, stats in nat_team_stats.items():
+                hs_avg = _wavg(stats["home_scored"], stats["home_w"], nat_avg_home)
+                as_avg = _wavg(stats["away_scored"], stats["away_w"], nat_avg_away)
+                hc_avg = _wavg(stats["home_conceded"], stats["home_w"], nat_avg_away)
+                ac_avg = _wavg(stats["away_conceded"], stats["away_w"], nat_avg_home)
+                atk = ((hs_avg / max(nat_avg_home, 0.01)) +
+                       (as_avg / max(nat_avg_away, 0.01))) / 2
+                dfn = ((hc_avg / max(nat_avg_away, 0.01)) +
+                       (ac_avg / max(nat_avg_home, 0.01))) / 2
+                total_m = len(stats["home_scored"]) + len(stats["away_scored"])
+                shrink = min(total_m, shrinkage_cap) / shrinkage_cap
+                atk = atk * shrink + 1.0 * (1 - shrink)
+                dfn = dfn * shrink + 1.0 * (1 - shrink)
+                self._national_team_strengths[team_id] = {
+                    "attack": max(atk, 0.15),
+                    "defense": max(dfn, 0.15),
                 }
-
-            # ----------------------------------------------------------------
-            # Separate national-team strength estimation
-            # Use ONLY international match data so that WC predictions are
-            # calibrated on international form, not club-league performance.
-            # ----------------------------------------------------------------
-            nat_matches_raw = [
-                (m, w) for m, w in zip(matches, weights)
-                if m.league in NATIONAL_TEAM_LEAGUES
-            ]
-            if nat_matches_raw:
-                nat_home_arr = np.array([
-                    _goal_value(m, m.home_goals, m.home_xg) for m, _ in nat_matches_raw
-                ])
-                nat_away_arr = np.array([
-                    _goal_value(m, m.away_goals, m.away_xg) for m, _ in nat_matches_raw
-                ])
-                nat_w = np.array([w for _, w in nat_matches_raw])
-                nat_w_sum = nat_w.sum()
-                if nat_w_sum > 0:
-                    nat_avg_home = float(np.dot(nat_w, nat_home_arr) / nat_w_sum)
-                    nat_avg_away = float(np.dot(nat_w, nat_away_arr) / nat_w_sum)
-                else:
-                    nat_avg_home = float(np.mean(nat_home_arr)) if len(nat_home_arr) else 1.4
-                    nat_avg_away = float(np.mean(nat_away_arr)) if len(nat_away_arr) else 1.1
-
-                # Per-league averages for national team competitions
-                for m, wt in nat_matches_raw:
-                    lg = m.league
-                    self._national_team_avgs.setdefault(lg, {"home": [], "away": [], "w": []})
-                    self._national_team_avgs[lg]["home"].append(
-                        _goal_value(m, m.home_goals, m.home_xg))
-                    self._national_team_avgs[lg]["away"].append(
-                        _goal_value(m, m.away_goals, m.away_xg))
-                    self._national_team_avgs[lg]["w"].append(wt)
-                # Collapse lists → weighted averages
-                for lg, gdata in self._national_team_avgs.items():
-                    if isinstance(gdata["home"], list) and gdata["home"]:
-                        lw = np.array(gdata["w"])
-                        lw_sum = lw.sum()
-                        if lw_sum > 0:
-                            self._national_team_avgs[lg] = {
-                                "home": float(np.dot(lw, gdata["home"]) / lw_sum),
-                                "away": float(np.dot(lw, gdata["away"]) / lw_sum),
-                            }
-
-                nat_team_stats: dict = {}
-                for m, wt in nat_matches_raw:
-                    h_scored = _goal_value(m, m.home_goals, m.home_xg)
-                    a_scored = _goal_value(m, m.away_goals, m.away_xg)
-                    for team_id, scored, conceded, venue in [
-                        (m.home_team_id, h_scored, a_scored, "home"),
-                        (m.away_team_id, a_scored, h_scored, "away"),
-                    ]:
-                        if team_id not in nat_team_stats:
-                            nat_team_stats[team_id] = {
-                                "home_scored": [], "home_conceded": [],
-                                "away_scored": [], "away_conceded": [],
-                                "home_w": [], "away_w": [],
-                            }
-                        nat_team_stats[team_id][f"{venue}_scored"].append(scored)
-                        nat_team_stats[team_id][f"{venue}_conceded"].append(conceded)
-                        nat_team_stats[team_id][f"{venue}_w"].append(wt)
-
-                shrinkage_cap = self.config.get("models.shrinkage_sample_cap", 100)
-                for team_id, stats in nat_team_stats.items():
-                    hs_avg = _wavg(stats["home_scored"], stats["home_w"], nat_avg_home)
-                    as_avg = _wavg(stats["away_scored"], stats["away_w"], nat_avg_away)
-                    hc_avg = _wavg(stats["home_conceded"], stats["home_w"], nat_avg_away)
-                    ac_avg = _wavg(stats["away_conceded"], stats["away_w"], nat_avg_home)
-                    atk = ((hs_avg / max(nat_avg_home, 0.01)) +
-                           (as_avg / max(nat_avg_away, 0.01))) / 2
-                    dfn = ((hc_avg / max(nat_avg_away, 0.01)) +
-                           (ac_avg / max(nat_avg_home, 0.01))) / 2
-                    total_m = len(stats["home_scored"]) + len(stats["away_scored"])
-                    shrink = min(total_m, shrinkage_cap) / shrinkage_cap
-                    atk = atk * shrink + 1.0 * (1 - shrink)
-                    dfn = dfn * shrink + 1.0 * (1 - shrink)
-                    self._national_team_strengths[team_id] = {
-                        "attack": max(atk, 0.15),
-                        "defense": max(dfn, 0.15),
-                    }
-                logger.info(
-                    f"National-team Poisson strengths fitted: "
-                    f"{len(self._national_team_strengths)} teams from "
-                    f"{len(nat_matches_raw)} international matches"
-                )
-
-            # Estimate per-league Dixon-Coles rho via MLE
-            self._estimate_league_rhos(matches)
-
-            xg_label = f"xG mode ({xg_available}/{len(matches)} matches)" if use_xg_global else "raw goals"
             logger.info(
-                f"Poisson model fitted: {len(self._team_strengths)} teams, "
-                f"{len(self._league_avgs)} leagues calibrated, "
-                f"{len(self._league_rhos)} per-league rhos estimated, "
-                f"avg home goals={self.league_avg_home_goals:.2f}, "
-                f"avg away goals={self.league_avg_away_goals:.2f} "
-                f"(time-decay half-life={half_life}d, {xg_label})"
+                f"National-team Poisson strengths fitted: "
+                f"{len(self._national_team_strengths)} teams from "
+                f"{len(nat_matches_raw)} international matches"
             )
+
+        # Estimate per-league Dixon-Coles rho via MLE
+        self._estimate_league_rhos(matches)
+
+        xg_label = f"xG mode ({xg_available}/{len(matches)} matches)" if use_xg_global else "raw goals"
+        logger.info(
+            f"Poisson model fitted: {len(self._team_strengths)} teams, "
+            f"{len(self._league_avgs)} leagues calibrated, "
+            f"{len(self._league_rhos)} per-league rhos estimated, "
+            f"avg home goals={self.league_avg_home_goals:.2f}, "
+            f"avg away goals={self.league_avg_away_goals:.2f} "
+            f"(time-decay half-life={half_life}d, {xg_label})"
+        )
 
     def _estimate_league_rhos(self, matches):
         """Estimate per-league Dixon-Coles rho via maximum likelihood.

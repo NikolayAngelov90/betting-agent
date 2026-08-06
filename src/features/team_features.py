@@ -6,6 +6,7 @@ from sqlalchemy import and_, or_
 
 from src.data.models import Match, Team
 from src.data.database import get_db
+from src.features import preload_cache as _pc
 from src.utils.logger import get_logger
 
 logger = get_logger()
@@ -36,23 +37,47 @@ class TeamFeatures:
         Returns:
             Dictionary of form features
         """
-        if preload_cache is not None:
-            rows = preload_cache.get("team_history", {}).get(team_id, [])
-            filtered = [
-                m for m in rows
-                if m["home_goals"] is not None
+        def _matches(m):
+            return (
+                m["home_goals"] is not None
                 and (as_of_date is None or m["match_date"] < as_of_date)
                 and (league is None or m["league"] == league)
                 and (venue != "home" or m["home_team_id"] == team_id)
                 and (venue != "away" or m["away_team_id"] == team_id)
-            ]
-            rows_subset = filtered[:num_matches]
+            )
+
+        # A league-filtered request comes from _get_league_standings, which needs
+        # every club in the division — served by the league-wide scope. Anything
+        # else is one of the fixture's own teams, served by the per-team scope
+        # that carries the full stat columns. Either accessor returns None when
+        # it cannot prove it holds the rows the query below would return, and
+        # execution falls through to that query.
+        if league is not None:
+            rows_subset = _pc.league_team_rows(
+                preload_cache, league, team_id, limit=num_matches, predicate=_matches)
+        else:
+            rows_subset = _pc.team_rows(
+                preload_cache, team_id, limit=num_matches, predicate=_matches)
+
+        if rows_subset is not None:
             if not rows_subset:
                 return self._empty_form_features()
             return self._calculate_form_from_dicts(rows_subset, team_id, elo_ratings=elo_ratings)
 
         with self.db.get_session() as session:
-            query = session.query(Match).filter(
+            # Column-projected to exactly what _calculate_form reads (20 of 45).
+            query = session.query(
+                Match.home_team_id, Match.away_team_id,
+                Match.home_goals, Match.away_goals,
+                Match.home_shots, Match.away_shots,
+                Match.home_shots_on_target, Match.away_shots_on_target,
+                Match.home_possession, Match.away_possession,
+                Match.home_corners, Match.away_corners,
+                Match.home_dangerous_attacks, Match.away_dangerous_attacks,
+                Match.home_saves, Match.away_saves,
+                Match.home_offsides, Match.away_offsides,
+                Match.home_free_kicks, Match.away_free_kicks,
+            ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
             )
@@ -453,14 +478,15 @@ class TeamFeatures:
             "intl_active": 0,
         }
 
-        if preload_cache is not None:
-            cached_rows = preload_cache.get("team_history", {}).get(team_id, [])
-            intl_rows = [
-                m for m in cached_rows
-                if m["home_goals"] is not None
+        intl_rows = _pc.team_rows(
+            preload_cache, team_id, limit=num_matches,
+            predicate=lambda m: (
+                m["home_goals"] is not None
                 and m.get("league") in self.INTERNATIONAL_LEAGUES
                 and (as_of_date is None or m["match_date"] < as_of_date)
-            ][:num_matches]
+            ),
+        )
+        if intl_rows is not None:
             if not intl_rows:
                 return _intl_empty
             form = self._calculate_form_from_dicts(intl_rows, team_id)
@@ -478,7 +504,19 @@ class TeamFeatures:
             }
 
         with self.db.get_session() as session:
-            query = session.query(Match).filter(
+            # Feeds _calculate_form — same 20-column projection as get_form_features.
+            query = session.query(
+                Match.home_team_id, Match.away_team_id,
+                Match.home_goals, Match.away_goals,
+                Match.home_shots, Match.away_shots,
+                Match.home_shots_on_target, Match.away_shots_on_target,
+                Match.home_possession, Match.away_possession,
+                Match.home_corners, Match.away_corners,
+                Match.home_dangerous_attacks, Match.away_dangerous_attacks,
+                Match.home_saves, Match.away_saves,
+                Match.home_offsides, Match.away_offsides,
+                Match.home_free_kicks, Match.away_free_kicks,
+            ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
                 Match.league.in_(self.INTERNATIONAL_LEAGUES),
@@ -520,13 +558,14 @@ class TeamFeatures:
             "momentum_matches": 0,
         }
 
-        if preload_cache is not None:
-            cached_rows = preload_cache.get("team_history", {}).get(team_id, [])
-            recent = [
-                m for m in cached_rows
-                if m["home_goals"] is not None
+        recent = _pc.team_rows(
+            preload_cache, team_id, limit=num_matches,
+            predicate=lambda m: (
+                m["home_goals"] is not None
                 and (as_of_date is None or m["match_date"] < as_of_date)
-            ][:num_matches]
+            ),
+        )
+        if recent is not None:
             if len(recent) < 5:
                 return empty
             pts = []
@@ -542,7 +581,9 @@ class TeamFeatures:
                     pts.append(0)
         else:
             with self.db.get_session() as session:
-                query = session.query(Match).filter(
+                query = session.query(
+                    Match.home_team_id, Match.home_goals, Match.away_goals,
+                ).filter(
                     Match.is_fixture == False,
                     Match.home_goals.isnot(None),
                     or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
@@ -623,11 +664,11 @@ class TeamFeatures:
             return self._standings_cache[cache_key]
 
         with self.db.get_session() as session:
-            teams = session.query(Team).filter_by(league=league).all()
-            if not teams:
+            team_ids = session.query(Team.id, Team.name).filter_by(league=league).all()
+            if not team_ids:
                 self._standings_cache[cache_key] = []
                 return []
-            team_ids = [(t.id, t.name) for t in teams]
+            team_ids = [(t.id, t.name) for t in team_ids]
 
         standings = []
         for team_id, team_name in team_ids:

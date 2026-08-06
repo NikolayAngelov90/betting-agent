@@ -42,26 +42,31 @@ class InjuryFeatures:
             Dictionary of injury impact features
         """
         with self.db.get_session() as session:
-            # Get current injuries with player info
-            injuries = session.query(Injury).join(Player).filter(
+            # Current injuries, with the two player columns we actually read
+            # pulled in the same SELECT. The old form fetched whole Injury rows
+            # and then lazy-loaded `i.player` per injury — an N+1 that shipped a
+            # full players row for every one of them.
+            injuries = session.query(
+                Player.is_key_player, Player.position,
+            ).select_from(Injury).join(
+                Player, Injury.player_id == Player.id
+            ).filter(
                 Injury.team_id == team_id,
                 Injury.status.in_(["out", "doubtful"]),
             ).all()
 
-            # Get total squad info
-            squad = session.query(Player).filter_by(team_id=team_id).all()
+            # Total squad info — only `position` is consumed below.
+            squad = session.query(Player.position).filter_by(team_id=team_id).all()
 
             if not squad:
                 return self._empty_injury_features()
 
-            key_players_injured = sum(
-                1 for i in injuries if i.player and i.player.is_key_player
-            )
+            key_players_injured = sum(1 for i in injuries if i.is_key_player)
 
             # Position-based analysis
             injured_positions = [
-                POSITION_GROUPS.get(i.player.position, "unknown")
-                for i in injuries if i.player and i.player.position
+                POSITION_GROUPS.get(i.position, "unknown")
+                for i in injuries if i.position
             ]
 
             gk_available = not any(p == "goalkeeper" for p in injured_positions)

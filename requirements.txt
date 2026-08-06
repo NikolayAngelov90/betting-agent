@@ -19,6 +19,10 @@ alembic>=1.13.0
 
 # Data Processing
 pandas>=2.1.0
+# Parquet engine for the local match-history mirror (src/data/history_mirror.py).
+# Optional at runtime: without it the mirror is skipped and history is read from
+# the database, which costs egress but nothing else.
+pyarrow>=15.0.0
 numpy>=1.26.0
 
 # Machine Learning

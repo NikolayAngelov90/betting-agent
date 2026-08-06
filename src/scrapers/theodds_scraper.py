@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Set
 
 import aiohttp
 
+from src.data.sql_helpers import id_in
 from src.data.database import get_db
 from src.data.models import Match, Odds, Team
 from src.utils.logger import get_logger
@@ -675,7 +676,7 @@ class TheOddsScraper:
                     # query instead of one SELECT per row — reduces Neon roundtrips
                     # from N_odds_rows to 1 per league.
                     existing_rows = session.query(Odds).filter(
-                        Odds.match_id.in_(match_ids)
+                        id_in(session, Odds.match_id, match_ids)
                     ).all()
                     existing_index = {
                         (r.match_id, r.bookmaker, r.market_type, r.selection): r

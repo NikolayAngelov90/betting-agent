@@ -28,6 +28,15 @@ data/processed/
 data/raw/
 data/models/bayesian_weights.json
 data/models/calibration.json
+# Local mirror of completed-match history (src/data/history_mirror.py) plus its
+# metadata and sync lock. Rebuilt from the database on demand and cached between
+# CI runs via actions/cache — never a source artifact.
+data/models/match_history.parquet
+data/models/match_history_meta.json
+data/models/*.tmp
+data/models/*.lock
+# Per-shard candidate files handed from `--picks --shard` to `--picks --collect`.
+data/candidates/
 data/models/ev_threshold.json
 data/models/pick_calibration.json
 data/models/picks_sent_date.txt

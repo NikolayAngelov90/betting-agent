@@ -23,11 +23,40 @@ from src.reporting.telegram_bot import (
     _mark_cold_streak_alerted,
 )
 from src.data.models import Match, Team, Odds, SavedPick, Injury
+from src.data.sql_helpers import id_in
 from src.data.database import get_db, init_db
 from src.utils.config import get_config
 from src.utils.logger import get_logger, setup_logger, utcnow
 
 logger = get_logger()
+
+
+def _insert_pick_if_absent(session, values: dict):
+    """INSERT a saved pick unless its dedup key already exists.
+
+    Returns the new row id, or None when a row with the same
+    (match_id, selection, pick_date) was already there — including when a
+    concurrent worker inserted it a moment ago.
+
+    Both PostgreSQL and SQLite support ON CONFLICT DO NOTHING ... RETURNING, so
+    one code path covers production and dev. If the unique index is missing
+    (migration 002 not applied, or rolled back) the insert simply always
+    succeeds, which is the pre-existing behaviour.
+    """
+    from sqlalchemy.dialects import postgresql, sqlite
+
+    dialect = session.bind.dialect.name if session.bind is not None else ""
+    insert = postgresql.insert if dialect == "postgresql" else sqlite.insert
+
+    stmt = (
+        insert(SavedPick.__table__)
+        .values(**values)
+        .on_conflict_do_nothing(
+            index_elements=["match_id", "selection", "pick_date"]
+        )
+        .returning(SavedPick.__table__.c.id)
+    )
+    return session.execute(stmt).scalar()
 
 
 def _sync_create_features(feature_engineer, match_id, as_of_date):
@@ -628,7 +657,9 @@ class FootballBettingAgent:
             _start = datetime.combine(_today, datetime.min.time())
             _end = _start + timedelta(days=2)
             with self.db.get_session() as _sess:
-                _fixtures = _sess.query(Match).filter(
+                _fixtures = _sess.query(
+                    Match.home_team_id, Match.away_team_id,
+                ).filter(
                     Match.is_fixture == True,
                     Match.match_date >= _start,
                     Match.match_date < _end,
@@ -694,22 +725,42 @@ class FootballBettingAgent:
         _end = _start + timedelta(days=1)
         skip: set = set()
         with self.db.get_session() as session:
-            fixtures = session.query(Match).filter(
+            fixtures = session.query(
+                Match.id, Match.league, Match.home_team_id, Match.away_team_id,
+            ).filter(
                 Match.is_fixture == True,  # noqa: E712
                 Match.match_date >= _start,
                 Match.match_date < _end,
             ).all()
             club = [m for m in fixtures if (m.league or "") not in NATIONAL_TEAM_LEAGUES]
-            # One count query per distinct team (bounded: 2×fixtures).
-            counts: dict = {}
-            for m in club:
-                for tid in (m.home_team_id, m.away_team_id):
-                    if tid not in counts:
-                        counts[tid] = session.query(Match.id).filter(
-                            Match.is_fixture == False,  # noqa: E712
-                            Match.home_goals.isnot(None),
-                            _or(Match.home_team_id == tid, Match.away_team_id == tid),
-                        ).count()
+
+            # One aggregate for every team, not one COUNT per team.
+            #
+            # The old loop issued a round trip per distinct team. Measured on
+            # production: ~4.3 ms execution plus ~50 ms pooler latency each, so
+            # at 100x volume (~26,400 teams) it was ~24 minutes of pure latency
+            # inside a step budgeted 65 — to compute one boolean per fixture.
+            # Grouping is O(1) round trips regardless of team count.
+            team_ids = {tid for m in club
+                        for tid in (m.home_team_id, m.away_team_id) if tid}
+            counts: dict = {tid: 0 for tid in team_ids}
+            if team_ids:
+                from sqlalchemy import func as _func
+                # Two grouped aggregates — home appearances and away appearances
+                # — summed per team. A team is never both sides of one match, so
+                # the sum is exactly `count(home = tid OR away = tid)`, which is
+                # what the per-team query computed. Both use the same partial
+                # indexes the old query did (ix_match_home/away_team_fixture_date).
+                for column in (Match.home_team_id, Match.away_team_id):
+                    for tid, n in session.query(
+                        column, _func.count(Match.id),
+                    ).filter(
+                        Match.is_fixture == False,  # noqa: E712
+                        Match.home_goals.isnot(None),
+                        id_in(session, column, team_ids),
+                    ).group_by(column).all():
+                        if tid in counts:
+                            counts[tid] += n
             for m in club:
                 if counts.get(m.home_team_id, 0) == 0 or counts.get(m.away_team_id, 0) == 0:
                     skip.add(m.id)
@@ -769,18 +820,42 @@ class FootballBettingAgent:
             home_id = match.home_team_id
             away_id = match.away_team_id
 
-            # Get odds from DB
-            odds_records = session.query(Odds).filter_by(match_id=match_id).all()
-            odds_data = [
-                {
-                    "market_type": o.market_type,
-                    "selection": o.selection,
-                    "odds_value": o.odds_value,
-                    "bookmaker": o.bookmaker,
-                    "opening_odds": o.opening_odds,
-                }
-                for o in odds_records
-            ]
+            # Odds: prefer the preload cache. get_daily_picks calls
+            # preload_batch with exactly these fixture ids immediately before
+            # analysing them, so re-querying here re-downloaded every odds row
+            # for every fixture a second time in the same process. The cached
+            # rows come from the same columns of the same table, so the dicts
+            # below are identical either way.
+            _cached_odds = (
+                (self.feature_engineer._preload_cache or {}).get("odds", {})
+                if getattr(self, "feature_engineer", None) else {}
+            )
+            if match_id in _cached_odds:
+                odds_data = [
+                    {
+                        "market_type": o["market_type"],
+                        "selection": o["selection"],
+                        "odds_value": o["odds_value"],
+                        "bookmaker": o["bookmaker"],
+                        "opening_odds": o["opening_odds"],
+                    }
+                    for o in _cached_odds[match_id]
+                ]
+            else:
+                odds_records = session.query(
+                    Odds.market_type, Odds.selection, Odds.odds_value,
+                    Odds.bookmaker, Odds.opening_odds,
+                ).filter_by(match_id=match_id).all()
+                odds_data = [
+                    {
+                        "market_type": o.market_type,
+                        "selection": o.selection,
+                        "odds_value": o.odds_value,
+                        "bookmaker": o.bookmaker,
+                        "opening_odds": o.opening_odds,
+                    }
+                    for o in odds_records
+                ]
 
         # Coverage gate — skip fixtures where at least one team has no data
         # from any model (no Poisson strengths AND no Elo rating).
@@ -1054,7 +1129,9 @@ class FootballBettingAgent:
     async def get_daily_picks(self, target_date: date = None,
                               max_picks_per_match: int = 2,
                               leagues: List[str] = None,
-                              force: bool = False) -> List[BetRecommendation]:
+                              force: bool = False,
+                              shard: int = None,
+                              shards: int = None) -> List[BetRecommendation]:
         """Get high-confidence value betting picks for a specific date.
 
         EV and confidence thresholds are read from config (betting.min_expected_value /
@@ -1352,9 +1429,22 @@ class FootballBettingAgent:
                 )
 
         # Value threshold auto-calibration: hot streak → relax, cold streak → tighten.
+        #
+        # Shards must not run this. It writes data/models/ev_threshold.json, so N
+        # shards would race on the same file, and the alert below would fire N
+        # times. They read the persisted value instead (loaded at startup), which
+        # is the same number this call would compute — --settle already
+        # recalibrates it via learn_from_settled().
         self._recent_roi = None
         self._recent_roi_n = 0
-        self._auto_calibrate_ev_threshold()
+        _is_shard = bool(shards and shards > 1)
+        if _is_shard:
+            logger.info(
+                f"Shard {shard}/{shards}: using the persisted EV threshold "
+                f"({self.value_calculator.min_ev:.1%}); calibration runs in --collect"
+            )
+        else:
+            self._auto_calibrate_ev_threshold()
         # Alert operators when the model is in a sustained cold streak (ROI < -15%).
         # Guard: only send once per day (same alert fires from --settle AND --picks).
         _cal_roi = getattr(self, "_recent_roi", None)
@@ -1429,6 +1519,18 @@ class FootballBettingAgent:
                 )
             fixture_ids = odds_fixture_ids
 
+        # Partition AFTER every filter, so each shard sees the same candidate
+        # slate and takes a disjoint slice of it. Keyed on match_id so a match —
+        # and therefore the per-match pick cap and the correlation filter, both
+        # of which reason within a single match — never straddles two shards.
+        if shards and shards > 1:
+            _before = len(fixture_ids)
+            fixture_ids = [fid for fid in fixture_ids if fid % shards == (shard - 1)]
+            logger.info(
+                f"Shard {shard}/{shards}: analysing {len(fixture_ids)} of "
+                f"{_before} fixtures"
+            )
+
         if not fixture_ids:
             logger.info("No fixtures with bookmaker odds for analysis")
             return [], [], []
@@ -1476,6 +1578,43 @@ class FootballBettingAgent:
                 f"for qualifying-round minnows; --backfill-history can close gaps"
             )
 
+        # Everything from here on is PORTFOLIO-level: it ranks, caps and
+        # trims across the whole day's candidates, so it must see all of
+        # them. When this process is one shard of several it returns the
+        # candidates instead, and the collect step runs the global phase
+        # once over the union. Extracted rather than duplicated so the
+        # sharded and unsharded paths cannot drift apart.
+        if shards and shards > 1:
+            logger.info(
+                f"Shard {shard}/{shards}: {len(all_recommendations)} candidate "
+                f"recommendation(s) — deferring the portfolio phase to --collect"
+            )
+            return all_recommendations, [], []
+
+        return self.finalize_picks(
+            all_recommendations, target, max_picks_per_match=max_picks_per_match)
+
+    def finalize_picks(self, all_recommendations, target,
+                       max_picks_per_match: int = 2):
+        """Apply the portfolio-level phase and persist the result.
+
+        Ranking, the per-match cap, correlation filtering, the briefing-final
+        freeze and the daily exposure cap are all properties of the DAY, not
+        of any one fixture. Running them per shard would give each shard its
+        own `betting.max_total_kelly_pct`, so four shards would stake 4x the
+        configured daily exposure. This runs exactly once, over every
+        candidate, whether the analysis was sharded or not.
+
+        Args:
+            all_recommendations: Candidates from one or more analysis passes.
+            target: The pick date.
+            max_picks_per_match: Cap on picks kept per match. Per-match, so it
+                is unaffected by sharding (a match never straddles shards) —
+                but it is applied here so both paths share one implementation.
+
+        Returns:
+            (final_picks, newly_saved_picks, picks_dropped_by_the_exposure_cap)
+        """
         # Sort order: EV × confidence × agreement bonus × contrarian bonus.
         # Contrarian picks (model significantly disagrees with market) get
         # a boost when backed by strong model agreement — these are genuine
@@ -1501,12 +1640,20 @@ class FootballBettingAgent:
                     f"{1/r.odds:.0%} ({cv:.1f}x divergence, {r.model_agreement})"
                 )
 
-        all_recommendations.sort(
-            key=lambda r: r.expected_value * r.confidence
-            * _agreement_bonus.get(r.model_agreement, 1.0)
-            * _contrarian_bonus(r),
-            reverse=True,
-        )
+        # The score alone is not a total order — ties are common (identical EV
+        # and confidence across fixtures), and Python's sort is stable, so the
+        # winner used to be decided by whichever order analysis happened to
+        # produce. That made the day's picks depend on fixture iteration order,
+        # and under sharding it changed them systematically (shard file order
+        # instead of fixture order). (match_id, selection) makes the ranking
+        # total and therefore reproducible.
+        def _rank_key(r):
+            score = (r.expected_value * r.confidence
+                     * _agreement_bonus.get(r.model_agreement, 1.0)
+                     * _contrarian_bonus(r))
+            return (-score, r.match_id, r.selection)
+
+        all_recommendations.sort(key=_rank_key)
 
         # Limit picks per match: keep only the top N by confidence per match.
         # First deduplicate identical (match, selection) pairs, then group by
@@ -1542,7 +1689,10 @@ class FootballBettingAgent:
 
             limited = []
             for match_id, group in by_match.items():
-                group.sort(key=lambda r: r.confidence, reverse=True)
+                # Total order again: picks tied on confidence within a match
+                # must resolve deterministically, or which one survives the cap
+                # depends on list order.
+                group.sort(key=lambda r: (-r.confidence, r.selection))
                 already = existing_counts.get(match_id, 0)
                 slots = max(0, max_picks_per_match - already)
                 if slots < len(group):
@@ -1557,9 +1707,11 @@ class FootballBettingAgent:
 
             # Re-sort by EV × confidence × agreement for final ordering
             limited.sort(
-                key=lambda r: r.expected_value * r.confidence
-                * _agreement_bonus.get(r.model_agreement, 1.0),
-                reverse=True,
+                key=lambda r: (
+                    -(r.expected_value * r.confidence
+                      * _agreement_bonus.get(r.model_agreement, 1.0)),
+                    r.match_id, r.selection,
+                )
             )
         all_recommendations = limited
 
@@ -1706,7 +1858,7 @@ class FootballBettingAgent:
                 if existing:
                     continue
 
-                saved = SavedPick(
+                values = dict(
                     match_id=pick.match_id,
                     pick_date=pick_date,
                     match_name=pick.match,
@@ -1727,8 +1879,22 @@ class FootballBettingAgent:
                     model_market=pick.market,
                     model_selection=pick.selection,
                     model_probability=float(pick.predicted_probability),
+                    created_at=utcnow(),
                 )
-                session.add(saved)
+
+                # INSERT ... ON CONFLICT DO NOTHING against ix_saved_picks_dedup.
+                # The checks above are a fast path, not a guarantee: they are a
+                # read-then-write that two concurrent workers both pass. RETURNING
+                # tells us whether this call actually created the row, so
+                # new_picks stays exactly "picks this process saved" and Telegram
+                # does not re-notify for a pick another worker just wrote.
+                inserted_id = _insert_pick_if_absent(session, values)
+                if inserted_id is None:
+                    logger.debug(
+                        f"Pick already saved by a concurrent writer, skipping: "
+                        f"{pick.match} / {pick.selection}"
+                    )
+                    continue
                 new_picks.append(pick)
 
                 # AC4: warn when a new pick has no injury data for its match
@@ -2059,9 +2225,29 @@ class FootballBettingAgent:
         settled = []
 
         with self.db.get_session() as session:
-            pending = session.query(SavedPick).filter(
-                SavedPick.result.is_(None),
-            ).all()
+            # Bounded. This was an unlimited fetch, which is a growth trap: when
+            # upstream results arrive late the backlog grows, the step takes
+            # longer, times out, settles nothing, and the next run inherits a
+            # bigger backlog. Oldest-first with a cap means a backlog drains
+            # steadily over successive runs instead of wedging the step.
+            _PENDING_BATCH = int(self.config.get("betting.settle_batch_size", 2000))
+            pending = (
+                session.query(SavedPick)
+                .filter(SavedPick.result.is_(None))
+                .order_by(SavedPick.pick_date.asc(), SavedPick.id.asc())
+                .limit(_PENDING_BATCH)
+                .all()
+            )
+            from sqlalchemy import func as _sa_func
+            _pending_total = session.query(_sa_func.count(SavedPick.id)).filter(
+                SavedPick.result.is_(None)
+            ).scalar() or 0
+            if _pending_total > len(pending):
+                logger.warning(
+                    f"Settle: {_pending_total:,} pending picks, processing the "
+                    f"oldest {len(pending):,} this run "
+                    f"(betting.settle_batch_size={_PENDING_BATCH})"
+                )
 
             # Also re-evaluate recently settled picks where the stored score
             # differs from the current match score — catches cases where the
@@ -2078,6 +2264,19 @@ class FootballBettingAgent:
                 )
                 .all()
             )
+            # Prime the identity map with one batched fetch instead of a
+            # primary-key round trip per pick. At 100x the 3-day correction
+            # window is ~40,000 picks; at ~50 ms RTT that loop alone was ~33
+            # minutes in a step budgeted 15. session.get() below is then an
+            # identity-map hit, so the surrounding logic is untouched.
+            _correction_ids = {sp.match_id for sp in already_settled if sp.match_id}
+            _pending_ids = {p.match_id for p in pending if p.match_id}
+            _all_match_ids = _correction_ids | _pending_ids
+            if _all_match_ids:
+                session.query(Match).filter(
+                    id_in(session, Match.id, _all_match_ids)
+                ).all()
+
             needs_correction = []
             for sp in already_settled:
                 m = session.get(Match, sp.match_id)
@@ -2290,7 +2489,14 @@ class FootballBettingAgent:
         now = date.today()
 
         with self.db.get_session() as session:
-            all_picks = session.query(SavedPick).all()
+            # Column-projected: this reads the whole saved_picks table on every
+            # --stats / --report, and the analysis below touches six columns.
+            # review_reason alone (VARCHAR 500) dominated the old payload.
+            all_picks = session.query(
+                SavedPick.result, SavedPick.odds, SavedPick.kelly_stake_percentage,
+                SavedPick.pick_date, SavedPick.market,
+                SavedPick.predicted_probability, SavedPick.used_fallback_odds,
+            ).all()
 
             if not all_picks:
                 return {"total": 0}
@@ -2446,7 +2652,11 @@ class FootballBettingAgent:
         and average EV per window so drift or improvement over time is visible.
         """
         with self.db.get_session() as session:
-            all_picks = session.query(SavedPick).filter(
+            all_picks = session.query(
+                SavedPick.pick_date, SavedPick.result, SavedPick.odds,
+                SavedPick.kelly_stake_percentage, SavedPick.expected_value,
+                SavedPick.market,
+            ).filter(
                 SavedPick.result.isnot(None)
             ).order_by(SavedPick.pick_date).all()
             if not all_picks:
@@ -2522,7 +2732,11 @@ class FootballBettingAgent:
         """
         with self.db.get_session() as session:
             month_ago = date.today() - timedelta(days=30)
-            rows = session.query(SavedPick).filter(
+            rows = session.query(
+                SavedPick.match_id, SavedPick.market, SavedPick.selection,
+                SavedPick.actual_home_goals, SavedPick.actual_away_goals,
+                SavedPick.pick_date,
+            ).filter(
                 SavedPick.result.isnot(None),
                 SavedPick.pick_date >= month_ago,
             ).all()
@@ -2569,7 +2783,9 @@ class FootballBettingAgent:
         match_ids = list({p["match_id"] for p in settled})
         match_data = {}  # match_id -> (home_team_id, away_team_id, league)
         with self.db.get_session() as session:
-            matches = session.query(Match).filter(Match.id.in_(match_ids)).all()
+            matches = session.query(
+                Match.id, Match.home_team_id, Match.away_team_id, Match.league,
+            ).filter(id_in(session, Match.id, match_ids)).all()
             for m in matches:
                 match_data[m.id] = (m.home_team_id, m.away_team_id, m.league or "")
 
@@ -2903,7 +3119,9 @@ class FootballBettingAgent:
 
         # Get most recent completed matches with results
         with self.db.get_session() as session:
-            matches = session.query(Match).filter(
+            matches = session.query(
+                Match.id, Match.home_goals, Match.away_goals, Match.match_date,
+            ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
                 Match.away_goals.isnot(None),
@@ -3945,14 +4163,41 @@ async def main():
             print("Results scrape complete.")
 
         elif command == "--train":
-            print("Training ML models on historical data...")
-            # Use fewer samples when running against remote Neon DB (CI)
-            # to avoid 30K+ network round-trips for feature extraction.
-            from src.data.database import get_db as _get_db_check
-            _db_tmp = _get_db_check()
-            _max = 500 if _db_tmp.is_postgres else 2000
-            await agent.train_ml_models(max_samples=_max)
-            print("ML training complete.")
+            # Respect models.ml_retrain_days.
+            #
+            # daily_update() already asks _ml_models_stale() before retraining,
+            # but CI passes --skip-ml-retrain so the work moves to this step
+            # (its own timeout budget). The staleness *decision* was therefore
+            # made in the --update process and thrown away, while this entry
+            # point retrained unconditionally — so the pipeline trained every
+            # single day regardless of ml_retrain_days: 3, rebuilding features
+            # for 500 matches and refitting Poisson/Elo for nothing on two days
+            # out of three.
+            #
+            # `--force` keeps the manual escape hatch for an operator who wants
+            # a retrain now.
+            force_train = "--force" in sys.argv
+            _max_age = agent.config.get("models.ml_retrain_days", 3)
+            if not force_train and not agent._ml_models_stale(max_age_days=_max_age):
+                _last = getattr(agent.predictor.ml_models, "trained_at", "unknown")
+                print(
+                    f"ML models are fresh (last trained: {_last}, "
+                    f"retrain interval: {_max_age}d) — skipping. "
+                    f"Use --train --force to retrain anyway."
+                )
+                logger.info(
+                    f"--train skipped: models fresh (trained_at={_last}, "
+                    f"ml_retrain_days={_max_age})"
+                )
+            else:
+                print("Training ML models on historical data...")
+                # Use fewer samples when running against remote Postgres (CI)
+                # to avoid 30K+ network round-trips for feature extraction.
+                from src.data.database import get_db as _get_db_check
+                _db_tmp = _get_db_check()
+                _max = 500 if _db_tmp.is_postgres else 2000
+                await agent.train_ml_models(max_samples=_max)
+                print("ML training complete.")
 
         elif command == "--picks":
             # Parse optional --leagues filter and --force flag
@@ -3962,11 +4207,83 @@ async def main():
                 if arg == "--leagues" and i + 1 < len(sys.argv):
                     league_filter = [l.strip() for l in sys.argv[i + 1].split(",")]
                     break
-            agent.predictor.fit()
-            agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
-            picks, new_picks, dropped_picks = await agent.get_daily_picks(
-                leagues=league_filter, force=force_picks
-            )
+
+            # Sharding: `--shard i/N` analyses only the fixtures whose match_id
+            # falls in this shard and writes its candidates to `--out`, WITHOUT
+            # ranking, capping, saving or notifying. `--collect DIR` then runs
+            # the portfolio phase once over every shard's file.
+            #
+            # Without arguments the behaviour is exactly as before: analyse
+            # everything and finalise in the same process.
+            _shard = _shards = None
+            _out_path = None
+            _collect_dir = None
+            for i, arg in enumerate(sys.argv[2:], start=2):
+                if arg == "--shard" and i + 1 < len(sys.argv):
+                    try:
+                        _shard, _shards = (int(x) for x in sys.argv[i + 1].split("/", 1))
+                    except ValueError:
+                        print(f"Invalid --shard '{sys.argv[i + 1]}' — expected i/N")
+                        return
+                    if not (1 <= _shard <= _shards):
+                        print(f"Invalid --shard {_shard}/{_shards} — need 1 <= i <= N")
+                        return
+                    if _shards == 1:
+                        # A one-way split is not a split. Fall through to the
+                        # normal path so `--shard 1/1` is exactly today's
+                        # behaviour (analyse, finalise, notify) rather than
+                        # silently requiring a --collect step that a matrix of
+                        # size 1 would never run.
+                        _shard = _shards = None
+                elif arg == "--out" and i + 1 < len(sys.argv):
+                    _out_path = sys.argv[i + 1]
+                elif arg == "--collect" and i + 1 < len(sys.argv):
+                    _collect_dir = sys.argv[i + 1]
+
+            if _shard and _collect_dir:
+                print("--shard and --collect are mutually exclusive")
+                return
+
+            if _collect_dir:
+                from src.betting import candidate_io
+                files = candidate_io.discover(_collect_dir)
+                if not files:
+                    print(f"No candidate files found in {_collect_dir} — nothing to collect.")
+                    return
+                candidates = candidate_io.read_candidates(files)
+                print(f"Collected {len(candidates)} candidate(s) from {len(files)} shard(s).")
+                # The portfolio phase needs the calibrated EV threshold that the
+                # shards deliberately did not recompute.
+                agent._recent_roi = None
+                agent._recent_roi_n = 0
+                agent._auto_calibrate_ev_threshold()
+                picks, new_picks, dropped_picks = agent.finalize_picks(
+                    candidates, date.today()
+                )
+            elif _shard:
+                agent.predictor.fit()
+                agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
+                candidates, _, _ = await agent.get_daily_picks(
+                    leagues=league_filter, force=force_picks,
+                    shard=_shard, shards=_shards,
+                )
+                from src.betting import candidate_io
+                target = _out_path or f"data/candidates/candidates-{_shard:03d}.json"
+                candidate_io.write_candidates(
+                    target, candidates, shard=_shard, shards=_shards)
+                print(
+                    f"Shard {_shard}/{_shards}: {len(candidates)} candidate(s) "
+                    f"written to {target}. Run --picks --collect to finalise."
+                )
+                return
+
+            if not _collect_dir:
+                agent.predictor.fit()
+                agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
+                picks, new_picks, dropped_picks = await agent.get_daily_picks(
+                    leagues=league_filter, force=force_picks
+                )
+
             if not picks:
                 print("No value picks found for today.")
             else:
@@ -4012,7 +4329,9 @@ async def main():
                             match_ids = [p.match_id for p in new_picks if p.match_id]
                             if match_ids:
                                 with agent.db.get_session() as _isess:
-                                    _matches = _isess.query(Match).filter(Match.id.in_(match_ids)).all()
+                                    _matches = _isess.query(
+                                        Match.home_team_id, Match.away_team_id,
+                                    ).filter(id_in(_isess, Match.id, match_ids)).all()
                                     _team_ids = [
                                         tid
                                         for m in _matches
@@ -4033,7 +4352,7 @@ async def main():
                                         injury_budget_exhausted = _any_today == 0
                                         _inj_total = (
                                             _isess.query(Injury)
-                                            .filter(Injury.team_id.in_(_team_ids))
+                                            .filter(id_in(_isess, Injury.team_id, _team_ids))
                                             .count()
                                         )
                                         no_injury_data = _inj_total == 0
@@ -4041,7 +4360,7 @@ async def main():
                                             _fresh = (
                                                 _isess.query(Injury)
                                                 .filter(
-                                                    Injury.team_id.in_(_team_ids),
+                                                    id_in(_isess, Injury.team_id, _team_ids),
                                                     Injury.updated_at >= _today_start,
                                                 )
                                                 .count()

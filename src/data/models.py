@@ -24,6 +24,16 @@ class Team(Base):
     apifootball_team_id = Column(Integer)  # API-Football team ID for history backfill
     created_at = Column(DateTime, default=utcnow)
 
+    # Team lookup happens once per scraped name across four scrapers, and the
+    # table had no index beyond its primary key — pg_stat recorded 58k sequential
+    # scans having read 57M tuples. EXPLAIN on production picked an index scan for
+    # all three columns (see migrations/001_history_mirror_and_indexes.sql).
+    __table_args__ = (
+        Index("ix_teams_name", "name"),
+        Index("ix_teams_league", "league"),
+        Index("ix_teams_apifootball_team_id", "apifootball_team_id"),
+    )
+
     # Relationships
     home_matches = relationship("Match", foreign_keys="Match.home_team_id", back_populates="home_team")
     away_matches = relationship("Match", foreign_keys="Match.away_team_id", back_populates="away_team")
@@ -106,6 +116,18 @@ class Match(Base):
     is_fixture = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utcnow)
 
+    # Change marker for the local Parquet history mirror's incremental sync.
+    #
+    # On PostgreSQL the authoritative writer is the trg_matches_updated_at
+    # trigger from migration 001, which also supplies the NOT NULL / DEFAULT
+    # now() that the live column carries. The trigger is what catches the bulk
+    # `query().update()` statements and raw SQL that SQLAlchemy's onupdate never
+    # sees. The Python-side default/onupdate here keeps the column meaningful on
+    # SQLite (dev only — no trigger, and no mirror either), and is deliberately
+    # nullable so _migrate_missing_columns can add it to an existing dev DB
+    # without needing a backfill.
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, index=True)
+
     # Indexes on the columns hit by every form/xG/momentum query:
     #  · (home_team_id, is_fixture, match_date) — home form queries
     #  · (away_team_id, is_fixture, match_date) — away form queries
@@ -116,6 +138,10 @@ class Match(Base):
         Index("ix_match_away_team_fixture_date", "away_team_id", "is_fixture", "match_date"),
         Index("ix_match_fixture_date", "is_fixture", "match_date"),
         Index("ix_match_league_fixture", "league", "is_fixture"),
+        # Date-only entry point for the batched odds prune, which selects victim
+        # match ids by age. ix_match_fixture_date leads with is_fixture, so it
+        # cannot serve a bare match_date range.
+        Index("ix_matches_match_date", "match_date"),
     )
 
     # Relationships
@@ -237,11 +263,48 @@ class SavedPick(Base):
 
     created_at = Column(DateTime, default=utcnow)
 
+    # Dedup was application-level read-then-write, which two concurrent workers
+    # both pass. A duplicated pick is not cosmetic: every statistic here is a
+    # count over this table — win rate, ROI, Brier, the Bayesian weight learner,
+    # and the drawdown breaker that sizes real stakes. The database arbitrates
+    # now; save_picks() still checks first as a cheap fast path.
+    __table_args__ = (
+        Index("ix_saved_picks_dedup", "match_id", "selection", "pick_date",
+              unique=True),
+    )
+
     # Relationships
     match = relationship("Match")
 
     def __repr__(self):
         status = self.result or "pending"
         return f"<SavedPick({self.match_name}: {self.selection} @ {self.odds} — {status})>"
+
+
+class ApiBudget(Base):
+    """Cross-process daily request budget for an external API.
+
+    ``ApiFootballScraper`` counted spend in ``self._requests_today``, an instance
+    attribute reset to 0 on construction and never persisted — so the "100
+    requests/day" cap was enforced *per process*, and the daily job runs seven of
+    them. This table makes the counter global, and quota is claimed with one
+    conditional UPDATE whose row lock serialises concurrent claimants.
+    """
+
+    __tablename__ = 'api_budget'
+
+    day = Column(Date, primary_key=True)
+    provider = Column(String(50), primary_key=True)
+    used = Column(Integer, nullable=False, default=0)
+    # Trailing underscore: `limit` is a reserved word in several dialects.
+    limit_ = Column("limit_", Integer, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        Index("ix_api_budget_day", "day"),
+    )
+
+    def __repr__(self):
+        return f"<ApiBudget({self.provider} {self.day}: {self.used}/{self.limit_})>"
 
 

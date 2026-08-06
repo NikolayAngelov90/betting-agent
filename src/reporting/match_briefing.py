@@ -24,6 +24,9 @@ import re
 from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
 
+from sqlalchemy import func
+
+from src.data.sql_helpers import id_in
 from src.data.models import Match, Team, Odds, SavedPick
 from src.utils.logger import get_logger
 
@@ -369,25 +372,40 @@ class MatchBriefingService:
         """
         from src.utils.team_names import team_names_similar
         with self.db.get_session() as session:
-            rows = session.query(Match).filter(
+            rows = session.query(
+                Match.id, Match.home_team_id, Match.away_team_id,
+                Match.league, Match.match_date, Match.apifootball_id,
+            ).filter(
                 Match.is_fixture == True,  # noqa: E712
                 Match.league.in_(_WC_LEAGUES),
                 Match.match_date >= start,
                 Match.match_date <= end,
             ).order_by(Match.match_date.asc()).all()
 
+            # Resolve team names and odds counts in two batch queries instead of
+            # 3 per fixture (2 session.get + 1 count) — same values, far fewer
+            # round-trips and no full Team rows on the wire.
+            _team_ids = {m.home_team_id for m in rows} | {m.away_team_id for m in rows}
+            _names = dict(
+                session.query(Team.id, Team.name).filter(id_in(session, Team.id, _team_ids)).all()
+            ) if _team_ids else {}
+            _match_ids = [m.id for m in rows]
+            _odds_counts = dict(
+                session.query(Odds.match_id, func.count(Odds.id))
+                .filter(id_in(session, Odds.match_id, _match_ids))
+                .group_by(Odds.match_id).all()
+            ) if _match_ids else {}
+
             cands = []
             for m in rows:
-                ht = session.get(Team, m.home_team_id)
-                at = session.get(Team, m.away_team_id)
                 cands.append({
                     "id": m.id,
-                    "home": ht.name if ht else "",
-                    "away": at.name if at else "",
+                    "home": _names.get(m.home_team_id, ""),
+                    "away": _names.get(m.away_team_id, ""),
                     "league": m.league,
                     "dt": m.match_date,
                     "afid": m.apifootball_id,
-                    "odds": session.query(Odds).filter(Odds.match_id == m.id).count(),
+                    "odds": _odds_counts.get(m.id, 0),
                 })
 
         def _hours_apart(a, b):
@@ -552,7 +570,10 @@ class MatchBriefingService:
                     at = session.get(Team, m.away_team_id)
                     home_name = ht.name if ht else ""
                     away_name = at.name if at else ""
-                rows = session.query(Odds).filter(Odds.match_id == match_id).all()
+                rows = session.query(
+                    Odds.market_type, Odds.selection, Odds.odds_value,
+                    Odds.bookmaker, Odds.opening_odds,
+                ).filter(Odds.match_id == match_id).all()
                 odds_data = [
                     {
                         "market_type": o.market_type,
