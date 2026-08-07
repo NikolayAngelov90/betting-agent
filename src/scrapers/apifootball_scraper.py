@@ -1765,7 +1765,12 @@ class APIFootballScraper(BaseScraper):
                 (r.bookmaker, r.market_type, r.selection): r
                 for r in existing_rows
             }
+            # Rows queued for the upsert in THIS pass, keyed the same way as
+            # existing_index. Kept separate because the two need different
+            # handling on a repeat hit: persisted rows are ORM objects, queued
+            # rows are plain dicts.
             new_rows: list = []
+            queued_index: dict = {}
 
             for entry in odds_response:
                 bookmakers = entry.get("bookmakers", [])
@@ -1804,17 +1809,37 @@ class APIFootballScraper(BaseScraper):
                                 continue
 
                             key = (bookie_name, market_type, selection)
+                            now = datetime.now(timezone.utc).replace(tzinfo=None)
+
                             existing = existing_index.get(key)
-                            if existing:
+                            if existing is not None:
+                                # Already persisted → in-session ORM update.
                                 # Update if odds changed; preserve opening_odds
                                 if existing.odds_value != odds_value:
                                     if existing.opening_odds is None:
                                         existing.opening_odds = existing.odds_value
                                     existing.odds_value = odds_value
-                                    existing.timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
+                                    existing.timestamp = now
                                 continue
 
-                            # Not in our snapshot — but another writer may have
+                            queued = queued_index.get(key)
+                            if queued is not None:
+                                # The API response lists this selection more
+                                # than once (same bookmaker across repeated bet
+                                # blocks). Update the row we already queued —
+                                # NOT the index entry, which is why this branch
+                                # exists at all. It also keeps `new_rows` free
+                                # of duplicate conflict keys, which PostgreSQL
+                                # rejects outright: "ON CONFLICT DO UPDATE
+                                # command cannot affect row a second time".
+                                if queued["odds_value"] != odds_value:
+                                    queued["odds_value"] = odds_value
+                                    queued["timestamp"] = now
+                                    # opening_odds stays at first-seen, matching
+                                    # the persisted-row branch above.
+                                continue
+
+                            # Not seen at all — but another writer may have
                             # inserted it since we read. A plain INSERT would
                             # raise a unique violation on
                             # ix_odds_match_bookie_market, and on PostgreSQL a
@@ -1823,16 +1848,17 @@ class APIFootballScraper(BaseScraper):
                             # fixture, plus a re-raise that kills the step.
                             # Upsert instead, so a concurrent writer costs
                             # nothing.
-                            new_rows.append({
+                            row = {
                                 "match_id": match_id,
                                 "bookmaker": bookie_name,
                                 "market_type": market_type,
                                 "selection": selection,
                                 "odds_value": odds_value,
                                 "opening_odds": odds_value,
-                                "timestamp": datetime.now(timezone.utc).replace(tzinfo=None),
-                            })
-                            existing_index[key] = True  # prevent re-insert on dup
+                                "timestamp": now,
+                            }
+                            new_rows.append(row)
+                            queued_index[key] = row
                             count += 1
 
             if new_rows:

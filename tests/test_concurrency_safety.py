@@ -513,3 +513,102 @@ class TestBatchedHotPaths:
         assert db.prune_old_odds(keep_days=400, batch_size=1, max_batches=2) == 2
         with db.get_session() as s:
             assert s.query(Odds).count() == 4, "the rest must survive to the next run"
+
+
+class TestSaveOddsFromSet:
+    """Regression: the whole `_save_odds_from_set` path, not just the upsert.
+
+    The ON CONFLICT rewrite replaced the ORM object in `existing_index` with a
+    bare `True` sentinel. When an API response listed the same
+    (bookmaker, market, selection) twice — which it does routinely — the second
+    hit ran `existing.odds_value` against `True` and raised
+    `AttributeError: 'bool' object has no attribute 'odds_value'`.
+
+    In production that killed the API-Football odds update outright AND the
+    per-fixture fallback: 35/35 fixtures ended with zero odds and the day
+    produced no picks. The unit tests for _upsert_odds_rows all passed, because
+    none of them exercised this function.
+    """
+
+    def _response(self, entries):
+        """Shape a fake API-Football odds payload."""
+        return [{"bookmakers": [{"name": name, "bets": bets} for name, bets in entries]}]
+
+    def _bet(self, values):
+        return {"name": "Match Winner",
+                "values": [{"value": v, "odd": str(o)} for v, o in values]}
+
+    def test_a_repeated_selection_does_not_raise(self, db):
+        """The exact production failure."""
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        mid = _fixture(db)
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper.db = db
+        scraper._logged_unknown_bets = set()
+
+        # Same bookmaker, same market, the selection listed twice — the second
+        # block quotes a moved price.
+        payload = self._response([
+            ("Bet365", [self._bet([("Home", 2.10), ("Draw", 3.40)]),
+                        self._bet([("Home", 2.05)])]),
+        ])
+        saved = scraper._save_odds_from_set(mid, payload, {"Bet365"})
+
+        assert saved == 2, f"expected Home+Draw counted once each, got {saved}"
+        with db.get_session() as s:
+            rows = {o.selection: o for o in s.query(Odds).all()}
+        assert set(rows) == {"Home", "Draw"}
+        assert rows["Home"].odds_value == 2.05, "the later quote should win"
+        assert rows["Home"].opening_odds == 2.10, "opening stays at first-seen"
+
+    def test_repeat_does_not_produce_duplicate_conflict_keys(self, db):
+        """PostgreSQL rejects a VALUES list that hits one row twice.
+
+        'ON CONFLICT DO UPDATE command cannot affect row a second time' — so
+        deduplicating within the batch is required, not a nicety.
+        """
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        mid = _fixture(db)
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper.db = db
+        scraper._logged_unknown_bets = set()
+
+        payload = self._response([
+            ("Bet365", [self._bet([("Home", 2.0)]) for _ in range(5)]),
+        ])
+        scraper._save_odds_from_set(mid, payload, {"Bet365"})
+        with db.get_session() as s:
+            assert s.query(Odds).count() == 1
+
+    def test_updating_an_already_persisted_row_still_works(self, db):
+        """The other branch: the row exists in the DB from an earlier run."""
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        mid = _fixture(db)
+        with db.get_session() as s:
+            s.add(Odds(match_id=mid, bookmaker="Bet365", market_type="1X2",
+                       selection="Home", odds_value=2.50, opening_odds=None))
+
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper.db = db
+        scraper._logged_unknown_bets = set()
+        scraper._save_odds_from_set(
+            mid, self._response([("Bet365", [self._bet([("Home", 1.90)])])]),
+            {"Bet365"})
+
+        with db.get_session() as s:
+            row = s.query(Odds).filter_by(selection="Home").one()
+        assert row.odds_value == 1.90
+        assert row.opening_odds == 2.50, "opening backfilled from the prior price"
+
+    def test_unlisted_bookmakers_are_ignored(self, db):
+        from src.scrapers.apifootball_scraper import APIFootballScraper
+        mid = _fixture(db)
+        scraper = APIFootballScraper.__new__(APIFootballScraper)
+        scraper.db = db
+        scraper._logged_unknown_bets = set()
+        saved = scraper._save_odds_from_set(
+            mid, self._response([("NotAllowed", [self._bet([("Home", 2.0)])])]),
+            {"Bet365"})
+        assert saved == 0
+        with db.get_session() as s:
+            assert s.query(Odds).count() == 0
