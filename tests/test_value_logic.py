@@ -355,14 +355,29 @@ class TestForcedPickBlend:
 
 
 class TestClubForcedPickGuards:
-    """Option C hardening (2026-07-16): club forced picks never take BTTS Yes
-    (33% win / -42% ROI in clubs) and must clear a blended-probability floor."""
+    """Club forced-pick guards, now declared in `gate_registry`.
 
-    def _calc(self, odds_by_selection):
+    The BTTS-Yes ban was fitted on 32 settled picks by inspecting their outcomes.
+    Walk-forward re-test (Stage 3, Phase 4): holdout cohort n=11 at -20.6% with a
+    bootstrap CI of [-69.4%, +28.9%]; lifetime binomial vs break-even p = 0.582.
+    It therefore defaults to OFF, and these tests pin BOTH states so the switch
+    stays deliberate.
+    """
+
+    def _calc(self, odds_by_selection, gates=None):
         from types import SimpleNamespace
         calc = _make_calc()
         calc.min_odds = 1.50
-        calc.config = SimpleNamespace(betting={})
+
+        _gates = gates or {}
+
+        class _Cfg:
+            betting: dict = {}
+
+            def get(self, key, default=None):
+                return _gates.get(key, default)
+
+        calc.config = _Cfg()
         calc._find_best_odds = (
             lambda odds_data, market, selection, **kw:
             odds_by_selection.get(selection, 0)
@@ -375,15 +390,25 @@ class TestClubForcedPickGuards:
         )
         return calc
 
-    def test_club_forced_pick_never_btts(self):
-        # BTTS Yes has the best blend (0.61) but the league is a club competition
-        # -> it must be excluded and Over 2.5 (blend 0.57) chosen instead.
+    _PREDICTIONS = {"ensemble": {
+        "btts_yes": 0.60, "over_2.5": 0.55,
+        "home_win": 0.40, "away_win": 0.30,
+    }}
+
+    def test_club_btts_ban_is_off_by_default(self):
+        """Default behaviour after Stage 3: BTTS Yes has the best blend (0.61)
+        and is no longer suppressed, because the ban did not survive validation."""
         calc = self._calc({"BTTS Yes": 1.60, "Over 2.5 Goals": 1.70})
-        predictions = {"ensemble": {
-            "btts_yes": 0.60, "over_2.5": 0.55,
-            "home_win": 0.40, "away_win": 0.30,
-        }}
-        pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}],
+        pick = calc.find_best_bet(self._PREDICTIONS, odds_data=[{"x": 1}],
+                                  league="europe/champions-league")
+        assert pick.market_key == "btts_yes"
+
+    def test_club_btts_ban_still_works_when_enabled(self):
+        """Opting back in via betting.gates.club_btts_yes_ban restores the old
+        behaviour: Over 2.5 (blend 0.57) is chosen instead."""
+        calc = self._calc({"BTTS Yes": 1.60, "Over 2.5 Goals": 1.70},
+                          gates={"betting.gates.club_btts_yes_ban": True})
+        pick = calc.find_best_bet(self._PREDICTIONS, odds_data=[{"x": 1}],
                                   league="europe/champions-league")
         assert pick.market_key == "over_2.5"
 

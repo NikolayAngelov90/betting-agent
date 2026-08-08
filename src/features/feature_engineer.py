@@ -951,6 +951,7 @@ class FeatureEngineer:
             "draw_implied_prob": 1/3,
             "away_implied_prob": 1/3,
             "bookmaker_available": 0,
+            "bookmaker_consensus_books": 0,
             # Over/Under totals
             "over25_implied_prob": 0.0,
             "under25_implied_prob": 0.0,
@@ -995,93 +996,124 @@ class FeatureEngineer:
 
             result = dict(defaults)
 
-            # Helper: margin-remove a 3-way market
-            def _3way(od):
-                h = od.get("Home") or od.get("Home Win")
-                d = od.get("Draw")
-                a = od.get("Away") or od.get("Away Win")
-                if not (h and d and a) or min(h, d, a) <= 0:
-                    return None
-                rh, rd, ra = 1/h, 1/d, 1/a
-                m = rh + rd + ra
-                if m <= 0:
-                    return None
-                return round(rh/m, 4), round(rd/m, 4), round(ra/m, 4)
+            # Consensus de-vigging.
+            #
+            # This used to de-vig ONE bookmaker, chosen Bet365 -> Pinnacle -> any.
+            # Two problems, both measured on 2026-08-07:
+            #
+            #  1. Bet365's stored 1X2 was corrupt for all 2,486 matches in the
+            #     database (median overround 1.3524 — see the "Home/Away" note in
+            #     apifootball_scraper.BET_TYPE_MAP). Being first in the priority
+            #     order, it was the source of home/draw/away_implied_prob for
+            #     nearly every fixture, and those features feed both ML training
+            #     and the 60% bookmaker blend.
+            #  2. The probability came from one book while the EV in
+            #     value_calculator used the MEDIAN price across all books. The
+            #     median price sat 8.3% above the reference book's on average
+            #     (p90 +36.9%), and every point of that gap entered claimed EV as
+            #     if it were edge.
+            #
+            # Taking the per-outcome median of de-vigged probabilities across
+            # every book that prices the market fixes both: one bad book can no
+            # longer dominate, and the probability now comes from the same
+            # cross-book consensus as the price it will be compared against.
+            #
+            # An overround plausibility gate runs first, so a book whose market
+            # does not sum to a believable figure is excluded outright rather
+            # than averaged in.
 
-            # Helper: margin-remove a 2-way market (over/under style)
-            def _2way(od, over_key, under_key):
-                o = od.get(over_key)
-                u = od.get(under_key)
-                if not (o and u) or min(o, u) <= 0:
+            def _devig(od, keys, lo, hi):
+                """De-vig one book's market. None when a leg is missing or the
+                overround is outside [lo, hi] — an implausible book is dropped,
+                not silently normalised into a plausible-looking answer."""
+                prices = []
+                for alts in keys:
+                    v = next((od[k] for k in alts if od.get(k)), None)
+                    if not v or v <= 1.0:
+                        return None
+                    prices.append(v)
+                inv = [1.0 / p for p in prices]
+                overround = sum(inv)
+                if not (lo <= overround <= hi):
                     return None
-                ro, ru = 1/o, 1/u
-                m = ro + ru
-                if m <= 0:
-                    return None
-                return round(ro/m, 4), round(ru/m, 4)
+                return [i / overround for i in inv]
 
-            # Bookmaker priority order
-            _priority = ("Bet365", "Pinnacle")
-
-            def _best_bk(market_type):
-                """Return the odds dict for the preferred available bookmaker."""
-                for pref in _priority:
-                    if (market_type, pref) in bk_data:
-                        return bk_data[(market_type, pref)]
-                # Fall back to any bookmaker for this market
+            def _consensus(market_type, keys, lo, hi):
+                """Median de-vigged probability per outcome across all books."""
+                per_book = []
                 for (mt, _bk), od in bk_data.items():
-                    if mt == market_type:
-                        return od
-                return None
+                    if mt != market_type:
+                        continue
+                    probs = _devig(od, keys, lo, hi)
+                    if probs:
+                        per_book.append(probs)
+                if not per_book:
+                    return None
+                cols = list(zip(*per_book))
+                med = []
+                for col in cols:
+                    s = sorted(col)
+                    n = len(s)
+                    med.append(s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2)
+                # Medians taken per outcome need not sum to 1 — renormalise.
+                total = sum(med)
+                if total <= 0:
+                    return None
+                return [round(v / total, 4) for v in med], len(per_book)
+
+            # Plausible overround bands. A 3-way book runs ~1.02-1.15 and a 2-way
+            # ~1.01-1.12; the ceilings are deliberately generous so that only
+            # genuinely broken markets (the 1.35 above) are rejected.
+            _OR3 = (1.005, 1.25)
+            _OR2 = (1.005, 1.20)
 
             # ── 1X2 ──────────────────────────────────────────────────────────
-            od = _best_bk("1X2")
-            if od:
-                r = _3way(od)
-                if r:
-                    result["home_implied_prob"] = r[0]
-                    result["draw_implied_prob"] = r[1]
-                    result["away_implied_prob"] = r[2]
-                    result["bookmaker_available"] = 1
+            r = _consensus(
+                "1X2",
+                [("Home", "Home Win"), ("Draw",), ("Away", "Away Win")],
+                *_OR3,
+            )
+            if r:
+                (h, d, a), n_books = r
+                result["home_implied_prob"] = h
+                result["draw_implied_prob"] = d
+                result["away_implied_prob"] = a
+                result["bookmaker_available"] = 1
+                result["bookmaker_consensus_books"] = n_books
 
             # ── Over/Under ────────────────────────────────────────────────────
-            od = _best_bk("over_under")
-            if od:
-                r25 = _2way(od, "Over 2.5", "Under 2.5")
-                if r25:
-                    result["over25_implied_prob"] = r25[0]
-                    result["under25_implied_prob"] = r25[1]
-                    result["goals_bookmaker_available"] = 1
-                r15 = _2way(od, "Over 1.5", "Under 1.5")
-                if r15:
-                    result["over15_implied_prob"] = r15[0]
-                    result["under15_implied_prob"] = r15[1]
-                    result["goals_bookmaker_available"] = 1
+            r25 = _consensus("over_under", [("Over 2.5",), ("Under 2.5",)], *_OR2)
+            if r25:
+                (o, u), _ = r25
+                result["over25_implied_prob"] = o
+                result["under25_implied_prob"] = u
+                result["goals_bookmaker_available"] = 1
+            r15 = _consensus("over_under", [("Over 1.5",), ("Under 1.5",)], *_OR2)
+            if r15:
+                (o, u), _ = r15
+                result["over15_implied_prob"] = o
+                result["under15_implied_prob"] = u
+                result["goals_bookmaker_available"] = 1
 
             # ── BTTS ─────────────────────────────────────────────────────────
-            od = _best_bk("btts")
-            if od:
-                yes_odds = od.get("Yes") or od.get("BTTS Yes")
-                no_odds = od.get("No") or od.get("BTTS No")
-                if yes_odds and no_odds and min(yes_odds, no_odds) > 0:
-                    ry, rn = 1/yes_odds, 1/no_odds
-                    m = ry + rn
-                    if m > 0:
-                        result["btts_yes_implied_prob"] = round(ry/m, 4)
-                        result["btts_no_implied_prob"] = round(rn/m, 4)
-                    result["btts_bookmaker_available"] = 1
+            rb = _consensus("btts", [("Yes", "BTTS Yes"), ("No", "BTTS No")], *_OR2)
+            if rb:
+                (y, n) = rb[0]
+                result["btts_yes_implied_prob"] = y
+                result["btts_no_implied_prob"] = n
+                result["btts_bookmaker_available"] = 1
 
             # ── Team goal lines ───────────────────────────────────────────────
-            od = _best_bk("team_goals")
-            if od:
-                rh = _2way(od, "Home Over 1.5", "Home Under 1.5")
-                if rh:
-                    result["home_over15_implied_prob"] = rh[0]
-                    result["team_goals_bookmaker_available"] = 1
-                ra = _2way(od, "Away Over 1.5", "Away Under 1.5")
-                if ra:
-                    result["away_over15_implied_prob"] = ra[0]
-                    result["team_goals_bookmaker_available"] = 1
+            rh = _consensus(
+                "team_goals", [("Home Over 1.5",), ("Home Under 1.5",)], *_OR2)
+            if rh:
+                result["home_over15_implied_prob"] = rh[0][0]
+                result["team_goals_bookmaker_available"] = 1
+            ra = _consensus(
+                "team_goals", [("Away Over 1.5",), ("Away Under 1.5",)], *_OR2)
+            if ra:
+                result["away_over15_implied_prob"] = ra[0][0]
+                result["team_goals_bookmaker_available"] = 1
 
             return result
 

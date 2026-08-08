@@ -1,0 +1,62 @@
+{
+  "generated_at": "2026-08-07T09:43:25.009476",
+  "manifest": "clean_evaluation_dataset manifest\n  markets                : 1X2, over_under, btts\n  min surviving books    : 2\n  untimestamped odds     : admitted\n  matches considered     : 38347\n  matches qualified      : 2700\n  match rejections:\n      no market reached the 2-book quorum          35647\n  bookmaker-market books seen : 119873\n  book rejections:\n      over_under_1.5: incomplete legs              16935\n      over_under_3.5: incomplete legs              14376\n      odds timestamped after kickoff               10732\n      over_under_2.5: incomplete legs              5441\n      1X2: implausible overround (corruption gate) 4836\n      excluded bookmaker (display-only prices)     919\n      1X2: incomplete legs                         457\n      over_under_2.5: implausible overround (corruption gate) 79\n      over_under_3.5: implausible overround (corruption gate) 28\n      over_under_1.5: implausible overround (corruption gate) 4\n  qualified matches per market:\n      1X2                                          2286\n      btts                                         2412\n      over_under_1.5                               2425\n      over_under_2.5                               2698\n      over_under_3.5                               2509",
+  "phase4_1x2": {
+    "A raw bookmaker (vig left in)": {
+      "log_loss": 1.0015639556973344,
+      "brier": 0.5984684357107612,
+      "ece": 0.008465826393261973,
+      "accuracy": 0.5140388768898488,
+      "n": 926
+    },
+    "B de-vigged consensus": {
+      "log_loss": 1.001228238803852,
+      "brier": 0.5982814436944998,
+      "ece": 0.008360660571992059,
+      "accuracy": 0.5140388768898488,
+      "n": 926
+    },
+    "C elo only": {
+      "log_loss": 1.049500715522294,
+      "brier": 0.6321699158878321,
+      "ece": 0.011577452367686921,
+      "accuracy": 0.47300215982721383,
+      "n": 926
+    },
+    "D poisson only (540d, rho=0)": {
+      "log_loss": 1.0569173763541413,
+      "brier": 0.6379786919738644,
+      "ece": 0.008290116223334039,
+      "accuracy": 0.46220302375809935,
+      "n": 926
+    },
+    "F market 80% + elo 20%": {
+      "log_loss": 1.0030167971434074,
+      "brier": 0.5991026975300107,
+      "ece": 0.017059237761364494,
+      "accuracy": 0.5032397408207343,
+      "n": 926
+    },
+    "G market 80% + poisson 20%": {
+      "log_loss": 1.0025917923094436,
+      "brier": 0.5988575361233447,
+      "ece": 0.017641373576041123,
+      "accuracy": 0.5161987041036717,
+      "n": 926
+    },
+    "H market 80% + elo/poisson 20%": {
+      "log_loss": 1.00268930938965,
+      "brier": 0.5988975999596368,
+      "ece": 0.016831186067399705,
+      "accuracy": 0.509719222462203,
+      "n": 926
+    },
+    "I production ensemble (blend 0.80)": {
+      "log_loss": 1.00268930938965,
+      "brier": 0.5988975999596368,
+      "ece": 0.016831186067399705,
+      "accuracy": 0.509719222462203,
+      "n": 926
+    }
+  }
+}

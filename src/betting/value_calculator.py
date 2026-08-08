@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from src.betting.gate_registry import is_enabled as _gate_enabled
 from src.utils.config import get_config
 from src.utils.logger import get_logger
 
@@ -41,6 +42,12 @@ class BetRecommendation:
     match_date: Optional[datetime] = None  # Kickoff time (UTC)
     contrarian_value: float = 0.0          # Model-vs-market divergence ratio (>1.3 = contrarian)
     opening_odds: float = 0.0              # Opening line (first odds seen); 0 if unknown
+    # The de-vigged cross-book consensus probability for THIS selection at
+    # prediction time, and how many plausible books backed it. Persisted so the
+    # model's claimed edge can be judged later without re-deriving the market
+    # from odds rows that may have been overwritten since.
+    market_probability: float = 0.0
+    market_books: int = 0
 
 
 class ValueBettingCalculator:
@@ -288,6 +295,7 @@ class ValueBettingCalculator:
                 agreement_info, xg_info,
             )
 
+            _mkt_p, _mkt_n = self._market_prob(context, market_key)
             rec = BetRecommendation(
                 match=match_name,
                 match_id=match_id,
@@ -315,6 +323,8 @@ class ValueBettingCalculator:
                 predicted_xg=xg_info.get("predicted_xg", ""),
                 contrarian_value=round(divergence, 2),
                 opening_odds=round(opening, 2) if opening else 0.0,
+                market_probability=_mkt_p,
+                market_books=_mkt_n,
             )
             recommendations.append(rec)
 
@@ -394,12 +404,14 @@ class ValueBettingCalculator:
         for market, selection, prob, market_key in self._market_specs(ensemble):
             if market_key in self.excluded_markets:
                 continue
-            # Club FORCED picks never take BTTS Yes: settled data shows it is
-            # the worst club selection (33% win, -42% ROI since 6/11 on top of
-            # 44% at the WC). The value path (find_value_bets) and the Claude
-            # review menu still offer it — with research support it can come
-            # back via a SWITCH, just never as the blind default.
-            if market_key == "btts_yes" and _is_club:
+            # Club FORCED picks skip BTTS Yes — but only when the gate is
+            # explicitly enabled. It was justified by 32 settled picks
+            # (33% win, -42% ROI) chosen by inspecting those same outcomes.
+            # Walk-forward re-test: holdout cohort n=11 at -20.6% with a
+            # bootstrap CI of [-69.4%, +28.9%], and a lifetime binomial vs
+            # break-even of p = 0.582. See gate_registry.club_btts_yes_ban.
+            if (market_key == "btts_yes" and _is_club
+                    and _gate_enabled(self.config, "club_btts_yes_ban")):
                 continue
             best_odds = self._find_best_odds(
                 odds_data, market, selection,
@@ -626,6 +638,7 @@ class ValueBettingCalculator:
         reasoning = self._build_reasoning(
             market, selection, prob, best_odds, ev, context, agreement_info, xg_info,
         )
+        _mkt_p, _mkt_n = self._market_prob(context, market_key)
         return BetRecommendation(
             match=match_name,
             match_id=match_id,
@@ -653,7 +666,39 @@ class ValueBettingCalculator:
             predicted_xg=xg_info.get("predicted_xg", ""),
             contrarian_value=round(divergence, 2),
             opening_odds=round(opening, 2) if opening else 0.0,
+            market_probability=_mkt_p,
+            market_books=_mkt_n,
         )
+
+
+    # Feature key holding the de-vigged consensus probability for each selection.
+    # These are produced by FeatureEngineer._get_bookmaker_features, which takes
+    # the per-outcome median across every book whose overround is plausible.
+    _MARKET_PROB_KEYS = {
+        "home_win": "home_implied_prob", "draw": "draw_implied_prob",
+        "away_win": "away_implied_prob",
+        "over_2.5": "over25_implied_prob", "under_2.5": "under25_implied_prob",
+        "over_1.5": "over15_implied_prob", "under_1.5": "under15_implied_prob",
+        "btts_yes": "btts_yes_implied_prob", "btts_no": "btts_no_implied_prob",
+        "home_over_1.5": "home_over15_implied_prob",
+        "away_over_1.5": "away_over15_implied_prob",
+    }
+
+    @classmethod
+    def _market_prob(cls, context: Dict, market_key: str):
+        """(consensus probability, books backing it) for a selection, or (0, 0).
+
+        Returning zeros rather than a guess matters: a fabricated market
+        probability would be indistinguishable from a real one in the stored
+        record, and the whole point of persisting it is to have a trustworthy
+        comparison later.
+        """
+        fd = (context or {}).get("features_dict") or {}
+        key = cls._MARKET_PROB_KEYS.get(market_key)
+        if not key:
+            return 0.0, 0
+        p = fd.get(key, 0) or 0
+        return (float(p), int(fd.get("bookmaker_consensus_books", 0) or 0)) if p > 0 else (0.0, 0)
 
     @staticmethod
     def calculate_expected_value(probability: float, odds: float) -> float:

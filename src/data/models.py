@@ -255,6 +255,52 @@ class SavedPick(Base):
     model_probability = Column(Float)
     model_result = Column(String(10))     # win/loss/void of the model's ORIGINAL pick
 
+    # --- Stage 5 experiment metadata -----------------------------------------
+    # Which model configuration produced this prediction. Stages 1-4 changed the
+    # blend weight, Poisson half-life, rho, the de-vigging rule and six betting
+    # gates; none of it was recorded, so picks from different systems were
+    # pooled in the same statistics. See src/models/model_version.py.
+    model_version = Column(String(64))
+
+    # pending | captured | missing | late | invalid.
+    # Explicit so a NULL closing_odds is never ambiguous (never captured?
+    # rejected? captured after kickoff?). Only 'captured' may feed CLV.
+    closing_capture_status = Column(String(16), default="pending")
+    closing_bookmaker_count = Column(Integer)
+    closing_fair_probability = Column(Float)
+
+    # The model's own EV for its ORIGINAL selection, snapshotted before the
+    # Claude review could change anything. Completes the pre/post pair alongside
+    # model_market / model_selection / model_probability.
+    pre_claude_ev = Column(Float)
+
+    # --- Prospective-measurement columns (Stage 4, Phase 12) -----------------
+    # The market's own opinion AT PREDICTION TIME, stored alongside the model's.
+    # Without it, nothing downstream can reconstruct what the model was
+    # disagreeing with: `predicted_probability` was recorded but the de-vigged
+    # consensus it was compared against was not, so every retrospective question
+    # of the form "was the model's edge real?" had to re-derive the market from
+    # odds rows that had since been overwritten.
+    market_probability = Column(Float)      # de-vigged consensus for this selection
+    market_books = Column(Integer)          # how many books backed that consensus
+
+    # Recorded for measurement only, not offered as a live recommendation.
+    # Set when betting.paper_trading_mode is on. Paper picks are excluded from
+    # ROI reporting by default so they cannot flatter or damage the live record.
+    is_paper = Column(Boolean, default=False)
+
+    # Closing line for THIS selection — the consensus decimal price at (or as
+    # close as possible to) kickoff. Populated by scripts/capture_closing_lines.py.
+    #
+    # Without it, closing line value cannot be computed at all: the 2026-08-07
+    # audit found 0 of 124,158 odds rows on picked matches carried a timestamp
+    # after the pick day, so the odds table holds a ~6h-before-kickoff snapshot
+    # and nothing later. CLV is the strongest available diagnostic for a betting
+    # model — a strategy with persistent positive CLV and short-run negative ROI
+    # is working, and one with negative CLV is not, however its ROI looks.
+    closing_odds = Column(Float)
+    closing_odds_captured_at = Column(DateTime)
+
     # Result (NULL = pending)
     result = Column(String(10))       # 'win', 'loss', 'void', or NULL
     actual_home_goals = Column(Integer)

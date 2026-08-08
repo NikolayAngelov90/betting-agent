@@ -460,6 +460,68 @@ class MLModels:
 
         return importance
 
+    def cross_val_report(self, X: np.ndarray, y: np.ndarray,
+                         feature_names: List[str] = None,
+                         n_splits: int = 3) -> Optional[Dict]:
+        """Forward-chaining per-class precision/recall — a genuinely leak-free diagnostic.
+
+        The previous implementation lived inline in ``train_ml_models`` and had two
+        defects. It read ``ml_models._models`` (the attribute is ``models``), so it
+        raised ``AttributeError`` on every run and the surrounding ``except`` swallowed
+        it — the report has never printed. And it called ``cross_val_predict(..., cv=3)``,
+        which is plain KFold with ``shuffle=False``: folds 2 and 3 train on data that is
+        chronologically AFTER fold 1's test rows, so the "leak-free" label was wrong.
+
+        This version walks forward with ``TimeSeriesSplit`` (train strictly precedes
+        test), fits a fresh clone per fold, and scales inside the fold so the scaler
+        never sees the test rows. Rows in the first ``TimeSeriesSplit`` block are never
+        predicted, which is correct — nothing precedes them.
+
+        Returns the sklearn ``classification_report`` dict, or ``None`` when the model
+        is unfitted or too few samples exist to split.
+        """
+        from sklearn.base import clone
+        from sklearn.metrics import classification_report
+        from sklearn.pipeline import Pipeline
+
+        if not self.models:
+            return None
+        X = np.asarray(X)
+        y = np.asarray(y)
+        if len(X) < (n_splits + 1) * 2:
+            logger.debug(f"cross_val_report: {len(X)} samples too few for {n_splits} splits")
+            return None
+
+        # Align to the feature set the production model actually uses, so the
+        # diagnostic describes the shipped representation and not the raw matrix.
+        if feature_names and self.feature_names and X.shape[1] != len(self.feature_names):
+            X = self._align_features(X, feature_names)
+
+        base = self.models.get("xgboost") or next(iter(self.models.values()))
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+        y_true_parts, y_pred_parts = [], []
+        for train_idx, test_idx in tscv.split(X):
+            pipe = Pipeline([("scaler", StandardScaler()), ("model", clone(base))])
+            try:
+                pipe.fit(X[train_idx], y[train_idx])
+                y_pred_parts.append(pipe.predict(X[test_idx]))
+                y_true_parts.append(y[test_idx])
+            except Exception as e:  # a degenerate fold must not kill the diagnostic
+                logger.debug(f"cross_val_report: fold skipped ({e})")
+
+        if not y_true_parts:
+            return None
+        y_true = np.concatenate(y_true_parts)
+        y_pred = np.concatenate(y_pred_parts)
+        labels = sorted(set(np.unique(y_true)) | set(np.unique(y_pred)))
+        names_by_label = {0: "Away", 1: "Draw", 2: "Home"}
+        return classification_report(
+            y_true, y_pred,
+            labels=labels,
+            target_names=[names_by_label.get(int(l), str(l)) for l in labels],
+            output_dict=True, zero_division=0,
+        )
+
     def save(self, path: str = None):
         """Save all models to disk with HMAC integrity signature."""
         save_dir = Path(path) if path else MODELS_DIR

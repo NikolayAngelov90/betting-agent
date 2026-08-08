@@ -309,8 +309,21 @@ class PoissonModel:
                 f"{len(nat_matches_raw)} international matches"
             )
 
-        # Estimate per-league Dixon-Coles rho via MLE
-        self._estimate_league_rhos(matches)
+        # Per-league Dixon-Coles rho via MLE — OFF by default since 2026-08-07.
+        #
+        # The correction is designed to fix the low-score cells, so it was worth
+        # measuring on the market it targets. Walk-forward over 5,771 matches:
+        # Over/Under 2.5 log-loss was 0.7083 at rho=-0.13 and 0.7084 at rho=0 —
+        # indistinguishable. On 1X2 it is actively harmful: rho=0 beat every
+        # negative rho at every half-life tested. Meanwhile this routine runs a
+        # scipy.optimize.minimize_scalar over every league x every match, calling
+        # poisson.pmf inside the objective, on every fit() — and there are ~10
+        # fits a CI day.
+        #
+        # Re-enable with models.dc_rho_per_league: true if a future evaluation
+        # finds a market where it pays.
+        if self.config.get("models.dc_rho_per_league", False):
+            self._estimate_league_rhos(matches)
 
         xg_label = f"xG mode ({xg_available}/{len(matches)} matches)" if use_xg_global else "raw goals"
         logger.info(

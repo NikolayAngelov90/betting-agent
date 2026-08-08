@@ -21,6 +21,7 @@ from sqlalchemy import func
 from src.scrapers.base_scraper import BaseScraper
 from src.data.models import Match, Team, Odds
 from src.data.sql_helpers import id_in
+from src.data.market_spec import validate_write as _validate_write
 from src.data.api_budget import ApiBudgetStore
 from src.data.database import get_db
 from src.utils.logger import get_logger
@@ -332,9 +333,27 @@ BET_TYPE_MAP = {
         "market_type": "1X2",
         "selections": {"Home": "Home", "Draw": "Draw", "Away": "Away"},
     },
+    # "Home/Away" is API-Football's TWO-WAY market: the draw is excluded and the
+    # stake refunded on it — i.e. Draw No Bet, not 1X2. It was mapped to "1X2"
+    # with the same Home/Away labels, so for any bookmaker offering both bets the
+    # two-way prices overwrote the real 1X2 ones under the same
+    # (bookmaker, market_type, selection) key.
+    #
+    # Evidence (2026-08-07, match 49032): Bet365 stored Home 1.25 / Draw 3.40 /
+    # Away 3.75 for an overround of 1.361, while Pinnacle had 1.71 / 3.66 / 4.55
+    # at 1.078. Pinnacle de-vigged gives P(H)=0.542, P(A)=0.204, so the two-way
+    # home price is 0.542/0.746 = 0.727 -> fair 1.376, which with margin is the
+    # 1.25 that was stored. Only Home and Away were overwritten (the two-way bet
+    # has no Draw value), which is exactly the observed signature.
+    #
+    # Blast radius: ALL 2,486 Bet365 1X2 rows in the database carry a median
+    # overround of 1.3524. Bet365 was also the first-priority book in
+    # _get_bookmaker_features, so these prices were the primary source of
+    # home/draw/away_implied_prob — the features that feed both ML training and
+    # the 60% bookmaker blend.
     "Home/Away": {
-        "market_type": "1X2",
-        "selections": {"Home": "Home", "Draw": "Draw", "Away": "Away"},
+        "market_type": "draw_no_bet",
+        "selections": {"Home": "DNB Home", "Away": "DNB Away"},
     },
     "Goals Over/Under": {
         "market_type": "over_under",
@@ -1780,6 +1799,15 @@ class APIFootballScraper(BaseScraper):
                         continue
                     bets = bookie.get("bets", [])
 
+                    # Which source bet already wrote each (market_type, selection)
+                    # for THIS bookmaker on THIS fixture. The odds table's unique
+                    # index is (match_id, bookmaker, market_type, selection) and
+                    # the upsert does DO UPDATE, so without this a second bet
+                    # mapping to the same key silently replaces the first — which
+                    # is exactly how "Home/Away" (a two-way market) destroyed the
+                    # genuine 1X2 prices on 2,548 matches.
+                    _written_by: dict = {}
+
                     for bet in bets:
                         bet_name = bet.get("name", "")
                         bet_mapping = BET_TYPE_MAP.get(bet_name)
@@ -1791,6 +1819,17 @@ class APIFootballScraper(BaseScraper):
 
                         market_type = bet_mapping["market_type"]
                         selection_map = bet_mapping["selections"]
+
+                        # Structural guard: only a declared-authoritative bet may
+                        # write a declared market type. See src/data/market_spec.py.
+                        _ok, _why = _validate_write(
+                            market_type, bet_name, selection_map.values())
+                        if not _ok:
+                            logger.error(
+                                f"[Odds] REFUSING write for match {match_id} "
+                                f"{bookie_name}: {_why}"
+                            )
+                            continue
 
                         for value in bet.get("values", []):
                             raw_selection = value.get("value", "")
@@ -1810,6 +1849,24 @@ class APIFootballScraper(BaseScraper):
 
                             key = (bookie_name, market_type, selection)
                             now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+                            # Cross-bet collision guard. Two DIFFERENT source bets
+                            # writing the same key means one is about to destroy
+                            # the other's price. We cannot tell which is correct,
+                            # so keep the first and refuse the second loudly —
+                            # the alternative is what happened before: silent
+                            # overwrite, discovered five months later.
+                            _prev_bet = _written_by.get(key)
+                            if _prev_bet is not None and _prev_bet != bet_name:
+                                logger.error(
+                                    f"[Odds] MARKET COLLISION on match {match_id} "
+                                    f"{bookie_name} {market_type}/{selection}: bet "
+                                    f"{bet_name!r} would overwrite the value already "
+                                    f"written by {_prev_bet!r}. Keeping {_prev_bet!r}. "
+                                    f"Check BET_TYPE_MAP — these are different markets."
+                                )
+                                continue
+                            _written_by[key] = bet_name
 
                             existing = existing_index.get(key)
                             if existing is not None:

@@ -409,7 +409,10 @@ class TelegramNotifier:
         """Send a comprehensive performance report via Telegram.
 
         Includes all-time + recent records, ROI, per-market and per-league
-        breakdowns, Brier score calibration, and avg CLV.
+        breakdowns, Brier score calibration, and — once closing prices exist —
+        genuine CLV. Until then the message reports model-vs-market divergence
+        under its own name; it was previously sent as "Avg CLV" and read +6.3%
+        while realised ROI was -3.6%.
         """
         if not self.enabled:
             return
@@ -437,14 +440,27 @@ class TelegramNotifier:
         # ── Calibration & quality metrics ────────────────────────────────────
         brier = stats.get("brier_score")
         avg_clv = stats.get("avg_clv")
-        if brier is not None or avg_clv is not None:
+        divergence = stats.get("avg_model_market_divergence")
+        if brier is not None or avg_clv is not None or divergence is not None:
             lines.append("\n<b>─── Model Quality ───</b>")
             if brier is not None:
                 cal_label = "good" if brier < 0.20 else ("fair" if brier < 0.25 else "poor")
                 lines.append(f"Brier Score: {brier:.4f} ({cal_label})")
             if avg_clv is not None:
+                # Genuine CLV: the price taken vs the closing price.
                 clv_emoji = "✅" if avg_clv > 0 else "⚠️"
-                lines.append(f"Avg CLV: {avg_clv:+.3f} {clv_emoji}")
+                lines.append(
+                    f"Avg CLV: {avg_clv:+.3f} {clv_emoji} "
+                    f"(n={stats.get('clv_sample', 0)})")
+            elif divergence is not None:
+                # This number used to be sent as "Avg CLV". It is not: it is the
+                # model's own claimed edge over the price it took, so it reads
+                # healthy even when the model is losing — it showed +6.3% against
+                # a realised -3.6% ROI. Labelled honestly until a closing line
+                # exists to compute real CLV from.
+                lines.append(
+                    f"Model-vs-market divergence: {divergence:+.3f} "
+                    f"(not CLV — no closing line stored yet)")
 
         # ── Per-market ────────────────────────────────────────────────────────
         by_market = stats.get("by_market", {})

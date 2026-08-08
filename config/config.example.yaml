@@ -84,13 +84,27 @@ models:
     random_forest: 0.20
     elo: 0.20
   # Weight for blending bookmaker implied probabilities (over/under, BTTS AND
-  # 1X2) with the model's own predictions. 0.60 = 60% bookmaker, 40% model.
-  # Raised from 0.40 on 2026-06-15: settled-pick data (755 picks) showed the
-  # model is systematically overconfident with no edge (predicted 50-55% won
-  # only 39%), so its "+EV" was fictional. Leaning harder on the well-calibrated
-  # market shrinks those fake edges → fewer but better-calibrated picks.
-  # Set to 0.0 to disable (pure model); raise toward 1.0 to trust the market more.
-  bookmaker_blend_weight: 0.60
+  # 1X2) with the model's own predictions. 0.80 = 80% bookmaker, 20% model.
+  #
+  # 0.40 -> 0.60 on 2026-06-15 (755 settled picks showed the model was
+  # overconfident with no edge). 0.60 -> 0.80 on 2026-08-07 by the immutable
+  # baseline (scripts/run_baseline.py, 1,901 out-of-sample matches):
+  #
+  #   market 100%  log-loss 0.9906   <- best
+  #   market  85%           0.9920   not significantly worse
+  #   market  80%           0.9928   not significantly worse
+  #   market  75%           0.9938   SIGNIFICANTLY worse
+  #   market  60%           0.9979   SIGNIFICANTLY worse  (was shipped)
+  #
+  # Decision rule, fixed before the sweep: take the SMALLEST bookmaker weight
+  # whose log-loss is statistically indistinguishable from the pure-market
+  # baseline under a paired bootstrap. That is 0.80. Keeping a 20% model share
+  # (rather than going to 1.0) preserves a measurable model contribution so the
+  # learning loop still produces signal to evaluate.
+  #
+  # Set to 0.0 to disable (pure model); 1.0 makes the system a pure
+  # market-consensus price-shopper.
+  bookmaker_blend_weight: 0.80
   # Weight for blending the dedicated GoalsMLModel over/under prediction
   # with Poisson+bookmaker. 0.25 = 25% ML, 75% Poisson+bookmaker.
   # Set to 0.0 to disable. GoalsMLModel must be trained via --train first.
@@ -99,13 +113,21 @@ models:
   # E.g. 0.90 means 98% → 92.4% (excess retained at 30%). Set to 1.0 to disable.
   extreme_confidence_ceiling: 0.90
   # Dixon-Coles correction parameter ρ for low-scoring outcomes.
-  # With ρ < 0 (typical ≈ -0.13), 0-0 and 1-1 probabilities are boosted
-  # while 1-0 and 0-1 are slightly reduced. Set to 0.0 to disable.
-  dixon_coles_rho: -0.13
+  # DISABLED (0.0) on 2026-08-07. Walk-forward over 5,771 out-of-sample matches:
+  # on Over/Under 2.5 — the market DC is designed to fix — log-loss was 0.7083 at
+  # ρ=-0.13 and 0.7084 at ρ=0, i.e. no effect. On 1X2 it is actively harmful:
+  # ρ=0 beat every negative ρ at every half-life tested. Restricted grid
+  # (ρ ∈ {-0.10, -0.05, 0, +0.05} × half-life ∈ {180, 365, 540, 730}) put
+  # ρ=0 best or tied at every half-life.
+  dixon_coles_rho: 0.0
   # Time-decay half-life for Poisson strength calculations (days).
-  # Older matches are down-weighted with exponential decay.
-  # 180 = matches 6 months ago have half the weight of today's.
-  strength_half_life_days: 180
+  # 180 -> 540 on 2026-08-07. Same restricted grid: 180d was the WORST half-life
+  # tested (log-loss 1.0364 at ρ=0 vs 1.0315 at 540d and 1.0314 at 730d — 540
+  # and 730 are tied within noise, and the shorter memory is preferred on a tie).
+  # Combined change (180/-0.13 -> 540/0.0) improves log-loss by +0.0063 nats,
+  # paired bootstrap 95% CI [+0.0028, +0.0098] — significant.
+  # The model was being starved of data, not kept fresh.
+  strength_half_life_days: 540
   # Enable match-day weather features (Open-Meteo free API, no key needed).
   # Adds temperature, wind, precipitation features. Set to false to disable.
   weather_features_enabled: true
@@ -118,6 +140,10 @@ models:
   # Minimum matches per league to estimate a per-league Dixon-Coles rho via MLE.
   # Leagues with fewer matches use the global dixon_coles_rho instead.
   dc_rho_min_matches: 50
+  # Per-league rho estimation is OFF: it runs a scipy optimisation over every
+  # league x every match on every fit() (~10 fits a CI day) and buys nothing
+  # measurable — see the dixon_coles_rho note above.
+  dc_rho_per_league: false
   # Bayesian ensemble weight learning: half-life (days) for temporal decay
   # of observations. 90 = observations 3 months ago have half the weight.
   bayesian_weight_half_life_days: 90
@@ -157,6 +183,44 @@ models:
   min_training_samples: 1000
 
 betting:
+  # ---------------------------------------------------------------------------
+  # Outcome-derived gates (Stage 3, Phase 4). Every rule below was originally
+  # justified by a settled-pick sample of 30-100 bets, selected by inspecting the
+  # outcomes of those same bets. All were re-tested walk-forward on a holdout
+  # window they were never fitted on (train 2026-02-28..04-26, validate ..06-17,
+  # holdout ..08-05). NONE survived — see src/betting/gate_registry.py for each
+  # one's provenance, holdout verdict and ROI effect.
+  #
+  # They are therefore OFF. Setting one to true re-enables it; record the new
+  # evidence in gate_registry when you do.
+  #
+  # Notable: club_pick_min_ev's excluded cohort returned +4.3% in the holdout and
+  # applying the gate cost 1.95pp of overall holdout ROI.
+  # ---------------------------------------------------------------------------
+  gates:
+    club_btts_yes_ban: false
+    club_pick_min_ev: false
+    club_pick_min_blend: false
+    split_agreement_low_conf: false
+
+  # ---------------------------------------------------------------------------
+  # Prospective measurement (Stage 4, Phases 9 and 12)
+  # ---------------------------------------------------------------------------
+  # Paper trading: still generate, save, settle and measure picks, but flag them
+  # is_paper=True and keep them out of the live ROI record. This is the mode to
+  # run in while the CLV series accumulates — Stage 4's conclusion is that no
+  # production weight change is justified until 200-500 valid closing lines
+  # exist, and until then a live record only adds variance to a question the
+  # data cannot yet answer.
+  paper_trading_mode: false
+
+  # How close to kickoff scripts/capture_closing_lines.py looks for pending
+  # picks. Not hard-coded, because how late a capture can get depends on how
+  # often the odds refresh runs in your deployment. A capture taken earlier than
+  # evaluation/clv.DEFAULT_MAX_CAPTURE_LEAD before kickoff is rejected as "not a
+  # close" rather than silently weakening the CLV series.
+  clv_capture_window_minutes: 90
+
   min_odds: 1.50            # Skip very short prices — too little margin for model error
   max_odds: 10.0
   min_expected_value: 0.05  # 5% minimum edge — filters noise, improves selectivity

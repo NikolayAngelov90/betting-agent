@@ -667,6 +667,16 @@ class MatchBriefingService:
             primary.confidence = float(new.confidence)
             primary.kelly_stake_percentage = float(new.kelly_stake_percentage)
             primary.risk_level = new.risk_level
+            # The market's opinion is per-SELECTION, so it must move with the
+            # switch. Leaving it would leave the row claiming the market priced
+            # the OLD selection at this probability — a stale comparison that
+            # would silently corrupt every later "was the edge real?" analysis.
+            # model_market / model_selection / model_probability are deliberately
+            # NOT touched: they are the pre-Claude snapshot.
+            _mkt_p = getattr(new, "market_probability", 0.0) or 0.0
+            if _mkt_p:
+                primary.market_probability = float(_mkt_p)
+                primary.market_books = int(getattr(new, "market_books", 0) or 0)
             primary.review_action = "CHANGE"
             primary.review_reason = _review_reason
             session.commit()

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import numpy as np
 from datetime import datetime, date, timedelta
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from src.scrapers.theodds_scraper import TheOddsScraper
 from src.features.feature_engineer import FeatureEngineer
 from src.models.ensemble import EnsemblePredictor
 from src.betting.value_calculator import ValueBettingCalculator, BetRecommendation
+from src.betting.gate_registry import is_enabled as _gate_enabled
 from src.reporting.telegram_bot import (
     TelegramNotifier,
     _cold_streak_alerted_today,
@@ -957,18 +959,21 @@ class FootballBettingAgent:
                 # let the MARKET pick the favourite (maximise win rate) instead of
                 # chasing the model's noisy EV. The briefing LLM (live web
                 # research) can still CHANGE the selection afterward.
-                # Club forced picks carry quality floors: blended (model+market)
-                # win probability must reach betting.club_pick_min_blend AND the
-                # model's own EV must not be worse than betting.club_pick_min_ev
-                # (the model actively disputing the market price was the losing
-                # cohort: EV<-5% forced picks ran ~-13% ROI). WC pick-every-match
-                # stays unfloored (a pick must always exist; the Claude review is
-                # its safety net).
-                _blend_floor = 0.0 if _is_national else float(
-                    self.config.get("betting.club_pick_min_blend", 0.55) or 0
-                )
-                _ev_cfg = self.config.get("betting.club_pick_min_ev", -0.05)
-                _ev_floor = None if (_is_national or _ev_cfg is None) else float(_ev_cfg)
+                # Club forced-pick quality floors. Both are outcome-derived gates
+                # fitted on 41 settled picks; neither survived walk-forward
+                # validation (club_pick_min_ev's excluded cohort returned +4.3%
+                # in the holdout and the gate cost 1.95pp of overall holdout ROI;
+                # club_pick_min_blend cost 0.46pp). They are declared in
+                # gate_registry and default to OFF — set betting.gates.* to
+                # re-enable. WC pick-every-match was never floored.
+                _blend_floor = 0.0
+                if not _is_national and _gate_enabled(self.config, "club_pick_min_blend"):
+                    _blend_floor = float(
+                        self.config.get("betting.club_pick_min_blend", 0.55) or 0)
+                _ev_floor = None
+                if not _is_national and _gate_enabled(self.config, "club_pick_min_ev"):
+                    _ev_cfg = self.config.get("betting.club_pick_min_ev", -0.05)
+                    _ev_floor = None if _ev_cfg is None else float(_ev_cfg)
                 best = self.value_calculator.find_best_bet(
                     predictions, odds_data, match_name, context,
                     home_team_name=home_team_name, away_team_name=away_team_name,
@@ -1819,6 +1824,28 @@ class FootballBettingAgent:
             return []
 
         from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+
+        # Paper-trading mode: picks are still generated, still settled and still
+        # measured, but they are flagged as measurement-only and excluded from
+        # the live ROI record. This is the mode to run in while the CLV series
+        # accumulates — Stage 4's conclusion is that no production weight change
+        # is justified until it has 200-500 valid closing lines.
+        # getattr: _save_picks is exercised by tests against a bare agent that
+        # has no config, and paper mode must never be the reason a save fails.
+        _cfg = getattr(self, "config", None)
+        _paper_mode = bool(
+            _cfg.get("betting.paper_trading_mode", False) if _cfg else False)
+
+        # Computed once per save batch, not per pick: it is a hash over config
+        # and identical for every pick in the run.
+        from src.models.model_version import model_version as _mv
+        _model_version = _mv(_cfg) if _cfg else "unknown"
+        if _paper_mode and picks:
+            logger.info(
+                f"PAPER TRADING: saving {len(picks)} pick(s) flagged is_paper=True "
+                f"— recorded for measurement, not offered as recommendations"
+            )
+
         new_picks: List[BetRecommendation] = []
         with self.db.get_session() as session:
             for pick in picks:
@@ -1879,6 +1906,23 @@ class FootballBettingAgent:
                     model_market=pick.market,
                     model_selection=pick.selection,
                     model_probability=float(pick.predicted_probability),
+                    # What the MARKET said at prediction time. Recorded so the
+                    # question "was the model's edge real?" becomes a lookup
+                    # rather than a reconstruction from odds rows that later get
+                    # overwritten — the reconstruction Stage 4 had to perform,
+                    # and which failed for 194 of 1,018 settled picks.
+                    market_probability=(
+                        float(pick.market_probability)
+                        if getattr(pick, "market_probability", None) else None
+                    ),
+                    market_books=getattr(pick, "market_books", None) or None,
+                    is_paper=_paper_mode,
+                    # Stage 5: stamp the exact configuration that produced this
+                    # prediction, so cohorts from different model versions are
+                    # never silently pooled.
+                    model_version=_model_version,
+                    closing_capture_status="pending",
+                    pre_claude_ev=float(pick.expected_value),
                     created_at=utcnow(),
                 )
 
@@ -2611,14 +2655,44 @@ class FootballBettingAgent:
                     float(np.mean([(pred - actual) ** 2 for pred, actual in brier_samples])), 4
                 )
 
-            # CLV (Closing Line Value): predicted_prob - 1/odds
-            # Positive CLV = model found genuine edge vs market
-            clv_values = [
+            # Model-vs-market divergence: predicted_prob - 1/odds.
+            #
+            # This was reported as "avg_clv" and shown in --stats / --report as
+            # Closing Line Value. It is NOT CLV. CLV compares the price you TOOK
+            # against the CLOSING price; this compares our own probability against
+            # the price we took, so it measures how much the model DISAGREES with
+            # the market, not how much it beat it. The distinction matters: the
+            # metric read +6.3% while realised flat ROI was -3.6%, i.e. it was
+            # reporting the model's self-declared edge as if it were validated.
+            #
+            # Genuine CLV requires a stored closing line — see
+            # SavedPick.closing_odds and docs/predictive-audit-2026-08-07.md §11.
+            divergence_values = [
                 p.predicted_probability - (1.0 / p.odds)
                 for p in settled
                 if p.predicted_probability is not None and p.odds and p.odds > 1.0
             ]
-            avg_clv = round(float(np.mean(clv_values)), 4) if clv_values else None
+            avg_divergence = (round(float(np.mean(divergence_values)), 4)
+                              if divergence_values else None)
+
+            # Genuine CLV, computed only from picks that have a closing price.
+            clv_pairs = [
+                (p.odds, p.closing_odds) for p in settled
+                if p.odds and p.odds > 1.0
+                and getattr(p, "closing_odds", None) and p.closing_odds > 1.0
+            ]
+            if clv_pairs:
+                clv_vals = [taken / close - 1.0 for taken, close in clv_pairs]
+                avg_clv = round(float(np.mean(clv_vals)), 4)
+                clv_beat_rate = round(
+                    sum(1 for v in clv_vals if v > 0) / len(clv_vals), 4)
+                clv_note = None
+            else:
+                avg_clv = None
+                clv_beat_rate = None
+                clv_note = ("UNAVAILABLE — no closing line stored for any settled "
+                            "pick. Run scripts/capture_closing_lines.py before "
+                            "kickoff to start collecting it.")
 
             stats = {
                 "all_time": calc_stats(settled),
@@ -2640,7 +2714,12 @@ class FootballBettingAgent:
                 "stale_picks": len(stale_picks),
                 "calibration": calibration,
                 "brier_score": brier_score,
+                # Renamed 2026-08-07: this is model-vs-market divergence, not CLV.
+                "avg_model_market_divergence": avg_divergence,
                 "avg_clv": avg_clv,
+                "clv_beat_rate": clv_beat_rate,
+                "clv_note": clv_note,
+                "clv_sample": len(clv_pairs),
             }
 
             return stats
@@ -2733,7 +2812,8 @@ class FootballBettingAgent:
         with self.db.get_session() as session:
             month_ago = date.today() - timedelta(days=30)
             rows = session.query(
-                SavedPick.match_id, SavedPick.market, SavedPick.selection,
+                SavedPick.id, SavedPick.match_id, SavedPick.market,
+                SavedPick.selection,
                 SavedPick.actual_home_goals, SavedPick.actual_away_goals,
                 SavedPick.pick_date,
             ).filter(
@@ -2743,6 +2823,7 @@ class FootballBettingAgent:
             # Extract all needed attributes inside session to avoid detached-instance errors
             settled = [
                 {
+                    "pick_id": p.id,
                     "match_id": p.match_id,
                     "market": p.market,
                     "selection": p.selection,
@@ -2837,15 +2918,39 @@ class FootballBettingAgent:
             except Exception as _pre_err:
                 logger.debug(f"  Tuning preload failed (falling back to per-pick queries): {_pre_err}")
 
-        # Single pass: accuracy + calibration data + Bayesian updates
+        # Single pass: accuracy + calibration data + weight-learner updates
         model_correct = {"poisson": 0, "elo": 0, "ml": 0}
         model_total = {"poisson": 0, "elo": 0, "ml": 0}
         model_predictions: dict = {"poisson": [], "elo": [], "ml": []}
+        model_logloss: dict = {"poisson": [], "elo": [], "ml": []}
         ensemble_correct = 0
         ensemble_total = 0
         bayesian = self.predictor.bayesian_weights
         sel_map = {"Home Win": "home_win", "Draw": "draw", "Away Win": "away_win"}
         keys_1x2 = ["home_win", "draw", "away_win"]
+
+        from src.models.bayesian_weights import observation_key as _obs_key
+
+        def _nll(p: float) -> float:
+            """Negative log-likelihood of the actual outcome, clipped."""
+            return -math.log(min(max(float(p), 1e-6), 1.0))
+
+        # ML look-ahead guard. Poisson/Elo were refit as-of the oldest settled
+        # pick above, so every match below is genuinely out-of-sample for them.
+        # The ML pickles were NOT refit — they are whatever `--train` last
+        # produced, and if that was after a match then that match was in its
+        # training set. Feeding such a pick to the weight learner would hand ML
+        # a look-ahead advantage in the very comparison that sets its weight
+        # (audit finding L1). Only matches strictly after `trained_at` count.
+        _ml_trained_at = None
+        _ml_ta_raw = getattr(self.predictor.ml_models, "trained_at", None)
+        if _ml_ta_raw:
+            try:
+                _ml_dt = datetime.fromisoformat(_ml_ta_raw)
+                _ml_trained_at = (_ml_dt.date() if hasattr(_ml_dt, "date") else _ml_dt)
+            except Exception:
+                _ml_trained_at = None
+        _ml_skipped_leak = 0
 
         for i, (pick, home_id, away_id, league, actual) in enumerate(outcomes):
             if i % 50 == 0:
@@ -2880,6 +2985,10 @@ class FootballBettingAgent:
                 except Exception as _ml_err:
                     logger.debug(f"ML eval failed for pick: {_ml_err}")
 
+            days_ago = (date.today() - pick["match_date"]).days if pick["match_date"] else 0
+            obs = _obs_key(pick_id=pick.get("pick_id"), match_id=pick["match_id"],
+                           market=pick["market"], selection=pick["selection"])
+
             if ml_pred:
                 ml_best = max(keys_1x2, key=lambda k: ml_pred.get(k, 0))
                 model_total["ml"] += 1
@@ -2888,12 +2997,19 @@ class FootballBettingAgent:
                 model_predictions["ml"].append(
                     (ml_pred.get(ml_best, 0.33), 1 if ml_best == actual else 0)
                 )
-                if league:
-                    _days_ago = (
-                        (date.today() - pick["match_date"]).days
-                        if pick["match_date"] else 0
-                    )
-                    bayesian.update(league, "ml", ml_best == actual, _days_ago, market="1X2")
+                _ml_loss = _nll(ml_pred.get(actual, 1e-6))
+                model_logloss["ml"].append(_ml_loss)
+                # Only feed the learner matches the ML model could NOT have seen.
+                _ml_oos = (
+                    _ml_trained_at is None
+                    or pick["match_date"] is None
+                    or pick["match_date"] > _ml_trained_at
+                )
+                if _ml_oos:
+                    bayesian.update(league, "ml", _ml_loss, days_ago,
+                                    market="1X2", obs_key=obs)
+                else:
+                    _ml_skipped_leak += 1
 
             # --- Calibration data ---
             p_best_key = max(keys_1x2, key=lambda k: poisson_pred.get(k, 0))
@@ -2910,24 +3026,50 @@ class FootballBettingAgent:
                 ensemble_correct += 1
             ensemble_total += 1
 
-            # --- Bayesian per-league updates ---
-            if league:
-                days_ago = (date.today() - pick["match_date"]).days if pick["match_date"] else 0
-                poisson_best = max(keys_1x2, key=lambda k: poisson_pred.get(k, 0))
-                bayesian.update(league, "poisson", poisson_best == actual, days_ago, market="1X2")
-                elo_best = max(keys_1x2, key=lambda k: elo_pred.get(k, 0))
-                bayesian.update(league, "elo", elo_best == actual, days_ago, market="1X2")
+            # --- Weight-learner updates: 1X2 log-loss ------------------------
+            # Log-loss, not argmax-correctness. A proper scoring rule is what
+            # ensemble weights should optimise; accuracy is blind to calibration
+            # and — because the draw is almost never any model's argmax — blind
+            # to a third of the outcome space.
+            _p_loss = _nll(poisson_pred.get(actual, 1e-6))
+            _e_loss = _nll(elo_pred.get(actual, 1e-6))
+            model_logloss["poisson"].append(_p_loss)
+            model_logloss["elo"].append(_e_loss)
+            bayesian.update(league, "poisson", _p_loss, days_ago,
+                            market="1X2", obs_key=obs)
+            bayesian.update(league, "elo", _e_loss, days_ago,
+                            market="1X2", obs_key=obs)
 
-            # --- Poisson goals accuracy for Bayesian ---
+            # --- Weight-learner updates: goals log-loss ----------------------
+            # This lands ONLY in the "goals" scope. Under the old learner the
+            # same call also wrote the market-agnostic league and global buckets,
+            # so over/under accuracy moved the 1X2 weights and Poisson accrued
+            # twice Elo's observation count (audit: 872 vs 436).
             hg, ag = pick["actual_home_goals"], pick["actual_away_goals"]
-            if hg is not None and ag is not None and league:
-                total_goals = hg + ag
-                actual_over25 = total_goals > 2.5
-                poisson_over25 = poisson_pred.get("over_2.5", 0.5) > 0.5
-                days_ago = (date.today() - pick["match_date"]).days if pick["match_date"] else 0
-                bayesian.update(league, "poisson", poisson_over25 == actual_over25, days_ago, market="goals")
+            if hg is not None and ag is not None:
+                actual_over25 = (hg + ag) > 2.5
+                _p_o25 = poisson_pred.get("over_2.5", 0.5)
+                bayesian.update(
+                    league, "poisson",
+                    _nll(_p_o25 if actual_over25 else 1.0 - _p_o25),
+                    days_ago, market="goals", obs_key=obs,
+                )
 
         logger.info(f"  Tuning: {len(outcomes)}/{len(outcomes)} 1X2 picks processed")
+        if _ml_skipped_leak:
+            logger.info(
+                f"  Weight learner: skipped {_ml_skipped_leak} ML observation(s) on "
+                f"matches at/before the model's trained_at ({_ml_trained_at}) — "
+                f"they were in its training set, so they are not out-of-sample"
+            )
+
+        # Mean 1X2 log-loss per model — the quantity the weight learner now
+        # optimises, logged so the weights it produces are explicable.
+        _ll_summary = {
+            m: round(sum(v) / len(v), 4) for m, v in model_logloss.items() if v
+        }
+        if _ll_summary:
+            logger.info(f"Mean 1X2 log-loss (lower is better): {_ll_summary}")
 
         # Release tuning preload cache — it's only needed for this loop
         self.feature_engineer._preload_cache = None
@@ -3077,15 +3219,25 @@ class FootballBettingAgent:
         except Exception as e:
             logger.warning(f"Calibration computation failed: {e}")
 
-        # Save Bayesian weights (updated in the main loop above)
+        # Save the loss-based ensemble weights (updated in the main loop above).
+        # Scope keys are "<market>::<league>"; the market-wide bucket uses the
+        # __global__ league sentinel.
         bayesian.save()
         bw_summary = bayesian.get_league_summary()
-        logger.info(f"Bayesian weights updated: {len(bw_summary) - 1} leagues learned")
-        for lg, info in bw_summary.items():
-            if lg == "global":
-                logger.info(f"  Global weights: {info}")
-            elif isinstance(info, dict) and info.get("observations", 0) > 0:
-                logger.debug(f"  {lg}: {info['weights']} ({info['observations']} obs)")
+        _global_scopes = {k: v for k, v in bw_summary.items() if k.endswith("__global__")}
+        logger.info(
+            f"Ensemble weights updated: {len(bw_summary)} scopes "
+            f"({len(bw_summary) - len(_global_scopes)} league-specific)"
+        )
+        for scope, info in _global_scopes.items():
+            logger.info(
+                f"  {scope}: weights={info['weights']} "
+                f"n_eff={info['n_eff']} mean_loss={info['mean_loss']}"
+            )
+        for scope, info in bw_summary.items():
+            if scope not in _global_scopes:
+                logger.debug(
+                    f"  {scope}: {info['weights']} (n_eff={info['n_eff']})")
 
         # Restore the full-data fit so live prediction sees the latest information.
         # (We refit on as_of_date=oldest_pick_date earlier to avoid look-ahead leakage.)
@@ -3288,29 +3440,28 @@ class FootballBettingAgent:
         self.predictor.ml_models.fit(X, y, feature_names)
         self.predictor.ml_models.save()
 
-        # Per-class precision/recall from cross-validated predictions (leak-free diagnostic)
+        # Per-class precision/recall, forward-chained so train always precedes test.
+        # Delegated to MLModels.cross_val_report — the old inline version read a
+        # non-existent `_models` attribute and never once executed (the except
+        # swallowed the AttributeError), and its KFold(shuffle=False) split let
+        # later folds train on data after earlier folds' test rows.
         try:
-            from sklearn.model_selection import cross_val_predict
-            from sklearn.metrics import classification_report
-            _best_model = self.predictor.ml_models._models.get(
-                "xgboost") or next(iter(self.predictor.ml_models._models.values()))
-            _cv_pred = cross_val_predict(_best_model, X, y, cv=3)
-            _report = classification_report(
-                y, _cv_pred,
-                target_names=["Away", "Draw", "Home"],
-                output_dict=True,
-                zero_division=0,
-            )
-            for cls in ["Away", "Draw", "Home"]:
-                r = _report.get(cls, {})
-                logger.info(
-                    f"  1X2 CV [{cls}]: precision={r.get('precision', 0):.2f} "
-                    f"recall={r.get('recall', 0):.2f} f1={r.get('f1-score', 0):.2f} "
-                    f"support={int(r.get('support', 0))}"
-                )
-            logger.info(f"  1X2 CV accuracy={_report.get('accuracy', 0):.3f}")
+            _report = self.predictor.ml_models.cross_val_report(X, y, feature_names)
+            if _report:
+                for cls in ("Away", "Draw", "Home"):
+                    r = _report.get(cls)
+                    if not r:
+                        continue
+                    logger.info(
+                        f"  1X2 CV [{cls}]: precision={r.get('precision', 0):.2f} "
+                        f"recall={r.get('recall', 0):.2f} f1={r.get('f1-score', 0):.2f} "
+                        f"support={int(r.get('support', 0))}"
+                    )
+                logger.info(f"  1X2 CV accuracy={_report.get('accuracy', 0):.3f}")
+            else:
+                logger.info("  1X2 CV report skipped (too few samples or no models)")
         except Exception as _cv_err:
-            logger.debug(f"1X2 CV classification report failed (non-fatal): {_cv_err}")
+            logger.warning(f"1X2 CV classification report failed: {_cv_err}")
 
         # Log feature importance
         importance = self.predictor.ml_models.get_feature_importance()
@@ -4440,7 +4591,12 @@ async def main():
             print(f"\nSettled: {len(settled_picks)} picks")
             print(f"All time: {all_time.get('total', 0)} picks, Win rate: {all_time.get('win_rate', 0):.1%}")
             if stats.get("avg_clv") is not None:
-                print(f"Avg CLV: {stats['avg_clv']:+.3f}")
+                print(f"Avg CLV: {stats['avg_clv']:+.3f} "
+                      f"(n={stats.get('clv_sample', 0)})")
+            elif stats.get("avg_model_market_divergence") is not None:
+                print(f"Model-vs-market divergence: "
+                      f"{stats['avg_model_market_divergence']:+.3f} "
+                      f"(NOT CLV — no closing line stored)")
             print(f"Pending: {stats.get('pending', 0)} picks")
 
             # Query picks from yesterday that are still unresolved after this settle run.
@@ -4561,13 +4717,25 @@ async def main():
 
                 brier = stats.get("brier_score")
                 avg_clv = stats.get("avg_clv")
-                if brier is not None or avg_clv is not None:
+                divergence = stats.get("avg_model_market_divergence")
+                if brier is not None or avg_clv is not None or divergence is not None:
                     print(f"\nModel Quality:")
                     if brier is not None:
                         cal_label = "good" if brier < 0.20 else ("fair" if brier < 0.25 else "poor")
                         print(f"  Brier Score: {brier:.4f} ({cal_label})")
                     if avg_clv is not None:
-                        print(f"  Avg CLV: {avg_clv:+.4f} ({'edge' if avg_clv > 0 else 'no edge'})")
+                        # Genuine CLV — taken price vs closing price. Only this
+                        # number may be described as edge.
+                        print(f"  Avg CLV: {avg_clv:+.4f} "
+                              f"({'beating the close' if avg_clv > 0 else 'losing to the close'}, "
+                              f"beat {stats.get('clv_beat_rate', 0):.0%} of the time, "
+                              f"n={stats.get('clv_sample', 0)})")
+                    else:
+                        print(f"  Avg CLV: {stats.get('clv_note', 'unavailable')}")
+                    if divergence is not None:
+                        print(f"  Model-vs-market divergence: {divergence:+.4f} "
+                              f"(how far the model sits from the price it took — "
+                              f"NOT edge, and NOT CLV)")
 
         elif command == "--report":
             print("Generating performance report...")
@@ -4589,7 +4757,9 @@ async def main():
                 if brier is not None:
                     print(f"  Brier Score: {brier:.4f}")
                 if avg_clv is not None:
-                    print(f"  Avg CLV: {avg_clv:+.4f}")
+                    print(f"  Avg CLV: {avg_clv:+.4f} (n={stats.get('clv_sample', 0)})")
+                else:
+                    print(f"  Avg CLV: {stats.get('clv_note', 'unavailable')}")
 
         elif command == "--tune":
             print("Tuning ensemble weights from recent results...")

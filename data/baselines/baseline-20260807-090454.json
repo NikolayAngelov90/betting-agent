@@ -1,0 +1,102 @@
+{
+  "n_shared_matches": 136,
+  "window_days": 60,
+  "cutoffs": [
+    "2025-08-01",
+    "2025-11-01",
+    "2026-02-01",
+    "2026-05-01",
+    "2026-07-01"
+  ],
+  "candidates": {
+    "poisson only (180d, rho=-0.13)": {
+      "log_loss": 1.0096,
+      "brier": 0.60479,
+      "calibration_error": 0.03555,
+      "accuracy": 0.47794,
+      "n": 136,
+      "roi": null,
+      "roi_note": "not computed here \u2014 the harness scores forecasts, not a staking plan; ROI lives in the settled-pick analysis",
+      "clv": null,
+      "clv_note": "UNAVAILABLE \u2014 no closing line is stored (0 of 124,158 odds rows on picked matches were written after the pick day). Requires closing-line capture."
+    },
+    "elo only": {
+      "log_loss": 1.00891,
+      "brier": 0.60165,
+      "calibration_error": 0.03952,
+      "accuracy": 0.46324,
+      "n": 136,
+      "roi": null,
+      "roi_note": "not computed here \u2014 the harness scores forecasts, not a staking plan; ROI lives in the settled-pick analysis",
+      "clv": null,
+      "clv_note": "UNAVAILABLE \u2014 no closing line is stored (0 of 124,158 odds rows on picked matches were written after the pick day). Requires closing-line capture."
+    },
+    "poisson + elo (50/50)": {
+      "log_loss": 1.00509,
+      "brier": 0.60044,
+      "calibration_error": 0.03469,
+      "accuracy": 0.46324,
+      "n": 136,
+      "roi": null,
+      "roi_note": "not computed here \u2014 the harness scores forecasts, not a staking plan; ROI lives in the settled-pick analysis",
+      "clv": null,
+      "clv_note": "UNAVAILABLE \u2014 no closing line is stored (0 of 124,158 odds rows on picked matches were written after the pick day). Requires closing-line capture."
+    },
+    "market (de-vigged consensus)": {
+      "log_loss": 0.95609,
+      "brier": 0.56607,
+      "calibration_error": 0.04003,
+      "accuracy": 0.55882,
+      "n": 136,
+      "roi": null,
+      "roi_note": "not computed here \u2014 the harness scores forecasts, not a staking plan; ROI lives in the settled-pick analysis",
+      "clv": null,
+      "clv_note": "UNAVAILABLE \u2014 no closing line is stored (0 of 124,158 odds rows on picked matches were written after the pick day). Requires closing-line capture."
+    },
+    "market (raw 1/odds, vig left in)": {
+      "log_loss": 0.96407,
+      "brier": 0.57044,
+      "calibration_error": 0.04348,
+      "accuracy": 0.55147,
+      "n": 136,
+      "roi": null,
+      "roi_note": "not computed here \u2014 the harness scores forecasts, not a staking plan; ROI lives in the settled-pick analysis",
+      "clv": null,
+      "clv_note": "UNAVAILABLE \u2014 no closing line is stored (0 of 124,158 odds rows on picked matches were written after the pick day). Requires closing-line capture."
+    },
+    "market 40% + poisson/elo 60%": {
+      "log_loss": 0.97743,
+      "brier": 0.58099,
+      "calibration_error": 0.03361,
+      "accuracy": 0.52941,
+      "n": 136,
+      "roi": null,
+      "roi_note": "not computed here \u2014 the harness scores forecasts, not a staking plan; ROI lives in the settled-pick analysis",
+      "clv": null,
+      "clv_note": "UNAVAILABLE \u2014 no closing line is stored (0 of 124,158 odds rows on picked matches were written after the pick day). Requires closing-line capture."
+    },
+    "market 60% + poisson/elo 40%": {
+      "log_loss": 0.96781,
+      "brier": 0.57411,
+      "calibration_error": 0.04108,
+      "accuracy": 0.52206,
+      "n": 136,
+      "roi": null,
+      "roi_note": "not computed here \u2014 the harness scores forecasts, not a staking plan; ROI lives in the settled-pick analysis",
+      "clv": null,
+      "clv_note": "UNAVAILABLE \u2014 no closing line is stored (0 of 124,158 odds rows on picked matches were written after the pick day). Requires closing-line capture."
+    },
+    "market 80% + poisson/elo 19%": {
+      "log_loss": 0.96069,
+      "brier": 0.56914,
+      "calibration_error": 0.0457,
+      "accuracy": 0.54412,
+      "n": 136,
+      "roi": null,
+      "roi_note": "not computed here \u2014 the harness scores forecasts, not a staking plan; ROI lives in the settled-pick analysis",
+      "clv": null,
+      "clv_note": "UNAVAILABLE \u2014 no closing line is stored (0 of 124,158 odds rows on picked matches were written after the pick day). Requires closing-line capture."
+    }
+  },
+  "generated_at": "2026-08-07T09:04:54.971163"
+}
