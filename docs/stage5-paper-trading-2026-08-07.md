@@ -1,5 +1,14 @@
 # Stage 5 — Production Hardening, Paper Trading & Prospective CLV Experiment
 
+> **⚠️ CORRECTED BY STAGE 10.2 (2026-08-10).** The model identity quoted below
+> was computed from the local, gitignored `config/config.yaml`, which CI
+> overwrites and production has never executed. The deployed configuration is
+> `config/config.example.yaml`. Correct identities:
+> `stage5_baseline_20260807.326fcf` (CODE_REVISION `s5.1`, Stages 5-7) and
+> `stage5_baseline_20260807.485823` (CODE_REVISION `s5.2`, Stages 8-10).
+> Everything else in this report stands. See
+> `docs/stage10.2-model-identity-2026-08-10.md`.
+
 Executed against `docs/adter-stage4-prompt.md`.
 
 **483 tests passing, 0 regressions** (457 after Stage 4, +26).
