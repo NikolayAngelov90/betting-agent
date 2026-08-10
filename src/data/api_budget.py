@@ -108,6 +108,37 @@ class ApiBudgetStore:
     def remaining(self, reserve: int = 0, day: Optional[_date] = None) -> int:
         return max(0, self.daily_limit - self.used(day) - reserve)
 
+    def raise_used_to(self, n: int, day: Optional[_date] = None) -> int:
+        """Force ``used`` up to ``n`` when an external source knows better.
+
+        Distinct from ``claim``: a claim asks permission and is refused above
+        the limit, which is exactly wrong for recording spend that has already
+        happened elsewhere. If a provider says 500 credits are gone, the ledger
+        must be able to say so even when its own budget is 400 — otherwise the
+        refusal silently preserves the too-low number and the caller keeps
+        spending. Only ever raises; never lowers.
+
+        Returns ``used`` afterwards.
+        """
+        if not self.available():
+            return 0
+        day = day or _date.today()
+        try:
+            with self.db.get_session() as session:
+                self._ensure_row(session, day)
+                session.execute(
+                    update(ApiBudget.__table__)
+                    .where(
+                        ApiBudget.day == day,
+                        ApiBudget.provider == self.provider,
+                        ApiBudget.used < n,
+                    )
+                    .values(used=n, updated_at=utcnow())
+                )
+        except Exception as e:
+            logger.warning(f"api_budget raise_used_to failed ({e})")
+        return self.used(day)
+
     # ------------------------------------------------------------------ claim
 
     def claim(self, n: int = 1, reserve: int = 0,

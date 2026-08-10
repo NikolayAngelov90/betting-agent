@@ -118,12 +118,28 @@ class ProbabilityCalibrator:
         return True
 
     def fit_from_db(self, db) -> bool:
-        """Fit from all settled picks in the database."""
+        """Fit from all settled LIVE picks in the database.
+
+        Stage 8, Phase 7. Paper picks are excluded. This map is applied to
+        predictions (ensemble.predict, when
+        models.probability_calibration_enabled is on), so fitting it on paper
+        outcomes would let the frozen experiment recalibrate the model it is
+        measuring. Stage 7 filtered the drift check that logs beside this call
+        but not the fit itself, so the artifact was still being written from
+        pooled data — dormant today only because the config flag is off, which
+        is a reason to fix it rather than a reason it is safe.
+        """
+        from sqlalchemy import or_
+
         from src.data.models import SavedPick
         with db.get_session() as session:
             rows = session.query(
                 SavedPick.selection, SavedPick.predicted_probability, SavedPick.result
-            ).filter(SavedPick.result.in_(["win", "loss"])).all()
+            ).filter(
+                SavedPick.result.in_(["win", "loss"]),
+                # NULL is live: rows written before the column existed.
+                or_(SavedPick.is_paper.is_(False), SavedPick.is_paper.is_(None)),
+            ).all()
         pairs = [
             (SELECTION_FAMILY.get(sel), prob, 1 if res == "win" else 0)
             for sel, prob, res in rows

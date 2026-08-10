@@ -79,7 +79,25 @@ TRACKED_KEYS: List[str] = [
 #: — e.g. the Stage 4 switch from single-book de-vigging to gated cross-book
 #: consensus. Without this, a pure-code change would leave the fingerprint
 #: unmoved and two genuinely different models would share a version.
-CODE_REVISION = "s5.1"
+#:
+#: History
+#: -------
+#: s5.1  Stage 5 freeze.
+#: s5.2  Stage 8 (2026-08-10). SELECTION-affecting, not prediction-affecting:
+#:       the model's probabilities are untouched, but the set of picks it
+#:       persists changed, and a changed population of predictions is a
+#:       different experiment. Three edits:
+#:         1. `_CORRELATED_PAIRS` gained the six Over X.5 / Under Y.5 cross
+#:            pairs — the table had every same-direction pair and no opposite
+#:            ones, so that whole class passed the filter.
+#:         2. The Claude KEEP/CHANGE review now re-checks correlation before
+#:            switching a selection. It ran after `_filter_correlated_picks`
+#:            and only guarded exact-selection duplicates, so a switch could
+#:            land on a selection correlated with one already held — which is
+#:            how all three correlated pairs in production were created.
+#:         3. The in-memory duplicate key moved from (match_name, selection)
+#:            to (match_id, market, selection), matching the DB unique index.
+CODE_REVISION = "s5.2"
 
 
 def _stable(value: Any) -> Any:

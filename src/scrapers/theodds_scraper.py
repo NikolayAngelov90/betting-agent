@@ -17,8 +17,8 @@ import aiohttp
 
 from src.data.sql_helpers import id_in
 from src.data.database import get_db
-from src.data.models import Match, Odds, Team
-from src.utils.logger import get_logger
+from src.data.models import Match, Odds, SavedPick, Team
+from src.utils.logger import get_logger, utcnow
 
 logger = get_logger()
 
@@ -637,6 +637,41 @@ class TheOddsScraper:
         if not league_fixtures:
             return 0
 
+        return await self._fetch_and_persist(league_fixtures)
+
+    async def _fetch_and_persist(self, league_fixtures: Dict[str, List[Dict]],
+                                 quota=None) -> int:
+        """Fetch odds for the given leagues and persist them.
+
+        Extracted from ``update()`` so the Stage 6 imminent-fixture refresh
+        can reuse the identical fetch/match/persist path. Splitting it was the
+        alternative to duplicating ~140 lines of team-name matching and upsert
+        logic, which would have drifted.
+
+        Args:
+            league_fixtures: internal league key -> DB fixtures to match against.
+            quota: optional OddsApiQuota. When supplied, budget for exactly
+                len(league_fixtures) requests is CLAIMED BEFORE any HTTP call,
+                and the league set is truncated to what the budget grants.
+        """
+        if not league_fixtures:
+            return 0
+
+        if quota is not None:
+            wanted = list(league_fixtures)
+            granted = quota.claim_requests(len(wanted))
+            if granted <= 0:
+                logger.warning(
+                    "TheOddsAPI: monthly credit budget exhausted — making NO "
+                    "requests this run. " + quota.describe())
+                return 0
+            if granted < len(wanted):
+                dropped = wanted[granted:]
+                league_fixtures = {l: league_fixtures[l] for l in wanted[:granted]}
+                logger.warning(
+                    f"TheOddsAPI: budget allows {granted}/{len(wanted)} league "
+                    f"request(s); skipping {dropped} this run")
+
         # Fire all HTTP requests concurrently — reduces wall time from
         # 14× single-request latency to ~1× single-request latency.
         sport_keys = [LEAGUE_TO_THEODDS_SPORT[l] for l in league_fixtures]
@@ -657,8 +692,21 @@ class TheOddsScraper:
         unmatched_games = 0
         unmatched_details: List[str] = []
 
-        today_start = datetime.combine(date.today(), datetime.min.time())
-        today_end = today_start + timedelta(days=1)
+        # The window used to decide whether an API game is one we care about.
+        # Derived from the fixtures the caller passed in rather than hard-coded
+        # to "today": the Stage 6 imminent refresh can run at 23:00 UTC and
+        # legitimately want a 00:30 kickoff, which a today-only window drops.
+        # For update(), whose fixtures are all today, this is the same window.
+        _fixture_kos = [
+            f["match_date"] for fixes in league_fixtures.values() for f in fixes
+            if f.get("match_date")
+        ]
+        if _fixture_kos:
+            window_start = min(_fixture_kos) - timedelta(hours=1)
+            window_end = max(_fixture_kos) + timedelta(hours=1)
+        else:
+            window_start = datetime.combine(date.today(), datetime.min.time())
+            window_end = window_start + timedelta(days=1)
 
         for league, games in league_games.items():
             if not games:
@@ -694,7 +742,7 @@ class TheOddsScraper:
                                 from datetime import timezone as _tz
                                 ct = datetime.fromisoformat(commence_raw.replace("Z", "+00:00"))
                                 ct_naive = ct.astimezone(_tz.utc).replace(tzinfo=None)
-                                is_today = today_start <= ct_naive < today_end
+                                is_today = window_start <= ct_naive < window_end
                             except Exception:
                                 is_today = True
 
@@ -743,3 +791,212 @@ class TheOddsScraper:
                 f"(team name mismatch) — add aliases to fix:\n" + "\n".join(unmatched_details)
             )
         return total_written
+
+    # ------------------------------------------------------------------------
+    # Stage 6 — imminent-fixture refresh
+    # ------------------------------------------------------------------------
+
+    def _imminent_league_fixtures(self, window_minutes: int, now=None,
+                                  require_pending_pick: bool = True):
+        """Leagues whose fixtures kick off inside the window, most urgent first.
+
+        Returns ``(league_fixtures, skip_reasons)``.
+
+        A league is worth a credit only when refreshing it can actually produce
+        a closing line. Measured on production history: ~3.6 mapped leagues per
+        day carry a pending pick, against ~7.2 with any fixture and 27
+        configured. That gap is the entire Stage 6 saving.
+
+        Egress: two projected queries over the handful of fixtures in the
+        window, using the existing ``ix_match_fixture_date`` index — not
+        ``SELECT matches.*`` across a whole day, and no per-fixture team lookup.
+        """
+        now = now or utcnow()
+        horizon = now + timedelta(minutes=window_minutes)
+        skips = {}
+
+        with self.db.get_session() as session:
+            rows = (
+                session.query(
+                    Match.id, Match.league, Match.match_date,
+                    Team.name.label("home_name"),
+                )
+                .join(Team, Team.id == Match.home_team_id)
+                .filter(
+                    Match.is_fixture == True,  # noqa: E712
+                    Match.match_date > now,
+                    Match.match_date <= horizon,
+                )
+                .all()
+            )
+            if not rows:
+                return {}, skips
+
+            match_ids = [r.id for r in rows]
+            away = dict(
+                session.query(Match.id, Team.name)
+                .join(Team, Team.id == Match.away_team_id)
+                .filter(id_in(session, Match.id, match_ids))
+                .all()
+            )
+            pending = {
+                mid for (mid,) in session.query(SavedPick.match_id).filter(
+                    id_in(session, SavedPick.match_id, match_ids),
+                    SavedPick.closing_odds.is_(None),
+                    SavedPick.closing_capture_status == "pending",
+                ).distinct().all()
+            }
+
+        by_league = {}
+        for r in rows:
+            league = r.league or ""
+            if league not in LEAGUE_TO_THEODDS_SPORT:
+                skips.setdefault(league, "not mapped to a The Odds API sport key")
+                continue
+            if require_pending_pick and r.id not in pending:
+                skips.setdefault(league, "no pending pick awaiting a closing line")
+                continue
+            by_league.setdefault(league, []).append({
+                "match_id": r.id,
+                "home_name": r.home_name,
+                "away_name": away.get(r.id, ""),
+                "match_date": r.match_date,
+            })
+
+        # A league that qualified must not also be reported as skipped.
+        for league in by_league:
+            skips.pop(league, None)
+
+        # Soonest kickoff first, so a truncated budget keeps the urgent ones.
+        ordered = sorted(by_league.items(),
+                         key=lambda kv: min(f["match_date"] for f in kv[1]))
+        return dict(ordered), skips
+
+    def _leagues_refreshed_since(self, leagues, since):
+        """Leagues whose Odds-API rows already carry a timestamp >= ``since``.
+
+        Deduplication is derived from the odds table, not a state file: it is
+        authoritative, survives loss of the GitHub Actions cache, and cannot
+        disagree with what was actually stored. One projected aggregate query.
+        """
+        if not leagues:
+            return set()
+        from sqlalchemy import func as _func
+
+        with self.db.get_session() as session:
+            rows = (
+                session.query(Match.league, _func.max(Odds.timestamp))
+                .join(Odds, Odds.match_id == Match.id)
+                .filter(
+                    id_in(session, Match.league, list(leagues)),
+                    Odds.bookmaker.like(BOOKMAKER_PREFIX + "%"),
+                    Odds.timestamp >= since,
+                )
+                .group_by(Match.league)
+                .all()
+            )
+        return {lg for lg, ts in rows if ts is not None}
+
+    async def refresh_imminent(self, window_minutes: int = 120,
+                               min_interval_minutes: int = 180,
+                               quota=None,
+                               require_pending_pick: bool = True,
+                               dry_run: bool = False,
+                               now=None) -> dict:
+        """Refresh odds only for leagues with imminent fixtures worth a credit.
+
+        This never widens what counts as a valid closing line — it only changes
+        WHICH odds are fresh enough for ``capture_closing_lines`` to accept.
+
+        ``now`` is injectable so the selection and dedup windows can be tested
+        deterministically instead of against the wall clock.
+        """
+        from src.data.odds_quota import CREDITS_PER_REQUEST, credits_for
+
+        now = now or utcnow()
+        plan = {
+            "now": now.isoformat(),
+            "window_minutes": window_minutes,
+            "min_interval_minutes": min_interval_minutes,
+            "candidates": [], "requested": [], "skipped": {},
+            "credits_estimated": 0, "credits_claimed": 0,
+            "odds_written": 0, "dry_run": dry_run,
+        }
+        if not self.api_key:
+            plan["skipped"]["*"] = "ODDS_API_KEY not configured"
+            logger.info("TheOddsAPI: ODDS_API_KEY not configured — skipping")
+            return plan
+
+        league_fixtures, skips = self._imminent_league_fixtures(
+            window_minutes, now=now, require_pending_pick=require_pending_pick)
+        plan["skipped"].update(skips)
+        plan["candidates"] = [
+            {"league": lg, "fixtures": len(fx),
+             "next_kickoff": min(x["match_date"] for x in fx).isoformat()}
+            for lg, fx in league_fixtures.items()
+        ]
+
+        # A league refreshed inside the interval is already fresh enough;
+        # spending again buys nothing.
+        if league_fixtures and min_interval_minutes > 0:
+            since = now - timedelta(minutes=min_interval_minutes)
+            recent = self._leagues_refreshed_since(list(league_fixtures), since)
+            for league in list(league_fixtures):
+                if league in recent:
+                    plan["skipped"][league] = (
+                        f"refreshed within the last {min_interval_minutes} min")
+                    league_fixtures.pop(league)
+
+        plan["requested"] = list(league_fixtures)
+        plan["credits_estimated"] = credits_for(len(league_fixtures))
+
+        if not league_fixtures:
+            logger.info(
+                f"TheOddsAPI imminent refresh: nothing to do (window "
+                f"{window_minutes} min) — {len(plan['skipped'])} league(s) skipped")
+            return plan
+
+        if dry_run:
+            logger.info(
+                f"TheOddsAPI imminent refresh [DRY RUN]: would request "
+                f"{len(league_fixtures)} league(s) "
+                f"({plan['credits_estimated']} credits): {list(league_fixtures)}")
+            return plan
+
+        before = getattr(quota, "spent_this_run", 0) if quota else 0
+        written = await self._fetch_and_persist(league_fixtures, quota=quota)
+        after = getattr(quota, "spent_this_run", 0) if quota else 0
+        plan["odds_written"] = written
+        plan["credits_claimed"] = (after - before) if quota else plan["credits_estimated"]
+        plan["credits_remaining_header"] = self._remaining_requests
+
+        # Reconcile against the provider's own counter. The ledger only knows
+        # about spend that went through it; the API counts everything on the
+        # key. Measured 2026-08-10: provider 95 used, ledger 0. Doing this after
+        # the requests rather than before costs one cycle of staleness and saves
+        # a probe call — the response headers we already have carry the truth.
+        if quota is not None and self._used_requests is not None:
+            plan["credits_used_provider"] = self._used_requests
+            plan["credits_used_ledger"] = quota.reconcile(self._used_requests)
+
+        # Per-league attribution (section 7E): every refresh decision is
+        # traceable to a date, league, estimated cost, outcome and reason.
+        # Emitted as one structured line per league so a CI log can be grepped
+        # into a ledger without parsing prose.
+        for league in plan["requested"]:
+            logger.info(
+                f"ODDS_REFRESH date={now:%Y-%m-%d} time={now:%H:%M} "
+                f"league={league} sport_key={LEAGUE_TO_THEODDS_SPORT.get(league)} "
+                f"requests=1 est_credits={CREDITS_PER_REQUEST} "
+                f"result={'ok' if written else 'no_rows'} reason=imminent_pending_pick")
+        for league, why in plan["skipped"].items():
+            logger.info(
+                f"ODDS_REFRESH date={now:%Y-%m-%d} time={now:%H:%M} "
+                f"league={league or '-'} requests=0 est_credits=0 "
+                f"result=skipped reason={why.replace(' ', '_')}")
+
+        logger.info(
+            f"TheOddsAPI imminent refresh: {written} odds rows from "
+            f"{len(league_fixtures)} league(s), {plan['credits_claimed']} credits "
+            f"claimed (header remaining: {self._remaining_requests})")
+        return plan

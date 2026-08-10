@@ -61,6 +61,87 @@ def _insert_pick_if_absent(session, values: dict):
     return session.execute(stmt).scalar()
 
 
+class PickObservationsUnavailable(RuntimeError):
+    """Migration 006 has not been applied, so attribution cannot be recorded."""
+
+
+#: Set once the table has been seen in this process. The preflight is a
+#: per-run check, not a per-pick one.
+_PICK_OBSERVATIONS_READY = False
+
+
+def _require_pick_observations(db) -> None:
+    """Abort the run unless `pick_observations` exists. Stage 10.3, section 1.
+
+    Refusing to start is the right failure. Without this table a pick can be
+    saved with no MODEL attribution, and that loss is silent AND permanent: the
+    Claude review overwrites `saved_picks.odds`, and the odds table keeps one
+    row per (match, bookmaker, market, selection) which every refresh
+    overwrites — so the model's taken price cannot be reconstructed afterwards.
+    A day of picks that look fine but can never be attributed is worse than a
+    day with no picks.
+    """
+    global _PICK_OBSERVATIONS_READY
+    if _PICK_OBSERVATIONS_READY:
+        return
+
+    from sqlalchemy import inspect as _sa_inspect
+
+    try:
+        present = _sa_inspect(db.engine).has_table("pick_observations")
+    except Exception as e:                       # pragma: no cover - defensive
+        raise PickObservationsUnavailable(
+            f"Could not verify the pick_observations table ({e}). Apply "
+            f"migrations/006_pick_observations.sql before generating picks."
+        ) from e
+
+    if not present:
+        raise PickObservationsUnavailable(
+            "Table 'pick_observations' is missing — migration 006 has not been "
+            "applied to this database. Picks cannot be saved, because the "
+            "frozen model's taken price would be lost the moment the Claude "
+            "review rewrites the pick, and it cannot be reconstructed later. "
+            "Apply migrations/006_pick_observations.sql and re-run."
+        )
+    _PICK_OBSERVATIONS_READY = True
+
+
+def _write_pick_observations(session, pick_id: int, *, market: str,
+                             selection: str, taken_odds: float, taken_at):
+    """Create the 'model' and 'final' observations for a newly saved pick.
+
+    Stage 10, sections 5-7. Called from `_save_picks` at the moment of insert,
+    which is BEFORE the Claude KEEP/CHANGE review can touch anything. Both rows
+    start identical because at that instant the model's pick IS the final pick;
+    `_update_final_observation` moves the 'final' row if the review changes it.
+
+    **Raises on failure, by design (Stage 10.3).** It previously wrapped the
+    inserts in a SAVEPOINT and swallowed errors so a bookkeeping problem could
+    not cost a pick. Stage 10.1 measured what that actually bought: picks
+    committed with no observations, including a batch where one pick was
+    attributable and the next silently was not. Such a pick is indistinguishable
+    in the report from one that was never measurable, so the experiment quietly
+    loses rows it believes it never had.
+
+    No savepoint now. These inserts belong to the caller's transaction, so a
+    failure propagates out of `_save_picks`'s `with db.get_session()` block,
+    which rolls the whole batch back: no partial picks, no orphaned
+    observations.
+    """
+    from src.data.models import PickObservation
+
+    for attribution in ("model", "final"):
+        session.add(PickObservation(
+            pick_id=pick_id, attribution=attribution,
+            market=market, selection=selection,
+            taken_odds=float(taken_odds), taken_at=taken_at,
+            closing_status="pending",
+        ))
+    # Surface constraint violations here rather than at the caller's commit,
+    # where the failing pick would no longer be identifiable.
+    session.flush()
+
+
 def _sync_create_features(feature_engineer, match_id, as_of_date):
     """Run create_features synchronously in a thread (for ML training).
 
@@ -78,6 +159,29 @@ def _sync_create_features(feature_engineer, match_id, as_of_date):
         )
     finally:
         loop.close()
+
+
+
+def _live_only():
+    """SQL predicate selecting picks that count as the LIVE record.
+
+    Stage 7, section 15. ``is_paper`` was written by Stage 5 but never READ, so
+    enabling paper mode would have pooled measurement-only picks into live ROI,
+    the Telegram performance report, and — worse — into the loops that change
+    future predictions. That would let the experiment's own output rewrite the
+    model it is measuring, making the 100/200/500-pick evidence uninterpretable.
+
+    Applied at every site that either REPORTS live performance or CHANGES what
+    the frozen model will do next. Paper picks remain fully visible to the
+    experiment tooling (paper_trading_report, CLV, Claude added-value).
+
+    NULL counts as live: production backfilled all 1,070 existing rows to false,
+    but a column added without a default on another deployment would read NULL
+    and must not silently vanish from the live record.
+    """
+    from sqlalchemy import or_ as _or
+
+    return _or(SavedPick.is_paper.is_(False), SavedPick.is_paper.is_(None))
 
 
 @dataclass
@@ -1152,6 +1256,16 @@ class FootballBettingAgent:
             Tuple of (picks, new_picks, dropped_picks)
         """
         target = target_date or date.today()
+
+        # Stage 10.3 — preflight the attribution table BEFORE anything else.
+        #
+        # Placed here rather than in _save_picks deliberately: everything
+        # between this line and the save spends API-Football quota on fixtures,
+        # injuries and features. Discovering the table is missing after that
+        # work would waste a day's budget to produce picks we then refuse to
+        # store. Checked once per run, not once per pick.
+        _require_pick_observations(self.db)
+
         # Fresh analysis memo for this pick run (reused by the Claude review).
         if not hasattr(self, "_analysis_cache"):
             self._analysis_cache = {}
@@ -1461,7 +1575,8 @@ class FootballBettingAgent:
                 with self.db.get_session() as _cs:
                     _recent_picks = (
                         _cs.query(SavedPick)
-                        .filter(SavedPick.result.isnot(None), SavedPick.result != "void")
+                        .filter(SavedPick.result.isnot(None),
+                                SavedPick.result != "void", _live_only())
                         .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
                         .limit(lookback)
                         .all()
@@ -1666,9 +1781,20 @@ class FootballBettingAgent:
         seen_pick_keys: set = set()
         deduped = []
         for rec in all_recommendations:
-            key = (rec.match, rec.selection)
+            # Stage 8: key on the normalized identity, not the display name.
+            # `rec.match` is a rendered string ("Estrela vs Sporting CP"); two
+            # fixture rows for one game render identically and would collapse a
+            # legitimate pick, while one fixture whose team name changed between
+            # shards would render differently and slip a duplicate through. The
+            # DB's unique index is (match_id, selection, pick_date), so keying
+            # on anything else here means the in-memory gate and the storage
+            # gate disagree about what "the same pick" is. `market` joins them
+            # because a selection string is only unique within its market.
+            key = (rec.match_id, rec.market, rec.selection)
             if key in seen_pick_keys:
-                logger.debug(f"Skipping duplicate pick for {rec.match}: {rec.selection}")
+                logger.debug(
+                    f"PICK_REJECTED reason=duplicate_exact match_id={rec.match_id} "
+                    f"market={rec.market} selection={rec.selection}")
                 continue
             seen_pick_keys.add(key)
             deduped.append(rec)
@@ -1703,10 +1829,11 @@ class FootballBettingAgent:
                 if slots < len(group):
                     skipped = group[slots:]
                     for s in skipped:
-                        logger.debug(
-                            f"Skipping lower-confidence pick for {s.match}: "
-                            f"{s.selection} (conf={s.confidence:.1%}, "
-                            f"keeping top {max_picks_per_match} per match)"
+                        logger.info(
+                            f"PICK_REJECTED reason=same_fixture_limit "
+                            f"match_id={s.match_id} market={s.market} "
+                            f"selection={s.selection} conf={s.confidence:.4f} "
+                            f"cap={max_picks_per_match} already_saved={already}"
                         )
                 limited.extend(group[:slots])
 
@@ -1846,6 +1973,12 @@ class FootballBettingAgent:
                 f"— recorded for measurement, not offered as recommendations"
             )
 
+        # Stage 10.3 — hard guard at the persistence boundary. get_daily_picks
+        # already preflighted, but _save_picks is the last point before rows
+        # exist and must not depend on its caller having checked. Cached, so
+        # this is a no-op after the first call in a run.
+        _require_pick_observations(self.db)
+
         new_picks: List[BetRecommendation] = []
         with self.db.get_session() as session:
             for pick in picks:
@@ -1940,6 +2073,27 @@ class FootballBettingAgent:
                     )
                     continue
                 new_picks.append(pick)
+
+                # Stage 10 — write BOTH attribution observations now, while the
+                # pick is still exactly what the frozen model produced.
+                #
+                # This ordering is the whole point. The Claude review runs after
+                # get_daily_picks and rewrites market/selection/odds on the row;
+                # `_apply_decision` assigns `primary.odds = float(new.odds)` and
+                # the model's taken price ceases to exist anywhere. Recording it
+                # here is not an optimisation, it is the only moment it can be
+                # recorded at all — the odds table keeps one row per
+                # (match, bookmaker, market, selection) and overwrites it on
+                # every refresh, so there is no history to recover it from.
+                #
+                # At this instant model and final are identical by construction,
+                # so both rows carry the same values. A later CHANGE updates the
+                # 'final' row only.
+                _write_pick_observations(
+                    session, inserted_id,
+                    market=values["market"], selection=values["selection"],
+                    taken_odds=values["odds"], taken_at=values["created_at"],
+                )
 
                 # AC4: warn when a new pick has no injury data for its match
                 match_row = session.query(Match).filter(Match.id == pick.match_id).first()
@@ -2536,11 +2690,13 @@ class FootballBettingAgent:
             # Column-projected: this reads the whole saved_picks table on every
             # --stats / --report, and the analysis below touches six columns.
             # review_reason alone (VARCHAR 500) dominated the old payload.
+            # Paper picks are measurement-only and must never enter the live
+            # record — see _live_only().
             all_picks = session.query(
                 SavedPick.result, SavedPick.odds, SavedPick.kelly_stake_percentage,
                 SavedPick.pick_date, SavedPick.market,
                 SavedPick.predicted_probability, SavedPick.used_fallback_odds,
-            ).all()
+            ).filter(_live_only()).all()
 
             if not all_picks:
                 return {"total": 0}
@@ -2736,7 +2892,7 @@ class FootballBettingAgent:
                 SavedPick.kelly_stake_percentage, SavedPick.expected_value,
                 SavedPick.market,
             ).filter(
-                SavedPick.result.isnot(None)
+                SavedPick.result.isnot(None), _live_only()
             ).order_by(SavedPick.pick_date).all()
             if not all_picks:
                 print("No settled picks found.")
@@ -2819,6 +2975,9 @@ class FootballBettingAgent:
             ).filter(
                 SavedPick.result.isnot(None),
                 SavedPick.pick_date >= month_ago,
+                # Paper picks must not move ensemble weights: the frozen model
+                # would drift while model_version stayed constant.
+                _live_only(),
             ).all()
             # Extract all needed attributes inside session to avoid detached-instance errors
             settled = [
@@ -3682,7 +3841,7 @@ class FootballBettingAgent:
                 _recent = _s.query(
                     SavedPick.predicted_probability, SavedPick.result
                 ).filter(SavedPick.result.in_(["win", "loss"]),
-                         SavedPick.pick_date >= _cut).all()
+                         SavedPick.pick_date >= _cut, _live_only()).all()
             if len(_recent) >= 25:
                 _pred = sum(float(p) for p, _ in _recent) / len(_recent)
                 _act = sum(1 for _, r in _recent if r == "win") / len(_recent)
@@ -3756,6 +3915,7 @@ class FootballBettingAgent:
                 SavedPick.result != "void",
                 SavedPick.predicted_probability.isnot(None),
                 SavedPick.pick_date >= lookback,
+                _live_only(),
             ).all()
             pick_data = [
                 {
@@ -3979,7 +4139,8 @@ class FootballBettingAgent:
             with self.db.get_session() as session:
                 recent = (
                     session.query(SavedPick)
-                    .filter(SavedPick.result.isnot(None), SavedPick.result != "void")
+                    .filter(SavedPick.result.isnot(None), SavedPick.result != "void",
+                            _live_only())
                     .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
                     .limit(lookback)
                     .all()
@@ -4102,7 +4263,34 @@ class FootballBettingAgent:
         ("Over 3.5 Goals", "Over 4.5 Goals"),
         ("Under 2.5 Goals", "Under 3.5 Goals"),
         ("Under 3.5 Goals", "Under 4.5 Goals"),
+        # Stage 8: OPPOSITE rungs of the same ladder. Over X.5 + Under Y.5 with
+        # Y > X wins both only when the goal count lands in the gap between the
+        # lines — two stakes on one narrow outcome. The table declared every
+        # same-direction pair and no cross pair at all, so this whole class
+        # passed untouched.
+        ("Over 1.5 Goals", "Under 2.5 Goals"),
+        ("Over 1.5 Goals", "Under 3.5 Goals"),
+        ("Over 1.5 Goals", "Under 4.5 Goals"),
+        ("Over 2.5 Goals", "Under 3.5 Goals"),
+        ("Over 2.5 Goals", "Under 4.5 Goals"),
+        ("Over 3.5 Goals", "Under 4.5 Goals"),
     }
+
+    @classmethod
+    def selections_are_correlated(cls, a: str, b: str) -> bool:
+        """Whether two selections on the SAME match are a correlated pair.
+
+        One predicate over one table, so every gate in the pipeline agrees.
+        Stage 8 found the pipeline had two places that decide whether a match
+        may hold both selections — the pre-persist filter here and the Claude
+        CHANGE path in match_briefing — and only one of them consulted this
+        table. Reaching for `_CORRELATED_PAIRS` directly from a second module
+        would rebuild that divergence with extra steps.
+        """
+        if not a or not b or a == b:
+            return a == b and bool(a)
+        return ((a, b) in cls._CORRELATED_PAIRS
+                or (b, a) in cls._CORRELATED_PAIRS)
 
     # Composite score used by both the main sort and the correlation filter,
     # so a pick promoted by unanimous agreement isn't dropped in favour of a
@@ -4148,9 +4336,7 @@ class FootballBettingAgent:
             for i in range(len(group)):
                 for j in range(i + 1, len(group)):
                     a, b = group[i], group[j]
-                    pair = (a.selection, b.selection)
-                    pair_rev = (b.selection, a.selection)
-                    if pair in self._CORRELATED_PAIRS or pair_rev in self._CORRELATED_PAIRS:
+                    if self.selections_are_correlated(a.selection, b.selection):
                         score_a = self._composite_score(a)
                         score_b = self._composite_score(b)
                         ev_diff = abs(a.expected_value - b.expected_value)
@@ -4176,12 +4362,15 @@ class FootballBettingAgent:
                         if idx not in to_remove:
                             to_remove.add(idx)
                             logger.info(
-                                f"Correlation filter: dropping '{loser.selection}' "
-                                f"(EV={loser.expected_value:.1%}, agreement="
-                                f"{loser.model_agreement}) for {loser.match} — "
-                                f"correlated with '{winner.selection}' "
-                                f"(EV={winner.expected_value:.1%}, agreement="
-                                f"{winner.model_agreement})"
+                                f"PICK_REJECTED reason=correlated_selection "
+                                f"match_id={loser.match_id} market={loser.market} "
+                                f"selection={loser.selection} "
+                                f"ev={loser.expected_value:.4f} "
+                                f"agreement={loser.model_agreement} "
+                                f"kept={winner.selection} "
+                                f"kept_ev={winner.expected_value:.4f} "
+                                f"kept_agreement={winner.model_agreement} "
+                                f"match={loser.match}"
                             )
 
         if to_remove:
@@ -4525,6 +4714,10 @@ async def main():
                             injury_data_stale=injury_data_stale,
                             injury_budget_exhausted=injury_budget_exhausted,
                             force=force_picks,
+                            # The Telegram message is this system's betting
+                            # action. In paper mode it must be unmistakable.
+                            paper_mode=bool(agent.config.get(
+                                "betting.paper_trading_mode", False)),
                         )
                         print(f"\nPicks sent to Telegram! ({len(new_picks)} new)")
                     else:

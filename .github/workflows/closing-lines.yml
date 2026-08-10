@@ -1,0 +1,122 @@
+name: Closing Line Capture
+
+# Stage 6 — the only scheduled job the prospective CLV experiment needs.
+#
+# WHY THIS EXISTS SEPARATELY FROM daily-picks.yml
+#
+# clv.validate_pair rejects any odds snapshot taken more than 180 minutes before
+# kickoff, because that is a pre-match price, not a closing price. The daily
+# pipeline runs at 09:37 UTC and European club matches kick off in the evening,
+# so its odds are 8-10 hours stale by kickoff and every capture would be
+# rejected. Without this job the experiment collects nothing, however long it
+# runs.
+#
+# COST
+#
+# Only leagues with a fixture inside the window AND a pending pick awaiting a
+# closing line are refreshed, subject to a per-league minimum interval and a
+# hard monthly credit budget claimed before any HTTP call. Simulated on
+# production fixture history: ~256 credits/month, worst observed day 46, against
+# a 500-credit free tier.
+#
+# TIMEZONE
+#
+# All cron expressions and all stored timestamps are UTC. Bulgaria observes
+# EET/EEST (UTC+2/+3) and switches on the last Sundays of March and October, so
+# the LOCAL time of these runs shifts by an hour twice a year. Nothing in the
+# logic depends on local time — kickoff comparisons use stored UTC datetimes —
+# so correctness is unaffected; only the convenience of the slots moves. The
+# 2-hourly spread absorbs it, as it absorbs GitHub's scheduler delay (observed
+# 0.5-5.7h on this repo).
+
+on:
+  schedule:
+    # Every 2 hours across the window that covers European kickoffs
+    # (~11:00-23:00 UTC) plus a late slot for North/South American fixtures.
+    # Off-hour minute to avoid the top-of-hour scheduling crush.
+    - cron: '17 11,13,15,17,19,21,23 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Plan only — make no API call and spend no credit'
+        type: boolean
+        default: false
+      window_minutes:
+        description: 'Minutes ahead to look for imminent fixtures'
+        default: ''
+
+concurrency:
+  # Never let two capture runs overlap: both would claim credits for the same
+  # leagues. Queue rather than cancel, so a late run still completes.
+  group: closing-lines
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        # Deliberately minimal: this job never trains, scrapes with a browser or
+        # builds features, so it does not need the full requirements set.
+        run: |
+          python -m pip install --upgrade pip
+          pip install sqlalchemy psycopg2-binary aiohttp pyyaml python-dotenv loguru numpy scipy
+
+      - name: Create directories
+        run: mkdir -p data/models logs
+
+      - name: Create config from example
+        run: cp config/config.example.yaml config/config.yaml
+
+      - name: Refresh imminent odds and capture closing lines
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+          TABLES_CREATED: '1'
+        run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          if [ -n "${{ inputs.window_minutes }}" ]; then ARGS="$ARGS --window ${{ inputs.window_minutes }}"; fi
+          python -m scripts.refresh_and_capture $ARGS
+
+      - name: Report quota and CLV coverage
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+          TABLES_CREATED: '1'
+        run: python -m scripts.refresh_and_capture --status
+
+      - name: Alert if the capture job failed
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'EOF'
+          import os, json, urllib.request
+          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+          chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+          if token and chat:
+              msg = ("⚠️ Closing-line capture failed. CLV coverage will "
+                     "have a gap for this window.")
+              try:
+                  urllib.request.urlopen(
+                      f"https://api.telegram.org/bot{token}/sendMessage",
+                      data=json.dumps({"chat_id": chat, "text": msg}).encode(),
+                      timeout=10)
+              except Exception as e:
+                  print(f"Telegram alert failed: {e}")
+          EOF

@@ -3,7 +3,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, DateTime,
-    ForeignKey, Date, Text, JSON, Index
+    CheckConstraint, ForeignKey, Date, Text, JSON, Index, UniqueConstraint
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -354,3 +354,66 @@ class ApiBudget(Base):
         return f"<ApiBudget({self.provider} {self.day}: {self.used}/{self.limit_})>"
 
 
+class PickObservation(Base):
+    """One (pick, attribution) CLV observation — Stage 10, migration 006.
+
+    The experiment measures two series and they are different bets:
+
+        model — the FROZEN Stage 5 selection
+        final — the selection actually persisted, after the Claude review
+
+    ``taken_odds`` is written at pick-save time, BEFORE the review can
+    overwrite anything, because that is the only moment the model's price
+    exists. On a CHANGE, ``_apply_decision`` assigns
+    ``primary.odds = float(new.odds)`` and the model's price is gone from
+    ``saved_picks`` for good: the odds table holds one row per
+    (match, bookmaker, market, selection) and overwrites it on every refresh,
+    so there is no price history to recover it from. Inverting the stored EV is
+    unsound for Draw No Bet, whose EV is scaled by an unstored P(decisive).
+
+    On an unchanged pick both rows carry the same market, selection and price.
+    Closing capture then resolves ONE close and attributes it to both — one API
+    observation, two attributions, and still one fixture in the statistics.
+    """
+
+    __tablename__ = 'pick_observations'
+
+    id = Column(Integer, primary_key=True)
+    pick_id = Column(Integer, ForeignKey('saved_picks.id', ondelete='CASCADE'),
+                     nullable=False, index=True)
+
+    #: Declared so SQLAlchemy's unit of work knows a pick must be INSERTed
+    #: before its observations. A bare column-level ForeignKey gives the DDL
+    #: the constraint but gives the mapper no ordering dependency, so a session
+    #: that adds both in one flush can emit them the wrong way round and trip
+    #: the constraint.
+    pick = relationship("SavedPick", backref="observations")
+
+    #: 'model' or 'final'. Constrained in the database as well as here, so a
+    #: third value cannot quietly create a series nothing reports on.
+    attribution = Column(String(8), nullable=False)
+    market = Column(String(50), nullable=False)
+    selection = Column(String(100), nullable=False)
+
+    #: The price at the moment of the pick. Never reconstructed.
+    taken_odds = Column(Float, nullable=False)
+    taken_at = Column(DateTime, nullable=False)
+
+    closing_odds = Column(Float)
+    closing_captured_at = Column(DateTime)
+    closing_status = Column(String(16), nullable=False, default='pending')
+    closing_book_count = Column(Integer)
+    closing_fair_prob = Column(Float)
+
+    __table_args__ = (
+        UniqueConstraint('pick_id', 'attribution',
+                         name='uq_pick_observations_pick_attribution'),
+        CheckConstraint("attribution IN ('model', 'final')",
+                        name='ck_pick_observations_attribution'),
+        Index('ix_pick_observations_pending', 'closing_status'),
+    )
+
+    def __repr__(self):
+        return (f"<PickObservation(pick={self.pick_id} {self.attribution} "
+                f"{self.selection} @{self.taken_odds} "
+                f"close={self.closing_odds} {self.closing_status})>")

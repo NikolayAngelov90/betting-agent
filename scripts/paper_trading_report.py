@@ -21,13 +21,15 @@ from __future__ import annotations
 
 import argparse
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 from typing import Dict, List, Optional
 
 import numpy as np
 
 from src.data.models import Match, SavedPick
+from src.evaluation.attribution import (FINAL, MODEL, resolve,
+                                        shares_one_observation)
 from src.evaluation.clv import coverage_report
 from src.utils.logger import get_logger
 
@@ -58,16 +60,20 @@ def _load_env() -> None:
 class _Pick:
     """Flat view of a saved pick plus its match kickoff."""
 
-    __slots__ = ("id", "pick_date", "league", "market", "selection", "odds",
-                 "prob", "market_prob", "market_books", "ev", "result",
+    __slots__ = ("id", "match_id", "pick_date", "league", "market", "selection",
+                 "odds", "prob", "market_prob", "market_books", "ev", "result",
                  "closing_odds", "closing_odds_captured_at", "closing_status",
                  "closing_fair", "kickoff", "is_paper", "model_version",
-                 "review_action", "model_selection", "model_result")
+                 "review_action", "model_market", "model_selection",
+                 "model_result", "observations")
 
     def __init__(self, r):
         for f in self.__slots__:
             setattr(self, f, None)
         self.id = r.id
+        # Stage 8: the clustering key. Picks on one fixture are not independent
+        # observations, so every confidence interval has to resample fixtures.
+        self.match_id = r.match_id
         self.pick_date = r.pick_date
         self.league = r.league or "unknown"
         self.market = r.market
@@ -86,6 +92,9 @@ class _Pick:
         self.is_paper = bool(r.is_paper)
         self.model_version = r.model_version
         self.review_action = r.review_action
+        # Stage 9: the model series resolves its close in the MODEL's market,
+        # which may differ from the final one after a Claude CHANGE.
+        self.model_market = r.model_market
         self.model_selection = r.model_selection
         self.model_result = r.model_result
 
@@ -100,14 +109,73 @@ class _Pick:
         return (self.odds - 1) if self.result == "win" else -1.0
 
 
-def _boot(values: List[float], iters: int = 4000, seed: int = 0):
+def _boot(values: List[float], clusters: Optional[List] = None,
+          iters: int = 4000, seed: int = 0):
+    """Bootstrap 95% CI for a mean, resampling CLUSTERS when given.
+
+    Stage 8. Picks on the same fixture are not independent observations: both
+    prices respond to the same information flowing into that one match. An
+    i.i.d. bootstrap over picks treats them as if they were, which understates
+    the standard error and produces a confidence interval that is too narrow —
+    the direction that makes a null result look significant.
+
+    Measured on 180 days of production picks: 900 fixtures carried 1,070 picks,
+    and 170 fixtures (18.9%) carried two — **31.8% of all picks share a fixture
+    with another pick**. That is far too much clustering to ignore.
+
+    The fix is a cluster bootstrap: resample fixtures with replacement and take
+    all of each drawn fixture's picks. Every pick keeps contributing its own
+    information (nothing is collapsed or averaged away — Phase 5 warns against
+    discarding genuinely different markets), but the resampling unit becomes the
+    independent one.
+
+    ``clusters`` is a parallel sequence of cluster ids. Passing None keeps the
+    old i.i.d. behaviour, which is correct only when the values are already one
+    per cluster.
+    """
     if len(values) < 5:
         return None, None
     arr = np.asarray(values, dtype=float)
     rng = np.random.default_rng(seed)
-    means = np.array([rng.choice(arr, len(arr), replace=True).mean()
-                      for _ in range(iters)])
+
+    if clusters is None:
+        means = np.array([rng.choice(arr, len(arr), replace=True).mean()
+                          for _ in range(iters)])
+        return tuple(np.percentile(means, [2.5, 97.5]))
+
+    groups: Dict = defaultdict(list)
+    for v, c in zip(arr, clusters):
+        groups[c].append(v)
+    keys = list(groups.keys())
+    blocks = [np.asarray(groups[k], dtype=float) for k in keys]
+    if len(keys) < 5:
+        return None, None
+
+    idx = rng.integers(0, len(blocks), size=(iters, len(blocks)))
+    means = np.array([
+        np.concatenate([blocks[i] for i in row]).mean() for row in idx
+    ])
     return tuple(np.percentile(means, [2.5, 97.5]))
+
+
+def _effective_n(clusters: List) -> tuple:
+    """(n_picks, n_fixtures, design_effect, effective_n) for a clustered sample.
+
+    ``design_effect = 1 + (E[m^2]/E[m] - 1) * rho`` is the factor by which the
+    variance of a mean is inflated by clustering. Rho — the intra-fixture
+    correlation — is not identifiable from a handful of observations, so this
+    reports the WORST CASE, rho = 1: two picks on one fixture carry no more
+    information than one. The truth lies between that and the naive count, and
+    quoting the pessimistic bound is the right way round for a stopping rule.
+    """
+    if not clusters:
+        return 0, 0, 1.0, 0.0
+    sizes = Counter(clusters)
+    n = len(clusters)
+    k = len(sizes)
+    m = np.asarray(list(sizes.values()), dtype=float)
+    deff = (m ** 2).sum() / m.sum()          # E[m^2]/E[m] with rho = 1
+    return n, k, float(deff), float(n / deff) if deff else 0.0
 
 
 def _fmt_ci(lo, hi, pct=True):
@@ -123,14 +191,16 @@ def load_picks(days: int, include_live: bool, model_version: Optional[str]):
     cutoff = date.today() - timedelta(days=days)
     with db.get_session() as s:
         q = s.query(
-            SavedPick.id, SavedPick.pick_date, SavedPick.league, SavedPick.market,
+            SavedPick.id, SavedPick.match_id,
+            SavedPick.pick_date, SavedPick.league, SavedPick.market,
             SavedPick.selection, SavedPick.odds, SavedPick.predicted_probability,
             SavedPick.market_probability, SavedPick.market_books,
             SavedPick.expected_value, SavedPick.result, SavedPick.closing_odds,
             SavedPick.closing_odds_captured_at, SavedPick.closing_capture_status,
             SavedPick.closing_fair_probability, SavedPick.is_paper,
             SavedPick.model_version, SavedPick.review_action,
-            SavedPick.model_selection, SavedPick.model_result,
+            SavedPick.model_market, SavedPick.model_selection,
+            SavedPick.model_result,
             Match.match_date,
         ).join(Match, Match.id == SavedPick.match_id).filter(
             SavedPick.pick_date >= cutoff)
@@ -143,10 +213,120 @@ def load_picks(days: int, include_live: bool, model_version: Optional[str]):
         paper = [p for p in picks if p.is_paper]
         if paper:
             picks = paper
+    _attach_observations(picks)
     return picks
 
 
+def _attach_observations(picks: List[_Pick]) -> None:
+    """Hang each pick's MODEL/FINAL observation rows off it (Stage 10).
+
+    One extra query for the whole report, column-projected. Picks written before
+    migration 006 simply get no observations, and the report falls back to the
+    Stage 9 derivation from `saved_picks` — which is correct for them, because
+    an unchanged pick's own close IS the model's close.
+    """
+    from src.data.database import get_db
+    from src.data.models import PickObservation
+
+    for p in picks:
+        p.observations = {}
+    ids = [p.id for p in picks]
+    if not ids:
+        return
+
+    try:
+        with get_db().get_session() as s:
+            rows = s.query(
+                PickObservation.pick_id, PickObservation.attribution,
+                PickObservation.market, PickObservation.selection,
+                PickObservation.taken_odds, PickObservation.closing_odds,
+                PickObservation.closing_status,
+                PickObservation.closing_captured_at,
+            ).filter(PickObservation.pick_id.in_(ids)).all()
+    except Exception as e:
+        logger.debug(f"pick_observations unavailable ({e}) — reporting from "
+                     f"saved_picks only. Is migration 006 applied?")
+        return
+
+    by_pick: Dict[int, Dict[str, object]] = defaultdict(dict)
+    for r in rows:
+        by_pick[r.pick_id][r.attribution] = r
+    for p in picks:
+        p.observations = dict(by_pick.get(p.id, {}))
+
+
 # ─────────────────────────────────────────────────────────────────── sections
+
+def section_operational(picks: List[_Pick]) -> None:
+    """Stage 7 section 16 — the operational picture behind the experiment.
+
+    Answers "is the machine running?" separately from "is the model any good?",
+    so an empty CLV series can be attributed to a pipeline gap rather than
+    mistaken for a modelling result.
+    """
+    from src.data.database import get_db
+    from src.data.models import Match, Odds
+    from src.data.odds_quota import (CREDITS_PER_REQUEST, FREE_TIER_CREDITS,
+                                     OddsApiQuota)
+    from src.utils.config import get_config
+
+    print()
+    print("=" * 88)
+    print("OPERATIONAL")
+    print("=" * 88)
+
+    db = get_db()
+    cfg = get_config()
+    with db.get_session() as s:
+        from sqlalchemy import func as _f
+
+        fixtures_future = s.query(_f.count(Match.id)).filter(
+            Match.is_fixture.is_(True), Match.match_date > _f.now()).scalar() or 0
+        fixtures_total = s.query(_f.count(Match.id)).filter(
+            Match.is_fixture.is_(True)).scalar() or 0
+        latest_fixture = s.query(_f.max(Match.match_date)).filter(
+            Match.is_fixture.is_(True)).scalar()
+        # Odds written by the Odds API path, which is what closing capture uses.
+        newest_odds = s.query(_f.max(Odds.timestamp)).filter(
+            Odds.bookmaker.like("TheOddsAPI%")).scalar()
+
+    print(f"  fixtures in DB (total / future) : {fixtures_total} / {fixtures_future}")
+    print(f"  latest fixture kickoff          : {latest_fixture}")
+    print(f"  newest Odds-API odds row        : {newest_odds}")
+    if fixtures_future == 0:
+        print("  NOTE: no future fixtures — the refresh job will select 0 leagues")
+        print("        and spend 0 credits until ingestion runs.")
+
+    print(f"  paper predictions in range      : {sum(1 for p in picks if p.is_paper)}")
+
+    quota = OddsApiQuota(
+        db,
+        monthly_budget=int(cfg.get("odds_api.monthly_credit_budget", 400)),
+        safety_margin=int(cfg.get("odds_api.safety_margin_credits", 50)),
+    )
+    used = quota.used() if quota.available() else None
+    if used is None:
+        print("  API credits (ledger)            : unavailable (api_budget missing)")
+    else:
+        print(f"  API credits used this month     : {used}/{quota.monthly_budget} "
+              f"(free tier {FREE_TIER_CREDITS})")
+        print(f"  API credits remaining           : {quota.remaining()} "
+              f"= {quota.max_requests()} league request(s) "
+              f"at {CREDITS_PER_REQUEST}/request")
+
+    by_status: Dict[str, int] = defaultdict(int)
+    for p in picks:
+        by_status[p.closing_status or "pending"] += 1
+    print("  closing capture status          :")
+    for k in ("captured", "missing", "late", "invalid", "pending"):
+        if by_status.get(k):
+            print(f"      {k:<10}{by_status[k]:>6}")
+    resolved = [p for p in picks if p.kickoff and p.kickoff.date() < date.today()]
+    if resolved:
+        cap = sum(1 for p in resolved if p.closing_status == "captured")
+        print(f"  capture coverage (past kickoff) : {cap}/{len(resolved)} "
+              f"= {cap/len(resolved):.1%}")
+
 
 def section_volume(picks: List[_Pick]) -> None:
     print("\n" + "=" * 88)
@@ -196,27 +376,178 @@ def section_pricing(picks: List[_Pick]) -> None:
         print(f"  average predicted EV        : {np.mean(evs):+.2%}")
 
 
-def section_clv(picks: List[_Pick]) -> None:
+def series_clv(p: _Pick, attribution: str) -> Optional[float]:
+    """CLV for one attribution series on one pick, or None if unmeasurable.
+
+    Stage 10. Two sources, in priority order, and never mixed on one pick:
+
+    1. `pick_observations` — the authority once migration 006 is applied. Each
+       row carries its OWN taken price, so a CHANGE yields two genuinely
+       independent CLVs.
+    2. `saved_picks` — the Stage 9 fallback for picks written before the table
+       existed. It can only serve the model series when the selection was never
+       changed, because that is the only case where `saved_picks.odds` is still
+       the model's price. On a changed pick it returns None rather than
+       borrowing the final selection's numbers.
+    """
+    obs = (getattr(p, "observations", None) or {}).get(attribution)
+    if obs is not None:
+        if obs.closing_status != "captured" or not obs.closing_odds:
+            return None
+        if not obs.taken_odds or obs.taken_odds <= 1.0:
+            return None
+        return obs.taken_odds / obs.closing_odds - 1
+
+    if p.closing_status != "captured" or not p.closing_odds:
+        return None
+    m, f = resolve(p)
+    spec = f if attribution == FINAL else m
+    if not spec.measurable:
+        return None
+    if attribution == MODEL and not shares_one_observation(m, f):
+        return None
+    return spec.taken_odds / p.closing_odds - 1
+
+
+def _series_stats(label: str, clvs: List[float], fixtures: List) -> None:
+    """One attribution series' CLV block, clustered by fixture (Stage 8/9)."""
+    if not clvs:
+        print(f"  {label:<8} no valid closing lines")
+        return
+    lo, hi = _boot(clvs, clusters=fixtures)
+    n, k, deff, n_eff = _effective_n(fixtures)
+    print(f"  {label:<8} valid closing lines : {n}")
+    print(f"  {'':<8} independent fixtures: {k}")
+    print(f"  {'':<8} effective n         : {n_eff:.0f} "
+          f"(design effect {deff:.2f}, worst case)")
+    print(f"  {'':<8} CLV mean            : {np.mean(clvs):+.3%}  "
+          f"95% CI {_fmt_ci(lo, hi)}")
+    print(f"  {'':<8} CLV median          : {np.median(clvs):+.3%}")
+    print(f"  {'':<8} positive CLV        : "
+          f"{sum(1 for c in clvs if c > 0) / len(clvs):.1%}")
+
+
+def section_attribution_coverage(picks: List[_Pick]) -> None:
+    """Stage 9, section 12 — which series each pick could even contribute to.
+
+    This is about the PICK side only: whether the row records what a series
+    needs. Whether a closing price was then found is a separate fact, reported
+    in the CLV section. Keeping them apart matters because an unavailable model
+    snapshot is not a failed model prediction.
+    """
+    from src.evaluation.attribution import (MODEL_PRICE_NOT_KEPT,
+                                            NO_MODEL_SNAPSHOT, coverage_class,
+                                            resolve, selection_changed)
+
     print("\n" + "=" * 88)
-    print("CLOSING LINE VALUE")
+    print("ATTRIBUTION COVERAGE  (model vs final — Stage 9)")
+    print("=" * 88)
+
+    classes: Dict[str, int] = defaultdict(int)
+    reasons: Dict[str, int] = defaultdict(int)
+    changed = same = unknown = 0
+
+    for p in picks:
+        m, f = resolve(p)
+        classes[coverage_class(m, f)] += 1
+        if not m.measurable:
+            reasons[m.unavailable_reason] += 1
+        ch = selection_changed(p)
+        if ch is None:
+            unknown += 1
+        elif ch:
+            changed += 1
+        else:
+            same += 1
+
+    total = len(picks) or 1
+    print(f"  picks considered        : {len(picks)}")
+    print(f"  same selection          : {same}")
+    print(f"  changed selection       : {changed}")
+    print(f"  snapshot unavailable    : {unknown}  "
+          f"(cannot say whether the selection changed)")
+
+    print("\n  measurability (from the pick record, before closing prices):")
+    for name in ("both_measurable_same_selection", "both_measurable",
+                 "model_only_measurable", "final_only_measurable",
+                 "neither_measurable"):
+        n = classes.get(name, 0)
+        print(f"      {name:<32}{n:>6}  {n/total:>6.1%}")
+
+    if reasons:
+        print("\n  model series unavailable because:")
+        for reason, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
+            note = ""
+            if reason == NO_MODEL_SNAPSHOT:
+                note = "  (row predates the snapshot columns)"
+            elif reason == MODEL_PRICE_NOT_KEPT:
+                note = "  (Claude CHANGE overwrote the taken price)"
+            print(f"      {reason:<40}{n:>6}{note}")
+
+    print("\n  NOTE: 'unavailable' means the record cannot say what the model")
+    print("        picked. It is NOT a failed prediction and is never counted")
+    print("        as zero CLV.")
+
+
+def section_clv(picks: List[_Pick]) -> None:
+
+    print("\n" + "=" * 88)
+    print("CLOSING LINE VALUE  (two attribution series — Stage 9)")
     print("=" * 88)
     cov = coverage_report(picks)
     print(cov.render())
 
-    valid = [p for p in picks
-             if p.closing_status == "captured" and p.closing_odds and p.odds]
-    if not valid:
-        print("\n  No genuine CLV yet. Nothing below can be reported until "
-              "closing prices exist.")
+    # A captured close belongs to the FINAL selection: capture_closing_lines
+    # resolves SavedPick.selection. Where the review kept the model's pick the
+    # two series are one underlying observation and the same close is attributed
+    # to both — one fact, two counters, never two fixtures (section 13).
+    model_clvs, model_fx = [], []
+    final_clvs, final_fx = [], []
+    paired = []          # (match_id, model_clv, final_clv) — genuinely both
+    shared = 0
+
+    for p in picks:
+        mc = series_clv(p, "model")
+        fc = series_clv(p, "final")
+        if fc is not None:
+            final_clvs.append(fc)
+            final_fx.append(p.match_id)
+        if mc is not None:
+            model_clvs.append(mc)
+            model_fx.append(p.match_id)
+        if mc is not None and fc is not None:
+            paired.append((p.match_id, mc, fc))
+            m, f = resolve(p)
+            if shares_one_observation(m, f):
+                shared += 1
+
+    if not final_clvs and not model_clvs:
+        print("\n  No genuine CLV yet in either series. Nothing below can be "
+              "reported until closing prices exist.")
         print("  NOTE: model probability minus 1/odds is NOT CLV and is not "
               "shown here.")
         return
 
-    clvs = [p.odds / p.closing_odds - 1 for p in valid]
-    lo, hi = _boot(clvs)
-    print(f"\n  average CLV : {np.mean(clvs):+.3%}  95% CI {_fmt_ci(lo, hi)}")
-    print(f"  median CLV  : {np.median(clvs):+.3%}")
-    print(f"  positive CLV: {sum(1 for c in clvs if c > 0) / len(clvs):.1%}")
+    print("\n  Series A — FROZEN MODEL (model_market / model_selection)")
+    _series_stats("model", model_clvs, model_fx)
+    print("\n  Series B — FINAL SELECTION (market / selection, post-review)")
+    _series_stats("final", final_clvs, final_fx)
+
+    print(f"\n  shared observations (review kept the model's pick): {shared}")
+    print("      counted once as a model CLV and once as a final CLV, but as")
+    print("      ONE fixture — never two independent observations.")
+
+    if paired:
+        _section_paired(paired)
+
+    _section_by_review_action(picks)
+
+    valid = [p for p in picks
+             if p.closing_status == "captured" and p.closing_odds and p.odds]
+    clvs = final_clvs
+    if not valid or not clvs:
+        return
+    print("\n  Breakdowns below are the FINAL series.")
 
     print(f"\n  {'by market':<28}{'n':>5}{'avg CLV':>10}{'positive':>10}")
     by_market: Dict[str, List[float]] = defaultdict(list)
@@ -236,6 +567,77 @@ def section_clv(picks: List[_Pick]) -> None:
                   f"{sum(1 for v in vals if v > 0)/len(vals):>10.0%}")
 
 
+def _section_paired(paired: List[tuple]) -> None:
+    """Stage 9, section 10 — the paired subset.
+
+    Only picks where BOTH series produced a valid close. The difference is
+    reported as a within-pick delta, clustered by fixture exactly as elsewhere.
+
+    It is not an independent CLV sample and is not presented as one: each delta
+    is one pick's two measurements, so the population is the paired picks, not
+    2 x that.
+    """
+    print("\n  PAIRED SUBSET — both series measurable on the same pick")
+    fx = [m for m, _, _ in paired]
+    mc = [c for _, c, _ in paired]
+    fc = [c for _, _, c in paired]
+    deltas = [f - m for (_, m, f) in paired]
+    n, k, deff, n_eff = _effective_n(fx)
+    lo, hi = _boot(deltas, clusters=fx)
+    print(f"      paired observations : {n} on {k} fixtures "
+          f"(effective n {n_eff:.0f})")
+    print(f"      model CLV mean      : {np.mean(mc):+.3%}")
+    print(f"      final CLV mean      : {np.mean(fc):+.3%}")
+    print(f"      final - model       : {np.mean(deltas):+.3%}  "
+          f"95% CI {_fmt_ci(lo, hi)}")
+    print("      (observed difference in CLV — not a causal claim about the "
+          "review)")
+
+
+def _section_by_review_action(picks: List[_Pick]) -> None:
+    """Stage 9, section 11 — CLV split by what the review did.
+
+    For CHANGE rows the model and final series are different bets, so the delta
+    is the diagnostic. Where the model's own close is unobtainable that is
+    stated, not filled in.
+    """
+    print("\n  BY REVIEW ACTION")
+    print(f"      {'action':<10}{'n close':>9}{'model CLV':>12}"
+          f"{'final CLV':>12}{'delta':>10}")
+
+    buckets: Dict[str, List[_Pick]] = defaultdict(list)
+    for p in picks:
+        if (series_clv(p, MODEL) is not None
+                or series_clv(p, FINAL) is not None):
+            buckets[p.review_action or "none"].append(p)
+
+    for action in ("none", "KEEP", "CHANGE"):
+        rows = buckets.get(action, [])
+        if not rows:
+            print(f"      {action:<10}{0:>9}{'—':>12}{'—':>12}{'—':>10}")
+            continue
+        mc, fc, dl = [], [], []
+        for p in rows:
+            fv = series_clv(p, FINAL)
+            mv = series_clv(p, MODEL)
+            if fv is not None:
+                fc.append(fv)
+            if mv is not None:
+                mc.append(mv)
+            if mv is not None and fv is not None:
+                dl.append(fv - mv)
+        print(f"      {action:<10}{len(rows):>9}"
+              f"{(f'{np.mean(mc):+.2%}' if mc else 'n/a'):>12}"
+              f"{(f'{np.mean(fc):+.2%}' if fc else 'n/a'):>12}"
+              f"{(f'{np.mean(dl):+.2%}' if dl else 'n/a'):>10}")
+
+    if buckets.get("CHANGE"):
+        print("      NOTE: on CHANGE rows the model and final series are")
+        print("            DIFFERENT bets. A model CLV of 'n/a' means the")
+        print("            model selection's own close was not obtainable —")
+        print("            the final selection's close is never substituted.")
+
+
 def section_outcomes(picks: List[_Pick]) -> None:
     print("\n" + "=" * 88)
     print("OUTCOMES")
@@ -245,7 +647,7 @@ def section_outcomes(picks: List[_Pick]) -> None:
         print("  (nothing settled yet)")
         return
     profits = [p.profit for p in decided]
-    lo, hi = _boot(profits)
+    lo, hi = _boot(profits, clusters=[p.match_id for p in decided])
     wins = sum(1 for p in decided if p.result == "win")
     print(f"  settled            : {len(decided)}")
     print(f"  win rate           : {wins / len(decided):.1%}")
@@ -311,7 +713,8 @@ def section_claude(picks: List[_Pick]) -> None:
         if not sub:
             continue
         roi = np.mean([p.profit for p in sub])
-        lo, hi = _boot([p.profit for p in sub])
+        lo, hi = _boot([p.profit for p in sub],
+                       clusters=[p.match_id for p in sub])
         wr = sum(1 for p in sub if p.result == "win") / len(sub)
         print(f"  {action:<8} n={len(sub):<5} win={wr:.1%} ROI={roi:+.1%} "
               f"95% CI {_fmt_ci(lo, hi)}")
@@ -400,15 +803,38 @@ def section_checkpoints(picks: List[_Pick]) -> None:
     print("\n" + "=" * 88)
     print("SAMPLE-SIZE CHECKPOINTS (Phase 16)")
     print("=" * 88)
-    valid = sum(1 for p in picks
-                if p.closing_status == "captured" and p.closing_odds and p.odds)
-    print(f"  valid closing-line picks: {valid}")
-    for target, purpose in CHECKPOINTS:
-        status = "REACHED" if valid >= target else f"{target - valid} to go"
-        print(f"      {target:>4} — {purpose:<44} {status}")
-    if valid < CHECKPOINTS[0][0]:
-        print("\n  Below the first checkpoint. No model decision may be taken "
-              "from this data.")
+    # Stage 9: the two series get SEPARATE counters. A single underlying
+    # observation counts as one model valid CLV and one final valid CLV, but the
+    # fixture behind it is one fixture — so the effective-n figures are computed
+    # per series over that series' own fixtures, never pooled.
+    model_fx, final_fx = [], []
+    for p in picks:
+        if series_clv(p, FINAL) is not None:
+            final_fx.append(p.match_id)
+        if series_clv(p, MODEL) is not None:
+            model_fx.append(p.match_id)
+
+    # The checkpoint DEFINITION is unchanged — 100/200/500 valid closing lines,
+    # counted in picks. What Stage 8 added is the effective sample size beside
+    # it, because a fixture contributing two closing lines advances the counter
+    # by two while advancing the evidence by less.
+    for label, fx in (("MODEL", model_fx), ("FINAL", final_fx)):
+        valid, k, deff, n_eff = _effective_n(fx)
+        print(f"\n  {label}:")
+        print(f"      valid closing-line picks: {valid}")
+        print(f"      independent fixtures    : {k}")
+        print(f"      worst-case effective n  : {n_eff:.0f}  "
+              f"(design effect {deff:.2f})")
+        for target, purpose in CHECKPOINTS:
+            status = "REACHED" if valid >= target else f"{target - valid} to go"
+            print(f"          {target:>4} — {purpose:<40} {status}")
+            if valid >= target > n_eff:
+                print(f"               ^ reached on pick count, but only "
+                      f"~{n_eff:.0f} effective observations — provisional")
+
+    if len(final_fx) < CHECKPOINTS[0][0] and len(model_fx) < CHECKPOINTS[0][0]:
+        print("\n  Below the first checkpoint in both series. No model decision "
+              "may be taken from this data.")
 
 
 def main():
@@ -434,7 +860,9 @@ def main():
     if args.health_only:
         raise SystemExit(1 if section_health(picks) else 0)
 
+    section_operational(picks)
     section_volume(picks)
+    section_attribution_coverage(picks)
     section_pricing(picks)
     section_clv(picks)
     section_outcomes(picks)

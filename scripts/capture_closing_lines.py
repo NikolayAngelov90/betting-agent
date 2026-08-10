@@ -32,9 +32,13 @@ kickoff is not a close either; ``clv.validate_pair`` enforces that at read time.
 considered, so a second run in the same window is a no-op and a captured price
 is never overwritten.
 
-**Cheap.** Two queries per run regardless of fixture count: one for the pending
-picks in the window, one for their odds rows, both column-projected. No N+1, no
-``SELECT *``. ``--stats`` prints the measured cost.
+**Cheap.** Two reads per run regardless of fixture count: one for the pending
+picks in the window, one for their odds rows, both column-projected. Picks whose
+kickoff has already passed are separated out *before* the odds read, so a stale
+backlog costs one status UPDATE and no odds egress. Write-back is one UPDATE per
+distinct status plus one per genuinely captured price — the captured set is
+bounded by the capture window, not by history. No ``SELECT *``. ``--stats``
+prints the measured cost.
 """
 
 from __future__ import annotations
@@ -99,6 +103,12 @@ SELECTION_SPEC: Dict[str, Tuple[str, Optional[str], Optional[str], int]] = {
 
 
 
+def _chunks(items: List[int], size: int):
+    """Split ids into batches so an IN (...) list never grows unbounded."""
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
 def _median(values: List[float]) -> Optional[float]:
     s = sorted(values)
     n = len(s)
@@ -108,22 +118,46 @@ def _median(values: List[float]) -> Optional[float]:
 
 
 def consensus_close(odds_rows, market_type: str, line: Optional[str],
-                    side: Optional[str], leg: int) -> Tuple[Optional[float],
-                                                            Optional[float], int]:
-    """(median price for our leg, median de-vigged probability, books used).
+                    side: Optional[str], leg: int,
+                    not_before=None) -> Tuple[Optional[float], Optional[float],
+                                              int, Optional[object]]:
+    """(median price for our leg, median de-vigged probability, books used,
+    observed_at).
 
     Each bookmaker's market is validated on its own before it contributes, so
     one broken book cannot define the close.
+
+    ``not_before`` is EXCLUSIVE: a row must be observed strictly after it. A
+    price the odds table has been holding since this morning is not a closing
+    price, and the caller cannot tell the difference from the value alone — the
+    row's own ``timestamp`` is the only evidence of when it was true.
+
+    Exclusive rather than inclusive because the caller passes the pick's own
+    creation time here (Stage 8, Phase 8). The row the pick was priced from
+    carries exactly that timestamp, so an inclusive bound would hand it straight
+    back as the "closing" price and CLV would read 0.00%.
+
+    ``observed_at`` is the OLDEST contributing row's timestamp, i.e. the most
+    conservative claim we can make about how fresh the consensus is. It becomes
+    ``closing_odds_captured_at`` so that ``clv.validate_pair``'s lead check
+    measures the price's age rather than the script's run time.
     """
     by_book: Dict[str, Dict[str, float]] = defaultdict(dict)
+    seen_at: Dict[str, object] = {}
     for r in odds_rows:
         if r.bookmaker in EXCLUDED_BOOKMAKERS or r.market_type != market_type:
             continue
+        ts = getattr(r, "timestamp", None)
+        if not_before is not None and ts is not None and ts <= not_before:
+            continue
         if r.odds_value and r.odds_value > 1.0:
             by_book[r.bookmaker][r.selection] = r.odds_value
+            prev = seen_at.get(r.bookmaker)
+            if ts is not None and (prev is None or ts < prev):
+                seen_at[r.bookmaker] = ts
 
-    prices, fairs = [], []
-    for sels in by_book.values():
+    prices, fairs, stamps = [], [], []
+    for book, sels in by_book.items():
         legs = extract_legs(market_type, sels, line=line, side=side)
         if legs is None or leg >= len(legs):
             continue
@@ -132,23 +166,149 @@ def consensus_close(odds_rows, market_type: str, line: Optional[str],
             continue
         probs = devig(market_type, legs)
         prices.append(legs[leg])
+        if seen_at.get(book) is not None:
+            stamps.append(seen_at[book])
         if probs is not None:
             fairs.append(probs[leg])
 
     if not prices:
-        return None, None, 0
-    return _median(prices), (_median(fairs) if fairs else None), len(prices)
+        return None, None, 0, None
+    return (_median(prices), (_median(fairs) if fairs else None), len(prices),
+            min(stamps) if stamps else None)
+
+
+def resolve_close(odds_for_match, selection: str, not_before):
+    """Apply every closing rule to one selection. The single resolver.
+
+    Returns ``(status, price, fair_prob, n_books, observed_at)``.
+
+    Stage 10 gave the pipeline a second attribution series, and both series must
+    be judged by identical rules — a MODEL observation held to a looser standard
+    than a FINAL one would make the two CLV numbers incomparable, which is the
+    only thing the paired comparison measures. So both paths call this, rather
+    than each re-implementing the checks.
+    """
+    spec = SELECTION_SPEC.get(selection)
+    if spec is None:
+        return STATUS_INVALID, None, None, 0, None
+
+    market_type, line, side, leg = spec
+    price, fair, n_books, observed_at = consensus_close(
+        odds_for_match, market_type, line, side, leg, not_before=not_before)
+    if price is None:
+        return STATUS_MISSING, None, None, 0, None
+    return STATUS_CAPTURED, price, fair, n_books, observed_at
+
+
+def _load_observations(session, pick_ids, stats: dict) -> list:
+    """Pending MODEL/FINAL observation rows for the picks in this window.
+
+    Loaded BEFORE the odds query so their markets can widen `needed_markets`:
+    after a Claude CHANGE the model observation sits in a different market from
+    the pick, and querying only the pick's market would leave it permanently
+    `missing` for want of rows nobody asked for.
+
+    Returns [] when migration 006 is not applied — the FINAL series keeps
+    working off `saved_picks.closing_*` exactly as before.
+    """
+    from src.data.models import PickObservation
+
+    if not pick_ids:
+        return []
+    try:
+        obs = session.query(PickObservation).filter(
+            PickObservation.pick_id.in_(pick_ids),
+            PickObservation.closing_odds.is_(None),
+            PickObservation.closing_status == STATUS_PENDING,
+        ).all()
+        stats["db_queries"] += 1
+        return obs
+    except Exception as e:
+        logger.debug(f"pick_observations unavailable ({e}) — skipping the "
+                     f"dual-attribution pass. Is migration 006 applied?")
+        return []
+
+
+def _capture_observations(session, obs, live_rows, by_match, max_lead, now,
+                          dry_run: bool, stats: dict) -> None:
+    """Resolve closing prices for the MODEL and FINAL attribution rows.
+
+    Stage 10, sections 10, 11 and 16.
+
+    Reads the odds snapshot the caller already loaded — no extra odds query, and
+    no extra Odds API request, because capture never calls the API at all. Where
+    MODEL and FINAL name the same (market, selection) the close is resolved
+    ONCE and written to both rows: one underlying observation, two attributions.
+    """
+    if not obs:
+        return
+
+    by_pick = {r.id: r for r in live_rows}
+    # (pick_id, market, selection) -> resolved outcome. MODEL and FINAL on an
+    # unchanged pick share a key and therefore share one resolution.
+    resolved: Dict[tuple, tuple] = {}
+
+    for o in obs:
+        row = by_pick.get(o.pick_id)
+        if row is None:
+            continue
+
+        # Same causal boundary as the FINAL series: the observation's own
+        # taken_at, which _update_final_observation deliberately does not move.
+        not_before = (row.match_date - max_lead) if row.match_date else None
+        if o.taken_at is not None:
+            not_before = (max(not_before, o.taken_at) if not_before
+                          else o.taken_at)
+
+        key = (o.pick_id, o.market, o.selection)
+        if key not in resolved:
+            resolved[key] = resolve_close(
+                by_match.get(row.match_id, []), o.selection, not_before)
+            stats["observations_resolved"] += 1
+
+        status, price, fair, n_books, observed_at = resolved[key]
+        stats[f"obs_{o.attribution}_{status}"] = (
+            stats.get(f"obs_{o.attribution}_{status}", 0) + 1)
+
+        if dry_run:
+            continue
+        o.closing_status = status
+        if status == STATUS_CAPTURED:
+            o.closing_odds = float(price)
+            o.closing_fair_prob = float(fair) if fair else None
+            o.closing_book_count = int(n_books)
+            o.closing_captured_at = observed_at or now
+
+    stats["observations_considered"] = len(obs)
+    if not dry_run:
+        session.flush()
 
 
 def capture(within_minutes: int = 90, dry_run: bool = False,
-            max_retries: int = 3) -> dict:
-    """Capture closing prices for pending picks kicking off inside the window."""
+            max_retries: int = 3,
+            max_lead_minutes: Optional[int] = None) -> dict:
+    """Capture closing prices for pending picks kicking off inside the window.
+
+    ``max_lead_minutes`` is how old a price may be and still count as closing.
+    It defaults to the same value ``clv.validate_pair`` enforces at read time,
+    so capture and validation cannot drift apart: anything this function is
+    willing to store is something the CLV layer is willing to use.
+    """
+    from src.evaluation.clv import DEFAULT_MAX_CAPTURE_LEAD
+
+    max_lead = (timedelta(minutes=max_lead_minutes)
+                if max_lead_minutes is not None else DEFAULT_MAX_CAPTURE_LEAD)
     db = get_db()
     now = utcnow()
     horizon = now + timedelta(minutes=within_minutes)
     stats = {
         "considered": 0, "captured": 0, "missing": 0, "late": 0, "invalid": 0,
         "db_queries": 0, "odds_rows_read": 0, "elapsed_s": 0.0,
+        # Stage 10 dual attribution. `observations_resolved` counts DISTINCT
+        # (pick, market, selection) resolutions — an unchanged pick contributes
+        # 1, not 2, which is how "one underlying observation" is verifiable
+        # rather than merely asserted.
+        "observations_considered": 0, "observations_resolved": 0,
     }
     started = time.monotonic()
 
@@ -160,7 +320,7 @@ def capture(within_minutes: int = 90, dry_run: bool = False,
                 rows = session.query(
                     SavedPick.id, SavedPick.match_id, SavedPick.selection,
                     SavedPick.market, SavedPick.odds, SavedPick.match_name,
-                    Match.match_date,
+                    SavedPick.created_at, Match.match_date,
                 ).join(Match, Match.id == SavedPick.match_id).filter(
                     SavedPick.closing_odds.is_(None),
                     SavedPick.closing_capture_status == STATUS_PENDING,
@@ -176,7 +336,34 @@ def capture(within_minutes: int = 90, dry_run: bool = False,
                     return stats
 
                 stats["considered"] = len(rows)
-                match_ids = {r.match_id for r in rows}
+
+                # Kickoff already passed → there is no closing price to look up,
+                # only a status to record. Split those off BEFORE the odds query
+                # instead of inside the capture loop: their match_ids would
+                # otherwise widen Query 2 and ship rows straight to /dev/null.
+                # This is not hypothetical — migration 003 backfilled all 1,070
+                # historical picks to closing_capture_status='pending', and the
+                # window filter is `match_date <= now + 90min` with no lower
+                # bound, so the first production run sweeps every one of them.
+                live_rows, late_rows = [], []
+                for r in rows:
+                    is_late = r.match_date is not None and now >= r.match_date
+                    (late_rows if is_late else live_rows).append(r)
+                stats["late"] = len(late_rows)
+
+                updates: List[dict] = [
+                    {"id": r.id, "status": STATUS_LATE} for r in late_rows
+                ]
+
+                match_ids = {r.match_id for r in live_rows}
+
+                # Stage 10 — load the attribution rows before the odds query.
+                # A Claude CHANGE leaves the MODEL observation in a DIFFERENT
+                # market from the pick, so its market has to widen the filter
+                # below or it stays 'missing' forever for want of rows nobody
+                # asked for.
+                observations = _load_observations(
+                    session, [r.id for r in live_rows], stats)
 
                 # Only the market types the pending picks actually need. Without
                 # this the query returns every market on every match — measured
@@ -185,36 +372,34 @@ def capture(within_minutes: int = 90, dry_run: bool = False,
                 # but there is no reason to ship rows nothing will read.
                 needed_markets = {
                     SELECTION_SPEC[r.selection][0]
-                    for r in rows if r.selection in SELECTION_SPEC
+                    for r in live_rows if r.selection in SELECTION_SPEC
+                }
+                needed_markets |= {
+                    SELECTION_SPEC[o.selection][0]
+                    for o in observations if o.selection in SELECTION_SPEC
                 }
                 if not needed_markets:
                     needed_markets = {"1X2"}   # nothing mappable; keep the query valid
 
                 # Query 2 — the relevant odds rows for those matches, once.
-                odds_rows = session.query(
-                    Odds.match_id, Odds.bookmaker, Odds.market_type,
-                    Odds.selection, Odds.odds_value,
-                ).filter(
-                    Odds.match_id.in_(match_ids),
-                    Odds.market_type.in_(needed_markets),
-                    Odds.bookmaker.notin_(tuple(EXCLUDED_BOOKMAKERS)),
-                ).all()
-                stats["db_queries"] += 1
+                odds_rows = []
+                if match_ids:
+                    odds_rows = session.query(
+                        Odds.match_id, Odds.bookmaker, Odds.market_type,
+                        Odds.selection, Odds.odds_value, Odds.timestamp,
+                    ).filter(
+                        Odds.match_id.in_(match_ids),
+                        Odds.market_type.in_(needed_markets),
+                        Odds.bookmaker.notin_(tuple(EXCLUDED_BOOKMAKERS)),
+                    ).all()
+                    stats["db_queries"] += 1
                 stats["odds_rows_read"] = len(odds_rows)
 
                 by_match = defaultdict(list)
                 for o in odds_rows:
                     by_match[o.match_id].append(o)
 
-                updates: List[dict] = []
-                for r in rows:
-                    kickoff = r.match_date
-                    # Late capture is not a closing price. Mark and exclude.
-                    if kickoff is not None and now >= kickoff:
-                        updates.append({"id": r.id, "status": STATUS_LATE})
-                        stats["late"] += 1
-                        continue
-
+                for r in live_rows:
                     spec = SELECTION_SPEC.get(r.selection)
                     if spec is None:
                         logger.warning(
@@ -226,8 +411,37 @@ def capture(within_minutes: int = 90, dry_run: bool = False,
                         continue
 
                     market_type, line, side, leg = spec
-                    price, fair, n_books = consensus_close(
-                        by_match.get(r.match_id, []), market_type, line, side, leg)
+                    # Only prices observed inside the closing window count. The
+                    # odds table holds whatever was last written for a match,
+                    # and for markets the pre-kickoff refresh does not cover
+                    # (BTTS, team goals, double chance — 36% of recent picks)
+                    # that is the SAME row the pick was priced from. Accepting
+                    # it would manufacture CLV of exactly 0.00% and read as
+                    # "we get closing-line parity".
+                    not_before = (r.match_date - max_lead) if r.match_date else None
+
+                    # Stage 8, Phase 8 — the SAME-SNAPSHOT rule.
+                    #
+                    # The window rule above is about time; this one is about
+                    # identity. A pick taken 90 minutes before kickoff is priced
+                    # from an odds row that is itself inside the closing window,
+                    # so the window alone happily hands that very row back as
+                    # the "closing" price. CLV would then be taken/closing - 1 =
+                    # exactly 0.00% — not a measurement, an echo.
+                    #
+                    # A closing observation must be an observation the market
+                    # made AFTER we took our price. `Odds.timestamp` is refreshed
+                    # on every upsert (ON CONFLICT ... SET timestamp), so a book
+                    # re-quoted at the same number still counts — that is a
+                    # genuine unchanged close. Only a row nobody looked at again
+                    # is excluded.
+                    if r.created_at is not None:
+                        not_before = (max(not_before, r.created_at)
+                                      if not_before else r.created_at)
+
+                    price, fair, n_books, observed_at = consensus_close(
+                        by_match.get(r.match_id, []), market_type, line, side, leg,
+                        not_before=not_before)
 
                     if price is None:
                         updates.append({"id": r.id, "status": STATUS_MISSING})
@@ -235,33 +449,78 @@ def capture(within_minutes: int = 90, dry_run: bool = False,
                         continue
 
                     clv = (r.odds / price - 1) if r.odds else None
+                    lead = (
+                        (r.match_date - observed_at).total_seconds() / 60.0
+                        if (observed_at is not None and r.match_date is not None)
+                        else None
+                    )
                     logger.info(
                         f"closing line: {r.match_name} {r.selection} "
                         f"taken @ {r.odds} closing @ {price:.2f} "
-                        f"({n_books} books)"
+                        f"({n_books} books"
+                        + (f", observed {lead:.0f}min pre-KO" if lead is not None
+                           else ", observation time unknown")
+                        + ")"
                         + (f" CLV {clv:+.2%}" if clv is not None else ""))
                     updates.append({
                         "id": r.id, "status": STATUS_CAPTURED,
                         "closing_odds": float(price),
                         "closing_fair_probability": float(fair) if fair else None,
                         "closing_bookmaker_count": int(n_books),
-                        "captured_at": now,
+                        # When the PRICE was true, not when this script ran.
+                        # Stamping `now` made validate_pair's lead check
+                        # vacuous: the script only runs inside the window, so
+                        # every capture passed no matter how old the row was.
+                        "captured_at": observed_at or now,
                     })
                     stats["captured"] += 1
 
+                # Stage 10 — the dual-attribution pass, over the same odds
+                # snapshot. Runs whether or not the FINAL loop found anything.
+                _capture_observations(session, observations, live_rows,
+                                      by_match, max_lead, now, dry_run, stats)
+
                 if not dry_run and updates:
+                    # Status-only outcomes (late/missing/invalid) carry no
+                    # per-row payload, so they go back as one UPDATE per status
+                    # rather than one SELECT+UPDATE per pick. The previous
+                    # session.get() loop was an N+1: the rows were loaded as
+                    # column tuples, so nothing was in the identity map and a
+                    # 1,070-pick legacy sweep meant 1,070 round trips to
+                    # Supabase — against a docstring promising two queries.
+                    status_only = defaultdict(list)
+                    captured = []
                     for u in updates:
+                        if u["status"] == STATUS_CAPTURED:
+                            captured.append(u)
+                        else:
+                            status_only[u["status"]].append(u["id"])
+
+                    for status, ids in status_only.items():
+                        for chunk in _chunks(ids, 500):
+                            session.query(SavedPick).filter(
+                                SavedPick.id.in_(chunk)
+                            ).update(
+                                {SavedPick.closing_capture_status: status},
+                                synchronize_session=False,
+                            )
+                            stats["db_queries"] += 1
+
+                    # Captured rows each carry their own price, so they stay
+                    # individual. They are bounded by the capture window (picks
+                    # kicking off in the next `within_minutes`), not by history.
+                    for u in captured:
                         pick = session.get(SavedPick, u["id"])
                         if pick is None:
                             continue
                         pick.closing_capture_status = u["status"]
-                        if u["status"] == STATUS_CAPTURED:
-                            pick.closing_odds = u["closing_odds"]
-                            pick.closing_fair_probability = u["closing_fair_probability"]
-                            pick.closing_bookmaker_count = u["closing_bookmaker_count"]
-                            pick.closing_odds_captured_at = u["captured_at"]
+                        pick.closing_odds = u["closing_odds"]
+                        pick.closing_fair_probability = u["closing_fair_probability"]
+                        pick.closing_bookmaker_count = u["closing_bookmaker_count"]
+                        pick.closing_odds_captured_at = u["captured_at"]
+                        stats["db_queries"] += 1
+
                     session.commit()
-                    stats["db_queries"] += 1
             break
 
         except Exception as exc:

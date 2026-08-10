@@ -212,7 +212,31 @@ betting:
   # production weight change is justified until 200-500 valid closing lines
   # exist, and until then a live record only adds variance to a question the
   # data cannot yet answer.
-  paper_trading_mode: false
+  # PAPER TRADING — ENABLED 2026-08-10 (Stage 7, section 11).
+  #
+  # Picks are still generated, saved, settled and measured, but are flagged
+  # is_paper=true and held out of everything that either reports live
+  # performance or changes what the frozen model does next (see
+  # betting_agent._live_only). The Telegram message carries an explicit
+  # "DO NOT BET REAL MONEY" banner.
+  #
+  # Enabled only after every section-11 safety check passed:
+  #   migrations 003/004/005 applied .... verified against production
+  #   model_version stamped ............ stage5_baseline_20260807.ac04cc
+  #   live ROI excludes paper .......... 12 isolation tests
+  #   settlement covers paper .......... settle_predictions does not filter it
+  #   CLV fields immutable ............. capture only writes status='pending'
+  #   pre-Claude record protected ...... model_* snapshot never overwritten
+  #   paper cannot look like a real bet  Telegram banner + test
+  #   health checks .................... paper_trading_report --health-only
+  #   rollback ......................... set this back to false
+  #
+  # ACTIVATION: CI copies config.example.yaml -> config.yaml, so THIS file is
+  # what production reads. The change takes effect on the next pipeline run
+  # after it is committed and pushed.
+  # ROLLBACK: set to false. Existing paper rows keep is_paper=true and stay out
+  # of the live record; nothing needs backfilling.
+  paper_trading_mode: true
 
   # How close to kickoff scripts/capture_closing_lines.py looks for pending
   # picks. Not hard-coded, because how late a capture can get depends on how
@@ -220,6 +244,23 @@ betting:
   # evaluation/clv.DEFAULT_MAX_CAPTURE_LEAD before kickoff is rejected as "not a
   # close" rather than silently weakening the CLV series.
   clv_capture_window_minutes: 90
+
+  # Imminent-odds refresh (Stage 6). A closing line is only a closing line if it
+  # was captured close to kickoff: clv.validate_pair rejects a snapshot taken
+  # more than 180 minutes before it. The daily 09:37 UTC pipeline leaves odds
+  # 8-10 hours stale by an evening kickoff, so scripts/refresh_and_capture.py
+  # refreshes just before capturing.
+  #
+  # window: how far ahead to look for fixtures worth refreshing. 120 leaves 60
+  # minutes of margin against the 180-minute validity limit.
+  # min_interval: a league refreshed inside this many minutes is already fresh
+  # enough; refreshing again buys nothing and costs 2 credits.
+  #
+  # Chosen by simulation over production history under a rule fixed in advance —
+  # fewest scheduled runs subject to <=400 credits/month, >=95%% pick coverage,
+  # and window <=150 min. Result: 2-hourly runs, 256 credits/month, 96%% coverage.
+  odds_refresh_window_minutes: 120
+  odds_refresh_min_interval_minutes: 180
 
   min_odds: 1.50            # Skip very short prices — too little margin for model error
   max_odds: 10.0
@@ -273,6 +314,27 @@ betting:
     majority: 0.80
     split: 0.60
     unknown: 0.75
+
+# ---------------------------------------------------------------------------
+# The Odds API — free-tier credit budget (Stage 6)
+#
+# The API charges 1 credit x regions x markets. The scraper requests regions=eu
+# (1) and markets=h2h,totals (2), so every league request costs 2 credits.
+# Both markets are required and neither can be dropped: 330 settled picks are on
+# 1X2 (h2h) and 473 on Over/Under lines (totals).
+#
+# The free tier is 500 credits/month. The budget below is deliberately lower so
+# an unusually busy fixture month cannot exhaust it. Measured on production
+# history, the Stage 6 design costs ~256 credits/month with a worst observed day
+# of 46.
+#
+# Enforcement is claim-before-spend in the api_budget table (a month is keyed by
+# its first day), so concurrent workers cannot both spend the last credit and a
+# crash cannot overspend.
+# ---------------------------------------------------------------------------
+odds_api:
+  monthly_credit_budget: 400
+  safety_margin_credits: 50
 
 notifications:
   telegram_enabled: true

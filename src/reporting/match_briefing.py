@@ -82,6 +82,56 @@ def _sanitize_telegram_html(text: str) -> str:
 # across CI runs via actions/cache (see prematch-briefings.yml).
 _SENT_PATH = Path("data/briefings_sent.json")
 
+
+def _update_final_observation(session, pick_id: int, *, market: str,
+                              selection: str, taken_odds: float) -> None:
+    """Point the FINAL observation at the selection the review switched to.
+
+    Stage 10, sections 7 and 9. Only the row with ``attribution = 'final'`` is
+    touched. The ``'model'`` row keeps the frozen model's market, selection and
+    price — after this call ``saved_picks.odds`` no longer holds them and
+    nothing else in the system does either, so an update that hit both rows
+    would silently delete the MODEL series.
+
+    ``taken_at`` is deliberately NOT moved. Both series share one causal
+    boundary — the moment the pick was created — and the Stage 8 same-snapshot
+    rule measures closing observations against it. Resetting it to the review
+    time would quietly widen the window a "closing" price could come from.
+
+    Never raises: a review decision must not fail because attribution
+    bookkeeping failed.
+    """
+    from src.data.models import PickObservation
+
+    try:
+        with session.begin_nested():
+            updated = session.query(PickObservation).filter(
+                PickObservation.pick_id == pick_id,
+                PickObservation.attribution == "final",
+            ).update(
+                {
+                    PickObservation.market: market,
+                    PickObservation.selection: selection,
+                    PickObservation.taken_odds: float(taken_odds),
+                    # A switch invalidates any close already attributed to the
+                    # old final selection — it priced a different bet.
+                    PickObservation.closing_odds: None,
+                    PickObservation.closing_captured_at: None,
+                    PickObservation.closing_book_count: None,
+                    PickObservation.closing_fair_prob: None,
+                    PickObservation.closing_status: "pending",
+                },
+                synchronize_session=False,
+            )
+        if not updated:
+            logger.debug(
+                f"No FINAL observation to update for pick {pick_id} — the pick "
+                f"predates migration 006 or the table is absent")
+    except Exception as e:
+        logger.warning(
+            f"Could not update the FINAL observation for pick {pick_id} ({e}) "
+            f"— its CLV would be measured against the pre-switch selection")
+
 # International tournaments this briefing applies to. Imported lazily elsewhere,
 # duplicated here as a module constant to avoid a hard dependency at import time.
 _WC_LEAGUES = {"world/fifa-world-cup"}
@@ -653,6 +703,40 @@ class MatchBriefingService:
                         f"holds {new.selection} — dropped duplicate {primary.selection}"
                     )
                     return True
+
+            # Stage 8 — correlation re-check.
+            #
+            # `_filter_correlated_picks` runs inside get_daily_picks, i.e.
+            # BEFORE this review, and never runs again. The exact-duplicate
+            # guard above is the only thing that looked at the other picks on
+            # this match, so a switch could freely land on a selection that is
+            # correlated with one already held. That is not hypothetical: all
+            # three correlated pairs in production were manufactured here, and
+            # one of them (Home Win + Over 2.5 Goals, match 48965) is a pair the
+            # filter table ALREADY declares — proof that adding entries to the
+            # table cannot fix this on its own.
+            #
+            # Reject the switch rather than dropping the other pick: the other
+            # pick is the frozen model's own output, and the conservative choice
+            # keeps the experiment measuring the model instead of silently
+            # letting the review delete its evidence.
+            for other in picks[1:]:
+                if self.agent.selections_are_correlated(other.selection,
+                                                        new.selection):
+                    primary.review_action = "KEEP"
+                    primary.review_reason = (
+                        f"CHANGE to {new.selection} rejected: correlated with "
+                        f"{other.selection} already held on this match"
+                    )[:500]
+                    session.commit()
+                    logger.info(
+                        f"PICK_REJECTED reason=correlated_selection "
+                        f"stage=claude_change match_id={match_id} "
+                        f"selection={new.selection} "
+                        f"correlated_with={other.selection} "
+                        f"kept={primary.selection} match={analysis.match_name}"
+                    )
+                    return True
             old_sel = primary.selection
             # Cast numerics to plain float — build_selection_pick carries numpy
             # scalars (round() on model probs → np.float64), and under numpy 2.x
@@ -679,6 +763,13 @@ class MatchBriefingService:
                 primary.market_books = int(getattr(new, "market_books", 0) or 0)
             primary.review_action = "CHANGE"
             primary.review_reason = _review_reason
+            # Stage 10 — move the FINAL observation, leave MODEL alone.
+            # saved_picks.odds now holds the new price; the frozen model's
+            # price survives only in the 'model' observation row written at
+            # save time. Touching it here would destroy the MODEL series.
+            _update_final_observation(
+                session, primary.id, market=new.market,
+                selection=new.selection, taken_odds=float(new.odds))
             session.commit()
             _reason = (decision.get("reason") or "").strip() or "no reason given"
             logger.info(

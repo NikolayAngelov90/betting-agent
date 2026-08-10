@@ -104,8 +104,14 @@ class TelegramNotifier:
                 logger.error(f"Failed to initialize Telegram bot: {e}")
         return self._bot
 
-    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None, no_injury_data: bool = False, injury_data_stale: bool = False, injury_budget_exhausted: bool = False, force: bool = False):
-        """Send daily picks summary via Telegram with rich formatting."""
+    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None, no_injury_data: bool = False, injury_data_stale: bool = False, injury_budget_exhausted: bool = False, force: bool = False, paper_mode: bool = False):
+        """Send daily picks summary via Telegram with rich formatting.
+
+        ``paper_mode`` prefixes an unmistakable banner. This message IS this
+        system's betting action — the reader places bets from it by hand — so a
+        measurement-only pick that looks identical to a live recommendation is a
+        money-safety problem, not a cosmetic one.
+        """
         if not self.enabled:
             return
 
@@ -133,6 +139,13 @@ class TelegramNotifier:
         else:
             header = f"<b>Daily Value Picks - {date.today().strftime('%d %b %Y')}</b>\n"
             header += f"<i>{len(picks)} picks found</i>\n"
+
+        if paper_mode:
+            header = (
+                "<b>🧪 PAPER TRADING — DO NOT BET REAL MONEY</b>\n"
+                "<i>Recorded for measurement only. These picks are excluded from "
+                "the live record and exist to collect closing-line data.</i>\n\n"
+            ) + header
 
         # Add stats summary if available — always show all-time, add shorter periods
         # only when they differ (avoids showing the same number three times when the
