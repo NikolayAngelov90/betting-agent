@@ -437,7 +437,8 @@ def section_attribution_coverage(picks: List[_Pick]) -> None:
     """
     from src.evaluation.attribution import (MODEL_PRICE_NOT_KEPT,
                                             NO_MODEL_SNAPSHOT, coverage_class,
-                                            resolve, selection_changed)
+                                            resolve_effective,
+                                            selection_changed)
 
     print("\n" + "=" * 88)
     print("ATTRIBUTION COVERAGE  (model vs final — Stage 9)")
@@ -448,7 +449,10 @@ def section_attribution_coverage(picks: List[_Pick]) -> None:
     changed = same = unknown = 0
 
     for p in picks:
-        m, f = resolve(p)
+        # Stage 12.1: observation-aware. A CHANGE pick whose MODEL price was
+        # recorded at pick time IS measurable, even though saved_picks.odds was
+        # overwritten by the review.
+        m, f = resolve_effective(p)
         classes[coverage_class(m, f)] += 1
         if not m.measurable:
             reasons[m.unavailable_reason] += 1

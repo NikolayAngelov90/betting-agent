@@ -152,6 +152,52 @@ def resolve(pick) -> Tuple[SeriesSpec, SeriesSpec]:
                       unavailable_reason=MODEL_PRICE_NOT_KEPT), final
 
 
+def _spec_from_observation(attribution: str, obs) -> Optional[SeriesSpec]:
+    """A SeriesSpec built from a recorded `pick_observations` row, or None."""
+    if obs is None:
+        return None
+    market = getattr(obs, "market", None)
+    selection = getattr(obs, "selection", None)
+    taken = getattr(obs, "taken_odds", None)
+    if not market or not selection:
+        return None
+    if not taken or float(taken) <= 1.0:
+        return SeriesSpec(attribution, market, selection,
+                          unavailable_reason=NO_TAKEN_PRICE)
+    return SeriesSpec(attribution, market, selection, float(taken))
+
+
+def resolve_effective(pick) -> Tuple[SeriesSpec, SeriesSpec]:
+    """What each series can ACTUALLY be measured on, observations included.
+
+    Stage 12.1, Defect 3.
+
+    `resolve()` reads `saved_picks` alone. That was the whole truth before
+    Stage 10, and it is still the right answer for rows written back then — but
+    it is now wrong for new ones. On a Claude CHANGE, `saved_picks.odds` holds
+    the FINAL price, so `resolve()` reports the model series as
+    `model_taken_price_not_recorded`. Since Stage 10 the model's price IS
+    recorded, in `pick_observations`, which is exactly what that table exists
+    for. The production smoke test caught the report calling 4 such picks
+    unmeasurable while their model prices sat in the database.
+
+    Precedence: a recorded observation wins, because it is the value captured at
+    pick time and cannot be reconstructed from anything else. `resolve()` is the
+    fallback for picks that predate the table.
+
+    Deliberately a separate function rather than a change to `resolve()`:
+    `series_clv` already prefers observations on its own and uses `resolve()`
+    only as its legacy fallback. Rewriting `resolve()` would quietly change CLV
+    computation, which this defect is not about.
+    """
+    legacy_model, legacy_final = resolve(pick)
+    obs = getattr(pick, "observations", None) or {}
+
+    model = _spec_from_observation(MODEL, obs.get(MODEL)) or legacy_model
+    final = _spec_from_observation(FINAL, obs.get(FINAL)) or legacy_final
+    return model, final
+
+
 def shares_one_observation(model_spec: SeriesSpec, final_spec: SeriesSpec) -> bool:
     """Whether both series ride on the SAME underlying market observation.
 

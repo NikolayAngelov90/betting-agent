@@ -460,3 +460,138 @@ def test_report_sections_render_with_real_closes(tmp_path, monkeypatch, capsys):
     assert "final    valid closing lines : 12" in out
     # The 4 CHANGE rows must show no model CLV rather than the final's.
     assert "CHANGE" in out and "n/a" in out
+
+
+# ═════════ Stage 12.1, Defect 3 — coverage must recognise recorded MODEL prices
+
+def _obs_row(attribution, market, selection, taken_odds):
+    """A pick_observations row as the report's loader shapes it."""
+    return SimpleNamespace(attribution=attribution, market=market,
+                           selection=selection, taken_odds=taken_odds,
+                           closing_odds=None, closing_status="pending",
+                           closing_captured_at=None)
+
+
+def test_d3_legacy_changed_pick_without_observation_stays_unavailable():
+    """The pre-Stage-10 case must be unchanged: no observation, no model price."""
+    from src.evaluation.attribution import coverage_class, resolve_effective
+
+    p = _pick(market="1X2", selection="Home Win", odds=2.10,
+              model_market="Over 2.5", model_selection="Over 2.5 Goals")
+    p.observations = {}
+    m, f = resolve_effective(p)
+    assert not m.measurable
+    assert m.unavailable_reason == MODEL_PRICE_NOT_KEPT
+    assert coverage_class(m, f) == "final_only_measurable"
+
+
+def test_d3_changed_pick_with_model_observation_is_measurable():
+    """The defect. saved_picks.odds holds the FINAL price, but the MODEL price
+    was recorded at pick time — so the model series IS measurable."""
+    from src.evaluation.attribution import coverage_class, resolve_effective
+
+    p = _pick(market="1X2", selection="Home Win", odds=2.10,
+              model_market="Over 2.5", model_selection="Over 2.5 Goals")
+    p.observations = {
+        "model": _obs_row("model", "Over 2.5", "Over 2.5 Goals", 1.85),
+        "final": _obs_row("final", "1X2", "Home Win", 2.10),
+    }
+    m, f = resolve_effective(p)
+
+    assert m.measurable, "a recorded MODEL price was still reported unavailable"
+    assert (m.market, m.selection) == ("Over 2.5", "Over 2.5 Goals")
+    assert m.taken_odds == pytest.approx(1.85)
+    assert f.measurable and f.taken_odds == pytest.approx(2.10)
+    assert coverage_class(m, f) == "both_measurable"
+    # Still two different bets — not a shared observation.
+    assert not shares_one_observation(m, f)
+
+
+def test_d3_keep_pick_with_observations_shares_one_observation():
+    from src.evaluation.attribution import coverage_class, resolve_effective
+
+    p = _pick(market="Over 2.5", selection="Over 2.5 Goals", odds=1.85,
+              model_market="Over 2.5", model_selection="Over 2.5 Goals")
+    p.observations = {
+        "model": _obs_row("model", "Over 2.5", "Over 2.5 Goals", 1.85),
+        "final": _obs_row("final", "Over 2.5", "Over 2.5 Goals", 1.85),
+    }
+    m, f = resolve_effective(p)
+    assert shares_one_observation(m, f)
+    assert coverage_class(m, f) == "both_measurable_same_selection"
+
+
+def test_d3_change_across_markets_keeps_the_series_independent():
+    from src.evaluation.attribution import resolve_effective
+
+    p = _pick(market="Draw No Bet", selection="DNB Away", odds=1.83,
+              model_market="BTTS", model_selection="BTTS Yes")
+    p.observations = {
+        "model": _obs_row("model", "BTTS", "BTTS Yes", 1.715),
+        "final": _obs_row("final", "Draw No Bet", "DNB Away", 1.83),
+    }
+    m, f = resolve_effective(p)
+    assert m.market != f.market and m.selection != f.selection
+    assert m.taken_odds == pytest.approx(1.715)
+    assert f.taken_odds == pytest.approx(1.83)
+    assert not shares_one_observation(m, f)
+
+
+def test_d3_observation_wins_over_a_diverging_saved_pick():
+    """If saved_picks and the observation disagree, the OBSERVATION is the
+    record: it was captured at pick time and cannot be reconstructed. This is
+    exactly the CHANGE case, where saved_picks.odds was overwritten."""
+    from src.evaluation.attribution import resolve_effective
+
+    p = _pick(market="1X2", selection="Away Win", odds=3.40,
+              model_market="1X2", model_selection="Home Win")
+    p.observations = {
+        "model": _obs_row("model", "1X2", "Home Win", 2.00),
+        "final": _obs_row("final", "1X2", "Away Win", 3.40),
+    }
+    m, f = resolve_effective(p)
+    assert (m.selection, m.taken_odds) == ("Home Win", 2.00)
+    assert (f.selection, f.taken_odds) == ("Away Win", 3.40)
+
+
+def test_d3_missing_observation_falls_back_per_series():
+    """Fallback is per-series, not all-or-nothing: a FINAL observation present
+    and a MODEL one absent must still use the legacy MODEL resolution."""
+    from src.evaluation.attribution import resolve_effective
+
+    p = _pick(market="1X2", selection="Home Win", odds=2.10,
+              model_market="1X2", model_selection="Home Win")
+    p.observations = {"final": _obs_row("final", "1X2", "Home Win", 2.10)}
+    m, f = resolve_effective(p)
+    # Unchanged pick, so the legacy path can still price the model series.
+    assert m.measurable and m.taken_odds == pytest.approx(2.10)
+    assert f.measurable and f.taken_odds == pytest.approx(2.10)
+
+    # And with no observations at all, behaviour is exactly resolve().
+    p2 = _pick(model_market=None, model_selection=None)
+    p2.observations = None
+    m2, f2 = resolve_effective(p2)
+    assert m2.unavailable_reason == NO_MODEL_SNAPSHOT and f2.measurable
+
+
+def test_d3_observation_without_a_usable_price_is_not_measurable():
+    from src.evaluation.attribution import resolve_effective
+
+    p = _pick(market="1X2", selection="Home Win", odds=2.10,
+              model_market="Over 2.5", model_selection="Over 2.5 Goals")
+    p.observations = {"model": _obs_row("model", "Over 2.5", "Over 2.5 Goals", 1.0)}
+    m, _ = resolve_effective(p)
+    assert not m.measurable and m.unavailable_reason == "no_taken_price"
+
+
+def test_d3_series_clv_is_untouched_by_the_coverage_fix():
+    """Requirement 4: series_clv must not change. It already prefers
+    observations on its own; resolve_effective exists for the coverage table."""
+    import inspect
+
+    from scripts import paper_trading_report as rep
+
+    src = inspect.getsource(rep.series_clv)
+    assert "resolve_effective" not in src, (
+        "series_clv now depends on resolve_effective — CLV semantics changed")
+    assert "observations" in src and "resolve(p)" in src

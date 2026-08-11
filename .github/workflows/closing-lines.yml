@@ -105,18 +105,4 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python - <<'EOF'
-          import os, json, urllib.request
-          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-          chat = os.environ.get("TELEGRAM_CHAT_ID", "")
-          if token and chat:
-              msg = ("⚠️ Closing-line capture failed. CLV coverage will "
-                     "have a gap for this window.")
-              try:
-                  urllib.request.urlopen(
-                      f"https://api.telegram.org/bot{token}/sendMessage",
-                      data=json.dumps({"chat_id": chat, "text": msg}).encode(),
-                      timeout=10)
-              except Exception as e:
-                  print(f"Telegram alert failed: {e}")
-          EOF
+          python -m scripts.ci_alert             "⚠️ Closing-line capture failed. CLV coverage will have a gap for this window. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -131,10 +131,17 @@ jobs:
       - name: Mark DB tables as created
         run: echo "TABLES_CREATED=1" >> $GITHUB_ENV
 
+      # Stage 12.1, Defect 2: NO continue-on-error here, deliberately.
+      # Every other core step keeps it so one scraper hiccup cannot half-abort
+      # the pipeline. Tests are different: they gate whether this code is fit to
+      # generate picks at all. A failing suite used to leave the job green AND
+      # the alert undelivered — a silently broken run. Failing here stops the
+      # job before update/settle/picks, which is the correct blast radius: a
+      # missed day of picks is recoverable, picks generated from code whose
+      # tests fail are not obviously wrong and may never be noticed.
       - name: Run tests
         id: tests
         run: python -m pytest tests/ -v --tb=short
-        continue-on-error: true
 
       - name: Run daily update (fixtures + odds, no Flashscore results)
         id: update
@@ -160,19 +167,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python - <<'EOF'
-          import os, urllib.request, json
-          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-          chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-          if token and chat_id:
-              msg = "\u26a0\ufe0f ML training step killed by CI timeout \u2014 model not updated. Raise timeout-minutes or reduce sample target."
-              url = f"https://api.telegram.org/bot{token}/sendMessage"
-              data = json.dumps({"chat_id": chat_id, "text": msg}).encode()
-              try:
-                  urllib.request.urlopen(url, data=data, timeout=10)
-              except Exception as e:
-                  print(f"Telegram alert failed: {e}")
-          EOF
+          python -m scripts.ci_alert             "⚠️ ML training step killed by CI timeout — model not updated. Raise timeout-minutes or reduce sample target."
 
       - name: Check DB health
         run: |
@@ -262,7 +257,6 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          O_TESTS: ${{ steps.tests.outcome }}
           O_UPDATE: ${{ steps.update.outcome }}
           O_SETTLE1: ${{ steps.settle1.outcome }}
           O_PICKS: ${{ steps.picks.outcome }}
@@ -271,36 +265,25 @@ jobs:
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'EOF'
-          import os, urllib.request, json
+          import os, subprocess, sys
+          # `tests` is no longer listed: it has no continue-on-error, so a
+          # failure there fails the job outright and this step reports it
+          # through the job status rather than as a "stayed green" warning.
           steps = {
-              "tests": os.environ.get("O_TESTS", ""),
               "update": os.environ.get("O_UPDATE", ""),
               "settle (pre-picks)": os.environ.get("O_SETTLE1", ""),
               "picks (incl. review)": os.environ.get("O_PICKS", ""),
               "update-results": os.environ.get("O_RESULTS", ""),
               "settle (post-results)": os.environ.get("O_SETTLE2", ""),
           }
-          # outcome is 'success', 'failure', 'skipped', or '' (never ran)
           failed = [n for n, o in steps.items() if o == "failure"]
           if not failed:
               print("All critical steps OK:", steps)
-          else:
-              token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-              chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-              run_url = os.environ.get("RUN_URL", "")
-              msg = ("⚠️ Daily picks: step(s) FAILED — "
-                     + ", ".join(failed)
-                     + f"\nThe run stayed green (continue-on-error). Logs: {run_url}")
-              print(msg)
-              if token and chat_id:
-                  data = json.dumps({"chat_id": chat_id, "text": msg}).encode()
-                  try:
-                      urllib.request.urlopen(
-                          f"https://api.telegram.org/bot{token}/sendMessage",
-                          data=data, timeout=10,
-                      )
-                  except Exception as e:
-                      print(f"Telegram alert failed: {e}")
+              sys.exit(0)
+          msg = ("⚠️ Daily picks: step(s) FAILED — " + ", ".join(failed)
+                 + ". These run with continue-on-error, so the job may still be"
+                 + " green. Logs: " + os.environ.get("RUN_URL", ""))
+          subprocess.run([sys.executable, "-m", "scripts.ci_alert", msg], check=False)
           EOF
 
       - name: Send weekly performance report (Sundays only)
@@ -338,27 +321,12 @@ jobs:
           path: logs/
           retention-days: 7
 
-      - name: Notify Telegram on failure
+      # Stage 12.1, Defect 2: this step previously had NO `env:` block, so its
+      # token was always empty and it had never delivered a single alert.
+      - name: Notify Telegram on workflow failure
         if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python << 'PYEOF'
-          import os, urllib.request, json
-          token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-          chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
-          if token and chat_id:
-              run_url = 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-              msg = f'Daily picks workflow FAILED (run #${{ github.run_number }})\nLogs: {run_url}'
-              data = json.dumps({'chat_id': chat_id, 'text': msg}).encode()
-              req = urllib.request.Request(
-                  f'https://api.telegram.org/bot{token}/sendMessage',
-                  data=data,
-                  headers={'Content-Type': 'application/json'}
-              )
-              try:
-                  urllib.request.urlopen(req, timeout=10)
-                  print('Failure notification sent to Telegram')
-              except Exception as e:
-                  print(f'Could not send Telegram notification: {e}')
-          else:
-              print('TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — skipping notification')
-          PYEOF
+          python -m scripts.ci_alert             "❌ Daily picks workflow FAILED (run #${{ github.run_number }}). Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -89,11 +89,36 @@ def test_rolling_backtest_excludes_paper_picks(tmp_path, capsys):
 
 # ═════════════════════════════ paper cannot change future predictions
 
-def test_ev_threshold_calibration_ignores_paper_picks(tmp_path):
-    """_auto_calibrate_ev_threshold changes min_ev, i.e. which bets get taken.
-    Paper outcomes must not move it."""
-    mgr = _mgr(tmp_path, "s3.db")
-    _seed(mgr, n_live=0, n_paper=40, paper_win=False)
+def _run_ev_calibration(tmp_path, name, *, n_live, n_paper, persisted_ev,
+                        monkeypatch, live_win=True):
+    """Run _auto_calibrate_ev_threshold against an ISOLATED models directory.
+
+    Stage 12.1, Defect 1. The previous version of this test read the real
+    `data/models/ev_threshold.json`, which CI restores from the ML cache — so it
+    passed locally (that file happens to hold 0.05) and failed in CI with the
+    thoroughly misleading message "paper losses moved the live EV threshold".
+    Nothing about paper picks was involved: `_auto_calibrate_ev_threshold`
+    assigns `min_ev` from the persisted file BEFORE it queries the database.
+
+    Redirecting MODELS_DIR makes the persisted value an input of the test rather
+    than an accident of the environment.
+    """
+    import json
+
+    import src.models.ml_models as mlm
+    from src.betting.value_calculator import ValueBettingCalculator
+
+    models_dir = tmp_path / f"models_{name}"
+    models_dir.mkdir()
+    (models_dir / "ev_threshold.json").write_text(json.dumps(
+        {"min_ev": persisted_ev, "roi": -0.25, "n_picks": 40}))
+    # _auto_calibrate_ev_threshold imports MODELS_DIR inside the function, so
+    # patching the module attribute is picked up at call time.
+    monkeypatch.setattr(mlm, "MODELS_DIR", models_dir)
+
+    mgr = _mgr(tmp_path, f"{name}.db")
+    _seed(mgr, n_live=n_live, n_paper=n_paper, live_win=live_win,
+          paper_win=False)
     agent = _agent_with(mgr)
 
     class _Cfg:
@@ -102,18 +127,72 @@ def test_ev_threshold_calibration_ignores_paper_picks(tmp_path):
         def get(self, key, default=None):
             return {"models.ev_calibration_lookback": 40}.get(key, default)
 
-    from src.betting.value_calculator import ValueBettingCalculator
-
     agent.config = _Cfg()
     agent.value_calculator = ValueBettingCalculator.__new__(ValueBettingCalculator)
     agent.value_calculator.min_ev = 0.05
     agent._auto_calibrate_ev_threshold()
+    return agent
 
-    # 40 paper losses would be a -100% ROI cold streak and tighten min_ev.
-    assert agent.value_calculator.min_ev == 0.05, (
+
+@pytest.mark.parametrize("persisted_ev", [0.05, 0.07])
+def test_ev_threshold_calibration_ignores_paper_picks(tmp_path, monkeypatch,
+                                                      persisted_ev):
+    """The invariant, stated so the persisted value cannot decide the outcome.
+
+    With no LIVE settled picks the calibration has nothing to recompute from,
+    so the threshold must come out exactly as persisted — whatever that is.
+    Parametrised over two values precisely because the old test only passed
+    when the environment happened to supply 0.05.
+    """
+    agent = _run_ev_calibration(tmp_path, f"paper{int(persisted_ev * 100)}",
+                                n_live=0, n_paper=40,
+                                persisted_ev=persisted_ev,
+                                monkeypatch=monkeypatch)
+
+    # 40 paper losses are a -100% ROI cold streak. If they counted, min_ev
+    # would be tightened well above the persisted value.
+    assert agent.value_calculator.min_ev == persisted_ev, (
         "paper losses moved the live EV threshold")
     assert getattr(agent, "_recent_roi", None) is None, (
         "paper picks were counted as recent live ROI")
+
+
+@pytest.mark.parametrize("persisted_ev", [0.05, 0.07])
+def test_ev_threshold_is_identical_with_and_without_paper_picks(
+        tmp_path, monkeypatch, persisted_ev):
+    """The differential form: paper picks change nothing at all."""
+    with_paper = _run_ev_calibration(
+        tmp_path, f"w{int(persisted_ev * 100)}", n_live=0, n_paper=40,
+        persisted_ev=persisted_ev, monkeypatch=monkeypatch)
+    without = _run_ev_calibration(
+        tmp_path, f"n{int(persisted_ev * 100)}", n_live=0, n_paper=0,
+        persisted_ev=persisted_ev, monkeypatch=monkeypatch)
+
+    assert with_paper.value_calculator.min_ev == without.value_calculator.min_ev, (
+        "adding 40 paper picks changed the EV threshold")
+    assert getattr(with_paper, "_recent_roi", None) is None
+    assert getattr(without, "_recent_roi", None) is None
+
+
+def test_ev_threshold_calibration_does_respond_to_live_picks(tmp_path,
+                                                             monkeypatch):
+    """Guards against the whole suite passing vacuously.
+
+    The tests above prove "nothing happened". They would also pass if
+    `_auto_calibrate_ev_threshold` were a no-op, or if its query returned
+    nothing for an unrelated reason. This one shows the machinery is live and
+    that `_live_only()` is what excludes paper picks: the same 40 losing picks,
+    flagged LIVE instead of paper, must move the threshold.
+    """
+    agent = _run_ev_calibration(tmp_path, "livecold", n_live=40, n_paper=0,
+                                persisted_ev=0.05, monkeypatch=monkeypatch,
+                                live_win=False)
+
+    assert agent.value_calculator.min_ev > 0.05, (
+        "40 LIVE losses did not tighten min_ev — the calibration is inert, so "
+        "the paper-isolation tests above prove nothing")
+    assert getattr(agent, "_recent_roi", None) is not None, (
+        "live picks were not counted as recent ROI")
 
 
 def test_tune_ensemble_weights_ignores_paper_picks(tmp_path):
