@@ -79,6 +79,16 @@ LEAGUE_DISPLAY = {
     "europe/europa-conference-league": "🏆 Conference League",
 }
 
+def _result_icon(result: str | None) -> str:
+    """Return a simple emoji for a pick result."""
+    if result == "win":
+        return "✅"
+    elif result == "loss":
+        return "❌"
+    elif result == "void":
+        return "➖"
+    else:
+        return "⏳"
 
 class TelegramNotifier:
     """Sends betting picks and alerts via Telegram."""
@@ -347,7 +357,7 @@ class TelegramNotifier:
             lines.append(f"\n<b>{league_name}</b> ({lg_wins}/{lg_total})")
 
             for pick in league_picks:
-                result_emoji = "✅" if pick["result"] == "win" else "❌"
+                result_emoji = _result_icon(pick.get("result"))
                 score = html_escape(str(pick.get("score", "?-?")))
                 xg_str = ""
                 if pick.get("home_xg") is not None and pick.get("away_xg") is not None:

@@ -2639,7 +2639,12 @@ class FootballBettingAgent:
             session.commit()
 
         for s in settled:
-            result_icon = "✅" if s["result"] == "win" else "❌"
+            if s["result"] == "win":
+                result_icon = "✅"
+            elif s["result"] == "void":
+                result_icon = "➖"
+            else:
+                result_icon = "❌"
             logger.info(
                 f"Settled {result_icon} {s['match_name']} | {s['selection']} "
                 f"@ {s['odds']:.2f} → {s['result'].upper()} [{s['score']}] "
