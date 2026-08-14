@@ -292,6 +292,14 @@ def test_claude_added_value_measures_change_edge(db):
     agent = FootballBettingAgent.__new__(FootballBettingAgent)
     agent.db = db
     with db.get_session() as s:
+        # Stage 13 Step 1c: SavedPick.match_id is an enforced FK now.
+        h, a = Team(name="AV-H"), Team(name="AV-A")
+        s.add_all([h, a]); s.flush()
+        for i in range(10):
+            s.add(Match(id=2000 + i, home_team_id=h.id, away_team_id=a.id,
+                        match_date=datetime(2026, 7, 20, 18, 0),
+                        league="world/fifa-world-cup", is_fixture=False))
+        s.flush()
         for i in range(10):
             s.add(SavedPick(
                 match_id=2000 + i, pick_date=date.today(), match_name=f"m{i}",
@@ -326,6 +334,16 @@ def test_get_stats_excludes_void_from_roi(db):
     with db.get_session() as s:
         common = dict(pick_date=date.today(), market="1X2", selection="Home Win",
                       kelly_stake_percentage=1.0, predicted_probability=0.5)
+        # Stage 13 Step 1c: SavedPick.match_id is a FK and SQLite now enforces
+        # it. These three picks invented match ids 1/2/3; create the rows.
+        h, a = Team(name="VR-H"), Team(name="VR-A")
+        s.add_all([h, a]); s.flush()
+        for _mid in (1, 2, 3):
+            s.add(Match(id=_mid, home_team_id=h.id, away_team_id=a.id,
+                        match_date=datetime(2026, 7, 20, 18, 0),
+                        league="world/fifa-world-cup", is_fixture=False,
+                        home_goals=1, away_goals=0))
+        s.flush()
         s.add(SavedPick(match_id=1, match_name="w", odds=2.0, result="win", **common))
         s.add(SavedPick(match_id=2, match_name="l", odds=2.0, result="loss", **common))
         s.add(SavedPick(match_id=3, match_name="v", odds=2.0, result="void", **common))

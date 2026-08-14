@@ -233,6 +233,13 @@ def test_full_lifecycle_predict_capture_settle_clv(tmp_path, monkeypatch):
     mgr = db_mod.DatabaseManager(
         config=type("C", (), {"database": {"sqlite_path": str(tmp_path / "t.db")}})())
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: SQLite enforces foreign keys now, and Match's team FKs
+    # are NOT NULL. Fixtures that invent team ids 1/2 were building a state
+    # production cannot reach.
+    with mgr.get_session() as _s:
+        from src.data.models import Team as _T
+        _s.add(_T(id=1, name="Home FC")); _s.add(_T(id=2, name="Away FC"))
+        _s.commit()
 
     kickoff = datetime.utcnow() + timedelta(minutes=45)
     with mgr.get_session() as s:
@@ -303,6 +310,13 @@ def test_capture_is_idempotent(tmp_path, monkeypatch):
     mgr = db_mod.DatabaseManager(
         config=type("C", (), {"database": {"sqlite_path": str(tmp_path / "i.db")}})())
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: SQLite enforces foreign keys now, and Match's team FKs
+    # are NOT NULL. Fixtures that invent team ids 1/2 were building a state
+    # production cannot reach.
+    with mgr.get_session() as _s:
+        from src.data.models import Team as _T
+        _s.add(_T(id=1, name="Home FC")); _s.add(_T(id=2, name="Away FC"))
+        _s.commit()
     kickoff = datetime.utcnow() + timedelta(minutes=45)
     with mgr.get_session() as s:
         s.add(Match(id=1, home_team_id=1, away_team_id=2, match_date=kickoff,
@@ -342,6 +356,13 @@ def test_late_capture_is_marked_not_captured(tmp_path, monkeypatch):
     mgr = db_mod.DatabaseManager(
         config=type("C", (), {"database": {"sqlite_path": str(tmp_path / "l.db")}})())
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: SQLite enforces foreign keys now, and Match's team FKs
+    # are NOT NULL. Fixtures that invent team ids 1/2 were building a state
+    # production cannot reach.
+    with mgr.get_session() as _s:
+        from src.data.models import Team as _T
+        _s.add(_T(id=1, name="Home FC")); _s.add(_T(id=2, name="Away FC"))
+        _s.commit()
     started = datetime.utcnow() - timedelta(minutes=10)   # already kicked off
     with mgr.get_session() as s:
         s.add(Match(id=1, home_team_id=1, away_team_id=2, match_date=started,
@@ -371,6 +392,13 @@ def test_missing_price_is_recorded_not_invented(tmp_path, monkeypatch):
     mgr = db_mod.DatabaseManager(
         config=type("C", (), {"database": {"sqlite_path": str(tmp_path / "m.db")}})())
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: SQLite enforces foreign keys now, and Match's team FKs
+    # are NOT NULL. Fixtures that invent team ids 1/2 were building a state
+    # production cannot reach.
+    with mgr.get_session() as _s:
+        from src.data.models import Team as _T
+        _s.add(_T(id=1, name="Home FC")); _s.add(_T(id=2, name="Away FC"))
+        _s.commit()
     kickoff = datetime.utcnow() + timedelta(minutes=45)
     with mgr.get_session() as s:
         s.add(Match(id=1, home_team_id=1, away_team_id=2, match_date=kickoff,
@@ -496,6 +524,13 @@ def test_stale_backlog_costs_no_odds_egress(tmp_path, monkeypatch):
     mgr = db_mod.DatabaseManager(
         config=type("C", (), {"database": {"sqlite_path": str(tmp_path / "b.db")}})())
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: SQLite enforces foreign keys now, and Match's team FKs
+    # are NOT NULL. Fixtures that invent team ids 1/2 were building a state
+    # production cannot reach.
+    with mgr.get_session() as _s:
+        from src.data.models import Team as _T
+        _s.add(_T(id=1, name="Home FC")); _s.add(_T(id=2, name="Away FC"))
+        _s.commit()
 
     long_ago = datetime.utcnow() - timedelta(days=200)
     soon = datetime.utcnow() + timedelta(minutes=45)
@@ -550,6 +585,13 @@ def test_backlog_only_run_makes_no_odds_query_at_all(tmp_path, monkeypatch):
     mgr = db_mod.DatabaseManager(
         config=type("C", (), {"database": {"sqlite_path": str(tmp_path / "b2.db")}})())
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: SQLite enforces foreign keys now, and Match's team FKs
+    # are NOT NULL. Fixtures that invent team ids 1/2 were building a state
+    # production cannot reach.
+    with mgr.get_session() as _s:
+        from src.data.models import Team as _T
+        _s.add(_T(id=1, name="Home FC")); _s.add(_T(id=2, name="Away FC"))
+        _s.commit()
     long_ago = datetime.utcnow() - timedelta(days=100)
     with mgr.get_session() as s:
         for i in range(1, 21):
@@ -580,6 +622,13 @@ def _stale_env(tmp_path, name, odds_age_minutes, kickoff_in_minutes=45):
     mgr = db_mod.DatabaseManager(
         config=type("C", (), {"database": {"sqlite_path": str(tmp_path / name)}})())
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: SQLite enforces foreign keys now, and Match's team FKs
+    # are NOT NULL. Fixtures that invent team ids 1/2 were building a state
+    # production cannot reach.
+    with mgr.get_session() as _s:
+        from src.data.models import Team as _T
+        _s.add(_T(id=1, name="Home FC")); _s.add(_T(id=2, name="Away FC"))
+        _s.commit()
     now = datetime.utcnow()
     kickoff = now + timedelta(minutes=kickoff_in_minutes)
     observed = kickoff - timedelta(minutes=odds_age_minutes)

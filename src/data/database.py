@@ -106,6 +106,14 @@ class DatabaseManager:
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
             cursor.execute("PRAGMA busy_timeout=5000")
+            # Stage 13 Step 1c. SQLite defaults foreign_keys to OFF, per
+            # connection. Without this the schema's ON DELETE CASCADE on
+            # pick_observations.pick_id — described in models.py as the
+            # "backstop" for non-ORM delete paths — did not exist anywhere
+            # except production Postgres. Tests, CI and local runs, i.e. the
+            # environments whose FK weakness justified choosing ORM-side
+            # cascade in the first place, were enforcing nothing at all.
+            cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 
         return engine

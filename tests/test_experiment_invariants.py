@@ -19,6 +19,14 @@ def _mgr(tmp_path, name):
     mgr = db_mod.DatabaseManager(
         config=type("C", (), {"database": {"sqlite_path": str(tmp_path / name)}})())
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: SQLite now enforces foreign keys (database.py sets
+    # PRAGMA foreign_keys=ON). Match.home_team_id / away_team_id are NOT NULL
+    # FKs to teams, so a fixture that invents team ids 1 and 2 without the rows
+    # was building a state production cannot reach. Seed them.
+    with mgr.get_session() as _s:
+        _s.add(Team(id=1, name="Home FC"))
+        _s.add(Team(id=2, name="Away FC"))
+        _s.commit()
     return mgr
 
 
@@ -54,6 +62,13 @@ def test_invariant_1_same_prediction_cannot_be_persisted_twice(tmp_path):
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_saved_picks_dedup "
             "ON saved_picks (match_id, selection, pick_date)")
     assert Index is not None
+
+    # The pick's match must exist — SavedPick.match_id is a FK and SQLite now
+    # enforces it (Stage 13 Step 1c).
+    with mgr.get_session() as s:
+        s.add(Match(id=1, home_team_id=1, away_team_id=2,
+                    match_date=datetime(2026, 9, 1, 18, 0), league="x/y"))
+        s.commit()
 
     values = dict(match_id=1, pick_date=date(2026, 9, 1), market="1X2",
                   selection="Home Win", odds=2.0, predicted_probability=0.55,

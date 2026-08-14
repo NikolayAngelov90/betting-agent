@@ -660,6 +660,17 @@ class MatchBriefingService:
                 SavedPick.match_id == match_id,
                 SavedPick.pick_date == date.today(),
                 SavedPick.result.is_(None),
+                # Stage 13 Step 1c. Step 1b stopped deleting the superseded
+                # pick — which left it visible here. Reproduced: `--picks` runs
+                # more than once a day (the per-match cap is deliberately
+                # re-derived from the DB across runs), and on the second run
+                # this query returned the superseded pick FIRST, because the
+                # higher EV that made it the primary is exactly why it was
+                # superseded. The service then wrote review_action='KEEP' onto
+                # it and replaced its supersession reason with Claude's text.
+                # A row excluded from the live record would have entered the
+                # report's KEEP bucket as a bet that was never placed.
+                SavedPick.disposition.is_(None),
             ).order_by(SavedPick.expected_value.desc()).all()
             if not picks:
                 logger.info(f"Briefing decision {action}: no saved pick for match {match_id}")

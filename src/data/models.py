@@ -5,7 +5,8 @@ from sqlalchemy import (
     Column, Integer, String, Float, Boolean, DateTime,
     CheckConstraint, ForeignKey, Date, Text, JSON, Index, UniqueConstraint
 )
-from sqlalchemy.orm import backref, declarative_base, relationship
+from sqlalchemy.orm import (backref, declarative_base, relationship,
+                            validates)
 
 from src.utils.logger import utcnow
 
@@ -259,6 +260,32 @@ class SavedPick(Base):
     #: the report's KEEP/CHANGE breakdown). Overloading either would make a
     #: superseded pick indistinguishable from a settled or reviewed one.
     disposition = Column(String(24))
+
+    @validates("disposition")
+    def _disposition_is_write_once(self, _key, value):
+        """NULL → a value, once. Never value → other value, never back to NULL.
+
+        Stage 13 Step 1c. `is_paper` and `model_version` are write-once because
+        there is exactly one site that writes them — the SavedPick(...) call in
+        betting_agent. `disposition` cannot work that way: it is NULL at insert
+        and set later, so "write-once" has to be enforced rather than arranged.
+
+        It matters because the field is the audit trail for why a row exists
+        but was never a bet. A second write would let a supersession be
+        relabelled as a void (or the reverse), and the reason for the original
+        exclusion is then unrecoverable — the row looks like it was always
+        whatever it says last.
+
+        Re-writing the SAME value is allowed: idempotent replay of a
+        consolidation must not crash a production run. Only a CHANGING
+        overwrite raises.
+        """
+        current = getattr(self, "disposition", None)
+        if current is not None and value != current:
+            raise ValueError(
+                f"disposition is write-once: pick {self.id} is already "
+                f"{current!r}; refusing to overwrite with {value!r}")
+        return value
 
     review_action = Column(String(10))    # 'KEEP' or 'CHANGE'
     review_reason = Column(String(500))   # Claude's one-line justification

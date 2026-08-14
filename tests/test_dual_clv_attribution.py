@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 import src.data.database as db_mod
-from src.data.models import Base, Match, Odds, SavedPick
+from src.data.models import Base, Match, Odds, SavedPick, Team
 from src.evaluation.attribution import (FINAL, MODEL, MODEL_PRICE_NOT_KEPT,
                                         NO_MODEL_SNAPSHOT, coverage_class,
                                         resolve, selection_changed,
@@ -30,6 +30,14 @@ def _mgr(tmp_path, name):
     mgr = db_mod.DatabaseManager(
         config=type("C", (), {"database": {"sqlite_path": str(tmp_path / name)}})())
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: SQLite now enforces foreign keys (database.py sets
+    # PRAGMA foreign_keys=ON). Match.home_team_id / away_team_id are NOT NULL
+    # FKs to teams, so a fixture that invents team ids 1 and 2 without the rows
+    # was building a state production cannot reach. Seed them.
+    with mgr.get_session() as _s:
+        _s.add(Team(id=1, name="Home FC"))
+        _s.add(Team(id=2, name="Away FC"))
+        _s.commit()
     return mgr
 
 

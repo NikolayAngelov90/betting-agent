@@ -642,6 +642,53 @@ def test_consolidation_branch_does_not_delete_in_source():
     assert 'disposition = "consolidated"' in code
 
 
+def test_no_bulk_core_delete_of_a_parent_entity():
+    """Stage 13 Step 1c — the half the session.delete guard does not cover.
+
+    `session.query(SavedPick).filter(...).delete()` is a bulk Core DELETE. It
+    loads no objects, so the ORM's cascade never runs. Measured, with SQLite's
+    foreign_keys pragma OFF (the state this repo was in until Step 1c):
+
+        before: picks=1 observations=2
+        bulk delete: SUCCEEDED
+        after : picks=0 observations=2 ORPHANS=2
+
+    No exception, no rollback — silently orphaned rows pointing at a pick_id
+    that no longer exists. Strictly worse than the crash Step 1 fixed, and
+    invisible to any invariant that counts orphans only after a delete raises.
+    Turning the pragma on closes it (the DDL cascade fires), but that is one
+    line of connection setup away from regressing, so the call shape is banned
+    on parent entities as well.
+
+    Child-table bulk deletes stay allowed and are used deliberately —
+    flashscore_scraper drops a match's Flashscore odds rows before rewriting
+    them, injury_scraper clears a team's stale injuries. Nothing hangs off
+    `odds` or `injuries`, so there is no cascade to skip: the danger is
+    specific to entities that OWN dependent rows.
+    """
+    import pathlib
+    import re
+
+    PARENTS = ("SavedPick", "Match", "Team")
+    offenders = []
+    sources = (list(pathlib.Path("src").rglob("*.py"))
+               + list(pathlib.Path("scripts").rglob("*.py")))
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        for i, line in enumerate(text.splitlines(), 1):
+            code = line.split("#", 1)[0]
+            for parent in PARENTS:
+                if re.search(rf"query\(\s*{parent}\s*\).*\.delete\(", code):
+                    offenders.append(f"{path}:{i}: {line.strip()}")
+                if re.search(rf"{parent}\.__table__\.delete\(", code):
+                    offenders.append(f"{path}:{i}: {line.strip()}")
+
+    assert not offenders, (
+        "bulk Core delete on a parent entity — the ORM cascade is skipped and "
+        "dependent rows are orphaned without raising:\n  "
+        + "\n  ".join(offenders))
+
+
 def test_superseded_pick_is_excluded_from_the_live_record(tmp_path):
     """It was never a bet. Its sibling carries the stake; counting both would
     double-weight one wager in ROI and in the EV-threshold calibrator."""
@@ -683,3 +730,124 @@ def test_superseded_pick_keeps_its_model_series_but_not_final(tmp_path,
         "the MODEL series lost a selection the frozen model genuinely made")
     assert rep.series_clv(superseded, rep.FINAL) is None, (
         "a superseded pick was counted as a taken bet in the FINAL series")
+
+# ═══════════════════════════════ Step 1c item 3 — the disposition contract
+
+def test_disposition_is_write_once(tmp_path):
+    """Like is_paper and model_version — but enforced, not merely arranged.
+
+    Those two are write-once because exactly one site writes them, at insert.
+    `disposition` is NULL at insert and set later, so the same guarantee has to
+    be a validator. Overwriting it would let a supersession be relabelled a
+    void (or the reverse) with the original reason unrecoverable.
+    """
+    mgr = _mgr(tmp_path, "wo.db")
+    with mgr.get_session() as s:
+        s.add(Match(id=1, home_team_id=1, away_team_id=2,
+                    match_date=datetime(2026, 9, 1, 18, 0), league="x/y"))
+        s.add(_pick_row(1))
+        s.commit()
+
+    with mgr.get_session() as s:
+        p = s.get(SavedPick, 1)
+        p.disposition = "consolidated"
+        s.commit()
+
+    with mgr.get_session() as s:
+        p = s.get(SavedPick, 1)
+        p.disposition = "consolidated"          # idempotent replay: allowed
+        with pytest.raises(ValueError, match="write-once"):
+            p.disposition = "void_wrong_fixture"
+        with pytest.raises(ValueError, match="write-once"):
+            p.disposition = None                # nor back to "it was a bet"
+
+
+def test_a_superseded_pick_is_not_a_review_candidate(tmp_path):
+    """Step 1b kept the row alive; this stops the review from finding it again.
+
+    Reproduced before the fix: `--picks` runs more than once a day, and on the
+    second run the review query returned the superseded pick FIRST — its higher
+    EV is precisely why it had been the primary. The service wrote
+    review_action='KEEP' onto it and overwrote its supersession reason, so a
+    row excluded from the live record entered the report's KEEP bucket as a bet
+    that was never placed.
+    """
+    mgr = _mgr(tmp_path, "cand.db")
+    with mgr.get_session() as s:
+        s.add(Match(id=1, home_team_id=1, away_team_id=2,
+                    match_date=datetime(2026, 9, 1, 18, 0), league="x/y"))
+        # The superseded pick carries the HIGHER ev — the ordering the service
+        # uses would otherwise put it first.
+        # The service scopes the review to TODAY's picks.
+        s.add(_pick_row(1, match_id=1, expected_value=0.20,
+                        pick_date=date.today(), disposition="consolidated"))
+        s.add(_pick_row(2, match_id=1, expected_value=0.10,
+                        pick_date=date.today(), selection="Over 2.5"))
+        s.commit()
+
+    from src.reporting.match_briefing import MatchBriefingService
+    svc = MatchBriefingService.__new__(MatchBriefingService)
+    svc.db = mgr
+    assert svc._apply_decision(
+        1, {"action": "KEEP", "reason": "looks fine"}, None, None, "H", "A")
+
+    with mgr.get_session() as s:
+        superseded, survivor = s.get(SavedPick, 1), s.get(SavedPick, 2)
+        assert superseded.review_action is None, (
+            "the review wrote a verdict onto a pick that was never live")
+        assert superseded.disposition == "consolidated"
+        assert survivor.review_action == "KEEP", (
+            "KEEP landed on nothing — the live pick must receive it")
+
+
+def test_paired_clv_pairs_by_pick_not_by_fixture():
+    """Step 1c item 3. Both halves of a pair must come from ONE pick row.
+
+    After a consolidation a fixture carries 2 MODEL observations and 1 FINAL.
+    Pairing by match_id would marry the orphaned MODEL to the survivor's FINAL
+    and report the difference between two DIFFERENT bets as the review's
+    within-pick effect — a number with no meaning, in the direction that
+    flatters whichever selection happened to close better.
+    """
+    import inspect
+    import re
+
+    from scripts.paper_trading_report import section_clv
+
+    src = inspect.getsource(section_clv)
+    body = chr(10).join(ln.split("#", 1)[0] for ln in src.splitlines())
+
+    # The pair is appended inside `for p in picks:` and both members are
+    # resolved from that same `p`. Assert the shape, since a later refactor to
+    # a match_id-keyed dict is exactly the mistake this guards.
+    loop = body[body.index("for p in picks"):body.index("paired.append")]
+    assert re.search(r"mc\s*=\s*series_clv\(\s*p\s*,", loop)
+    assert re.search(r"fc\s*=\s*series_clv\(\s*p\s*,", loop)
+    assert "paired.append((p.match_id, mc, fc))" in body, (
+        "the paired subset no longer appends one pick's own two measurements")
+    # Guarded by both: the append is conditional on BOTH being present.
+    assert "if mc is not None and fc is not None:" in body
+
+
+def test_clustering_survives_two_model_and_one_final_on_one_fixture():
+    """Neither double-counted nor dropped.
+
+    A consolidated fixture contributes 2 MODEL observations and 1 FINAL. The
+    MODEL series must treat them as ONE cluster (paying a design effect for
+    the doubling), and the cluster bootstrap must still accept the sample.
+    """
+    from scripts.paper_trading_report import _boot, _effective_n
+
+    model_fx = [77, 77] + list(range(100, 108))   # 8 ordinary one-pick fixtures
+    final_fx = [77] + list(range(100, 108))
+
+    n, k, deff, n_eff = _effective_n(model_fx)
+    assert (n, k) == (10, 9), "fixture 77 must be one cluster, not two"
+    assert deff > 1.0 and n_eff < n, (
+        "two picks on one fixture must cost effective sample size")
+
+    n2, k2, deff2, n_eff2 = _effective_n(final_fx)
+    assert (n2, k2) == (9, 9) and deff2 == 1.0 and n_eff2 == 9
+
+    lo, hi = _boot([0.01, 0.02] + [0.0] * 8, clusters=model_fx)
+    assert lo is not None, "the doubled cluster was dropped from the bootstrap"

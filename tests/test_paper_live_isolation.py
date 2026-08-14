@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import pytest
 
 import src.data.database as db_mod
-from src.data.models import Base, Match, SavedPick
+from src.data.models import Base, Match, SavedPick, Team
 
 
 def _mgr(tmp_path, name="iso.db"):
@@ -34,6 +34,12 @@ def _seed(mgr, n_live=6, n_paper=6, live_win=True, paper_win=False):
     """Live picks all win at 2.0; paper picks all lose — so any leakage moves
     ROI by an unmissable amount."""
     Base.metadata.create_all(mgr.engine)
+    # Stage 13 Step 1c: Match's team FKs are NOT NULL and SQLite now enforces
+    # them. These fixtures referenced team ids 1/2 that never existed.
+    with mgr.get_session() as _s:
+        _s.add(Team(id=1, name="Home FC"))
+        _s.add(Team(id=2, name="Away FC"))
+        _s.commit()
     today = date(2026, 9, 1)
     with mgr.get_session() as s:
         pid = 0
