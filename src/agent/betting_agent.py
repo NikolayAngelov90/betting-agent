@@ -179,9 +179,19 @@ def _live_only():
     but a column added without a default on another deployment would read NULL
     and must not silently vanish from the live record.
     """
+    from sqlalchemy import and_ as _and
     from sqlalchemy import or_ as _or
 
-    return _or(SavedPick.is_paper.is_(False), SavedPick.is_paper.is_(None))
+    # Stage 13 Step 1b: a superseded pick was never a bet. The consolidation
+    # branch marks it `disposition='consolidated'` instead of deleting it (so
+    # its MODEL observation survives), which means it is now visible to every
+    # query that used to never see it. It must not reach ROI, the EV-threshold
+    # calibrator or the weight learner — its sibling on the same match carries
+    # the actual stake, and counting both would double-weight one bet.
+    return _and(
+        _or(SavedPick.is_paper.is_(False), SavedPick.is_paper.is_(None)),
+        SavedPick.disposition.is_(None),
+    )
 
 
 @dataclass

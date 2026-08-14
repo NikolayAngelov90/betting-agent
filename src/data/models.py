@@ -244,6 +244,22 @@ class SavedPick(Base):
     model_agreement = Column(String(20))  # unanimous/majority/split/solo — for analysis & filtering
     # Claude pick-review outcome (NULL = not reviewed). Makes the review's value
     # measurable: win rate of KEEP vs CHANGE picks answers "does the review help?"
+    #: Does this row represent a bet that was actually taken?
+    #:
+    #: NULL           the pick stands (the overwhelming majority).
+    #: 'consolidated' superseded by another pick on the same match that already
+    #:                held the selection the review switched to. Preserved
+    #:                rather than deleted — Stage 13 Step 1b. Deleting it would
+    #:                take its MODEL pick_observation with it, and that row is
+    #:                the frozen model's only record of its own taken price.
+    #: 'void_*'       Stage 13 Part B: a defective fixture, voided not deleted.
+    #:
+    #: Deliberately NOT `result` (that is the match outcome, written by
+    #: settlement) and NOT `review_action` (that is Claude's verdict, read by
+    #: the report's KEEP/CHANGE breakdown). Overloading either would make a
+    #: superseded pick indistinguishable from a settled or reviewed one.
+    disposition = Column(String(24))
+
     review_action = Column(String(10))    # 'KEEP' or 'CHANGE'
     review_reason = Column(String(500))   # Claude's one-line justification
     # The MODEL's ORIGINAL pick, snapshotted at save time and never overwritten

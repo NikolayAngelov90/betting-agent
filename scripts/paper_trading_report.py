@@ -65,7 +65,7 @@ class _Pick:
                  "closing_odds", "closing_odds_captured_at", "closing_status",
                  "closing_fair", "kickoff", "is_paper", "model_version",
                  "review_action", "model_market", "model_selection",
-                 "model_result", "observations")
+                 "model_result", "observations", "disposition")
 
     def __init__(self, r):
         for f in self.__slots__:
@@ -92,6 +92,10 @@ class _Pick:
         self.is_paper = bool(r.is_paper)
         self.model_version = r.model_version
         self.review_action = r.review_action
+        # Stage 13 Step 1b. Non-NULL means the row is not a bet that was taken
+        # (currently only 'consolidated' — superseded by a sibling pick on the
+        # same match). Kept in the MODEL series, excluded from FINAL.
+        self.disposition = getattr(r, "disposition", None)
         # Stage 9: the model series resolves its close in the MODEL's market,
         # which may differ from the final one after a Claude CHANGE.
         self.model_market = r.model_market
@@ -200,7 +204,7 @@ def load_picks(days: int, include_live: bool, model_version: Optional[str]):
             SavedPick.closing_fair_probability, SavedPick.is_paper,
             SavedPick.model_version, SavedPick.review_action,
             SavedPick.model_market, SavedPick.model_selection,
-            SavedPick.model_result,
+            SavedPick.model_result, SavedPick.disposition,
             Match.match_date,
         ).join(Match, Match.id == SavedPick.match_id).filter(
             SavedPick.pick_date >= cutoff)
@@ -390,6 +394,14 @@ def series_clv(p: _Pick, attribution: str) -> Optional[float]:
        the model's price. On a changed pick it returns None rather than
        borrowing the final selection's numbers.
     """
+    # Stage 13 Step 1b — a superseded pick was never taken, so it cannot
+    # contribute a FINAL observation: its sibling on the same match holds the
+    # actual bet and counting both would double-weight one wager. The MODEL
+    # series keeps it, because the frozen model really did select it at a real
+    # price, and that is exactly what the MODEL series measures.
+    if attribution == FINAL and getattr(p, "disposition", None):
+        return None
+
     obs = (getattr(p, "observations", None) or {}).get(attribution)
     if obs is not None:
         if obs.closing_status != "captured" or not obs.closing_odds:

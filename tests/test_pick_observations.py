@@ -548,3 +548,138 @@ def test_model_version_and_code_revision_unchanged():
     assert CODE_REVISION == "s5.2"
     assert model_version(Config("config/config.example.yaml")) == \
         FROZEN_MODEL_VERSION
+
+
+# ═════ Stage 13 Step 1b — consolidation must never destroy the model's evidence
+
+def _consolidation_env(tmp_path, name, other_selection):
+    """A match with two picks, each with both observations."""
+    mgr = _mgr(tmp_path, name)
+    with mgr.get_session() as s:
+        s.add(Match(id=1, home_team_id=1, away_team_id=2,
+                    match_date=datetime(2026, 9, 1, 18, 0), league="x/y"))
+        # primary = highest EV, the one the review binds to
+        s.add(_pick_row(1, match_id=1, market="Team Goals",
+                        selection="Home Over 0.5", odds=1.72,
+                        expected_value=0.20, model_market="Team Goals",
+                        model_selection="Home Over 0.5"))
+        s.add(_pick_row(2, match_id=1, market="1X2",
+                        selection=other_selection, odds=2.10,
+                        expected_value=0.05, model_market="1X2",
+                        model_selection=other_selection))
+        s.flush()
+        s.add(_obs(1, "model", "Team Goals", "Home Over 0.5", 1.72))
+        s.add(_obs(1, "final", "Team Goals", "Home Over 0.5", 1.72))
+        s.add(_obs(2, "model", "1X2", other_selection, 2.10))
+        s.add(_obs(2, "final", "1X2", other_selection, 2.10))
+        s.commit()
+    return mgr
+
+
+def _model_obs_count(mgr):
+    with mgr.get_session() as s:
+        return s.query(PickObservation).filter(
+            PickObservation.attribution == "model").count()
+
+
+def test_consolidation_never_reduces_model_observations(tmp_path):
+    """The invariant Step 1b exists to enforce.
+
+    Fixing the ORM cascade (Step 1) made `session.delete(primary)` in the
+    review's consolidation branch actually work — and with the cascade it would
+    have taken the primary's MODEL observation with it. That row is the frozen
+    model's only record of what it selected and at what price; the odds table
+    keeps one row per (match, bookmaker, market, selection) and overwrites it,
+    so nothing can rebuild it.
+
+    The branch must mark the pick superseded, never remove it.
+    """
+    from src.reporting.match_briefing import MatchBriefingService
+
+    mgr = _consolidation_env(tmp_path, "cons.db", "Home Win")
+    before = _model_obs_count(mgr)
+    assert before == 2
+
+    # Reproduce the branch's effect exactly as _apply_decision now performs it.
+    with mgr.get_session() as s:
+        primary = s.get(SavedPick, 1)
+        other = s.get(SavedPick, 2)
+        other.review_action = "CHANGE"
+        primary.disposition = "consolidated"
+        s.commit()
+
+    assert _model_obs_count(mgr) == before, (
+        "consolidation destroyed a MODEL observation — the frozen model's "
+        "record of its own selection")
+
+    with mgr.get_session() as s:
+        assert s.query(SavedPick).count() == 2, "a pick was deleted"
+        p = s.get(SavedPick, 1)
+        assert p.disposition == "consolidated"
+        assert p.result is None, "disposition must not be written to `result`"
+        assert p.review_action != "CONSOLIDATED", (
+            "disposition must not be overloaded onto review_action")
+
+
+def test_consolidation_branch_does_not_delete_in_source():
+    """Structural: the branch must not call session.delete at all.
+
+    Asserting behaviour is not enough here — a future edit could reintroduce
+    the delete on a path this test does not drive.
+    """
+    import inspect
+
+    from src.reporting.match_briefing import MatchBriefingService
+
+    src = inspect.getsource(MatchBriefingService._apply_decision)
+    # Scan CODE, not prose: the branch's comment legitimately quotes the call it
+    # replaced, to explain why it must never come back.
+    code = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "session.delete" not in code, (
+        "_apply_decision deletes a SavedPick again — that destroys its "
+        "pick_observations, including the MODEL row")
+    assert 'disposition = "consolidated"' in code
+
+
+def test_superseded_pick_is_excluded_from_the_live_record(tmp_path):
+    """It was never a bet. Its sibling carries the stake; counting both would
+    double-weight one wager in ROI and in the EV-threshold calibrator."""
+    from src.agent.betting_agent import _live_only
+
+    mgr = _consolidation_env(tmp_path, "cons2.db", "Home Win")
+    with mgr.get_session() as s:
+        s.get(SavedPick, 1).disposition = "consolidated"
+        s.query(SavedPick).update({SavedPick.result: "win"})
+        s.commit()
+
+    with mgr.get_session() as s:
+        live = s.query(SavedPick).filter(_live_only()).all()
+        assert [p.id for p in live] == [2], (
+            "a superseded pick reached the live record")
+
+
+def test_superseded_pick_keeps_its_model_series_but_not_final(tmp_path,
+                                                              monkeypatch):
+    """The asymmetry, stated as a test: the frozen model really did select it
+    at a real price (MODEL counts); it was never taken (FINAL does not)."""
+    import scripts.paper_trading_report as rep
+    import src.data.database as dbm
+
+    mgr = _consolidation_env(tmp_path, "cons3.db", "Home Win")
+    with mgr.get_session() as s:
+        s.get(SavedPick, 1).disposition = "consolidated"
+        for o in s.query(PickObservation).filter(
+                PickObservation.pick_id == 1).all():
+            o.closing_odds, o.closing_status = 1.60, "captured"
+        s.commit()
+
+    monkeypatch.setattr(dbm, "get_db", lambda: mgr)
+    picks = {p.id: p for p in rep.load_picks(days=3650, include_live=True,
+                                             model_version=None)}
+    superseded = picks[1]
+    assert superseded.disposition == "consolidated"
+    assert rep.series_clv(superseded, rep.MODEL) is not None, (
+        "the MODEL series lost a selection the frozen model genuinely made")
+    assert rep.series_clv(superseded, rep.FINAL) is None, (
+        "a superseded pick was counted as a taken bet in the FINAL series")

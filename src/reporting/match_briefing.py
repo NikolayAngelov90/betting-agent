@@ -690,17 +690,40 @@ class MatchBriefingService:
                 session.commit()
                 return True
             # If another pending pick on this match already holds the target
-            # selection, switching the primary would duplicate the bet —
-            # consolidate by dropping the primary instead.
+            # selection, switching the primary would duplicate the bet — so the
+            # primary is SUPERSEDED. It is not deleted.
+            #
+            # Stage 13 Step 1b. This branch used to call
+            # `session.delete(primary)`. That always raised (the Stage 10
+            # cascade defect, A1) and the whole decision rolled back, which hid
+            # what it would otherwise have done: with the cascade fixed, the
+            # delete also removes the primary's pick_observations — including
+            # the MODEL observation, the frozen model's only record of what it
+            # selected and at what price. That price cannot be reconstructed:
+            # the odds table keeps one row per
+            # (match, bookmaker, market, selection) and overwrites it on every
+            # refresh.
+            #
+            # The rule is already stated in the correlation branch below — "the
+            # conservative choice keeps the experiment measuring the model
+            # instead of silently letting the review delete its evidence." This
+            # branch now obeys it. `disposition` records the supersession; the
+            # row and both observations survive.
             for other in picks[1:]:
                 if other.selection == new.selection:
                     other.review_action = "CHANGE"
                     other.review_reason = _review_reason
-                    session.delete(primary)
+                    primary.disposition = "consolidated"
+                    primary.review_reason = (
+                        f"Superseded: pick {other.id} on this match already "
+                        f"holds {new.selection}"
+                    )[:500]
                     session.commit()
                     logger.info(
                         f"Briefing SWITCH consolidated: {analysis.match_name} already "
-                        f"holds {new.selection} — dropped duplicate {primary.selection}"
+                        f"holds {new.selection} — pick {primary.id} "
+                        f"({primary.selection}) marked disposition=consolidated, "
+                        f"NOT deleted; its MODEL observation is preserved"
                     )
                     return True
 

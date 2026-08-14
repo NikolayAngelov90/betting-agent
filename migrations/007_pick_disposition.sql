@@ -1,0 +1,54 @@
+-- =============================================================================
+-- Migration 007 — `saved_picks.disposition`
+--
+-- Target: Supabase Postgres 17 (project betting-agent / nhlurscyrlvpjzapmqcr)
+-- Rollback: migrations/007_pick_disposition.rollback.sql
+-- Depends on: 006 (pick_observations)
+--
+-- WHY
+--
+-- Stage 13 Step 1 fixed the ORM cascade on `pick_observations`, which made
+-- `session.delete(primary)` in the Claude review's consolidation branch
+-- actually work for the first time. That is worse than it failing.
+--
+-- The branch drops a pick when another pick on the same match already holds the
+-- selection the review wants to switch to. With a working cascade it now also
+-- deletes that pick's `pick_observations` — including the MODEL observation,
+-- which is the frozen model's own record of what it selected and the only place
+-- its taken price exists. The file already states the rule this violates, in
+-- the correlation branch thirty lines below:
+--
+--     "Reject the switch rather than dropping the other pick: the other pick is
+--      the frozen model's own output, and the conservative choice keeps the
+--      experiment measuring the model instead of silently letting the review
+--      delete its evidence."
+--
+-- The consolidation branch needed a way to say "this pick was superseded" that
+-- does not destroy it. `result` cannot carry it: `result` means the match
+-- outcome (win/loss/void) and is what settlement writes. Overloading it would
+-- make a superseded pick indistinguishable from a voided one in every ROI
+-- query. `review_action` cannot carry it either: that is Claude's verdict on a
+-- pick, and the report's KEEP/CHANGE breakdown reads it.
+--
+-- So: a dedicated column for one question — does this row represent a bet that
+-- was actually taken?
+--
+--   NULL           the pick stands. The overwhelming majority.
+--   'consolidated' superseded by another pick on the same match that already
+--                  held the selection. Preserved, not staked, not counted as a
+--                  taken bet; its MODEL observation still measures the model.
+--   'void_*'       reserved for Stage 13 Part B, which must VOID defective
+--                  fixtures rather than delete them (see the rollback file).
+--
+-- SAFETY
+--
+-- Additive and nullable. No existing row is read or written; every one keeps
+-- disposition NULL, which is exactly their current meaning. IF NOT EXISTS makes
+-- it idempotent. No index: the column is low-cardinality and every query that
+-- filters on it already filters by pick_date or model_version first.
+-- =============================================================================
+
+ALTER TABLE saved_picks
+    ADD COLUMN IF NOT EXISTS disposition VARCHAR(24);
+
+ANALYZE saved_picks;
