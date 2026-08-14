@@ -5,7 +5,7 @@ from sqlalchemy import (
     Column, Integer, String, Float, Boolean, DateTime,
     CheckConstraint, ForeignKey, Date, Text, JSON, Index, UniqueConstraint
 )
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.orm import backref, declarative_base, relationship
 
 from src.utils.logger import utcnow
 
@@ -387,7 +387,35 @@ class PickObservation(Base):
     #: the constraint but gives the mapper no ordering dependency, so a session
     #: that adds both in one flush can emit them the wrong way round and trip
     #: the constraint.
-    pick = relationship("SavedPick", backref="observations")
+    #:
+    #: `cascade="all, delete-orphan"` — Stage 13, defect A1.
+    #:
+    #: Stage 10 declared this relationship with SQLAlchemy's DEFAULT cascade
+    #: ("save-update, merge"). On `session.delete(pick)` that makes the ORM
+    #: de-associate the children rather than remove them: it emits
+    #: `UPDATE pick_observations SET pick_id = NULL`, which a NOT NULL column
+    #: refuses. The database's own ON DELETE CASCADE never got the chance to
+    #: fire, because the UPDATE happens first and aborts the transaction.
+    #:
+    #: Production impact: every Claude-review consolidation between 2026-08-10
+    #: and 2026-08-14 rolled back — six matches lost their KEEP/CHANGE verdict.
+    #:
+    #: THE CHOICE, stated deliberately: the ORM deletes the children. The
+    #: alternative is `passive_deletes=True`, which stays silent and lets the
+    #: database's ON DELETE CASCADE do the work — fewer statements, and the
+    #: schema already declares it. It is rejected because this project runs on
+    #: PostgreSQL in production and SQLite everywhere else, and SQLite enforces
+    #: foreign keys only when `PRAGMA foreign_keys = ON` is set per connection.
+    #: Under `passive_deletes` a test or local run that forgot the pragma would
+    #: silently orphan observations instead of failing. ORM-side cascade behaves
+    #: identically on both backends and does not depend on connection state.
+    #:
+    #: The DDL's ON DELETE CASCADE stays as a backstop for the two non-ORM
+    #: delete paths in the codebase. Both halves now agree: children go.
+    pick = relationship(
+        "SavedPick",
+        backref=backref("observations", cascade="all, delete-orphan"),
+    )
 
     #: 'model' or 'final'. Constrained in the database as well as here, so a
     #: third value cannot quietly create a series nothing reports on.

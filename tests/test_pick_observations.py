@@ -110,7 +110,23 @@ def test_attribution_is_constrained_to_model_and_final(tmp_path):
 
 def test_deleting_a_pick_cascades_to_its_observations(tmp_path):
     """The review's consolidation branch deletes a pick; its observations must
-    not survive as orphans that the report would still count."""
+    not survive as orphans that the report would still count.
+
+    Stage 13, defect A6 — THIS TEST USED TO PASS VACUOUSLY.
+
+    It previously deleted via ``session.execute(SavedPick.__table__.delete())``,
+    a Core statement that goes straight to the database and lets its
+    ON DELETE CASCADE fire. Production does not do that. It calls
+    ``session.delete(obj)`` (match_briefing.py), which routes through the ORM's
+    unit of work — and that path was broken for four days: the default cascade
+    on the ``observations`` relationship emitted
+    ``UPDATE pick_observations SET pick_id = NULL`` against a NOT NULL column,
+    so every consolidation rolled back. The test asserted the schema while the
+    code path it was named after could not run at all.
+
+    It now deletes the way production deletes. Verified to FAIL against the
+    pre-fix relationship.
+    """
     mgr = _mgr(tmp_path, "fk.db")
     with mgr.get_session() as s:
         s.add(Match(id=1, home_team_id=1, away_team_id=2,
@@ -121,10 +137,44 @@ def test_deleting_a_pick_cascades_to_its_observations(tmp_path):
         s.commit()
 
     with mgr.get_session() as s:
-        s.execute(SavedPick.__table__.delete().where(SavedPick.id == 1))
+        s.delete(s.get(SavedPick, 1))          # the production path
         s.commit()
     with mgr.get_session() as s:
-        assert s.query(PickObservation).count() == 0
+        assert s.query(SavedPick).count() == 0
+        assert s.query(PickObservation).count() == 0, (
+            "observations survived an ORM delete of their pick")
+
+
+def test_orm_delete_of_a_pick_does_not_null_the_observation_fk(tmp_path):
+    """The precise failure mode, pinned separately.
+
+    A cascade misconfiguration does not announce itself — it surfaces as an
+    IntegrityError from somewhere else entirely, which match_briefing then
+    swallowed as "Could not apply briefing decision". Assert that no UPDATE to
+    NULL is attempted, by asserting the delete simply succeeds.
+    """
+    mgr = _mgr(tmp_path, "fk2.db")
+    with mgr.get_session() as s:
+        for pid in (1, 2):
+            s.add(Match(id=pid, home_team_id=1, away_team_id=2,
+                        match_date=datetime(2026, 9, 1, 18, 0), league="x/y"))
+            s.add(_pick_row(pid, match_id=pid))
+            s.flush()
+            s.add(_obs(pid, "model"))
+            s.add(_obs(pid, "final"))
+        s.commit()
+
+    # Delete one of two picks — the sibling and its observations must survive.
+    with mgr.get_session() as s:
+        s.delete(s.get(SavedPick, 1))
+        s.commit()
+
+    with mgr.get_session() as s:
+        assert s.query(SavedPick).count() == 1
+        remaining = s.query(PickObservation).all()
+        assert len(remaining) == 2
+        assert {o.pick_id for o in remaining} == {2}
+        assert all(o.pick_id is not None for o in remaining)
 
 
 def test_migration_sql_is_additive_and_does_not_backfill():
