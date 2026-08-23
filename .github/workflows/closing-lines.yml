@@ -79,6 +79,38 @@ jobs:
       - name: Create config from example
         run: cp config/config.example.yaml config/config.yaml
 
+      # /v4/sports is free — it does not decrement the quota (x-requests-last: 0)
+      # — so a key-validity check costs nothing and therefore has no reason to be
+      # temporary. It confirms the DEPLOYED secret, not a local file: a rotated
+      # key that never reached GitHub previously surfaced as silent capture
+      # failure, indistinguishable from a budget refusal or from D1's zero rows.
+      # It also gives reconcile() a free, independent reading of x-requests-used
+      # on every run instead of only when a paid request happens to be made.
+      - name: Verify the Odds API key is deployed and live
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          code=$(curl -s -o /tmp/sports.json -D /tmp/sports.hdr \
+                   -w '%{http_code}' \
+                   "https://api.the-odds-api.com/v4/sports?apiKey=$ODDS_API_KEY")
+          used=$(grep -i '^x-requests-used:' /tmp/sports.hdr | tr -d '\r' \
+                   | awk '{print $2}')
+          remaining=$(grep -i '^x-requests-remaining:' /tmp/sports.hdr \
+                   | tr -d '\r' | awk '{print $2}')
+          echo "odds-api status      : $code"
+          echo "x-requests-used      : ${used:-unknown}"
+          echo "x-requests-remaining : ${remaining:-unknown}"
+          if [ "$code" = "401" ]; then
+            echo "::error::The Odds API key is INVALID (401). The deployed" \
+                 "secret is stale or wrong — closing-line capture cannot" \
+                 "work until it is updated."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::Unexpected status $code from /v4/sports."
+            exit 1
+          fi
+
       - name: Refresh imminent odds and capture closing lines
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
