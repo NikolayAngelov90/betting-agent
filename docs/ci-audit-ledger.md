@@ -495,3 +495,76 @@ Not a defect. Recorded because the expectation used during verification was
 stale (measured 2026-08-14, when the count was 0), and because it is the first
 evidence that consolidation supersedes rather than deletes in production.
 Not pursued further — the discovery phase of this stage is closed.
+
+---
+
+## First run under s5.3 — run 32646469497
+
+| field | value |
+| --- | --- |
+| run | 32646469497 |
+| trigger | **workflow_dispatch** (not the 09:37 cron) |
+| started | 2026-08-23 14:46:38 UTC |
+| conclusion | success |
+| commit | `bef66ca` (confirmed on origin/main before the run) |
+| verdict | **DEGRADED — expected**, plus 2 findings |
+
+Audited against `docs/stage-13-s53-verification-prompt.md`, written before
+deployment. Verdicts: 3 CONFIRMED, 4 PARTIAL, 1 UNTESTABLE. **Not one section is
+recorded as a pass on evidence that could not be produced.**
+
+### Trigger independence
+
+`workflow_dispatch:` declares **no inputs**, no step references
+`github.event_name` or `inputs.`, and `concurrency: {group: daily-picks,
+cancel-in-progress: false}` is trigger-independent. So every code-behaviour
+conclusion below holds for the scheduled run.
+
+What is **not** trigger-independent is the clock: this ran at 14:46 rather than
+~09:55, and that is why `Settled 0 picks` — which is what left §6 partial.
+
+### RUN-1 — an alert fired and never arrived
+
+```
+14:52:27  Flashscore tier-1 failure for portugal/primeira-liga: 0 fixtures
+14:52:27  Flashscore tier-1 failure for spain/laliga: 0 fixtures
+14:52:32  Failed to send Telegram message: Timed out
+```
+
+The detection worked; the delivery did not. This is the OBS-1 problem in a new
+form — not an alert that fires daily and changes nothing, but an alert that
+fires once and reaches nobody. A later message did send, so the token and chat
+id are fine; this was a transient timeout with **no retry and no failure
+surface**. Recorded, not pursued.
+
+Note this is also A4 recurring: two tier-1 leagues returned 0 fixtures.
+
+### RUN-2 — `.claude/commands/daily-ci-audit.md` does not exist
+
+`.claude/commands/` contains only `review-daily-picks.md`. The daily audit
+command was Part A's A4 deliverable and was deferred to Stage 14 along with the
+rest of D3; this audit was therefore performed by hand against the verification
+prompt instead. Recorded so the gap is visible rather than assumed closed.
+
+### Egress
+
+No instrumentation reports actual bytes, so this is an estimate from a measured
+row count and the known projection — and the absence of a measurement is itself
+worth noting, since a 97% egress reduction that nothing measures cannot be
+verified.
+
+Two full mirror resyncs occurred (14:53:28 and 14:54:06 — the second from
+legitimate row-count drift as results landed mid-run), each of 39,157 rows over
+a 10-column projection at roughly 100 bytes/row:
+
+```
+this run   ~3.9 MB per resync  x2  =  ~7.8 MB   + a full ML retrain
+```
+
+**Prediction for the next run, if the stamp mechanism works end to end:** the
+mirror's generation matches, so no full resync — incremental sync only, on the
+order of **kilobytes** rather than megabytes; and the pickle's generation
+matches, so the age check applies and `--train` is **skipped** (trained today,
+threshold 3 days). If the next run instead shows another full resync and another
+retrain, the stamp is refusing unconditionally and is costing a full rebuild
+every run, forever.
