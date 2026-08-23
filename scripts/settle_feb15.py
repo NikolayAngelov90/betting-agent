@@ -1,5 +1,6 @@
 """One-time script to settle Feb 15 2026 picks and send report to Telegram."""
 
+import os
 import asyncio
 from datetime import date
 
@@ -114,8 +115,8 @@ async def main():
     # Send to Telegram
     from telegram import Bot
 
-    bot_token = "8588061989:AAGQ91GA7QzsPmljwOuL6JV_gA9btpwCJU4"
-    chat_id = "-5290104839"
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
 
     if bot_token and chat_id:
         bot = Bot(token=bot_token)
