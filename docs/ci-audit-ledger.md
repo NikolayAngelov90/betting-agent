@@ -84,9 +84,10 @@ A reader who opens `.mcp.json` today sees `${ODDS_API_KEY}` and would
 reasonably conclude nothing was ever exposed. Both values remain in every
 commit from 02de2b0 onward, and in every fork, clone and scraper cache that
 took a copy during those 188 days. **Rotation is what made these keys safe —
-this commit only stopped the bleeding.** Rotation performed by the operator
-on 2026-08-23, before the remediation commit; exact timestamp to be recorded
-on confirmation.
+this commit only stopped the bleeding.** Rotation performed by the operator on
+2026-08-23, before the remediation commit, and verified dead by probe:
+Odds API `401 INVALID_KEY`, API-Football `errors.token: Missing application
+key`.
 
 **Git history deliberately NOT rewritten.** Rotation is what kills an exposed
 key. A rewrite unpublishes nothing — forks, clones and scrapers already hold the
@@ -107,9 +108,9 @@ read group updates.
 `os.environ.get("TELEGRAM_BOT_TOKEN")`. That does not mean the token was
 never exposed — it sat in this file, tracked and public, from the day it was
 added until 2026-08-23, and it remains in the history and in every copy taken
-during that period. **Only the BotFather rotation makes it safe.** Rotation
-was in progress at the time of writing; timestamp to be recorded on
-confirmation.
+during that period. **Only the BotFather rotation makes it safe.** Rotated
+**2026-08-23 10:00 UTC (13:00 Europe/Sofia)** via BotFather, and verified dead
+by probing the old value retrieved from history: `401 Unauthorized`.
 
 Remediation in code: both values replaced with `os.environ.get(...)`.
 **Rotation is the operator's action and was outstanding at the time of writing**
@@ -273,4 +274,39 @@ the vacuous cascade test, the 39 FK-violating fixtures, and this token. Each was
 code nothing forced anyone to re-read. A one-off that lingers is a file nobody
 reviews, and that is the condition under which a live credential survives six
 months and a 693-file scan only finds it because someone went looking.
+
+### HYG-2 — Which survivors would fail silently
+
+`simulate_odds_quota.py` was kept because quota planning is live work and the
+README documents it. But being documented is not what makes a file safe: a
+script listed in a table and never executed has exactly the shape this stage
+keeps finding — code nothing forces anyone to re-read.
+
+Mapped all seven survivors. "Imported" counts a real `from scripts.X import`,
+not a mention in a docstring or a string literal; the two differ sharply.
+
+| Script | Imported by tests | Workflow | Appears in logs |
+| --- | --- | --- | --- |
+| `paper_trading_report` | **14** | 1 | 3 |
+| `capture_closing_lines` | **7** | 0 (runs via `refresh_and_capture`) | 21 |
+| `refresh_and_capture` | 0 | **1** | 21 |
+| `ci_alert` | 0 | **3** | 11 |
+| `run_baseline` | **0** | **0** | **0** |
+| `run_clean_baseline` | **0** | **0** | **0** |
+| `simulate_odds_quota` | **0** | **0** | **0** |
+
+Three answer no to all three, and the important one is **`run_baseline.py`**:
+it is the evidence bar every model parameter change must clear, and nothing
+exercises it. If it broke, the failure would surface at exactly the moment it is
+needed — the next time someone tries to justify a model change — and would look
+like the change being unjustifiable rather than the harness being broken.
+
+`run_clean_baseline.py` has the same profile against the clean dataset.
+`simulate_odds_quota.py` is the least consequential of the three but the most
+obviously idle.
+
+Remedy for all three: a smoke test that imports the module and runs its argument
+parser, so a change that breaks them fails the suite instead of failing silently
+in six months. Same instinct as the structural guards, applied to files rather
+than to call shapes. **Cohort-neutral; deliberately NOT inside the s5.3 break.**
 
