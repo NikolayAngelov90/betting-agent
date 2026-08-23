@@ -28,6 +28,7 @@ from sqlalchemy import func
 
 from src.data.sql_helpers import id_in
 from src.data.models import Match, Team, Odds, SavedPick
+from src.data.pick_filters import live_only, valid_evidence
 from src.utils.logger import get_logger
 
 logger = get_logger()
@@ -900,6 +901,20 @@ class MatchBriefingService:
                     SavedPick.selection, SavedPick.result
                 ).filter(
                     SavedPick.result.in_(["win", "loss"]),
+                    # Stage 13 (s5.3) — PAPER LEAK, and the worst one found.
+                    #
+                    # This file had zero references to is_paper and never called
+                    # the live-only predicate. Paper-pick outcomes were computed
+                    # into these statistics, injected into the KEEP/CHANGE
+                    # decision prompt, and used by Claude to choose the pick the
+                    # FINAL series then measures.
+                    #
+                    # The README's "the experiment cannot retrain its own
+                    # subject" was true of the MODEL path and false of the
+                    # REVIEW path. Three audits missed it because nobody
+                    # enumerates the functions that never call the thing.
+                    live_only(),
+                    valid_evidence(),
                     SavedPick.pick_date >= cutoff,
                 ).all()
             agg: dict = {}
@@ -934,6 +949,20 @@ class MatchBriefingService:
                 ).filter(
                     SavedPick.review_action.isnot(None),
                     SavedPick.result.in_(["win", "loss"]),
+                    # Stage 13 (s5.3) — PAPER LEAK, and the worst one found.
+                    #
+                    # This file had zero references to is_paper and never called
+                    # the live-only predicate. Paper-pick outcomes were computed
+                    # into these statistics, injected into the KEEP/CHANGE
+                    # decision prompt, and used by Claude to choose the pick the
+                    # FINAL series then measures.
+                    #
+                    # The README's "the experiment cannot retrain its own
+                    # subject" was true of the MODEL path and false of the
+                    # REVIEW path. Three audits missed it because nobody
+                    # enumerates the functions that never call the thing.
+                    live_only(),
+                    valid_evidence(),
                     SavedPick.pick_date >= cutoff,
                 ).all()
             agg: dict = {}

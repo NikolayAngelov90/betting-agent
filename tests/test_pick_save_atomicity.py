@@ -25,6 +25,8 @@ from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
+
+from tests.experiment_pins import CODE_REVISION_PIN
 from sqlalchemy import event
 
 import src.agent.betting_agent as ba
@@ -304,6 +306,6 @@ def test_stage103_changed_no_model_identity():
 
     from tests.test_config_identity import FROZEN_MODEL_VERSION
 
-    assert CODE_REVISION == "s5.2"
+    assert CODE_REVISION == CODE_REVISION_PIN
     assert model_version(Config("config/config.example.yaml")) == \
         FROZEN_MODEL_VERSION

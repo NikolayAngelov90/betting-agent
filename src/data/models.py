@@ -113,6 +113,34 @@ class Match(Base):
     # Flashscore short match ID (e.g. "G8MZEpbl") — used to scrape odds page
     flashscore_id = Column(String(20))
 
+    #: Stage 13 (s5.3). NULL = this match is used for fitting.
+    #:
+    #: A reason string rather than a boolean so a future reader knows WHY
+    #: without consulting a commit message. Currently only
+    #: 'corrupt_team_identity': one participant's row belongs to a different
+    #: club, so the result is attributed to a team that did not play it.
+    #:
+    #: Both cached derivatives of the excluded data — the Parquet history
+    #: mirror and the ML pickles — are stamped with the exclusion filter's
+    #: generation and refuse themselves on mismatch, so changing this predicate
+    #: invalidates them automatically. No artifact surgery, and no one-time
+    #: action to remember.
+    #:
+    #: DELIBERATELY NOT WRITE-ONCE, unlike `disposition` and `evidence_status`.
+    #: Those record judgements about past events, which cannot become untrue. A
+    #: match's exclusion is a statement about CURRENT data quality, and the
+    #: whole reason for detaching rather than reassigning was that the 29 become
+    #: repairable once authoritative API-Football ids exist. Clearing this must
+    #: stay possible.
+    #:
+    #: But clearing it is NOT bookkeeping. Lifting an exclusion re-includes
+    #: matches in the fitting set, which changes what the models learn and
+    #: therefore what they predict. `model_version` fingerprints configuration,
+    #: not training data, so a repair moves predictions without moving the
+    #: fingerprint — the exact blind spot Stage 13 documented. **A repair is a
+    #: cohort event and needs its own CODE_REVISION bump.**
+    training_exclusion_reason = Column(String(48))
+
     # Match status
     is_fixture = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utcnow)
@@ -284,6 +312,34 @@ class SavedPick(Base):
         if current is not None and value != current:
             raise ValueError(
                 f"disposition is write-once: pick {self.id} is already "
+                f"{current!r}; refusing to overwrite with {value!r}")
+        return value
+
+    #: Stage 13 (s5.3). ORTHOGONAL to `disposition`, deliberately.
+    #:
+    #: `disposition` answers "why did this leave the live record" and gates
+    #: _live_only(). This answers "is the observation valid evidence about the
+    #: model" and gates _valid_evidence(). A pick can be both superseded and
+    #: built on corrupt inputs; one field cannot hold both without the second
+    #: write erasing the first reason.
+    #:
+    #: NULL                     valid evidence
+    #: 'void_corrupt_features'  real fixture, genuine wager, but the model's
+    #:                          inputs described a different club
+    evidence_status = Column(String(32))
+
+    @validates("evidence_status")
+    def _evidence_status_is_write_once(self, _key, value):
+        """Same contract as `disposition`, same reason.
+
+        Exclusion can be applied later but never undone, so a wrong stamp is
+        unrecoverable. Re-writing the SAME value is allowed so an idempotent
+        replay of the marking script cannot crash a run.
+        """
+        current = getattr(self, "evidence_status", None)
+        if current is not None and value != current:
+            raise ValueError(
+                f"evidence_status is write-once: pick {self.id} is already "
                 f"{current!r}; refusing to overwrite with {value!r}")
         return value
 

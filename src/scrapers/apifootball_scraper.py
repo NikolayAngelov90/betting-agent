@@ -8,6 +8,7 @@ Includes real bookmaker odds via the /odds endpoint.
 import asyncio
 import os
 import re
+import unicodedata
 from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -404,6 +405,69 @@ BET_TYPE_MAP = {
 }
 
 
+
+
+# Values that appear in the `country` position but identify no country. A club
+# first seen in a continental tie is stored as "Europe"; these carry no
+# information and must never trigger a refusal.
+_NOT_A_COUNTRY = {None, "", "world", "europe", "other", "international"}
+
+
+def is_a_real_country(value) -> bool:
+    return bool(value) and str(value).strip().lower() not in _NOT_A_COUNTRY
+
+
+def _name_anchors(name: str) -> set:
+    """Lexical anchors of a club name: normalised tokens and their 4+ char stems.
+
+    Accents folded, punctuation dropped, and the corporate noise that varies
+    freely between sources removed ("FC Thun" / "Thun", "Hammarby FF" /
+    "Hammarby"). Tokens shorter than 3 characters are ignored — they carry no
+    identity ("SK", "AC", "1907").
+    """
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    folded = re.sub(r"[^A-Za-z0-9 ]", " ", folded).lower()
+    tokens = {t for t in folded.split() if len(t) >= 3 and t not in _NAME_NOISE}
+    return tokens | {t[:4] for t in tokens}
+
+
+_NAME_NOISE = {
+    "fca", "fcb", "afc", "cfr", "sco", "usa", "the", "club", "team",
+    "fussball", "futbol", "football", "calcio", "sport", "sportif",
+}
+
+
+def names_share_an_anchor(a: str, b: str) -> bool:
+    """True when two names plausibly denote the same club.
+
+    Stage 13 Part B. This is the gate on API-Football's own team id, and it is
+    deliberately the WEAKEST possible test: it refuses only when two names share
+    no lexical anchor at all.
+
+    Measured against the 65 fixtures whose creation lines survive in CI logs, 20
+    of which disagreed with the stored row. Nineteen were benign aliases and all
+    nineteen share an anchor:
+
+        Union St. Gilloise / St. Gilloise      Fenerbahce / Fenerbahce
+        NEC Nijmegen / Nijmegen                Heart Of Midlothian / Hearts
+        Universitatea Craiova / Univ. Craiova  Ferencvarosi TC / Ferencvaros
+        Red Bull Salzburg / Salzburg           CFR 1907 Cluj / CFR Cluj
+
+    One shared nothing, and it is the defect this stage exists for:
+
+        Maccabi Tel Aviv  ->  stored row named "Telstar"   (afid 1607568)
+
+    **Known limitation, stated rather than discovered later.** Two genuinely
+    different clubs that share a token pass this gate. Rapid Vienna and Rapid
+    Bucuresti both anchor on "rapid", so the SK Rapid contamination (10 Romanian
+    matches on an Austrian club's row) would NOT be caught here. This gate closes
+    the total-disagreement case only. The token-sharing case needs the country
+    field, which the fixture payload carries but this call site does not yet
+    receive.
+    """
+    return bool(_name_anchors(a) & _name_anchors(b))
+
+
 class APIFootballScraper(BaseScraper):
     """Fetches xG, match statistics, fixtures, and odds from API-Football."""
 
@@ -621,7 +685,12 @@ class APIFootballScraper(BaseScraper):
         # Boulogne, Nancy). The 30K+ matches in Neon already provide sufficient
         # coverage for top league teams. Re-enable for local runs if needed.
 
-        logger.info(f"API-Football update complete ({self._requests_today} requests used)")
+        _refused = getattr(self, "_identity_refusals", 0)
+        logger.info(
+            f"API-Football update complete ({self._requests_today} requests used"
+            + (f", {_refused} fixture(s) SKIPPED on team-identity mismatch" if _refused else "")
+            + ")"
+        )
 
     async def fetch_lineups(self, fixture_id: int) -> dict:
         """Fetch confirmed starting XIs for a fixture (available ~20-45 min pre-KO).
@@ -807,12 +876,23 @@ class APIFootballScraper(BaseScraper):
 
             # Slow path: new fixture — get/create teams and find/create match record.
             # Get or create teams — also saves API-Football team IDs for future backfill
+            _fix_country = fix.get("league", {}).get("country")
             home_team_id = self._get_or_create_team_id(
-                home_name, league_key, apifootball_team_id=home_api_id
+                home_name, league_key, apifootball_team_id=home_api_id,
+                country=_fix_country
             )
             away_team_id = self._get_or_create_team_id(
-                away_name, league_key, apifootball_team_id=away_api_id
+                away_name, league_key, apifootball_team_id=away_api_id,
+                country=_fix_country
             )
+
+            if home_team_id is None or away_team_id is None:
+                # Stage 13 Part B: the identity gate refused one of the teams.
+                # Skipping is the conservative branch — a missing fixture is
+                # visible and recoverable; a fixture built on the wrong club
+                # silently poisons features, odds attribution and settlement.
+                self._identity_refusals = getattr(self, "_identity_refusals", 0) + 1
+                continue
 
             # Check for existing match — by team DB IDs then fuzzy name search
             # (apifootball_id lookup already handled by the pre-loaded cache above).
@@ -954,7 +1034,7 @@ class APIFootballScraper(BaseScraper):
             cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days_back)
             base_filters = [
                 Match.is_fixture == False,
-                Match.home_goals.isnot(None),
+                Match.home_goals.isnot(None),  # training-exclusion: NOT GATED (populates) - a complete row keeps repair possible later
                 Match.apifootball_id.isnot(None),
                 Match.match_date >= cutoff,
             ]
@@ -1252,7 +1332,7 @@ class APIFootballScraper(BaseScraper):
             stats_needed = session.query(Match).filter(
                 Match.apifootball_id.isnot(None),
                 Match.is_fixture == False,
-                Match.home_goals.isnot(None),
+                Match.home_goals.isnot(None),  # training-exclusion: NOT GATED (populates) - a complete row keeps repair possible later
                 or_(Match.home_xg.is_(None), Match.home_shots.is_(None)),
             ).order_by(Match.match_date.desc()).limit(stats_budget).all()
             stats_queue = [(m.id, m.apifootball_id) for m in stats_needed]
@@ -1358,7 +1438,8 @@ class APIFootballScraper(BaseScraper):
         return matches / len(sh) >= 0.7
 
     def _get_or_create_team_id(self, name: str, league: str,
-                               apifootball_team_id: int = None) -> int:
+                               apifootball_team_id: int = None,
+                               country: str = None) -> int:
         """Find existing team by name or create a new one. Returns team ID.
 
         When apifootball_team_id is provided, it is stored on the team record
@@ -1396,6 +1477,56 @@ class APIFootballScraper(BaseScraper):
                     apifootball_team_id=apifootball_team_id
                 )).first()
                 if team:
+                    # Stage 13 Part B — verify against the payload in hand.
+                    #
+                    # The id is the strongest key, but it is only as good as the
+                    # row it points at. On 2026-08-13 API-Football returned
+                    # "CSKA Sofia vs Maccabi Tel Aviv" for afid 1607568, and the
+                    # row holding Maccabi's team id was named "Telstar" — a Dutch
+                    # club whose Eredivisie history then priced the away side.
+                    # The correct name was in this very response when the wrong
+                    # row was chosen, so the check costs nothing and needs no
+                    # extra request: the response that supplies the name is the
+                    # one that checks it, and the two can never drift.
+                    #
+                    # Fail closed. A fixture we refuse to build is recoverable;
+                    # a pick priced against the wrong club is not.
+                    # Stage 13 Part C addendum — the verifiable confirmation
+                    # §B4 asked for. A club plays in exactly ONE domestic
+                    # league, so a domestic fixture in country X can only
+                    # involve clubs from X. This is unconditional where it
+                    # applies: no ratio, nothing to tune.
+                    #
+                    # It applies only when BOTH sides name a real country.
+                    # `teams.country` records where a club was first SEEN, not
+                    # where it plays — Levski Sofia is stored as "Europe"
+                    # because a Conference League tie created it — and a
+                    # continental fixture's own country is "World". Refusing on
+                    # either would reject legitimate fixtures wholesale, so
+                    # missing information means fall through, never refuse.
+                    if (is_a_real_country(country)
+                            and is_a_real_country(team.country)
+                            and str(country).strip().lower()
+                            != str(team.country).strip().lower()):
+                        logger.error(
+                            "TEAM IDENTITY MISMATCH (country) — refusing to "
+                            f"resolve: API-Football team id "
+                            f"{apifootball_team_id} arrived as '{name}' in a "
+                            f"{country} fixture, but local team {team.id} "
+                            f"('{team.name}') is a {team.country} club. "
+                            "Fixture skipped."
+                        )
+                        return None
+                    if not names_share_an_anchor(name, team.name):
+                        logger.error(
+                            "TEAM IDENTITY MISMATCH — refusing to resolve: "
+                            f"API-Football team id {apifootball_team_id} arrived "
+                            f"as '{name}' but local team {team.id} is named "
+                            f"'{team.name}' (league '{team.league}'). The stored "
+                            "row is suspect; not reusing it and not renaming it. "
+                            "Fixture skipped."
+                        )
+                        return None
                     return team.id
 
             # Collision guard: two different clubs can share a name/prefix
@@ -2051,12 +2182,20 @@ class APIFootballScraper(BaseScraper):
                 continue
 
             # Slow path: create/find teams and match.
+            _fix_country = fix.get("league", {}).get("country")
             home_team_id = self._get_or_create_team_id(
-                home_name, league_key, apifootball_team_id=home_api_id
+                home_name, league_key, apifootball_team_id=home_api_id,
+                country=_fix_country
             )
             away_team_id = self._get_or_create_team_id(
-                away_name, league_key, apifootball_team_id=away_api_id
+                away_name, league_key, apifootball_team_id=away_api_id,
+                country=_fix_country
             )
+
+            if home_team_id is None or away_team_id is None:
+                # Stage 13 Part B — identity gate refused; fail closed.
+                self._identity_refusals = getattr(self, "_identity_refusals", 0) + 1
+                continue
 
             match_id = self._find_match_id(home_team_id, away_team_id, match_dt)
             if match_id is None:
@@ -2190,7 +2329,7 @@ class APIFootballScraper(BaseScraper):
             for team_id in team_ids:
                 count = session.query(Match).filter(
                     Match.is_fixture == False,
-                    Match.home_goals.isnot(None),
+                    Match.home_goals.isnot(None),  # training-exclusion: NOT GATED (populates) - a complete row keeps repair possible later
                     _or(Match.home_team_id == team_id, Match.away_team_id == team_id),
                 ).count()
 
@@ -2278,7 +2417,7 @@ class APIFootballScraper(BaseScraper):
                     for team_id in team_ids:
                         count = session.query(Match).filter(
                             Match.is_fixture == False,
-                            Match.home_goals.isnot(None),
+                            Match.home_goals.isnot(None),  # training-exclusion: NOT GATED (populates) - a complete row keeps repair possible later
                             _or(Match.home_team_id == team_id, Match.away_team_id == team_id),
                         ).count()
                         if count < min_matches:
@@ -2437,12 +2576,21 @@ class APIFootballScraper(BaseScraper):
                         continue
 
                     match_dt = datetime.utcfromtimestamp(match_ts)
+                    _fix_country = fix.get("league", {}).get("country")
                     h_id = self._get_or_create_team_id(
-                        home_name, league_key, apifootball_team_id=home_api_id
+                        home_name, league_key, apifootball_team_id=home_api_id,
+                        country=_fix_country
                     )
                     a_id = self._get_or_create_team_id(
-                        away_name, league_key, apifootball_team_id=away_api_id
+                        away_name, league_key, apifootball_team_id=away_api_id,
+                        country=_fix_country
                     )
+
+                    if h_id is None or a_id is None:
+                        # Stage 13 Part B — identity gate refused; fail closed.
+                        self._identity_refusals = getattr(
+                            self, "_identity_refusals", 0) + 1
+                        continue
 
                     if self._find_match_id(h_id, a_id, match_dt):
                         continue  # Already in DB

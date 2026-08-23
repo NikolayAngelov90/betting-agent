@@ -62,6 +62,54 @@ logger = get_logger()
 # silently serving a frame that is missing a column the models now read.
 SCHEMA_VERSION = 1
 
+
+def filter_generation() -> str:
+    """Fingerprint of the rows this mirror is allowed to contain.
+
+    Stage 13 (s5.3). The mirror is a cache of "completed matches", and what
+    counts as one is now narrower: contaminated matches are excluded. A Parquet
+    built before that change contains rows the current code must never see —
+    and it does not announce itself, because a cache that answers is
+    indistinguishable from a cache that answers correctly.
+
+    A one-time invalidation would not have been enough. The daily workflow has
+    `Restore database and models` / `Save database and models` steps, so a stale
+    mirror can be restored into a run whose code has the filter and be trusted
+    on arrival. Local deletion would never touch it.
+
+    Deriving the marker from the SOURCE of the predicate makes invalidation
+    automatic: change the filter, and every existing mirror stops matching
+    without anyone remembering to do anything. A comment-only edit also
+    invalidates, which over-rebuilds — one database read, the safe direction.
+
+    BOUNDARY — what this does NOT cover.
+
+    The digest covers `_base_filter`'s own text and nothing else. If the
+    predicate ever referenced a module-level constant, an enum of exclusion
+    reasons, or a helper function, changing THAT would alter the filter's
+    behaviour without moving this digest, and a stale mirror would be served as
+    valid. That is exactly the shape found inside `_base_filter` itself during
+    Stage 13: a guard that looks complete because nobody asked what it excludes.
+
+    Today the predicate is closed — it references only `Match` — and
+    `test_mirror_generation_stamp.py` pins that with an AST check rather than
+    leaving it as an assumption. If that test ever fails, this function must be
+    extended to digest the symbols the predicate closes over, not merely
+    relaxed.
+    """
+    import hashlib
+    import inspect
+
+    from src.data.match_history import _HistoryCache
+
+    try:
+        src = inspect.getsource(_HistoryCache._base_filter)
+    except (OSError, TypeError):  # pragma: no cover — source unavailable
+        return "unknown"
+    return hashlib.blake2s(src.encode("utf-8"), digest_size=6).hexdigest()
+
+
+
 # Must stay in step with src/data/match_history.py's projection.
 COLUMNS = (
     "id", "match_date", "home_team_id", "away_team_id",
@@ -231,6 +279,16 @@ class HistoryMirror:
                     f"{SCHEMA_VERSION} — full resync"
                 )
                 return {}
+            # Stage 13 (s5.3): refuse, do not serve. A mirror built under a
+            # different exclusion predicate holds rows this code must not see.
+            _want = filter_generation()
+            if meta.get("filter_generation") != _want:
+                logger.warning(
+                    "history mirror was built under exclusion filter "
+                    f"{meta.get('filter_generation')!r}, current is {_want!r} "
+                    "— discarding it and reading from the database"
+                )
+                return {}
             return meta
         except FileNotFoundError:
             return {}
@@ -256,6 +314,7 @@ class HistoryMirror:
         with open(tmp_meta, "w", encoding="utf-8") as fh:
             json.dump({
                 "schema_version": SCHEMA_VERSION,
+                "filter_generation": filter_generation(),
                 "watermark": watermark.isoformat() if watermark is not None else None,
                 "row_count": int(len(frame)),
             }, fh)
@@ -279,6 +338,7 @@ class HistoryMirror:
             return session.query(func.count(Match.id)).filter(
                 Match.is_fixture == False,  # noqa: E712
                 Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
             ).scalar() or 0
 
     @staticmethod
@@ -293,6 +353,7 @@ class HistoryMirror:
             ).filter(
                 Match.is_fixture == False,  # noqa: E712
                 Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
             ).order_by(Match.match_date.asc(), Match.id.asc()).all()
 
     @staticmethod

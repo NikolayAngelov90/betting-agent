@@ -72,6 +72,9 @@ TRACKED_KEYS: List[str] = [
     "betting.kelly_fraction",
     "betting.max_stake_percentage",
     "betting.excluded_markets",
+    # Stage 13 Part C: one pick per match. Changing this changes
+    # which picks exist, so it must split the cohort.
+    "betting.max_picks_per_match",
     "betting.gates",
 ]
 
@@ -97,7 +100,80 @@ TRACKED_KEYS: List[str] = [
 #:            how all three correlated pairs in production were created.
 #:         3. The in-memory duplicate key moved from (match_name, selection)
 #:            to (match_id, market, selection), matching the DB unique index.
-CODE_REVISION = "s5.2"
+#: s5.3  Stage 13 (2026-08-23). SELECTION-affecting AND a training-data
+#:       correction — the second of which this fingerprint does NOT cover, so
+#:       read this entry before comparing anything across the boundary.
+#:
+#:       Config change (covered by the fingerprint):
+#:         · `betting.max_picks_per_match: 1` — at most one pick per fixture,
+#:           and it must be the best one. Three different orderings existed:
+#:           picks were sorted by `_rank_key` (EV x confidence x agreement x
+#:           contrarian), the per-match survivor was then chosen by CONFIDENCE
+#:           ALONE, and the final order dropped the contrarian term. At a cap
+#:           of 2 that was survivable; at a cap of 1 it decides which single
+#:           pick represents the match. All three now use `_rank_key`.
+#:
+#:       Selection-affecting, not in the fingerprint's inputs:
+#:         · Team-identity gate at API-Football team resolution. A row matched
+#:           by AF id is now verified against the payload in hand — country
+#:           first (unconditional: a club plays in exactly one domestic
+#:           league), then a lexical-anchor name check. Fails closed: the
+#:           fixture is skipped, the suspect row is neither renamed nor
+#:           re-keyed. Correct by construction and UNVERIFIED IN PRODUCTION
+#:           while the API-Football account is suspended (ledger OPS-1).
+#:         · The KEEP/CHANGE decision prompt no longer contains statistics
+#:           computed from paper picks (ledger EXP-1). Changing the prompt
+#:           changes Claude's decisions, which changes which picks persist.
+#:
+#:       TRAINING-DATA CORRECTION — the dimension `model_version` cannot see:
+#:         29 matches carry a participant whose row belongs to a different club
+#:         and are marked `training_exclusion_reason = corrupt_team_identity`:
+#:           Telstar/Maccabi Tel Aviv 2, SK Rapid/Rapid Bucuresti 10,
+#:           St. Pauli/Pau FC 14, Levski Sofia 3.
+#:         Picks 1148, 309 and 314 are marked
+#:         `evidence_status = void_corrupt_features` — excluded from every
+#:         learner and measurer, retained in the ROI record, because the wagers
+#:         were real.
+#:
+#:         A future REPAIR that lifts an exclusion re-includes those matches in
+#:         the fitting set. That is prediction-affecting and needs its own
+#:         CODE_REVISION bump. It is not bookkeeping.
+#:
+#:       HOW THE REFIT ACTUALLY WORKS — an earlier claim in this stage was
+#:       overturned and the corrected version is what follows.
+#:         OVERTURNED: "Poisson and Elo need no artifact surgery because fit()
+#:         replays from `self.ratings = {}` against the DATABASE."
+#:         Half right. Both DO replay from an empty state — no rating or
+#:         strength table was edited and none needed to be — but they replay
+#:         from whatever `get_completed_matches` returns, and that is the
+#:         Parquet mirror whenever one is warm. The database is the fallback.
+#:         A stale mirror would have fed the excluded matches straight back
+#:         into a fit that believed it had excluded them.
+#:         CORRECTED: exclusion is sufficient only because BOTH caches of the
+#:         excluded data are stamped with the filter's generation and refuse
+#:         themselves on mismatch — the Parquet mirror and the ML pickles. Two
+#:         mechanisms, not one. An exclusion is only real where every cached
+#:         derivative of the excluded data is invalidated.
+#:
+#:         The first retrain is not forced by a flag, a deletion or a dispatch.
+#:         The stamp is a property of the DEPLOYED CODE, so the run that has
+#:         the filter is the run that refuses the artifact: the restored pickle
+#:         has no stamp, `is_fitted` goes false, `trained_at` is CLEARED so the
+#:         age check cannot call it fresh, and `--train` retrains. There is no
+#:         ordering for anyone to get wrong later.
+#:
+#:       THIS COHORT OPENS INSIDE AN OUTAGE. API-Football has been suspended
+#:       since 2026-08-19 10:10:28 UTC, so the first picks under s5.3 are made
+#:       with no fixtures, odds, xG or injuries from that provider. If the
+#:       account is restored mid-cohort, this fingerprint spans two materially
+#:       different input regimes — ledger OPS-1 records the boundary so any
+#:       analysis can split rather than pool. Low pick counts in the first days
+#:       are the expected consequence of a one-pick cap on a card discovered
+#:       without API-Football, not a defect.
+#:
+#:       Verification prompt written BEFORE deployment:
+#:       docs/stage-13-s53-verification-prompt.md
+CODE_REVISION = "s5.3"
 
 
 def _stable(value: Any) -> Any:

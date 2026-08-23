@@ -80,6 +80,7 @@ class TeamFeatures:
             ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
             )
 
             if as_of_date is not None:
@@ -519,6 +520,7 @@ class TeamFeatures:
             ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                 Match.league.in_(self.INTERNATIONAL_LEAGUES),
                 or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
             )
@@ -586,6 +588,7 @@ class TeamFeatures:
                 ).filter(
                     Match.is_fixture == False,
                     Match.home_goals.isnot(None),
+                    Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                     or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
                 )
                 if as_of_date is not None:

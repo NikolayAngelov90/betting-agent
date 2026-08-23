@@ -13,6 +13,8 @@ Temp SQLite throughout; conftest strips DATABASE_URL.
 from datetime import date, datetime, timedelta
 
 import pytest
+
+from tests.experiment_pins import CODE_REVISION_PIN
 from sqlalchemy.exc import IntegrityError
 
 import src.data.database as db_mod
@@ -545,7 +547,7 @@ def test_model_version_and_code_revision_unchanged():
 
     # Stage 10.2: the DEPLOYED config is the frozen subject. The previous
     # version read the gitignored local file.
-    assert CODE_REVISION == "s5.2"
+    assert CODE_REVISION == CODE_REVISION_PIN
     assert model_version(Config("config/config.example.yaml")) == \
         FROZEN_MODEL_VERSION
 

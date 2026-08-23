@@ -57,6 +57,7 @@ class H2HFeatures:
             ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                 or_(
                     and_(Match.home_team_id == home_team_id, Match.away_team_id == away_team_id),
                     and_(Match.home_team_id == away_team_id, Match.away_team_id == home_team_id),

@@ -86,7 +86,36 @@ class _HistoryCache:
 
     @staticmethod
     def _base_filter():
-        return (Match.is_fixture == False, Match.home_goals.isnot(None))  # noqa: E712
+        # ── THE RULE ────────────────────────────────────────────────────
+        # `training_exclusion_reason` gates paths that LEARN FROM or MEASURE a
+        # match. It does NOT gate paths that POPULATE, REPAIR, or RESOLVE a
+        # real-world fact about it.
+        #
+        # So settlement is not gated: the score happened and the wager was real
+        # and gradeable. Whether the features behind the pick were sound is what
+        # `evidence_status` answers — on the PICK, not on the match.
+        #
+        # Nor are the stats/xG backfills: a complete row preserves the option to
+        # repair the fixture later, once authoritative ids exist and
+        # reassignment is unhurried enrichment rather than a correction under
+        # pressure. Exclusion is about what the MODEL CONSUMES, not about what
+        # the database is allowed to know.
+        #
+        # A path that is not gated says so at the query, with this marker:
+        #   # training-exclusion: NOT GATED (<populates|repairs|resolves>)
+        # naming exactly ONE category, so a copy-paste has to assert
+        # something specific and wrong rather than something generic.
+        # ─────────────────────────────────────────────────────────────────
+        # Stage 13 (s5.3). 29 matches carry a participant whose row belongs
+        # to a different club (Telstar/Maccabi Tel Aviv, SK Rapid/Rapid
+        # Bucuresti, St. Pauli/Pau FC, Levski Sofia), so their results are
+        # attributed to teams that did not play them. This filter serves
+        # Poisson, Elo and two of feature_engineer's calls — but NOT
+        # feature_engineer's own historical query, which carries a hand-copied
+        # copy of this predicate and is patched separately.
+        return (Match.is_fixture == False,                       # noqa: E712
+                Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None))
 
     def _fetch_signature(self, db):
         """Cheap change-detector: (row count, max id, max match_date).

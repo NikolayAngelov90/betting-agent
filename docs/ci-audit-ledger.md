@@ -400,3 +400,98 @@ Actions: the dead credential should come out of `.env.local` (trivial, local,
 no code depends on it). Decommissioning the Neon project is Niki's call and is
 recorded here rather than taken — a dead credential proves nothing about whether
 the data behind it is still wanted.
+
+### EXP-1 — The paper/live isolation was absent on the review path (CRITICAL)
+
+`src/reporting/match_briefing.py` contained **zero** references to `is_paper`
+and never called the live-only predicate. Two functions read settled outcomes:
+
+| Function | Line | What it produced |
+| --- | --- | --- |
+| `_recent_selection_stats` | 902 | per-selection win rates |
+| `_recent_review_stats` | 936 | KEEP-vs-CHANGE win rates |
+
+Both are injected into the KEEP/CHANGE decision prompt (lines 1146–1149). So
+paper-pick outcomes were computed into statistics, shown to Claude, and used to
+choose the pick that the **FINAL series then measures**.
+
+**This falsified the README's central isolation claim as written.** The
+experiment could not retrain the MODEL — that part held. It had been informing
+the REVIEW, which produces one of the two series the experiment exists to
+measure. Corrected in README with the original claim kept visible.
+
+A third site surfaced with them: `probability_calibration.fit_from_db` excluded
+paper picks correctly (its docstring explains why) but had **no evidence gate**,
+so it would have calibrated on all three corrupt-feature picks.
+
+**Root cause, and it is a pattern rather than an incident.** `match_briefing`
+hand-wrote its filter because the predicate lived inside `betting_agent`, where
+it could not import from. That is the second instance of one cause:
+`feature_engineer` hand-copied `is_fixture == False` for the same reason. Both
+copies drifted, both were invisible to a hand enumeration, and both fixes were
+the same — move the definition somewhere every caller can reach. The predicates
+now live in `src/data/pick_filters.py`.
+
+**How it was found, and why that matters more than the finding.** The guard was
+widened twice, because the guard was wrong in the same way the enumeration was:
+
+1. hand count of `_live_only()` callers — blind to sites that bypass it
+2. scan for readers, but only `result.isnot(None)`, only `betting_agent.py`
+3. scan for readers, every spelling of "settled", every module — found all three
+
+`match_briefing` writes it as `result.in_(["win", "loss"])`. **A guard that
+recognises one dialect of a predicate reports a clean population it never looked
+at.** That sentence is the transferable part and lives in the guard's docstring.
+
+Third time the same instrument found what careful passes missed — after SEC-4
+and the 23-site training-exclusion scan — and the first time it changed what the
+experiment *means* rather than how it runs.
+
+**Not resolved here, deliberately.** `_recent_review_stats`' docstring states
+its intent: *"evidence-based encouragement to act on research instead of
+deferring to the saved pick."* That statistic is (a) contaminated as described,
+(b) from a segment the 2026-08-07 audit measured at p > 0.15 against
+break-even, and (c) precedes CHANGE picks that carried negative EV at the taken
+price 73% of the time over 90 days. Noise, framed as evidence, used as
+persuasion, on the path that generates the FINAL series. Whether such a
+statistic should be injected at all is a change to what the review is FOR, and
+needs the evidence bar rather than a defect fix. **Leading Stage 14 candidate.**
+
+### EXP-2 — The review-contamination boundary
+
+The consequence of EXP-1 does not stop at the fix: every FINAL-series
+measurement produced since the review began came from a decision partly informed
+by its own paper outcomes.
+
+**Recorded as a boundary, not as row marking** — same treatment as OPS-1, and
+for the same reasons: no irreversible write, no migration, and the fact is a
+property of a period rather than of each row. Membership is derivable from
+`pick_date`.
+
+```
+contaminated:  from the first Claude review  ->  s5.3 deployment
+clean:         s5.3 onward
+```
+
+**Practical reach.** CLV impact is nil — D1 means the FINAL series has no
+resolved closing lines to contaminate. What it does reach is the settled
+record's KEEP-vs-CHANGE comparison and `get_claude_added_value`, both of which
+have been reported and used. The boundary is what lets a future reader know
+which side of it a figure came from.
+
+`get_claude_added_value` was separately ungated on paper picks (EXP-1) and is
+now gated on both, so figures from it after s5.3 are not comparable with figures
+from before it. That discontinuity is expected and is not a regression.
+
+### OBS-4 — Step 1b/1c confirmed working in production
+
+While verifying the s5.3 marking, `saved_picks.disposition` was found non-null
+on 2 rows (1156 on 2026-08-14, 1284 on 2026-08-17), both `consolidated`, both
+carrying the supersession reason format written in Step 1b, both with
+`review_action` NULL — which is the Step 1c query fix working: the review did
+not stamp a verdict on a superseded pick.
+
+Not a defect. Recorded because the expectation used during verification was
+stale (measured 2026-08-14, when the count was 0), and because it is the first
+evidence that consolidation supersedes rather than deletes in production.
+Not pursued further — the discovery phase of this stage is closed.

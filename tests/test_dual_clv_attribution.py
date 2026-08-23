@@ -18,6 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.experiment_pins import CODE_REVISION_PIN
+
 import src.data.database as db_mod
 from src.data.models import Base, Match, Odds, SavedPick, Team
 from src.evaluation.attribution import (FINAL, MODEL, MODEL_PRICE_NOT_KEPT,
@@ -386,7 +388,7 @@ def test_12_stage8_integrity_fixes_are_intact():
     assert A.selections_are_correlated("Home Win", "Over 2.5 Goals")
     assert not A.selections_are_correlated("Over 2.5 Goals", "Double Chance 1X")
     # Stage 9 is evaluation-only: the frozen version must NOT move.
-    assert CODE_REVISION == "s5.2", (
+    assert CODE_REVISION == CODE_REVISION_PIN, (
         "Stage 9 changed CODE_REVISION — it is evaluation-only and must not")
 
 

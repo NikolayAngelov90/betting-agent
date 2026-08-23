@@ -599,7 +599,7 @@ class FlashscoreScraper(BaseScraper):
                 Match.id, Match.flashscore_id,
             ).filter(
                 Match.is_fixture == False,
-                Match.home_goals.isnot(None),
+                Match.home_goals.isnot(None),  # training-exclusion: NOT GATED (populates) - a complete row keeps repair possible later
                 Match.home_shots.is_(None),
                 Match.flashscore_id.isnot(None),
                 Match.match_date >= cutoff,

@@ -11,6 +11,8 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
+from tests.experiment_pins import CODE_REVISION_PIN
+
 import src.data.database as db_mod
 from src.data.models import Base, Match, Odds, SavedPick, Team
 
@@ -308,7 +310,7 @@ def test_invariant_6b_stage8_bumped_the_revision():
     that forgets to bump has to argue with a test."""
     from src.models.model_version import CODE_REVISION
 
-    assert CODE_REVISION == "s5.2", (
+    assert CODE_REVISION == CODE_REVISION_PIN, (
         "Stage 8 made three selection-affecting changes (over/under cross "
         "pairs, the post-Claude correlation re-check, the normalized dedup "
         "key). Any further selection change needs its own bump.")

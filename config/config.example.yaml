@@ -272,6 +272,10 @@ betting:
   max_stake_percentage: 4.0 # Hard cap: maximum 4% of bankroll per bet
   max_picks_per_league: 5   # Portfolio: cap exposure per league per day
   max_total_kelly_pct: 0    # Portfolio: 0 = disabled (show all picks)
+  # Stage 13 Part C: at most ONE pick per match, and it is the
+  # highest-ranked one by the system's own ordering
+  # (EV x confidence x agreement x contrarian).
+  max_picks_per_match: 1
   # WC mode: save a tracked pick for EVERY World Cup match even when no value
   # edge exists (highest-EV selection, staked at the Kelly minimum). National-team
   # competitions only — club leagues keep value-only discipline. Set false to

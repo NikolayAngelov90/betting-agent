@@ -132,11 +132,17 @@ class ProbabilityCalibrator:
         from sqlalchemy import or_
 
         from src.data.models import SavedPick
+        from src.data.pick_filters import valid_evidence
         with db.get_session() as session:
             rows = session.query(
                 SavedPick.selection, SavedPick.predicted_probability, SavedPick.result
             ).filter(
                 SavedPick.result.in_(["win", "loss"]),
+                # Stage 13 (s5.3). This calibrator already excluded paper
+                # picks — correctly — but not picks whose features
+                # described a different club. It recalibrates the model's
+                # probabilities, so it is a learner and needs both.
+                valid_evidence(),
                 # NULL is live: rows written before the column existed.
                 or_(SavedPick.is_paper.is_(False), SavedPick.is_paper.is_(None)),
             ).all()

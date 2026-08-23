@@ -13,6 +13,8 @@ These tests make that divergence impossible to reintroduce silently.
 
 import pathlib
 
+from tests.experiment_pins import CODE_REVISION_PIN
+
 import pytest
 import yaml
 
@@ -27,7 +29,7 @@ LOCAL = "config/config.yaml"
 #: The frozen experimental subject, recomputed in Stage 10.2 from the
 #: configuration production actually executes. The previously quoted
 #: `d1b522` came from the local file and was never deployed.
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.485823"
+from tests.experiment_pins import FROZEN_MODEL_VERSION  # noqa: F401
 
 
 def _example() -> Config:
@@ -105,7 +107,7 @@ def test_the_deployed_config_produces_the_frozen_model_version():
 def test_code_revision_is_unchanged_by_the_reconciliation():
     """Stage 10.2 changed no code. CODE_REVISION distinguishes code paths that
     configuration cannot express; reconciling two config files is not one."""
-    assert CODE_REVISION == "s5.2"
+    assert CODE_REVISION == CODE_REVISION_PIN
 
 
 # ═══════════ over_3.5 is excluded on purpose, and stays that way

@@ -172,6 +172,13 @@ class FeatureEngineer:
                     _hist_filter = [
                         Match.is_fixture == False,
                         Match.home_goals.isnot(None),
+                        # Stage 13 (s5.3). This query does NOT route through
+                        # match_history — it carries its own copy of the
+                        # predicate above. Excluding the 29 from training while
+                        # leaving them here would keep the contamination in
+                        # team form, H2H and rolling goals, which is exactly
+                        # where it does harm.
+                        Match.training_exclusion_reason.is_(None),
                         # Array params, not IN lists: this clause binds the
                         # SAME team set twice, so at 100x volume a plain IN
                         # would put ~52,800 bind parameters in one statement
@@ -381,6 +388,7 @@ class FeatureEngineer:
                 id_in(session, Match.referee, referees),
                 Match.is_fixture == False,  # noqa: E712
                 Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                 Match.match_date >= _ref_cutoff,
             ).subquery()
             rows = session.query(sub).filter(sub.c.rn <= referee_cap).all()
@@ -763,6 +771,7 @@ class FeatureEngineer:
             ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                 Match.home_xg.isnot(None),
             )
 
@@ -888,6 +897,7 @@ class FeatureEngineer:
                 Match.referee == referee,
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                 Match.match_date >= _ref_cutoff,
             )
             if as_of_date is not None:
@@ -1243,6 +1253,7 @@ class FeatureEngineer:
                     Match.league == league,
                     Match.is_fixture == False,
                     Match.home_goals.isnot(None),
+                    Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                     Match.away_goals.isnot(None),
                 )
                 if as_of_date is not None:
@@ -1376,6 +1387,7 @@ class FeatureEngineer:
                 ).filter(
                     Match.is_fixture == False,
                     Match.home_goals.isnot(None),
+                    Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                     Match.match_date < match_date,
                     or_(Match.home_team_id == team_id, Match.away_team_id == team_id),
                 ).order_by(Match.match_date.desc()).limit(10).all()
@@ -1501,6 +1513,7 @@ class FeatureEngineer:
                     Match.season == season,
                     Match.is_fixture == False,
                     Match.home_goals.isnot(None),
+                    Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                     _or(
                         Match.home_team_id.in_([home_id, away_id]),
                         Match.away_team_id.in_([home_id, away_id]),

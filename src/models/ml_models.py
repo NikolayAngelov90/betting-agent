@@ -48,6 +48,32 @@ else:
     )
 
 
+
+def training_filter_generation() -> str:
+    """Fingerprint of the data the model was allowed to train on.
+
+    Stage 13 (s5.3). The mirror and the model pickles are the SAME finding, not
+    two: an exclusion is only real where every cached derivative of the excluded
+    data is invalidated, and there were two such caches.
+
+    Both are restored by the daily workflow's `Restore database and models`
+    step, from the same artifact. So a pickle trained on the contaminated 29 can
+    be restored into a run whose code has the filter — and `ml_retrain_days: 3`
+    will happily call it fresh, because age says nothing about WHAT it was
+    trained on. A one-time forced retrain would have been undone by the next
+    artifact restore.
+
+    Stamped on save, checked on load: a mismatch means retrain, not trust.
+    Shares `history_mirror.filter_generation()` so the two caches can never
+    disagree about what "excluded" means.
+    """
+    try:
+        from src.data.history_mirror import filter_generation
+        return filter_generation()
+    except Exception:            # pragma: no cover — import shape
+        return "unknown"
+
+
 def _compute_hmac(data: bytes) -> str:
     """Compute HMAC-SHA256 hex digest for model data."""
     return hmac.new(_MODEL_HMAC_KEY, data, hashlib.sha256).hexdigest()
@@ -537,6 +563,7 @@ class MLModels:
             "_kept_feature_mask": getattr(self, "_kept_feature_mask", None),
             "_corr_drop_mask": getattr(self, "_corr_drop_mask", None),
             "trained_at": _utcnow().isoformat(),
+            "training_filter_generation": training_filter_generation(),
         }
 
         filepath = save_dir / "ml_models.pkl"
@@ -571,6 +598,24 @@ class MLModels:
         self._kept_feature_mask = state.get("_kept_feature_mask")
         self._corr_drop_mask = state.get("_corr_drop_mask")
         self.trained_at = state.get("trained_at")
+
+        # Stage 13 (s5.3). Refuse, do not trust. A pickle trained under a
+        # different exclusion filter contains what the current code excludes,
+        # and the age check cannot see that — `ml_retrain_days` measures WHEN it
+        # was trained, never on WHAT. Marking it unfitted forces a retrain on
+        # the next run instead of serving contaminated weights.
+        _want = training_filter_generation()
+        _got = state.get("training_filter_generation")
+        if _got != _want:
+            logger.warning(
+                f"ML artifact was trained under exclusion filter {_got!r}, "
+                f"current is {_want!r} — discarding it and forcing a retrain"
+            )
+            self.is_fitted = False
+            self.trained_at = None
+            self.training_filter_generation = None
+            return
+        self.training_filter_generation = _got
 
         logger.info(f"Models loaded from {filepath}")
 
@@ -833,6 +878,7 @@ class GoalsMLModel:
             "_kept_feature_mask": self._kept_feature_mask,
             "_corr_drop_mask": self._corr_drop_mask,
             "trained_at": _utcnow().isoformat(),
+            "training_filter_generation": training_filter_generation(),
         }
         filepath = save_dir / "goals_model.pkl"
         _safe_save(state, filepath)
@@ -861,4 +907,22 @@ class GoalsMLModel:
         self._kept_feature_mask = state.get("_kept_feature_mask")
         self._corr_drop_mask = state.get("_corr_drop_mask")
         self.trained_at = state.get("trained_at")
+
+        # Stage 13 (s5.3). Refuse, do not trust. A pickle trained under a
+        # different exclusion filter contains what the current code excludes,
+        # and the age check cannot see that — `ml_retrain_days` measures WHEN it
+        # was trained, never on WHAT. Marking it unfitted forces a retrain on
+        # the next run instead of serving contaminated weights.
+        _want = training_filter_generation()
+        _got = state.get("training_filter_generation")
+        if _got != _want:
+            logger.warning(
+                f"ML artifact was trained under exclusion filter {_got!r}, "
+                f"current is {_want!r} — discarding it and forcing a retrain"
+            )
+            self.is_fitted = False
+            self.trained_at = None
+            self.training_filter_generation = None
+            return
+        self.training_filter_generation = _got
         logger.info(f"GoalsMLModel loaded from {filepath}")

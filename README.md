@@ -51,7 +51,7 @@ This is the part that matters now. Everything above feeds it.
 | Concept | What it means |
 |---|---|
 | **Frozen model** | `model_version` is a hash of 23 prediction-affecting config keys plus a hand-bumped `CODE_REVISION`. Every pick is stamped with it, so cohorts from different configurations can never be silently pooled. The authoritative config is [`config/config.example.yaml`](config/config.example.yaml) — the file CI deploys. |
-| **Paper/live isolation** | Paper picks are filtered out of ROI, backtests, EV-threshold tuning, ensemble-weight learning and both calibrators (11 filter sites). The experiment cannot retrain its own subject. |
+| **Paper/live isolation** | Paper picks are filtered out of ROI, backtests, EV-threshold tuning, ensemble-weight learning and both calibrators. **The experiment cannot retrain the MODEL. Until s5.3 it could, and did, inform the REVIEW** — see the correction below. |
 | **Dual CLV attribution** | Two named series. **MODEL** = the frozen model's own selection and price. **FINAL** = what was actually taken after Claude's review. They are different bets on ~22% of picks and are never conflated. |
 | **`pick_observations`** | One row per `(pick, attribution)`, written at pick-save time — *before* the review can overwrite `SavedPick.odds`. Without it the model's taken price is unrecoverable: the odds table keeps one row per (match, book, market, selection) and every refresh overwrites it. |
 | **Same-snapshot rule** | A closing observation must come from odds observed **strictly after** the pick was taken. Otherwise a pick's own pricing row is returned as its "close" and CLV reads exactly 0.00% — an echo, not a measurement. |
@@ -62,6 +62,43 @@ This is the part that matters now. Everything above feeds it.
 **Known limitation:** the pre-kickoff refresh covers `h2h` + `totals` only, so ~36% of picks (Team Goals, BTTS, Double Chance) are structurally outside CLV measurement. Accepted deliberately — widening the request would multiply the credit cost.
 
 Audit trail: [`docs/`](docs/) carries one report per stage, including the corrections where a later stage overturned an earlier diagnosis.
+
+
+> **Correction (Stage 13, s5.3).** The claim above previously read: *"Paper
+> picks are filtered out of ROI, backtests, EV-threshold tuning,
+> ensemble-weight learning and both calibrators (11 filter sites). The
+> experiment cannot retrain its own subject."*
+>
+> That was true of the **model** path and false of the **review** path.
+> `match_briefing._recent_selection_stats` and `_recent_review_stats` computed
+> win rates from settled picks with **no paper filter at all** — `is_paper`
+> appeared zero times in that file — and injected them into the KEEP/CHANGE
+> decision prompt. Paper-pick outcomes were therefore informing the review that
+> produces the FINAL series the experiment measures.
+> `probability_calibration.fit_from_db` excluded paper picks correctly but not
+> picks whose features described a different club.
+>
+> All three are gated as of s5.3, the predicates now live in one place
+> (`src/data/pick_filters.py`) so the next module imports rather than
+> reinvents, and `tests/test_valid_evidence_gate.py` enforces both filters
+> across every module — recognising every spelling of "settled", because
+> scoping it to one spelling is exactly what hid this for three audits.
+>
+> **The count "11 filter sites" is deliberately not replaced with another
+> number, and should not be.** A count of the sites that call a predicate
+> cannot see the sites that do not — that arithmetic is precisely what produced
+> the false claim, and a fresher count would carry the same defect with more
+> authority. What replaces it is a guard that scans for readers rather than
+> callers. If you find yourself wanting to put a number back here, put a test
+> there instead.
+>
+> **The cause has now appeared twice, which makes it a pattern rather than an
+> incident.** `feature_engineer` hand-copied `is_fixture == False` because the
+> shared projection was somewhere it did not import from; `match_briefing`
+> hand-wrote its paper filter because the predicate lived inside
+> `betting_agent`. Both times the copy drifted from the original, both times a
+> hand enumeration could not see it, and both times the fix was to move the
+> definition somewhere every caller can reach.
 
 ## AI Pick Review (Claude)
 

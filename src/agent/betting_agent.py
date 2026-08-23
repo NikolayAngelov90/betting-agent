@@ -268,6 +268,10 @@ class FootballBettingAgent:
             return
         try:
             with self.db.get_session() as session:
+                # evidence-gate: NOT GATED (repairs) - a sentinel asking "is
+                # this a brand-new database", not a learner. It repairs a stale
+                # ml=0.0 constant; excluding three picks cannot change whether
+                # the count is zero.
                 settled = session.query(SavedPick).filter(
                     SavedPick.result.isnot(None)
                 ).count()
@@ -873,6 +877,7 @@ class FootballBettingAgent:
                     ).filter(
                         Match.is_fixture == False,  # noqa: E712
                         Match.home_goals.isnot(None),
+                        Match.training_exclusion_reason.is_(None),  # s5.3
                         id_in(session, column, team_ids),
                     ).group_by(column).all():
                         if tid in counts:
@@ -1246,7 +1251,7 @@ class FootballBettingAgent:
             logger.warning(f"Could not send tier-1 fixture failure alert: {_te}")
 
     async def get_daily_picks(self, target_date: date = None,
-                              max_picks_per_match: int = 2,
+                              max_picks_per_match: int = None,
                               leagues: List[str] = None,
                               force: bool = False,
                               shard: int = None,
@@ -1258,7 +1263,9 @@ class FootballBettingAgent:
 
         Args:
             target_date: Date to get picks for (defaults to today)
-            max_picks_per_match: Maximum picks allowed per single match (default 2)
+            max_picks_per_match: Cap on picks per match. None reads
+                `betting.max_picks_per_match` from config (default 1, Stage 13
+                Part C: one pick per match, and it must be the best one).
             leagues: Optional list of league keys to restrict picks to
             force: If True, skip idempotency check and regenerate even if today's picks exist
 
@@ -1586,6 +1593,9 @@ class FootballBettingAgent:
                     _recent_picks = (
                         _cs.query(SavedPick)
                         .filter(SavedPick.result.isnot(None),
+                                # evidence-gate: NOT GATED (resolves) - a
+                                # cold-streak alert on real money. The
+                                # losses happened whatever informed them.
                                 SavedPick.result != "void", _live_only())
                         .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
                         .limit(lookback)
@@ -1722,10 +1732,13 @@ class FootballBettingAgent:
             return all_recommendations, [], []
 
         return self.finalize_picks(
-            all_recommendations, target, max_picks_per_match=max_picks_per_match)
+            all_recommendations, target,
+            max_picks_per_match=(
+                max_picks_per_match if max_picks_per_match is not None
+                else int(self.config.get("betting.max_picks_per_match", 1))))
 
     def finalize_picks(self, all_recommendations, target,
-                       max_picks_per_match: int = 2):
+                       max_picks_per_match: int = 1):
         """Apply the portfolio-level phase and persist the result.
 
         Ranking, the per-match cap, correlation filtering, the briefing-final
@@ -1830,10 +1843,17 @@ class FootballBettingAgent:
 
             limited = []
             for match_id, group in by_match.items():
-                # Total order again: picks tied on confidence within a match
-                # must resolve deterministically, or which one survives the cap
-                # depends on list order.
-                group.sort(key=lambda r: (-r.confidence, r.selection))
+                # Stage 13 Part C — ONE definition of "best".
+                #
+                # This used to sort by confidence alone while the final ordering
+                # used EV x confidence x agreement x contrarian. With a cap of 2
+                # that inconsistency was survivable; with a cap of 1 it decides
+                # which single pick represents the match, so the survivor could
+                # be a high-confidence, low-EV pick while the pick the system
+                # would actually rank first was discarded. `_rank_key` is the
+                # system's own ordering — use it here too, so "the best one"
+                # means the same thing at every stage of selection.
+                group.sort(key=_rank_key)
                 already = existing_counts.get(match_id, 0)
                 slots = max(0, max_picks_per_match - already)
                 if slots < len(group):
@@ -1847,14 +1867,11 @@ class FootballBettingAgent:
                         )
                 limited.extend(group[:slots])
 
-            # Re-sort by EV × confidence × agreement for final ordering
-            limited.sort(
-                key=lambda r: (
-                    -(r.expected_value * r.confidence
-                      * _agreement_bonus.get(r.model_agreement, 1.0)),
-                    r.match_id, r.selection,
-                )
-            )
+            # Stage 13 Part C: the same key again. This previously dropped
+            # the contrarian factor, making the final order disagree with the
+            # pre-dedup order for exactly the picks the contrarian signal was
+            # built to surface.
+            limited.sort(key=_rank_key)
         all_recommendations = limited
 
         # Market correlation filter: when a match has 2 correlated picks
@@ -2466,6 +2483,10 @@ class FootballBettingAgent:
             already_settled = (
                 session.query(SavedPick)
                 .filter(
+                    # evidence-gate: NOT GATED (resolves) - settlement grades a wager
+                    # that was really placed at a real price. Whether the model was
+                    # well-informed is a separate question, and excluding these would
+                    # silently drop three real settled bets from the ROI record.
                     SavedPick.result.isnot(None),
                     SavedPick.settled_at >= correction_window,
                     SavedPick.actual_home_goals.isnot(None),
@@ -2541,7 +2562,7 @@ class FootballBettingAgent:
                                 session.query(Match)
                                 .filter(
                                     Match.is_fixture == False,
-                                    Match.home_goals.isnot(None),
+                                    Match.home_goals.isnot(None),  # training-exclusion: NOT GATED (resolves) - the score happened and the wager was gradeable
                                     Match.match_date >= window_start,
                                     Match.match_date <= window_end,
                                     *_league_filter,
@@ -2679,6 +2700,16 @@ class FootballBettingAgent:
                 SavedPick.result.isnot(None), SavedPick.result != "void",
                 SavedPick.model_result.isnot(None), SavedPick.model_result != "void",
                 SavedPick.pick_date >= lookback,
+                # Stage 13 (s5.3). This site was NOT in the hand enumeration of
+                # _live_only() call sites — it never called it. The structural
+                # scan found it. It measures whether the review beats the model,
+                # so a pick whose features described a different club cannot be
+                # allowed to answer that question.
+                _valid_evidence(),
+                # ...and it was measuring PAPER picks alongside live ones. See
+                # the s5.3 entry: a pre-existing leak in the paper/live
+                # isolation, found by the same scan.
+                _live_only(),
             ).all()
             pairs = [(p.result, p.model_result) for p in rows]
         if len(pairs) < 10:
@@ -2711,6 +2742,9 @@ class FootballBettingAgent:
                 SavedPick.result, SavedPick.odds, SavedPick.kelly_stake_percentage,
                 SavedPick.pick_date, SavedPick.market,
                 SavedPick.predicted_probability, SavedPick.used_fallback_odds,
+            # evidence-gate: NOT GATED (resolves) - the settled record.
+            # These wagers happened; whether the model was well-informed
+            # is a different question, answered by evidence_status.
             ).filter(_live_only()).all()
 
             if not all_picks:
@@ -2907,7 +2941,7 @@ class FootballBettingAgent:
                 SavedPick.kelly_stake_percentage, SavedPick.expected_value,
                 SavedPick.market,
             ).filter(
-                SavedPick.result.isnot(None), _live_only()
+                SavedPick.result.isnot(None), _live_only(), _valid_evidence()
             ).order_by(SavedPick.pick_date).all()
             if not all_picks:
                 print("No settled picks found.")
@@ -2992,7 +3026,7 @@ class FootballBettingAgent:
                 SavedPick.pick_date >= month_ago,
                 # Paper picks must not move ensemble weights: the frozen model
                 # would drift while model_version stayed constant.
-                _live_only(),
+                _live_only(), _valid_evidence(),
             ).all()
             # Extract all needed attributes inside session to avoid detached-instance errors
             settled = [
@@ -3450,6 +3484,7 @@ class FootballBettingAgent:
             ).filter(
                 Match.is_fixture == False,
                 Match.home_goals.isnot(None),
+                Match.training_exclusion_reason.is_(None),  # s5.3 — learns/measures
                 Match.away_goals.isnot(None),
             ).order_by(Match.match_date.desc()).limit(max_samples).all()
 
@@ -3856,7 +3891,7 @@ class FootballBettingAgent:
                 _recent = _s.query(
                     SavedPick.predicted_probability, SavedPick.result
                 ).filter(SavedPick.result.in_(["win", "loss"]),
-                         SavedPick.pick_date >= _cut, _live_only()).all()
+                         SavedPick.pick_date >= _cut, _live_only(), _valid_evidence()).all()
             if len(_recent) >= 25:
                 _pred = sum(float(p) for p, _ in _recent) / len(_recent)
                 _act = sum(1 for _, r in _recent if r == "win") / len(_recent)
@@ -3930,7 +3965,7 @@ class FootballBettingAgent:
                 SavedPick.result != "void",
                 SavedPick.predicted_probability.isnot(None),
                 SavedPick.pick_date >= lookback,
-                _live_only(),
+                _live_only(), _valid_evidence(),
             ).all()
             pick_data = [
                 {
@@ -4155,7 +4190,7 @@ class FootballBettingAgent:
                 recent = (
                     session.query(SavedPick)
                     .filter(SavedPick.result.isnot(None), SavedPick.result != "void",
-                            _live_only())
+                            _live_only(), _valid_evidence())
                     .order_by(SavedPick.pick_date.desc(), SavedPick.id.desc())
                     .limit(lookback)
                     .all()
@@ -4442,6 +4477,30 @@ class FootballBettingAgent:
 
 
 
+
+def _valid_evidence():
+    """Rows that are valid evidence ABOUT THE MODEL.
+
+    Stage 13 (s5.3). Orthogonal to `_live_only()`, which asks whether the wager
+    happened. This asks whether the observation says anything true about the
+    model that produced it.
+
+    A pick whose features were computed from the wrong club is a real wager at a
+    real price on a real fixture — it belongs in the ROI record — but it is not
+    evidence about this model, because the model was not shown this match.
+
+    Applied at every LEARNING or MEASURING site. Deliberately NOT applied where
+    the question is whether the bet happened:
+
+      · get_stats()                     the settled record; the money was real
+      · the cold-streak alert           real losses are real, whatever caused them
+
+    Those two declare themselves at the query with a marker naming exactly
+    ONE category - populates, repairs or resolves - checked by
+    tests/test_valid_evidence_gate.py. The generic form is deliberately not
+    accepted: a copy-paste must assert something specific and wrong.
+    """
+    return SavedPick.evidence_status.is_(None)
 def _configure_cli_runtime():
     """One-time CLI runtime setup (UTF-8 streams + .env load).
 

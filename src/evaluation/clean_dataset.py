@@ -281,6 +281,7 @@ def load_from_db(since: date = date(2022, 1, 1), **kwargs) -> tuple:
             Match.home_goals, Match.away_goals, Match.league,
         ).filter(
             Match.is_fixture == False,  # noqa: E712
+            Match.training_exclusion_reason.is_(None),  # Stage 13 (s5.3)
             Match.home_goals.isnot(None),
             Match.away_goals.isnot(None),
             Match.match_date >= since,
