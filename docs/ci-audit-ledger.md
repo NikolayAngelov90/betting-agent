@@ -310,3 +310,93 @@ parser, so a change that breaks them fails the suite instead of failing silently
 in six months. Same instinct as the structural guards, applied to files rather
 than to call shapes. **Cohort-neutral; deliberately NOT inside the s5.3 break.**
 
+
+### SEC-5 — Key identity, recorded so a rotation is distinguishable from a leak
+
+Nothing in the ledger recorded *which* key a period's spending belonged to.
+Fingerprints below are SHA-256 prefixes; a 128-bit secret is not recoverable
+from one, and the values themselves appear nowhere.
+
+| Credential | Fingerprint (post-rotation, 2026-08-23) |
+| --- | --- |
+| `ODDS_API_KEY` | `sha256:2b98923b9944` |
+| `API_FOOTBALL_KEY` | `sha256:4b8f1e8b118e` |
+
+The pre-rotation keys are deliberately not fingerprinted: they are published in
+git history in full, so a fingerprint would add nothing and invite the mistake
+of treating one as a safe stand-in for the other.
+
+### OPS-2 — The Odds API ledger was NOT desynchronised by the rotation
+
+Expected: a rotated key restarts the provider's counter while the ledger holds
+the accumulated period total, so `reconcile()` — which only ever raises — would
+refuse valid claims for the rest of the month.
+
+Measured instead, from one free `/v4/sports` probe on the rotated key
+(`x-requests-last: 0` confirms it was not billed):
+
+```
+HTTP 200
+x-requests-remaining: 151
+x-requests-last:      0
+x-requests-used:      349
+```
+
+**The provider reports 349 used — exactly what the ledger holds.** The Odds API
+quota is per ACCOUNT, not per key: a rotated key inherits the account's usage.
+There is no divergence, the August row is correct, and no correction is needed.
+`reconcile()`'s guarantee was never violated.
+
+The probe also answers the second-order question it was chosen for: the key is
+valid (HTTP 200), so the rotated value is at least correct in `.env.local`.
+Whether the GitHub secret was updated remains unconfirmed and unconfirmable from
+logs while the budget blocks all requests — no call, no 401.
+
+**What is true is a different, smaller thing.** Free tier is 500
+(151 + 349). The repo's own `odds_api.monthly_credit_budget` is 400 with a
+50-credit safety margin, so 350 are spendable and 349 are spent: **1 credit for
+the last nine days of August, while 151 sit unused at the provider.** That is a
+deliberate conservative budget nearly consumed, not a defect — and it is a
+config decision, not a cohort one (`odds_api.*` is absent from `TRACKED_KEYS`).
+
+Sequencing note: this does not cost nine days of closing lines, because D1 is
+unfixed and the capture writes zero rows whether or not credits exist. The two
+failures are stacked, not additive. But the budget must be right before D1's fix
+can be demonstrated, or there will be nothing to demonstrate it with.
+
+Adding key identity as a ledger dimension was considered and is **not built**:
+the desync it would have fixed does not exist, and a per-key dimension would
+misrepresent a per-account quota. Recorded here so the reasoning survives.
+
+### ENV-2 — A retired Neon connection string in `.env.local`
+
+`.env.local` carries a `DATABASE_URL` pointing at
+`ep-bold-field-al1me8dx-pooler.c-3.eu-central-1.aws.neon.tech`, with
+credentials, while production runs on Supabase
+(`aws-1-eu-central-1.pooler.supabase.com`, per `.env`).
+
+Three questions, answered rather than assumed:
+
+**Which file wins?** Neither, because **nothing loads `.env.local`.** Every
+`load_dotenv()` in the repo either names `.env` explicitly
+(`betting_agent.py:4473`) or calls the bare form, which python-dotenv resolves
+to `.env` — it does not read `.env.local` by convention. Zero Python files in
+the repo reference the filename at all.
+
+**Can any path reach Neon?** No. The pointer is unreachable by code, and the
+credential is dead independently: connecting returns
+`password authentication failed for user 'neondb_owner'`. Doubly inert.
+
+**Does the database still hold data?** Unknown, and not determinable with a dead
+credential. The endpoint still resolves and completes a Postgres handshake, so
+**the Neon project still exists at the provider** — an unretired asset, even if
+this repo cannot reach it.
+
+Severity is therefore LOW, not the "quiet writes to the wrong target" this repo
+already has a scar for — the two AST regression tests guarding import-time
+`load_dotenv()` remain the relevant protection, and they are unaffected.
+
+Actions: the dead credential should come out of `.env.local` (trivial, local,
+no code depends on it). Decommissioning the Neon project is Niki's call and is
+recorded here rather than taken — a dead credential proves nothing about whether
+the data behind it is still wanted.
