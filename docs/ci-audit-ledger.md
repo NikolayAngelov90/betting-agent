@@ -79,6 +79,15 @@ This outranks the multi-account explanation and reframes the support request
 from "I had several accounts" to "my key was leaked and used by others". It
 remains unproven from here.
 
+**The fix is not the safety. The current file is clean; the history is not.**
+A reader who opens `.mcp.json` today sees `${ODDS_API_KEY}` and would
+reasonably conclude nothing was ever exposed. Both values remain in every
+commit from 02de2b0 onward, and in every fork, clone and scraper cache that
+took a copy during those 188 days. **Rotation is what made these keys safe —
+this commit only stopped the bleeding.** Rotation performed by the operator
+on 2026-08-23, before the remediation commit; exact timestamp to be recorded
+on confirmation.
+
 **Git history deliberately NOT rewritten.** Rotation is what kills an exposed
 key. A rewrite unpublishes nothing — forks, clones and scrapers already hold the
 values — and it would break every existing checkout for a benefit rotation has
@@ -93,6 +102,14 @@ file was added. Line 118 carried the chat id beside it.
 **Still live when found** — `getMe` returned HTTP 200 for bot `@na_bets_bot`.
 Anyone with the public repository can post to the picks channel as the bot and
 read group updates.
+
+**The fix is not the safety.** Line 117 now reads
+`os.environ.get("TELEGRAM_BOT_TOKEN")`. That does not mean the token was
+never exposed — it sat in this file, tracked and public, from the day it was
+added until 2026-08-23, and it remains in the history and in every copy taken
+during that period. **Only the BotFather rotation makes it safe.** Rotation
+was in progress at the time of writing; timestamp to be recorded on
+confirmation.
 
 Remediation in code: both values replaced with `os.environ.get(...)`.
 **Rotation is the operator's action and was outstanding at the time of writing**
@@ -210,3 +227,50 @@ nor selection.
 Runs from **2026-08-14 to 2026-08-22** were not in the original 27-run pass.
 08-19 through 08-22 have since been read for OPS-1; the remainder still need a
 full A2/A3 pass.
+
+### SEC-4 — The guard's own fixtures carried real credential prefixes
+
+The first version of `tests/test_no_secrets_in_repo.py` used discriminator
+samples built on the real six-character prefixes of the exposed credentials
+(`309170…`, `858806…`, and a real Odds API event id). The tails were invented, so
+none was a working credential — but a test that hardcodes fragments of the secret
+it exists to detect is a slower version of the same leak, and it would have been
+committed by the very step that removed the originals.
+
+Caught before anything was pushed and amended to fully synthetic values sharing
+no prefix with any real credential. Recorded because the near-miss is the
+instructive part: the scan found the exposures, and the scan's own fixtures
+nearly reintroduced them.
+
+### HYG-1 — Completed one-off scripts deleted
+
+`scripts/settle_feb15.py` — docstring "One-time script to settle Feb 15 2026
+picks" — was still tracked six months later and was the origin of SEC-2. The code
+fix removed the literal; it did not remove the reason the file was there.
+
+Audited all 13 scripts. Six were completed one-offs with zero inbound references
+(every apparent reference was a self-citation in the file's own usage docstring):
+
+| Deleted | Why it is finished |
+| --- | --- |
+| `settle_feb15.py` | one-time settlement for a single day in February |
+| `migrate_to_neon.py` | SQLite → Neon; Neon is retired |
+| `migrate_to_supabase.py` | Neon → Supabase; the migration completed |
+| `merge_old_neon_to_supabase.py` | one-time merge of the old Neon data |
+| `import_mcp_odds.py` | imported MCP JSON dumps into Neon; not in any pipeline |
+| `sync_db.py` | synced the SQLite CI database that the Neon move eliminated |
+
+Seven durable tools remain: `capture_closing_lines`, `ci_alert`,
+`paper_trading_report`, `refresh_and_capture`, `run_baseline`,
+`run_clean_baseline`, `simulate_odds_quota`. All are recoverable from history;
+none is referenced by a workflow that would break.
+
+`simulate_odds_quota.py` is the borderline case and was **kept**: it is a Stage 6
+artefact, but quota planning is live work while OPS-1 and D1 are open.
+
+**Why this is not housekeeping.** Three of this stage's defects share one shape —
+the vacuous cascade test, the 39 FK-violating fixtures, and this token. Each was
+code nothing forced anyone to re-read. A one-off that lingers is a file nobody
+reviews, and that is the condition under which a live credential survives six
+months and a 693-file scan only finds it because someone went looking.
+
