@@ -585,7 +585,7 @@ Not pursued further — the discovery phase of this stage is closed.
 
 ---
 
-# Stage 13.1 — s5.3 verification. **OPEN.**
+# Stage 13.1 — s5.3 verification. **CLOSED 2026-08-24.**
 
 ## THE OPEN QUESTION, first because it could invert the stage
 
@@ -598,7 +598,9 @@ rejected an unstamped artifact, rebuilt, and retrained. It cannot prove the
 it would rebuild 39,157 rows and retrain from scratch every run, forever, and
 every audit would read as green.
 
-**This resolves in one scheduled run. 13.1 stays open until it does.**
+**RESOLVED by run 32716289408 (2026-08-24): both stamps accepted a
+matching artifact. 0 refusals. The mechanism is sound — see the closure
+at the end of this file.**
 
 ### The prediction, stated before looking (falsifiable)
 
@@ -786,3 +788,143 @@ and §7.
 * **egress instrumentation** — a ~97% reduction nothing measures is an
   assertion; measure it or qualify it, do not restate it
 * `.claude/commands/daily-ci-audit.md` (D3) with the Telegram evidence source
+
+---
+
+# Stage 13.1 — CLOSED. Run 32716289408 (schedule, 2026-08-24 10:20 UTC)
+
+## The open question is resolved: the stamps do NOT refuse unconditionally
+
+**0 mirror stamp refusals. 0 ML stamp refusals.** Both artifacts were restored
+from the workflow cache, both carried `6fb354ba0d4c`, both were accepted.
+
+The scenario that could have inverted the stage — a stamp that always refuses,
+rebuilding and retraining forever while every audit reads green — **did not
+happen.** The acceptance half is now proven, and with it the mechanism.
+
+## The four predictions, stated before looking
+
+| # | prediction | result |
+| --- | --- | --- |
+| 1 | no `full resync` line | **DISPROVED** — one occurred |
+| 2 | mirror egress in kilobytes | **DISPROVED** — consequence of 1 |
+| 3 | `--train` skipped on the age check | **CONFIRMED** |
+| 4 | `filter_generation` accepted on both caches | **CONFIRMED** |
+
+Prediction 3, exactly:
+
+```
+Models loaded from data/models/
+ML models are fresh (last trained: 2026-08-23T14:57:18.398196)
+--train skipped: models fresh
+```
+
+0 training starts, 6 clean model loads. Stamped, restored, accepted, age check
+applied. The whole chain.
+
+**Predictions 1 and 2 failed for a reason I did not anticipate, and the reason
+is worth more than the prediction was.**
+
+## MIR-1 — the incremental sync re-admits excluded matches (the habit, again)
+
+The resync was **not** a stamp refusal. The stamp was accepted; then:
+
+```
+history mirror count drift: local=39236 db=39207 — full resync
+history mirror rebuilt: 39,207 completed matches
+```
+
+**39,236 − 39,207 = 29.** The local mirror had the entire excluded population
+back in it.
+
+### Mechanism
+
+`_fetch_incremental` deliberately omits the filter, and its docstring says why:
+
+> *"No is_fixture / home_goals filter: membership of the completed set is
+> decided per row after the fetch, so that a fixture which just gained a result
+> is added and a row whose result was cleared is removed."*
+
+That per-row decision is a **hand-written re-implementation of `_base_filter()`**:
+
+```python
+if (not r.is_fixture) and r.home_goals is not None:
+```
+
+It replicates two of the three conditions and never consults
+`training_exclusion_reason` — which the incremental query does not even fetch.
+
+The watermark makes it recur rather than being one-off. The watermark is
+`max(updated_at)` over the rows **kept** in the mirror. Excluded rows never
+enter it, so their newer `updated_at` (all 29 were written within the last 24h
+by the s5.3 marking) stays permanently ahead of the watermark and every
+incremental sync refetches them.
+
+### What saved it, and what that means
+
+`_completed_count()` **does** carry the filter, so the row-count reconcile
+caught the drift and forced a full resync that rebuilt correctly. **Correctness
+was preserved by the safety net, not by the mechanism.** Without that reconcile,
+excluded matches would sit in the mirror and reach Poisson and Elo silently.
+
+### This is the habit, instance 7 — inside the mechanism built to enforce it
+
+`_base_filter()` is the shared predicate. This is a second copy of it, in a
+different dialect (Python `if` rather than a SQLAlchemy filter), in the same
+file that defines the stamp.
+
+**And the guard could not see it.** `test_no_unguarded_completed_match_query`
+scans for `is_fixture == False`; this spells it `not r.is_fixture`. The exact
+sentence written into that guard's own docstring —
+
+> *a guard that recognises one dialect of a predicate reports a clean
+> population it never looked at*
+
+— failed on the very next case, in the file the guard was written for. Recorded
+because a lesson that does not catch its own next instance has not been learned
+yet.
+
+**Stage 14, and it is not a tidy-up:** the per-row membership test must consult
+the exclusion, the incremental query must fetch the column, and the guard must
+recognise both dialects. Until then every write touching one of the 29 costs a
+full resync.
+
+## Section verdicts — final
+
+| § | claim | verdict |
+| --- | --- | --- |
+| 1 | new picks carry `…098437` | **CONFIRMED** — 6 picks, that version only |
+| 2 | one pick per fixture, and it is the best | **PARTIAL** — 0 multi-pick fixtures, but the cap still never had to choose; blocked on OPS-1 |
+| 3 | mirror stamp | **CONFIRMED for the stamp**; MIR-1 filed separately |
+| 4 | retrain fires unforced, skips when fresh | **CONFIRMED** |
+| 5 | the 29 absent from the fitting set | **CONFIRMED** — mirror rebuilt to the filtered count |
+| 6 | `valid_evidence()` gates correctly | **CONFIRMED** — `Settled 11 picks`, `learn_from_settled` ran and refitted; settled record unchanged at 1074 |
+| 7 | identity gate skip count | **UNTESTABLE** — API-Football suspended, day 6, `1 requests used` |
+| 8 | nothing else moved | **CONFIRMED** |
+
+§6's learner half is now exercised: settlement ran, post-settlement learning ran
+and refitted Poisson/Elo, and the settled record is still `1074`. Whether the
+three marked picks fell inside any lookback window is not observable from the
+log — their exclusion is proven by the guards, not by this run.
+
+§2 and §7 remain tied to **OPS-1**, not to time.
+
+## DEL-1 did not recur
+
+Three `Telegram message sent`, zero delivery failures. That is not a fix — the
+failure is transient by nature — and DEL-1 stays open at its promoted severity.
+
+## Declaration
+
+**The s5.3 break did what it claimed.** The fingerprint is the only version on
+new picks; one pick per fixture holds; the 29 are absent from the fitting set;
+the settled record is untouched; observations balance; and both generation
+stamps have now been shown to refuse a stale artifact *and* accept a fresh one —
+which was the one open question that could have inverted the stage.
+
+**Two claims failed, and the failure was productive.** Predictions 1 and 2 were
+wrong, and being wrong in public — on a number written down before looking — is
+what surfaced MIR-1. A pass would have hidden it.
+
+**Still untested and named, not rounded up:** the per-match cap's ranking half
+and the identity gate, both blocked on API-Football restoration.
