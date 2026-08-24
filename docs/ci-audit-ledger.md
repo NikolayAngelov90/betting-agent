@@ -1699,3 +1699,93 @@ own "44 unsettled picks" reading wrong nine days after I took it.
 
 Recorded, not pursued: why capture began on 08-14; whether the ~31% coverage is
 explained by the market gap alone; and why 16 captures arrived late.
+
+---
+
+## D1 — the open question CLOSES. It did not start by accident.
+
+One query settled it. The 65 `missing` picks in 2026-08-10 → 08-13, by
+competition:
+
+| competition | picks |
+| --- | --- |
+| europe/europa-conference-league | 36 |
+| europe/europa-league | 16 |
+| europe/champions-league | 10 |
+| bulgaria, portugal, sweden (domestic) | 3 |
+
+**62 of 65 — 95.4% — are UEFA competitions.** And the mirror image is exact:
+of the 57 captured from 08-14 onward, **57 are domestic and 0 are UEFA.**
+
+The measurement did not begin by accident on 2026-08-14. **It began when the
+domestic season resumed.** Capture had nothing to capture while the card was
+European qualifiers, because the provider does not price them.
+
+**Stage 12.2 was right and its conclusion was overruled on a reasonable-sounding
+argument that turned out to be a category error.** The objection was that
+qualifiers could not explain zero across ~700 picks — true, but the ~700 are
+picks *considered by the report*, while capture concerns only picks with a
+fixture inside the coming capture window. Those were the qualifiers. Same shape,
+same dates and same cause as D2's injury coverage, which was reclassified for
+exactly this reason and then not connected to this.
+
+## Coverage decomposed, not averaged
+
+The headline "31%" conflates two different things. In 08-14 → 08-22:
+
+| | picks |
+| --- | --- |
+| captured | **57** (100% domestic, 100% inside `h2h`+`totals`) |
+| missing — **outside** `h2h`+`totals` | **78** (structural) |
+| missing — **inside** `h2h`+`totals` | **33** (genuinely not captured) |
+| late | 16 |
+
+**Of the 90 picks the refresh could even price, 57 were captured — 63%, not
+31%.** The other 78 were never capturable: Double Chance, BTTS, Draw No Bet,
+Team Goals sit outside the two markets the refresh requests.
+
+### `late` is a start-time problem, not a density problem
+
+All 16 late picks kick off at **11:00 or 11:30 UTC**. The first closing-lines
+run of the day is ~11:57. Every one of them had already kicked off before the
+first capture attempt of the day existed.
+
+A denser 2-hourly schedule would not help. **An earlier first run would** — the
+window is not wrong, its start is. Recorded, not fixed.
+
+## Budget raised 400 → 450, and the ledger honours it
+
+Changed in **both** `config/config.yaml` and `config/config.example.yaml` — the
+example is what CI deploys, and the two drifting is its own defect class.
+
+**Verified rather than recalled:** `odds_api` appears **0 times** in
+`TRACKED_KEYS`, and `model_version` is unchanged at
+`stage5_baseline_20260807.098437`, still matching the pin. No cohort break, no
+`CODE_REVISION` bump.
+
+**Verified the ledger acts on it**, because a budget raised in config that the
+ledger ignores looks identical to no change:
+
+```
+before:  349/400 used,  1 spendable, =  0 more league request(s)
+after:   349/450 used, 51 spendable, = 25 more league request(s)
+```
+
+## The pattern this exposes — and it recurs on 1 September
+
+August burned **349 credits in 24 days: ~14.5/day, ~450/month** against 400
+spendable. **Raising to 450 buys eight days, not the pattern.** September will
+exhaust around the 27th, October the same.
+
+The README's `measured: 212 credits/month` is **not a measurement** — it and the
+`212 cr at 88% vs 340 cr at 85%` comparison both come from
+`scripts/simulate_odds_quota.py`, whose `simulate()` replays the selection rules
+over historical picks. Corrected in README, relabelled SIMULATED with the real
+burn rate stated beside it, rather than replaced with a fresher estimate — a
+simulation and a measurement are different kinds of claim, and swapping the
+number would preserve the error. Same treatment as "11 filter sites".
+
+**Structural consequence, and the next stage's opening question.** At 57
+observations per 9 days against a 500-observation target, and a budget that
+affords roughly three weeks of every month, the question is no longer *"is it
+measuring"* — it is **"how many days a month can it afford to?"**

@@ -323,10 +323,36 @@ credits = requests × regions × markets = requests × 1 × 2   (eu; h2h,totals)
 
 worst case:  min(7 runs/day × 24-credit ceiling × 31,  400 budget − 50 margin)
              = 350 credits/month   vs 500 free tier   → 30% headroom
-measured:    212 credits/month, worst observed day 46
+SIMULATED:   212 credits/month, worst day 46   <- see the correction below
 ```
 
-A credit is spent only on leagues with an imminent fixture **and** a pick awaiting a close — cheaper *and* better covered than refreshing every league (212 cr at 88% vs 340 cr at 85%).
+A credit is spent only on leagues with an imminent fixture **and** a pick
+awaiting a close.
+
+> **Correction (Stage 14, 2026-08-24).** The line above previously read
+> `measured: 212 credits/month, worst observed day 46`, and the comparison
+> `212 cr at 88% vs 340 cr at 85%` was presented as a measured coverage result.
+>
+> **Neither was measured on production.** Both come from
+> `scripts/simulate_odds_quota.py`, whose `simulate()` replays the selection
+> rules over historical picks. Same class as the ~97% egress reduction that
+> nothing measures.
+>
+> **What production actually spent:** August 2026 burned **349 credits in 24
+> days — ~14.5/day, ~450/month** — more than double the simulated 212. The
+> budget was exhausted on 2026-08-22 and every closing-lines run afterwards
+> requested zero leagues until the budget was raised to 450 on 08-24.
+>
+> The figures are labelled SIMULATED rather than replaced with a fresher
+> estimate, because a simulation and a measurement are different kinds of claim
+> and swapping the number would preserve the error. The measured figure that
+> matters is the burn rate, and it is stated above.
+>
+> **Structural consequence:** at ~14.5 credits/day against 400 spendable, a
+> full month costs ~450. September exhausts around the 27th and October the
+> same. Raising the budget to 450 buys eight days, not the pattern — **the
+> credit budget is now the binding constraint on the experiment's completion
+> date.**
 
 ### Required GitHub Secrets
 
