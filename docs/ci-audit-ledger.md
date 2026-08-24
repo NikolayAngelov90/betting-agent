@@ -1003,3 +1003,93 @@ Everything below carries its evidence and nothing was pursued.
 **§2 and §7 are tied to OPS-1, not to the calendar.** The API-Football reply
 unblocks the per-match cap's ranking half and the identity gate **at once** —
 they are one unblock, not two.
+
+---
+
+## MASK-1 — Outcome tests that pass with the mechanism removed (Stage 14, pre-Part C)
+
+MIR-1 exposed a general property: **wherever a redundant corrective exists, an
+outcome test is vacuous by construction.** It asserts the system's end state,
+and the corrective produces that end state whether or not the mechanism under
+test works.
+
+This is the **third distinct way** tests in this suite have passed for the wrong
+reason, and the only one invisible to a textual scan:
+
+1. `__table__.delete()` — testing the DB constraint while the ORM path was broken
+2. the 39 FK-violating fixtures — true assertions from an impossible starting state
+3. **outcome assertions repaired by a downstream corrective** — this
+
+### Method
+
+Empirical, as with MIR-1: disable one mechanism, run the full suite, record what
+still passes. Not a scan — a scan cannot see this.
+
+### Result: 3 of 4 mechanisms can be deleted with all 742 tests passing
+
+| mechanism | suite with it disabled | verdict |
+| --- | --- | --- |
+| mirror generation stamp | **2 failed** | **VERIFIED** |
+| correlation filtering (pre-persist call site) | **742 passed** | **MASKED** |
+| per-match cap (`slots` limit) | **742 passed** | **EXERCISED, NOT ASSERTED** |
+| in-memory pick dedup (`seen_pick_keys`) | **742 passed** | **ABSENT** |
+
+Three failure modes, not one — which matters, because the remedy differs.
+
+### MASKED — `test_invariant_2_correlated_pair_is_filtered_before_persistence`
+
+The most serious of the three, because it lives in
+`tests/test_experiment_invariants.py` — the file rule F7 tells this project to
+stop for.
+
+Its name asserts **wiring**: *filtered before persistence*. Its body calls
+`agent._filter_correlated_picks(picks)` **directly** and never touches the
+persistence path. Delete the call site at `betting_agent.py:1880` and the
+invariant still passes.
+
+The function is well tested — four more tests in `test_value_logic.py` exercise
+its logic. **What is untested is its installation.** A pure function proven
+correct and never called is the exact shape of Stage 13's `A6` vacuous cascade
+test, one level up: there the test used a path production does not use; here the
+test uses the right function and skips the path that reaches it.
+
+### EXERCISED, NOT ASSERTED — the per-match cap
+
+`test_sharding.py` does call the real limiter with `max_picks_per_match`, so the
+code runs. But its assertions are about shard-order determinism, not about how
+many picks survive. Setting `slots = 99` changes nothing it checks.
+
+So s5.3's headline policy — **one pick per match, and it must be the best one** —
+has no test that fails if the cap stops capping. Production evidence exists
+(0 fixtures with >1 pick on 08-23 and 08-24), but `same_fixture_limit` fired
+**0 times** in both runs, so even that evidence never exercised the limit.
+
+### ABSENT — the in-memory pick dedup
+
+`seen_pick_keys` on `(match_id, market, selection)` has no test naming it.
+`test_briefing_dedup.py` is about odds-bearing match rows in briefings, a
+different idea.
+
+The code comments name the in-memory key and the DB unique index as one idea, so
+this is a genuine masking risk in production even though no test is masked here:
+the DB index would reject a duplicate insert whether or not the in-memory gate
+works, and the failure would surface as a swallowed IntegrityError rather than
+as a duplicate pick.
+
+### The generalisation, for the next mechanism
+
+Ask of every test: **would this still pass if the mechanism it names were
+disabled?** Where the answer is yes, the test measures an outcome and something
+else guarantees it. Two consequences follow, and both are worth stating:
+
+* a safety net makes the system correct **and its mechanism untestable by
+  outcome** — MIR-1's reconcile did both
+* a test whose NAME claims wiring and whose BODY tests a function is the same
+  defect wearing a more convincing label
+
+### Status
+
+Recorded, not fixed. Adding three mechanism tests is deliberate work, not a
+side-effect of an audit — and Stage 14's scope is MIR-1, D1, DEL-1, the audit
+command and egress. **The three mechanisms above are unverified, and that is now
+in the record rather than assumed.**
