@@ -208,3 +208,45 @@ def test_both_caches_share_one_generation():
     from src.models.ml_models import training_filter_generation
 
     assert training_filter_generation() == filter_generation()
+
+
+# ─────────────────── the safety net that is load-bearing and looks redundant
+
+def test_the_row_count_reconcile_still_consults_the_exclusion_filter():
+    """THIS COMPARISON IS LOAD-BEARING. Do not simplify it away.
+
+    On 2026-08-24 (run 32716289408) the exclusion held only because of this
+    reconcile. The stamp was accepted correctly, and then the incremental sync
+    put all 29 excluded matches back into the local mirror — because
+    `_fetch_incremental` deliberately omits the filter and its per-row
+    membership test never consults `training_exclusion_reason`. The drift was
+    caught solely because `_completed_count()` DOES carry the filter and
+    disagreed: local=39236 db=39207, a difference of exactly 29.
+
+    **Correctness was preserved by the safety net, not by the mechanism.**
+
+    It is also exactly the shape of code that gets deleted. A full COUNT on
+    every sync, against a mirror that is supposed to be authoritative, reads as
+    duplicated work — and this repository has a documented instinct for cutting
+    redundant reads (Stage 3, ~97% egress reduction). Remove it and the
+    exclusion fails silently, because nothing else counts anything.
+
+    Until MIR-1 is fixed by pushing the filter into the incremental query, this
+    is the only thing standing between an excluded match and the Poisson fit.
+    """
+    import inspect
+
+    from src.data.history_mirror import HistoryMirror
+
+    src = inspect.getsource(HistoryMirror._completed_count)
+    assert "training_exclusion_reason" in src, (
+        "the row-count reconcile no longer excludes contaminated matches. "
+        "This comparison is what caught MIR-1: without it, the incremental "
+        "sync drifts excluded rows back into the mirror undetected and they "
+        "reach Poisson and Elo. If you are removing it because it looks "
+        "redundant, fix MIR-1 first — push the filter into the incremental "
+        "query — and only then is this count genuinely redundant.")
+
+    sync = inspect.getsource(HistoryMirror._sync_locked)
+    assert "_completed_count" in sync, (
+        "the sync no longer reconciles against a filtered count — see above")

@@ -884,10 +884,12 @@ sentence written into that guard's own docstring —
 because a lesson that does not catch its own next instance has not been learned
 yet.
 
-**Stage 14, and it is not a tidy-up:** the per-row membership test must consult
-the exclusion, the incremental query must fetch the column, and the guard must
-recognise both dialects. Until then every write touching one of the 29 costs a
-full resync.
+**Stage 14, and it is not a tidy-up.** See the fix framing at the end of this
+file: the answer is NOT to teach the guard a second dialect — that is the
+reachability answer again — but to remove the second evaluation context
+entirely. Until then every write touching one of the 29 costs a full resync,
+and the row-count reconcile is the only thing keeping excluded matches out of
+the Poisson fit.
 
 ## Section verdicts — final
 
@@ -928,3 +930,76 @@ what surfaced MIR-1. A pass would have hidden it.
 
 **Still untested and named, not rounded up:** the per-match cap's ranking half
 and the identity gate, both blocked on API-Football restoration.
+
+---
+
+## MIR-1 — the fix, framed correctly
+
+My first proposal was *"the guard must recognise both dialects."* **That is the
+reachability answer again**, and `team_names.py` already showed where it leads:
+the guard grows to cover each new spelling as it is discovered, always one
+instance behind.
+
+### The real defect is the evaluation context, not the spelling
+
+The predicate is evaluated **in two different places**:
+
+| where | how |
+| --- | --- |
+| `_fetch_full` / `_completed_count` | a SQLAlchemy expression, **in the query** |
+| `_fetch_incremental` + `_apply_changes` | a Python `if`, **on fetched rows** |
+
+Those are not two spellings of one definition. They are **two implementations in
+two evaluation contexts**, and no textual guard spans both cleanly — which is
+precisely why mine could not see it. Teaching it a second dialect would paper
+over that, and leave the next context uncovered.
+
+### So the fix is to eliminate the post-fetch test
+
+1. Push the filter into the incremental query using the shared predicate
+2. Fetch `training_exclusion_reason` so the query can apply it
+3. Delete the hand-written per-row membership test
+
+Then there is **one definition, in one context**, and the guard that already
+exists covers it — no new dialect, nothing left to chase.
+
+### The watermark bug is downstream of the same choice
+
+The watermark is `max(updated_at)` over rows **kept** in the mirror. A row
+excluded in Python is a row **the query still returned** — so the watermark saw
+it, or rather, saw around it: excluded rows never enter the kept set, their
+newer timestamps stay permanently ahead of the watermark, and every incremental
+sync refetches them forever.
+
+Filtering in the query fixes both at once: an excluded row is never returned, so
+it can neither be re-admitted nor sit ahead of the watermark. **The watermark
+repair is not a separate task — it falls out of the same change.**
+
+### Until then, the reconcile is the only thing holding
+
+`_completed_count()` carries the filter and is the sole reason the exclusion
+survived 2026-08-24. It is now pinned by
+`test_the_row_count_reconcile_still_consults_the_exclusion_filter`, whose
+assertion message says why it must not be removed: it looks like duplicated work
+on an authoritative mirror, in a repository with a documented instinct for
+cutting redundant reads. **Fix MIR-1 first; only then is that count genuinely
+redundant.**
+
+## Handover — Stage 14
+
+Everything below carries its evidence and nothing was pursued.
+
+| item | note |
+| --- | --- |
+| **MIR-1** | push the filter into the incremental query; watermark falls out of it |
+| **ST14-1** matcher consolidation | cohort event, `CODE_REVISION` bump, four algorithms to reconcile |
+| **DEL-1** | a delivery guarantee, not another alert |
+| **D1** | closing capture writes 0 rows — cause in `refresh_imminent` |
+| injected-statistic question | leading design candidate; p > 0.15, 73% negative EV |
+| egress instrumentation | a ~97% claim nothing measures; measure or qualify |
+| **A4** + pick 1134 | Flashscore timeouts, recurred 2026-08-23 |
+| D2 residual, Neon decommission, Odds budget, xg_for_diff, prune-log truncation, `daily-ci-audit.md`, survivor smoke tests | as recorded |
+
+**§2 and §7 are tied to OPS-1, not to the calendar.** The API-Football reply
+unblocks the per-match cap's ranking half and the identity gate **at once** —
+they are one unblock, not two.
