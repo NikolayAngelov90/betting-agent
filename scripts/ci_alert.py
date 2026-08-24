@@ -72,78 +72,28 @@ annotations so GitHub surfaces them in the run summary regardless.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
-import urllib.error
-import urllib.request
 
-API = "https://api.telegram.org/bot{token}/sendMessage"
-TIMEOUT = 10
-
-
-def _annotate(msg: str) -> None:
-    """GitHub Actions error annotation — visible without opening the log."""
-    print(f"::error::{msg}")
-
-
-def _post(token: str, chat_id: str, text: str):
-    """(ok, detail). `detail` carries Telegram's own description on failure."""
-    req = urllib.request.Request(
-        API.format(token=token),
-        data=json.dumps({"chat_id": chat_id, "text": text}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            return True, resp.status
-    except urllib.error.HTTPError as e:
-        # The body is the whole point: urllib's str(e) is just "HTTP Error 400:
-        # Bad Request", which is what made the original failure undiagnosable.
-        try:
-            body = json.loads(e.read().decode() or "{}")
-        except Exception:
-            body = {}
-        return False, body or {"error_code": e.code}
-    except Exception as e:                      # network, DNS, timeout
-        return False, {"description": f"{type(e).__name__}: {e}"}
 
 
 def send(text: str) -> bool:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    """Delegates to the one delivery path. Kept as a thin wrapper because three
+    workflows invoke this module by name.
 
-    if not token or not chat_id:
-        # Never print which one is missing beyond the name — no values.
-        _annotate("CI alert NOT sent: TELEGRAM_BOT_TOKEN and/or "
-                  "TELEGRAM_CHAT_ID is not set on this step. The alert step "
-                  "needs both in its `env:` block.")
-        return False
+    Stage 14 (DEL-1): the retry, backoff, migration handling and the
+    Telegram-independent surface all moved to
+    `src.reporting.alert_delivery` — stdlib only, so the minimal-dependency
+    workflows can still import it. The dependency argument in this module's
+    header rejected consolidating toward TelegramNotifier; consolidating toward
+    stdlib was always available and is what happened.
+    """
+    from src.reporting.alert_delivery import deliver_alert
 
-    ok, detail = _post(token, chat_id, text)
-    if ok:
-        print("CI alert sent to Telegram.")
-        return True
-
-    desc = (detail or {}).get("description", "")
-    migrated = ((detail or {}).get("parameters") or {}).get("migrate_to_chat_id")
-
-    if migrated:
-        _annotate(
-            "TELEGRAM_CHAT_ID is STALE: the group was upgraded to a supergroup "
-            "and its id changed. Retrying with the id Telegram returned. "
-            "ACTION REQUIRED: update the TELEGRAM_CHAT_ID GitHub secret — this "
-            "retry is a stopgap, not a fix.")
-        ok2, detail2 = _post(token, str(migrated), text)
-        if ok2:
-            print("CI alert sent to the migrated chat id.")
-            return True
-        _annotate(f"CI alert failed after migration retry: "
-                  f"{(detail2 or {}).get('description', detail2)}")
-        return False
-
-    _annotate(f"CI alert NOT delivered. Telegram said: {desc or detail}")
-    return False
+    result = deliver_alert(text)
+    if result.ok:
+        print(f"CI alert delivered (attempt {result.attempts}).")
+    return result.ok
 
 
 def main() -> int:

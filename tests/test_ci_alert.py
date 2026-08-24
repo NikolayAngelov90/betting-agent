@@ -1,4 +1,10 @@
-"""Stage 12.1, Defect 2 — the CI alert must not fail silently.
+"""Stage 14 (DEL-1): delivery moved to `src.reporting.alert_delivery`, which
+both `ci_alert` and `TelegramNotifier.send_alert` now use. These tests kept
+every assertion and only follow the code — the patch target is the shared
+module. `test_alert_delivery.py` adds retry/backoff and the two historical
+replays on top.
+
+Stage 12.1, Defect 2 — the CI alert must not fail silently.
 
 The defect this replaces: workflows sent Telegram alerts with inline `urllib`
 and `except Exception as e: print(...)`.
@@ -20,6 +26,7 @@ import urllib.error
 import pytest
 
 from scripts import ci_alert
+from src.reporting import alert_delivery as _ad
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +53,7 @@ def _http_error(code, payload):
 
 def test_happy_path_sends_once(monkeypatch):
     calls = []
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen",
+    monkeypatch.setattr(_ad.urllib.request, "urlopen",
                         lambda req, **kw: calls.append(req) or _ok())
     assert ci_alert.send("boom") is True
     assert len(calls) == 1
@@ -57,7 +64,7 @@ def test_missing_secrets_is_reported_not_swallowed(monkeypatch, capsys):
     printed nothing useful. A missing secret must be an annotation."""
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     called = []
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen",
+    monkeypatch.setattr(_ad.urllib.request, "urlopen",
                         lambda *a, **k: called.append(1) or _ok())
 
     assert ci_alert.send("boom") is False
@@ -80,7 +87,7 @@ def test_request_is_labelled_as_json(monkeypatch):
         seen["body"] = json.loads(req.data.decode())
         return _ok()
 
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(_ad.urllib.request, "urlopen", fake)
     assert ci_alert.send("hello") is True
     assert seen["ctype"] == "application/json", (
         f"body not labelled as JSON (got {seen['ctype']!r}) — Telegram will "
@@ -90,7 +97,7 @@ def test_request_is_labelled_as_json(monkeypatch):
 
 def test_empty_text_400_is_surfaced(monkeypatch, capsys):
     """The exact production error string must reach the log, not be swallowed."""
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen", _http_error(
+    monkeypatch.setattr(_ad.urllib.request, "urlopen", _http_error(
         400, {"ok": False, "error_code": 400,
               "description": "Bad Request: message text is empty"}))
     assert ci_alert.send("boom") is False
@@ -114,7 +121,7 @@ def test_supergroup_migration_retries_with_the_new_id(monkeypatch, capsys):
                 }).encode()))
         return _ok()
 
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(_ad.urllib.request, "urlopen", fake)
     assert ci_alert.send("boom") is True
     assert seen == ["-100999", "-1001234567890"], seen
 
@@ -140,7 +147,7 @@ def test_migration_id_is_never_persisted(monkeypatch, tmp_path):
 
 
 def test_other_400s_surface_telegrams_own_description(monkeypatch, capsys):
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen", _http_error(
+    monkeypatch.setattr(_ad.urllib.request, "urlopen", _http_error(
         400, {"ok": False, "description": "Bad Request: chat not found"}))
     assert ci_alert.send("boom") is False
     out = capsys.readouterr().out
@@ -151,7 +158,7 @@ def test_other_400s_surface_telegrams_own_description(monkeypatch, capsys):
 def test_network_failure_is_reported(monkeypatch, capsys):
     def boom(*a, **k):
         raise OSError("connection reset")
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(_ad.urllib.request, "urlopen", boom)
     assert ci_alert.send("boom") is False
     assert "connection reset" in capsys.readouterr().out
 
@@ -159,14 +166,14 @@ def test_network_failure_is_reported(monkeypatch, capsys):
 def test_exit_code_is_always_zero(monkeypatch):
     """An undeliverable alert must not turn a green run red, nor a red run
     green — it is an observability channel, not the thing under test."""
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen",
+    monkeypatch.setattr(_ad.urllib.request, "urlopen",
                         _http_error(400, {"description": "nope"}))
     monkeypatch.setattr(ci_alert.sys, "argv", ["ci_alert", "a failure"])
     assert ci_alert.main() == 0
 
 
 def test_message_is_always_printed_even_when_undelivered(monkeypatch, capsys):
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen",
+    monkeypatch.setattr(_ad.urllib.request, "urlopen",
                         _http_error(400, {"description": "nope"}))
     monkeypatch.setattr(ci_alert.sys, "argv", ["ci_alert", "SENTINEL-TEXT"])
     ci_alert.main()
@@ -175,7 +182,7 @@ def test_message_is_always_printed_even_when_undelivered(monkeypatch, capsys):
 
 def test_no_secret_value_is_ever_printed(monkeypatch, capsys):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "SUPERSECRET-TOKEN")
-    monkeypatch.setattr(ci_alert.urllib.request, "urlopen",
+    monkeypatch.setattr(_ad.urllib.request, "urlopen",
                         _http_error(400, {"description": "nope"}))
     ci_alert.send("boom")
     assert "SUPERSECRET-TOKEN" not in capsys.readouterr().out

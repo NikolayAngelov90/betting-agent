@@ -606,10 +606,38 @@ class TelegramNotifier:
         await self._send_message(msg)
 
     async def send_alert(self, text: str):
-        """Send a generic alert message."""
+        """Send an alert through the one guaranteed delivery path.
+
+        Stage 14 (DEL-1). This used to call `_send_message`, which has no retry
+        for transient failures and whose entire surface is a `logger.error` that
+        callers discard. On 2026-08-23 an alert fired correctly and its send
+        timed out five seconds later; nobody learned anything.
+
+        Alerts now go through `alert_delivery`, which retries with backoff and
+        writes a `::error::` annotation and a GitHub step summary entry when
+        delivery fails — surfaces that do not depend on Telegram working.
+
+        `_send_message` is kept for RICH messages (picks, reports) that need
+        HTML, chunking and the returned Message object. Alerts are plain text
+        and need none of it, so this is one path for alerts, not two.
+
+        Returns the DeliveryResult so callers can act on a failure instead of
+        assuming success.
+        """
         if not self.enabled:
-            return
-        await self._send_message(text)
+            return None
+
+        import asyncio
+
+        from src.reporting.alert_delivery import deliver_alert
+
+        result = await asyncio.to_thread(
+            deliver_alert, text, token=self.bot_token, chat_id=self.chat_id)
+        if not result.ok:
+            logger.error(
+                f"ALERT NOT DELIVERED after {result.attempts} attempt(s): "
+                f"{result.detail} — surfaced to CI: {result.surfaced}")
+        return result
 
     async def _send_chunked(self, message: str, header: str = ""):
         """Send a message, splitting into chunks if over Telegram's 4096 char limit.
