@@ -213,26 +213,28 @@ def test_both_caches_share_one_generation():
 # ─────────────────── the safety net that is load-bearing and looks redundant
 
 def test_the_row_count_reconcile_still_consults_the_exclusion_filter():
-    """THIS COMPARISON IS LOAD-BEARING. Do not simplify it away.
+    """A genuine cross-check between two independent paths. Keep it.
 
-    On 2026-08-24 (run 32716289408) the exclusion held only because of this
-    reconcile. The stamp was accepted correctly, and then the incremental sync
-    put all 29 excluded matches back into the local mirror — because
-    `_fetch_incremental` deliberately omits the filter and its per-row
-    membership test never consults `training_exclusion_reason`. The drift was
-    caught solely because `_completed_count()` DOES carry the filter and
-    disagreed: local=39236 db=39207, a difference of exactly 29.
+    HISTORY, because the reason changed. Until MIR-1 was fixed (Stage 14) this
+    reconcile was the ONLY thing keeping excluded matches out of the Poisson
+    fit: `_fetch_delta` re-admitted all 29 on every incremental sync and only
+    the count disagreement (local=39236 db=39207) removed them again.
 
-    **Correctness was preserved by the safety net, not by the mechanism.**
+    That is no longer true. Membership is now decided once, in SQL, from
+    `_base_filter()`, so the incremental path excludes them by construction.
 
-    It is also exactly the shape of code that gets deleted. A full COUNT on
-    every sync, against a mirror that is supposed to be authoritative, reads as
-    duplicated work — and this repository has a documented instinct for cutting
-    redundant reads (Stage 3, ~97% egress reduction). Remove it and the
-    exclusion fails silently, because nothing else counts anything.
+    The reconcile stays anyway, and its value is now different and better: it is
+    an independent cross-check. The incremental path maintains the mirror
+    row-by-row; this counts the database directly. Two paths that must agree.
+    Deletes still leave no trace in `updated_at`, so without it a deleted row
+    would linger indefinitely.
 
-    Until MIR-1 is fixed by pushing the filter into the incremental query, this
-    is the only thing standing between an excluded match and the Poisson fit.
+    Worth knowing when judging whether to keep it: when MIR-1 was reproduced,
+    this reconcile MASKED the outcome tests. "Is the excluded match gone from
+    the mirror?" passed even against the broken code, because the reconcile
+    removed it. Only the tests that measured the mechanism — the watermark and
+    the source itself — failed. A safety net that repairs the symptom will hide
+    the defect from any test that asks about outcomes.
     """
     import inspect
 
@@ -240,12 +242,11 @@ def test_the_row_count_reconcile_still_consults_the_exclusion_filter():
 
     src = inspect.getsource(HistoryMirror._completed_count)
     assert "training_exclusion_reason" in src, (
-        "the row-count reconcile no longer excludes contaminated matches. "
-        "This comparison is what caught MIR-1: without it, the incremental "
-        "sync drifts excluded rows back into the mirror undetected and they "
-        "reach Poisson and Elo. If you are removing it because it looks "
-        "redundant, fix MIR-1 first — push the filter into the incremental "
-        "query — and only then is this count genuinely redundant.")
+        "the row-count reconcile no longer excludes contaminated matches. It "
+        "is the independent half of a two-path cross-check: the incremental "
+        "sync maintains the mirror row-by-row, this counts the database. If "
+        "they stop measuring the same population the check is worthless, and "
+        "deletes — which leave no trace in updated_at — go unnoticed.")
 
     sync = inspect.getsource(HistoryMirror._sync_locked)
     assert "_completed_count" in sync, (

@@ -21,7 +21,9 @@ import pytest
 pytest.importorskip("pyarrow", reason="Parquet engine required for the mirror")
 
 from src.data.database import DatabaseManager
-from src.data.history_mirror import HistoryMirror, MirrorUnavailable, SCHEMA_VERSION
+from src.data.history_mirror import HistoryMirror
+from src.data.history_mirror import MirrorUnavailable, SCHEMA_VERSION
+from src.data.match_history import _HistoryCache
 from src.data.models import Match, Team
 
 
@@ -65,9 +67,12 @@ def _db_truth(db):
             Match.id, Match.match_date, Match.home_team_id, Match.away_team_id,
             Match.home_goals, Match.away_goals, Match.home_xg, Match.away_xg,
             Match.league,
+        # MIR-1 (Stage 14): this helper used to hand-copy the predicate too —
+        # the same habit, in the harness. It now asks the one definition, so
+        # "what the mirror should contain" cannot drift from what production
+        # thinks it should contain.
         ).filter(
-            Match.is_fixture == False,  # noqa: E712
-            Match.home_goals.isnot(None),
+            *_HistoryCache._base_filter()
         ).order_by(Match.match_date.asc(), Match.id.asc()).all()
     return [tuple(r) for r in rows]
 
@@ -409,3 +414,114 @@ class TestModelsSeeIdenticalRowsThroughTheMirror:
             assert mirror_poisson[tid]["defense"] == pytest.approx(vals["defense"], abs=1e-12)
 
         assert mirror_avg == pytest.approx(db_avg, abs=1e-12)
+
+
+class TestMIR1ExcludedMatchesNeverDriftBack:
+    """Stage 14, MIR-1 — reproduced from production before it was fixed.
+
+    On 2026-08-24 (run 32716289408) the mirror's generation stamp was accepted
+    correctly, and then the incremental sync put all 29 excluded matches back:
+
+        history mirror count drift: local=39236 db=39207 — full resync
+
+    39,236 - 39,207 = 29. Membership was decided after the fetch by a
+    hand-written `if (not r.is_fixture) and r.home_goals is not None` that never
+    consulted `training_exclusion_reason`. Only the row-count reconcile removed
+    them again, at the cost of a full resync every time.
+    """
+
+    def test_marking_a_match_excluded_removes_it_from_the_mirror(self, db, mirror):
+        """The reproduction. Verified to FAIL against the pre-fix code."""
+        _seed(db, n=12)
+        frame = mirror.sync(db)
+        before = len(frame)
+
+        with db.get_session() as session:
+            victim = session.query(Match).order_by(Match.id.asc()).first()
+            victim_id = victim.id
+            victim.training_exclusion_reason = "corrupt_team_identity"
+            session.commit()
+
+        frame = mirror.sync(db)
+
+        assert victim_id not in set(frame["id"]), (
+            "an excluded match survived an incremental sync — this is MIR-1: "
+            "the row is still returned by the query, so it must be REMOVED, "
+            "not silently kept")
+        assert len(frame) == before - 1
+        assert _mirror_tuples(frame) == _db_truth(db)
+
+    def test_an_excluded_match_does_not_re_enter_on_a_later_sync(self, db, mirror):
+        """The half that made MIR-1 permanent rather than one-off."""
+        _seed(db, n=12)
+        mirror.sync(db)
+        with db.get_session() as session:
+            victim = session.query(Match).order_by(Match.id.asc()).first()
+            victim_id = victim.id
+            victim.training_exclusion_reason = "corrupt_team_identity"
+            session.commit()
+
+        for _ in range(3):
+            frame = mirror.sync(db)
+            assert victim_id not in set(frame["id"]), (
+                "the excluded match came back on a repeat sync")
+
+    def test_the_watermark_advances_past_an_excluded_row(self, db, mirror):
+        """The watermark repair, and it falls out of the same change.
+
+        Before: the watermark was `max(updated_at)` over rows KEPT in the
+        mirror. Excluded rows never entered it, so their newer timestamps stayed
+        ahead of it forever and every incremental sync refetched them.
+
+        After: the row is still RETURNED — flagged a non-member rather than
+        filtered out — so its `updated_at` enters the watermark computation and
+        the watermark moves past it. Nothing is refetched forever.
+
+        Note this is why the fix could not simply put the predicate in the WHERE
+        clause: a row filtered out of the query is a row that can never be
+        removed from the mirror, and can never advance the watermark either.
+        """
+        _seed(db, n=12)
+        mirror.sync(db)
+        with db.get_session() as session:
+            victim = session.query(Match).order_by(Match.id.desc()).first()
+            victim.training_exclusion_reason = "corrupt_team_identity"
+            session.commit()
+
+        mirror.sync(db)
+        watermark_after = mirror._read_meta().get("watermark")
+
+        with db.get_session() as session:
+            excluded_ts = session.query(Match.updated_at).filter(
+                Match.training_exclusion_reason.isnot(None)).scalar()
+
+        import pandas as pd
+        assert watermark_after is not None
+        assert pd.Timestamp(watermark_after) >= pd.Timestamp(excluded_ts), (
+            "the watermark is behind an excluded row's updated_at — that row "
+            "will be refetched on every sync forever, which is what made MIR-1 "
+            "permanent rather than one-off")
+
+    def test_membership_is_not_re_implemented_in_python(self):
+        """One definition, one evaluation context.
+
+        The fix is NOT teaching a guard to recognise `not r.is_fixture` as well
+        as `is_fixture == False`. That is the reachability answer, and it leaves
+        the guard one instance behind forever. The predicate is now evaluated
+        once, in SQL, from `_base_filter()`, and this module reads the result.
+        """
+        import inspect
+
+        from src.data.history_mirror import HistoryMirror
+
+        merge = inspect.getsource(HistoryMirror._merge)
+        assert "r.is_member" in merge
+        assert "r.is_fixture" not in merge, (
+            "the post-fetch membership test is back — that is a second "
+            "evaluation context, and it is how MIR-1 happened")
+
+        delta = inspect.getsource(HistoryMirror._fetch_delta)
+        assert "_base_filter()" in delta, (
+            "the incremental fetch no longer derives membership from the one "
+            "shared predicate")
+

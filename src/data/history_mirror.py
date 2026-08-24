@@ -358,19 +358,41 @@ class HistoryMirror:
 
     @staticmethod
     def _fetch_delta(db, since):
-        """Rows changed at or after ``since`` — completed or not.
+        """Rows changed at or after ``since``, each flagged for membership.
 
-        No is_fixture / home_goals filter: membership of the completed set is
-        decided per row after the fetch, so that a fixture which just gained a
-        result is added and a row whose result was cleared is removed.
+        The WHERE clause still selects on ``updated_at`` alone, deliberately.
+        Membership cannot be a WHERE condition here: a row that stops belonging
+        — a result cleared, or a match newly excluded — must still come back, or
+        it is never removed from the mirror. Filtering it out of the query would
+        trade one silent drift for its mirror image.
+
+        MIR-1 (Stage 14). What used to happen after the fetch was a hand-written
+        re-implementation of the membership predicate::
+
+            if (not r.is_fixture) and r.home_goals is not None:
+
+        Two of three conditions, in a second evaluation context, never
+        consulting ``training_exclusion_reason`` — which this query did not even
+        fetch. So the 29 excluded matches were re-admitted on every incremental
+        sync, and only the row-count reconcile removed them again.
+
+        The fix is not to teach a guard a second dialect. It is to evaluate the
+        predicate ONCE, in SQL, from ``_base_filter()`` itself, and return the
+        answer as a column. There is now one definition; this module reads its
+        result and does not restate it.
         """
+        from sqlalchemy import and_
+
+        from src.data.match_history import _HistoryCache
+
+        is_member = and_(*_HistoryCache._base_filter()).label("is_member")
         with db.get_session() as session:
             return session.query(
                 Match.id, Match.match_date,
                 Match.home_team_id, Match.away_team_id,
                 Match.home_goals, Match.away_goals,
                 Match.home_xg, Match.away_xg, Match.league,
-                Match.updated_at, Match.is_fixture,
+                Match.updated_at, is_member,
             ).filter(
                 Match.updated_at >= since
             ).order_by(Match.updated_at.asc()).all()
@@ -440,7 +462,9 @@ class HistoryMirror:
 
         completed, removed = [], []
         for r in rows:
-            if (not r.is_fixture) and r.home_goals is not None:
+            # MIR-1: membership was decided by the database, from the one
+            # shared predicate. Nothing is re-tested here.
+            if r.is_member:
                 completed.append({
                     "id": r.id, "match_date": r.match_date,
                     "home_team_id": r.home_team_id, "away_team_id": r.away_team_id,
