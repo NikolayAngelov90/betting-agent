@@ -498,73 +498,134 @@ Not pursued further — the discovery phase of this stage is closed.
 
 ---
 
-## First run under s5.3 — run 32646469497
+# Stage 13.1 — s5.3 verification. **OPEN.**
 
-| field | value |
+## THE OPEN QUESTION, first because it could invert the stage
+
+**If the generation stamps refuse unconditionally, this stage's most-praised
+mechanism is a permanent full-egress rebuild wearing the appearance of a pass.**
+
+Run 32646469497 proved the *refusal* half of both stamps: mirror and pickle each
+rejected an unstamped artifact, rebuilt, and retrained. It cannot prove the
+*acceptance* half, and a stamp that always refuses looks identical from here —
+it would rebuild 39,157 rows and retrain from scratch every run, forever, and
+every audit would read as green.
+
+**This resolves in one scheduled run. 13.1 stays open until it does.**
+
+### The prediction, stated before looking (falsifiable)
+
+Next scheduled run (~09:37 UTC cron), if the mechanism works end to end:
+
+| what | must show |
 | --- | --- |
-| run | 32646469497 |
-| trigger | **workflow_dispatch** (not the 09:37 cron) |
-| started | 2026-08-23 14:46:38 UTC |
-| conclusion | success |
-| commit | `bef66ca` (confirmed on origin/main before the run) |
-| verdict | **DEGRADED — expected**, plus 2 findings |
+| mirror | **no** `full resync` line; incremental sync only |
+| mirror egress | **kilobytes**, not the ~7.8 MB this run spent |
+| `--train` | **skipped** on the age check, `is_fitted` true, pickle loaded |
+| stamp in metadata | `filter_generation` == `6fb354ba0d4c` on both caches |
 
-Audited against `docs/stage-13-s53-verification-prompt.md`, written before
-deployment. Verdicts: 3 CONFIRMED, 4 PARTIAL, 1 UNTESTABLE. **Not one section is
-recorded as a pass on evidence that could not be produced.**
+If it instead shows another full resync and another retrain, the stamps refuse
+unconditionally and §3/§4 are DISPROVED, not partial.
 
-### Trigger independence
+## Verdicts so far — 3 CONFIRMED, 4 PARTIAL, 1 UNTESTABLE
 
-`workflow_dispatch:` declares **no inputs**, no step references
-`github.event_name` or `inputs.`, and `concurrency: {group: daily-picks,
-cancel-in-progress: false}` is trigger-independent. So every code-behaviour
-conclusion below holds for the scheduled run.
+| § | claim | verdict |
+| --- | --- | --- |
+| 1 | new picks carry `…098437` | **CONFIRMED** — 11 picks, that version only |
+| 2 | one pick per fixture, and it is the best | **PARTIAL** — see below |
+| 3 | mirror discarded and rebuilt | **PARTIAL — awaiting run N+1** |
+| 4 | retrain fired unforced | **PARTIAL — awaiting run N+1** |
+| 5 | the 29 absent from the fitting set | **CONFIRMED** (39,186 − 39,157 = 29) |
+| 6 | `valid_evidence()` gates correctly | **PARTIAL** — settled record unchanged; learner half unexercised |
+| 7 | identity gate skip count | **UNTESTABLE — API-Football suspended** |
+| 8 | nothing else moved | **CONFIRMED** — 22 observations = 2 × 11 |
 
-What is **not** trigger-independent is the clock: this ran at 14:46 rather than
-~09:55, and that is why `Settled 0 picks` — which is what left §6 partial.
+### §2 and §7 are blocked on the same thing — tie them to it
 
-### RUN-1 — an alert fired and never arrived
+§2's "at most one" half is confirmed trivially: `same_fixture_limit` fired **0
+times**, because no fixture produced competing candidates. The half that matters
+— that the survivor is the highest-ranked by `_rank_key` rather than the
+highest-confidence — needs a fuller card. §7 needs fixtures at all.
+
+Both are **blocked on API-Football restoration (OPS-1)**, not on time passing.
+Neither may drift toward PASS because the calendar moved. When the account is
+restored, the same two sections are re-run against a run with a real card.
+
+### §6's remaining half is trigger-dependent, correctly identified
+
+`Settled 0 picks` — this ran at 14:46, not ~09:55, so nothing settled and no
+learner consumed an outcome. The scheduled run settles yesterday's picks and
+will exercise it. The settled-record half is already CONFIRMED: `1074 /
+51.676% / −3.8361%`, byte-identical to the pre-break measurement, with the
+counterfactual (`1072 / −3.8899%`) proving the two are distinguishable.
+
+### Trigger independence — established
+
+`workflow_dispatch:` declares **no inputs**; no step references
+`github.event_name` or `inputs.`; `concurrency: {group: daily-picks,
+cancel-in-progress: false}` is identical either way. Every *code-behaviour*
+conclusion holds for the scheduled run. Only the *clock* differs, which is
+exactly what left §6 partial.
+
+---
+
+## DEL-1 — Alert delivery has no guarantee (STRUCTURAL, promoted)
+
+Not an incident. Two occurrences, different causes, **different code paths**,
+identical class:
+
+| when | run | failure |
+| --- | --- | --- |
+| 2026-08-11 | 31482430418 | alert built but undelivered — **HTTP 400**; "fixed" in `451fe3f`, which added `scripts/ci_alert.py` |
+| 2026-08-23 | 32646469497 | `Failed to send Telegram message: **Timed out**` — the agent's own `_send_message`, 5s after a Flashscore tier-1 alert fired |
+
+**This is a structural flaw in everything this stage built for observability.**
+Every alert designed here — the D3 assertions, the CI failure-alert step, the
+API-Football suspension notice — terminates in the same last hop. A run can
+fail, detect correctly, and still be silent.
+
+It is the second version of the finding that opened this stage. Part A:
+*27 runs, none flagged.* Now: *alerts fired, none arrived.*
+
+**The remedy is not another alert. It is a delivery guarantee:**
+
+1. retry with backoff on the send
+2. a surface that does not depend on Telegram at all — fail the workflow step so
+   the run goes red, and/or write to the GitHub job summary. Something whose
+   failure mode is visible in the same place the run already is.
+3. record the send's own outcome, so *"alert fired"* and *"alert arrived"* stop
+   being the same line in a log
+
+> An alert whose only channel can fail silently is not an alert. It is a log
+> line with ambition.
+
+Also note: the alert that failed to deliver was **A4 recurring** — two tier-1
+leagues (`portugal/primeira-liga`, `spain/laliga`) returned 0 fixtures.
+
+## RUN-2 — the daily-audit command does not exist
+
+`.claude/commands/` holds only `review-daily-picks.md`. `daily-ci-audit.md` was
+Part A's A4 deliverable, deferred to Stage 14 with the rest of D3. This audit
+was done by hand against the verification prompt instead.
+
+Recorded as an **operator tracking error**, not an implementation gap: the
+deferral was approved in the same conversation that later asked for the command
+to be used.
+
+## Egress — measured basis, and the instrumentation gap
+
+**Nothing measures egress.** The figure below is an estimate from a measured row
+count and the known 10-column projection.
 
 ```
-14:52:27  Flashscore tier-1 failure for portugal/primeira-liga: 0 fixtures
-14:52:27  Flashscore tier-1 failure for spain/laliga: 0 fixtures
-14:52:32  Failed to send Telegram message: Timed out
+2 x full resync x 39,157 rows x ~100 B/row  =  ~7.8 MB   + one full ML retrain
 ```
 
-The detection worked; the delivery did not. This is the OBS-1 problem in a new
-form — not an alert that fires daily and changes nothing, but an alert that
-fires once and reaches nobody. A later message did send, so the token and chat
-id are fine; this was a transient timeout with **no retry and no failure
-surface**. Recorded, not pursued.
+(The second resync at 14:54:06 was legitimate row-count drift as results landed
+mid-run, not a stamp failure.)
 
-Note this is also A4 recurring: two tier-1 leagues returned 0 fixtures.
-
-### RUN-2 — `.claude/commands/daily-ci-audit.md` does not exist
-
-`.claude/commands/` contains only `review-daily-picks.md`. The daily audit
-command was Part A's A4 deliverable and was deferred to Stage 14 along with the
-rest of D3; this audit was therefore performed by hand against the verification
-prompt instead. Recorded so the gap is visible rather than assumed closed.
-
-### Egress
-
-No instrumentation reports actual bytes, so this is an estimate from a measured
-row count and the known projection — and the absence of a measurement is itself
-worth noting, since a 97% egress reduction that nothing measures cannot be
-verified.
-
-Two full mirror resyncs occurred (14:53:28 and 14:54:06 — the second from
-legitimate row-count drift as results landed mid-run), each of 39,157 rows over
-a 10-column projection at roughly 100 bytes/row:
-
-```
-this run   ~3.9 MB per resync  x2  =  ~7.8 MB   + a full ML retrain
-```
-
-**Prediction for the next run, if the stamp mechanism works end to end:** the
-mirror's generation matches, so no full resync — incremental sync only, on the
-order of **kilobytes** rather than megabytes; and the pickle's generation
-matches, so the age check applies and `--train` is **skipped** (trained today,
-threshold 3 days). If the next run instead shows another full resync and another
-retrain, the stamp is refusing unconditionally and is costing a full rebuild
-every run, forever.
+**The gap is the finding.** The README quotes a ~97% Supabase egress reduction
+from Stage 3 as a result. Nothing in the pipeline measures egress, so it is an
+assertion, not a result — and it cannot be verified, defended, or noticed when
+it regresses. **Stage 14, with the same treatment as the "11 filter sites"
+number: do not replace it with a fresher estimate; measure it or qualify it.**
