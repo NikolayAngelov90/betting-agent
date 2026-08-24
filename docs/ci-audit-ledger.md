@@ -1325,3 +1325,108 @@ Per this project's convention, they stand as written, with this annotation:
 
 Nothing fixed. The two defective invariants join MASK-1's three mechanism tests
 and MASK-3 as deliberate work for a later stage.
+
+---
+
+## DEL-2 — The red run is disabled by design, in one workflow only (measured, not changed)
+
+DEL-1's exit-code decision — an alert must not turn a green run red — rests on a
+precondition: **that a genuinely broken run is already red.** Part A disproved
+that precondition for this repository: 27 runs audited, 1 BROKEN, 9 DEGRADED,
+**all 27 reporting `conclusion: success`**.
+
+Measured across all three workflows. They are not the same, and the difference
+is the whole finding.
+
+| workflow | steps | `continue-on-error: true` | alert condition | goes red on a real failure? |
+| --- | --- | --- | --- | --- |
+| `daily-picks` | 30 | **9** | `if: always()` | **NO** |
+| `closing-lines` | 9 | **0** | `if: failure()` | **yes** |
+| `paper-trading-report` | 9 | **0** | `if: failure()` | **yes** |
+
+**Only `daily-picks` has the disabled-red-run condition**, and it is the one that
+produces picks.
+
+### The nine guarded steps in `daily-picks`
+
+```
+Download camoufox Firefox binary
+Run daily update (fixtures + odds, no Flashscore results)
+Settle yesterday's predictions
+Retrain ML models (if stale)
+Install Claude Code CLI (pick review via Pro subscription)
+Generate, review, and send picks
+Scrape Flashscore results for all leagues (post-picks)
+Settle late results (post update-results)
+Send weekly performance report (Sundays only)
+```
+
+Five of those are the core pipeline. Any of them can fail and the job stays
+green.
+
+### The failure-check step detects the failure and exits 0
+
+It reads the five core outcomes, and:
+
+* none failed -> `sys.exit(0)`
+* some failed -> sends a message via `ci_alert` and **falls off the end**, which
+  is also exit 0
+
+Its own message says so out loud:
+
+> *"These run with continue-on-error, so the job may still be green."*
+
+So the step correctly detects a broken run, correctly reports it, and correctly
+declines to fail. Nothing is malfunctioning. The design is coherent — and its
+consequence is that **GitHub's own failure notifications never fire for the
+workflow that produces picks.**
+
+### What this means for DEL-1's surface
+
+DEL-1 added `::error::` annotations and a GitHub step summary entry. Both are
+real, and both are **passive**: they require someone to open the run page.
+
+The active Telegram-independent surface — a red run in the Actions list, an
+email, a GitHub notification — is unavailable in `daily-picks` by design. So
+after DEL-1, a failed alert delivery on the picks workflow surfaces only to
+someone who was already looking.
+
+**That is not a defect in DEL-1's fix.** It is the ceiling DEL-1's fix can reach
+while the precondition is false.
+
+### Not changed, deliberately
+
+Making `daily-picks` go red for genuine failures is an operational change with
+real consequences — a red run every time Flashscore times out or the Claude CLI
+hits a session limit, both of which happen routinely and neither of which stops
+picks being produced. That is a judgement about what Niki wants to be paged for,
+not a code fix, and it is not this stage's to make.
+
+**Measured and recorded. The decision goes to the operator.**
+
+The narrow version, if a full change is unwanted: `continue-on-error` on the
+scrapers is defensible; on `Generate, review, and send picks` it is the step
+whose failure means no picks exist at all, and a green run then means nothing.
+Those two cases could reasonably be decided differently.
+
+### Guard-design notes (accumulated)
+
+Two rules, both learned by a guard misfiring rather than by design:
+
+**A guard that cannot tell documentation from the real thing gets switched off.**
+The one-sender guard first fired on a `print()` in `--telegram-setup` showing a
+user a `getUpdates` URL. Scoped to request construction, not to mentions of the
+domain. Same family as refusing to treat a bare 32-hex as a secret, because The
+Odds API returns 32-hex event ids in fixture data.
+
+**A rationale that rules out one direction is routinely read as ruling out the
+goal.** `ci_alert.py` correctly rejected consolidating toward `TelegramNotifier`
+— it imports `python-telegram-bot`, which three workflows deliberately do not
+install. That reasoning was then read, including by me, as ruling out
+consolidation. Consolidating toward stdlib was available the whole time.
+
+This is THE HABIT's respectable form: most duplications in this codebase have no
+justification, and this one had a good one. The lesson is not "the rationale was
+wrong" — it was right — but that a documented reason for not doing X one way
+becomes, over time, a reason for not doing X.
+
