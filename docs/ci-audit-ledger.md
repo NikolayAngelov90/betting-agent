@@ -1618,3 +1618,84 @@ apply" has other possible causes and this has NOT been investigated.
 Recorded as a finding and deliberately not pursued, per the stage's closed door.
 It is the obvious first task for whoever runs the command next.
 
+
+---
+
+## D1 — PREMISE FALSIFIED. The experiment is measuring.
+
+Stage 14 opened with: *"the experiment has never collected a single valid
+closing line... 0 valid CLV pairs... The fault is in request construction,
+inside `refresh_imminent`."*
+
+**That was true when Stage 13 measured it and is not true now.** No fix was
+made, because there is no defect of the described shape.
+
+### What today's paper-trading report says (run 32720148367, 2026-08-24)
+
+```
+captured           57
+valid CLV pairs  : 57
+
+MODEL  (model_market / model_selection)     CLV mean -0.509%  95% CI [-1.4%, +0.3%]
+FINAL  (market / selection, post-review)    CLV mean -0.470%  95% CI [-1.2%, +0.3%]
+```
+
+Both series resolved independently, with cluster-bootstrapped intervals. This is
+the measurement the whole project exists to make, and it exists.
+
+### The refresh path works, and has for months
+
+Across all saved logs:
+
+```
+result=ok       65     result=no_rows  17     result=skipped  41
+refresh_imminent: 1339 / 1323 / 1289 / 204 / 179 odds rows written
+```
+
+`no_rows` is real but is the minority case, not the rule. B1's inference — *both
+counts zero means an empty event list, so the fault is request construction* —
+was drawn from the DEGRADED runs and generalised to all of them.
+
+### The actual timeline, from `closing_capture_status`
+
+| window | captured | missing | late |
+| --- | --- | --- | --- |
+| 08-10 → 08-13 | **0** | 65 | 1 |
+| 08-14 → 08-22 | **57** | 111 | 16 |
+| 08-23 → | 0 | 8 | 3 |
+
+**The turning point is 2026-08-14**, and the stop on 08-22 is explained: the
+August budget reached 349/400 with 1 credit spendable, and every closing-lines
+run since requests `0 league(s) = 0 credits`. Capture did not break — it ran out
+of money, exactly as OPS-2 predicted it would.
+
+The three reports that said *"0 valid CLV pairs"* were **correct for their
+dates**. Nothing has been collected before 08-14 and nothing since 08-22.
+
+### What has NOT been established
+
+**Why it began working on 2026-08-14.** The commits that day are the Stage 13
+Step 1 fixes (ORM cascade, consolidation, FK pragma) and none of them touch the
+capture path. So the change was not ours, and until the cause is known it cannot
+be relied on to continue. **This is the open question, and it is the one that
+matters** — a measurement that started by accident can stop by accident.
+
+### The real remaining defect is COVERAGE, not capture
+
+In the window where capture worked: **57 captured, 111 missing, 16 late** — about
+31%. The README already concedes ~36% of markets (Team Goals, BTTS, Double
+Chance) sit outside the `h2h` + `totals` refresh, which accounts for part of it
+and not all.
+
+`late` is its own question: a price observed at or after kickoff is excluded, so
+16 captures were thrown away for arriving too late relative to the run schedule.
+
+### Status
+
+**D1 is not `FIX DEPLOYED — UNDEMONSTRATED`. It is `PREMISE FALSIFIED — NO FIX
+MADE`.** The stage's purpose was overtaken by events between Stage 13's
+measurement and Stage 14's execution, which is the same staleness that made my
+own "44 unsettled picks" reading wrong nine days after I took it.
+
+Recorded, not pursued: why capture began on 08-14; whether the ~31% coverage is
+explained by the market gap alone; and why 16 captures arrived late.
