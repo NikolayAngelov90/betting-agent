@@ -1093,3 +1093,116 @@ Recorded, not fixed. Adding three mechanism tests is deliberate work, not a
 side-effect of an audit — and Stage 14's scope is MIR-1, D1, DEL-1, the audit
 command and egress. **The three mechanisms above are unverified, and that is now
 in the record rather than assumed.**
+
+---
+
+## MASK-2 — The halt condition, audited (Stage 14, measurement only)
+
+Every prompt in this project ends with hard rule F7: *"if any invariant in
+`tests/test_experiment_invariants.py` fails — STOP, do not fix, report."* It has
+authorised every commit in Stages 13 and 14. Its contents had never been audited
+by the standard this project invented three days ago.
+
+**Method.** Disable the mechanism each invariant names; run the file; record
+whether it fails. Measurement only — nothing fixed.
+
+**A correction to my own method, before the results.** Six disables were
+attempted; **two were no-ops** — the regexes matched nothing, so the code was
+never changed and "26 passed" meant nothing. Both were redone against verified
+targets. A masking audit that does not verify its own disable produces exactly
+the false confidence it is auditing for.
+
+### Results — 6 of 10 numbered invariants audited
+
+| invariant | mechanism it names | disabled → | verdict |
+| --- | --- | --- | --- |
+| 1 | unique index `ix_saved_picks_dedup` | **1 failed** | **VERIFIED** |
+| 1b | the in-memory dedup KEY SHAPE | 26 passed (gate disabled) | **CORRECTLY SCOPED** |
+| 2 | the correlation filter call site | 26 passed | **MASKED** |
+| 3 | the calibrator's paper filter | 26 passed | **VACUOUS** |
+| 6 | `CODE_REVISION` feeding the fingerprint | **1 failed** | **VERIFIED** |
+| 10 | `_live_only()` in the ROI record | **1 failed** | **VERIFIED** |
+
+**Three genuinely halt. One is correctly scoped and narrower than it looks. Two
+cannot stop what their names describe.**
+
+### Invariant 3 is vacuous by fixture size — a FOURTH way to pass wrongly
+
+`test_invariant_3_calibration_fit_ignores_paper_rows` seeds 200 paper picks and
+asserts `not fitted`. Measured directly, with the filter intact and then removed:
+
+```
+is_paper=True   ->  "0 settled picks < 300 minimum"      (filter works)
+is_paper=False  ->  "200 settled picks < 300 minimum"    (refuses anyway)
+```
+
+**The fixture never reaches the threshold at which the mechanism would matter.**
+The assertion is true, the mechanism is unverified, and deleting the paper
+filter entirely changes nothing.
+
+This is distinct from the three failure modes already recorded — not a wrong
+path, not an impossible starting state, not a corrective repairing the outcome.
+It is a fixture that stops short of the decision point. Call it what it is: **a
+test whose fixture cannot reach the branch it is named for.**
+
+### Invariant 2 is masked
+
+Recorded in MASK-1: its name asserts *before persistence*, its body calls
+`_filter_correlated_picks` directly, and the call site at
+`betting_agent.py:1880` can be deleted with the invariant still green.
+
+### Invariant 1b is fine, and worth saying so
+
+Disabling the in-memory dedup GATE leaves it passing — but its name is
+*"inmemory_dedup_keys_on_identity_not_display_name"*, and it tests the KEY
+SHAPE via `inspect.getsource`. Name and body agree. **Not every narrow test is a
+defective one**, and an audit that cannot tell the difference is as useless as
+no audit.
+
+### What this means for F7
+
+**F7's authority is partly earned and partly assumed.** Three of the six audited
+invariants would genuinely halt a stage. Two would not — and one of those,
+invariant 2, guards the correlation filtering that Stage 8 bumped `s5.2` for.
+
+Not audited: invariants 2b, 2c, 2d, 4, 5, 5b, 6b, 7, 8, 8b, 8c, 9, 10b — 15 of
+the 21 test functions. Several are pure-predicate tests whose names match their
+bodies (2b, 2c, 8b, 8c) and are probably fine; the rest are unmeasured.
+
+**This belongs in the Stage 13/14 record as a correction to the method, not as a
+bug in one file.** Every stage that reported "all 26 invariants pass" reported
+something weaker than it sounded: 26 assertions held, of which an unmeasured
+number could not have failed.
+
+Nothing fixed. This joins the three mechanism tests from MASK-1 as deliberate
+work for a later stage.
+
+## MASK-3 — A broken pick-dedup gate would be near-silent
+
+Confirming the "swallowed" hypothesis: **no exception is involved at all.**
+`_insert_pick_if_absent` uses `ON CONFLICT DO NOTHING` on
+`(match_id, selection, pick_date)` and returns `None` on conflict.
+
+The caller does notice — and then:
+
+```python
+if inserted_id is None:
+    logger.debug(f"Pick already saved by a concurrent writer, skipping: ...")
+    continue
+```
+
+Three problems, in ascending order of importance:
+
+1. it is `DEBUG`, not a counted metric
+2. the message **asserts a cause** — "a concurrent writer" — that would be wrong
+   if the real cause were a broken in-memory gate
+3. nothing aggregates or alarms on it
+
+DEBUG does reach CI logs (46 lines in run 32716289408; 0 conflict lines, so no
+duplicates occurred). So a broken gate would be **discoverable in principle and
+invisible in practice**: a scattering of DEBUG lines blaming concurrency, which
+nobody counts.
+
+That is OBS-2's shape — the failure gets quieter as it gets total — and it means
+the redundancy between the in-memory gate and the database index is not merely
+untested but effectively unmonitored.
