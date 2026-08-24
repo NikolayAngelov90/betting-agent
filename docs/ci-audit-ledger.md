@@ -1419,6 +1419,26 @@ user a `getUpdates` URL. Scoped to request construction, not to mentions of the
 domain. Same family as refusing to treat a bare 32-hex as a secret, because The
 Odds API returns 32-hex event ids in fixture data.
 
+**A single anomalous result is evidence about the MEASUREMENT first.** Three
+instances in this stage, and the third is the one that generalises it:
+
+1. **The positive control.** Two disables matched nothing; "26 passed" reported
+   mechanisms as unverified that were never tested. One of them (invariant 1)
+   was VERIFIED once redone.
+2. **Invariants 4 and 8c.** Invariant 4 did not fail when `max_lead` was nulled
+   but did when the strictly-after gate was disabled — the first mutation
+   targeted a different mechanism. Invariant 8c survived a stubbed
+   `_effective_n` because the stub coincidentally returned exactly what 8c
+   asserts for singletons.
+3. **A cp1251 console.** The DEL-2 harness reported "no annotation" on the
+   scraper case. The cause was a `UnicodeEncodeError` printing an emoji to a
+   non-UTF-8 console — a defect in the harness, not the workflow.
+
+The third matters most: the first two were about mutations of the code under
+test, the third was about the tooling doing the measuring. **The rule applies to
+your own instruments, not only to the thing being instrumented.** Rule out the
+measurement before believing the result.
+
 **A rationale that rules out one direction is routinely read as ruling out the
 goal.** `ci_alert.py` correctly rejected consolidating toward `TelegramNotifier`
 — it imports `python-telegram-bot`, which three workflows deliberately do not
@@ -1476,4 +1496,70 @@ red and nothing else — no email arrives.
 contains an emoji, and crashes on a console without UTF-8 (Windows cp1251).
 Irrelevant in CI, which is Linux/UTF-8, but local invocation on Windows needs
 `PYTHONIOENCODING=utf-8`. Found while testing; pre-existing.
+
+---
+
+## Part D — the daily audit command, built and validated
+
+`.claude/commands/daily-ci-audit.md` (judgement) + `scripts/ci_audit.py`
+(counting). The command was referenced as though it existed before it did; it
+now does.
+
+**Validated by reproduction, which is the only claim worth making about an audit
+procedure.** Re-audited 2026-08-11 -> 2026-08-13 against the Part A manual pass:
+
+```
+27 runs   1 BROKEN   9 DEGRADED   17 CLEAN   —   zero disagreements
+```
+
+### Building it found five defects in itself, each caught by that requirement
+
+A procedure that cannot reproduce a known result is not ready for an unknown
+one — and every one of these would have produced a confident, wrong table.
+
+1. **A definition read as an occurrence.** `step(s) FAILED — ` matched the
+   workflow's own source, which GitHub echoes into the log. Two DEGRADED runs
+   were reported BROKEN. Same class as the `--telegram-setup` false positive and
+   the bare 32-hex: a guard that cannot tell a definition from an instance.
+2. **A truncated query read as an empty result.** `--limit 40` per workflow
+   covers five days of closing-lines, which fires every two hours. Fourteen runs
+   were simply absent, and absence looked like "no runs in the window".
+3. **Reading one workflow's vocabulary against another's logs.** With
+   daily-picks patterns only, 25 of 27 runs came back CLEAN against a manual
+   pass that found 9 DEGRADED. `result=no_rows` and `credits claimed` are the
+   closing-lines evidence.
+4. **A missing signal, found by the one remaining disagreement.** Run
+   31588427891: the manual pass caught a discarded briefing decision, the script
+   did not. That is the A1 cascade defect's signature.
+5. **cp1251 again.** `subprocess.run(text=True)` decodes with the platform
+   codec; a log byte outside it killed the reader thread and returned None.
+   **Third instance in this stage** after the DEL-2 harness and the `ci_alert`
+   emoji — and the second in my own tooling rather than the code under test.
+
+### Two assertions are deliberately NOT self-calibrating
+
+Most fire only when a unit that produced data within the last 7 runs produces
+none. Two do not, because they are wrong on the first occurrence rather than
+relative to history:
+
+* credits claimed with zero closing lines captured, or `result=no_rows`
+* a briefing decision computed and then discarded
+
+### Backlog surfaced, recorded, NOT pursued
+
+The first `--unaudited` run reports **334 runs with no ledger verdict, from
+2026-02-24 to 2026-08-24**:
+
+```
+268 CLEAN     59 DEGRADED     7 BROKEN
+```
+
+Part A audited 27 runs and called it "every run since the Stage 12 boundary",
+which it was. It was never every run. **Eight of the DEGRADED runs show
+discarded briefing decisions dating to June** — earlier than Stage 13's
+conclusion that the A1 cascade defect ran for four days, though "Could not
+apply" has other possible causes and this has NOT been investigated.
+
+Recorded as a finding and deliberately not pursued, per the stage's closed door.
+It is the obvious first task for whoever runs the command next.
 
