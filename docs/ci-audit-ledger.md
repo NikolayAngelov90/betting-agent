@@ -55,6 +55,87 @@ Audited by `.claude/commands/daily-ci-audit.md`.
 
 ---
 
+## THE HABIT — read this before the individual findings
+
+Every defect below is an instance of one habit:
+
+> **When something needs to be used somewhere else, a second copy appears
+> instead of the first being made reachable.** The copy is always the site that
+> drifts.
+
+| # | The shared thing | What appeared instead | The defect it caused |
+| --- | --- | --- | --- |
+| 1 | Telegram delivery | `scripts/ci_alert.py`, a second sender | DEL-1: fix built a second path to the same last hop; the class survived it |
+| 2 | `match_history._base_filter()` | `feature_engineer.py:173`, hand-copied `is_fixture == False` | contamination stayed in form/H2H/rolling goals |
+| 3 | `_live_only()` | `match_briefing`'s own filters | EXP-1: paper outcomes reached the KEEP/CHANGE prompt |
+| 4 | one ranking | three orderings that disagreed | the per-match survivor was not the best pick |
+| 5 | one cohort literal | six copies of `"s5.2"` across five files | the next bump edits five and misses one |
+| 6 | `src/utils/team_names.py` | five more name matchers | the wrong-fixture class this stage exists for |
+
+### Instance 6 is the one that should change how the corrective is stated
+
+The obvious lesson is "make the first one reachable". **That is not sufficient,
+and instance 6 proves it.**
+
+`src/utils/team_names.py` already existed as the canonical home. It is already
+imported by `betting_agent`, `match_briefing`, `apifootball_scraper` and
+`flashscore_scraper`. `flashscore_scraper.py:1703` even carries a migration note
+telling future callers to import it directly.
+
+Copies appeared anyway:
+
+* `theodds_scraper.py:109` — its docstring says outright *"Reuse
+  FlashscoreScraper's fuzzy match logic **without importing the class**"*
+* `footballdataorg_scraper.py:260` — its own `_names_match`
+* `apifootball_scraper.py:1402` — its own `_names_similar`, in a file that
+  **imports the canonical utility 266 lines later**
+
+The reachable version was reachable, documented, and already in use in the same
+file. The copy appeared regardless. So reachability is necessary and does not
+prevent this; **only a guard that fails when a second definition appears does.**
+
+### And this stage committed the habit while fixing it
+
+`names_share_an_anchor` was added at `apifootball_scraper.py:440` — a
+general-purpose name predicate placed inside a scraper rather than in
+`team_names.py` with the others. It is not a straight duplicate (it is
+deliberately an anchor test, not a similarity ratio — see Part B), but it is the
+same habit: a name-matching function that belongs in the shared module, put
+somewhere else because that was where it was needed.
+
+Recorded because the stage that named the habit is not exempt from it, and
+because a pattern nobody catches themselves committing is a pattern nobody
+believes.
+
+### What the three guards actually are
+
+Named this way, the guards built in s5.3 stop looking like three separate good
+ideas:
+
+| guard | one definition it protects |
+| --- | --- |
+| `test_training_exclusion.py` | the exclusion predicate |
+| `test_valid_evidence_gate.py` | `live_only()` / `valid_evidence()` |
+| `test_no_secrets_in_repo.py` | credentials belong in the environment, once |
+
+All three enforce the same corrective: **one definition, and a test that fails
+when a second appears.** `team_names.py` never had one, which is why it has five
+copies despite being the canonical home.
+
+### The search strategy this gives Stage 14
+
+Not a to-do list — a query: **find the places where the same idea is spelled
+twice.** Start with the ones already visible:
+
+* five name matchers vs `src/utils/team_names.py`
+* two senders vs one delivery guarantee (DEL-1)
+* `_normalise` / `_norm` / `_tokens` duplicated across scrapers
+* any predicate a guard does not yet pin
+
+Each is a candidate for the same treatment: consolidate, then guard the
+consolidation. The guard is the half that lasts.
+
+
 ## Incidents (Stage 13, recorded 2026-08-23)
 
 ### SEC-1 — Two live API keys public for 188 days (CRITICAL, remediated)
