@@ -1206,3 +1206,122 @@ nobody counts.
 That is OBS-2's shape — the failure gets quieter as it gets total — and it means
 the redundancy between the in-memory gate and the database index is not merely
 untested but effectively unmonitored.
+
+---
+
+## METHOD — every masking audit in this project starts by proving its own mutation
+
+**Read this before any result below, and before running the next audit.**
+
+A disable-based audit works by removing a mechanism and observing whether its
+test fails. That method has one failure mode, and it is silent:
+
+> **If the mutation does not land, every test passes and the table reports a
+> mechanism as unverified when it was never tested at all.**
+
+It happened here. Six disables were attempted in the first pass; **two matched
+nothing** — the regexes found no target, the files were never modified, and
+"26 passed" meant nothing. Both were redone against verified anchors and one of
+them (invariant 1) turned out to be VERIFIED, the opposite of what the unmutated
+run implied.
+
+This is the vacuous-cascade-test defect one level further up: **an audit that
+cannot fail is worse than no audit, because it produces a table.** A table is
+believed.
+
+**The rule, therefore:** a masking audit MUST carry a positive control. Assert
+the anchor occurs exactly once, mutate, then re-read the file and assert it
+differs. Report `UNMUTATED` and discard the result otherwise. The harness used
+for the second pass does this on every case.
+
+**And a corollary, from invariant 1b:** an audit must also distinguish a
+correctly scoped narrow test from a vacuous one. `test_invariant_1b_inmemory_
+dedup_keys_on_identity_not_display_name` survives disabling the dedup GATE — but
+it is named for the KEY SHAPE and tests exactly that via `inspect.getsource`.
+Name and body agree. An audit that flags it is as useless as one that misses
+invariant 2.
+
+---
+
+## MASK-2 (complete) — the halt condition, measured
+
+20 of 21 test functions in `tests/test_experiment_invariants.py`, each measured
+by disabling the mechanism it names, every mutation positively controlled.
+
+| invariant | mechanism disabled | result | verdict |
+| --- | --- | --- | --- |
+| 1 | unique index `ix_saved_picks_dedup` | 1 failed | **VERIFIED** |
+| 1b | the dedup gate (name is the key shape) | 26 passed | **CORRECTLY SCOPED** |
+| 2 | correlation filter **call site** | 26 passed | **MASKED** |
+| 2b / 2c | `selections_are_correlated` predicate | 7 failed | **VERIFIED** |
+| 2d | post-review correlation re-check | 1 failed | **VERIFIED** |
+| 3 | the calibrator's paper filter | 26 passed | **VACUOUS** |
+| 3b | paper filter on a learning path | 1 failed | **VERIFIED** |
+| 4 | same-snapshot gate | 2 failed | **VERIFIED** |
+| 5 / 5b | strictly-after rule | 2 failed | **VERIFIED** |
+| 6 | `CODE_REVISION` → fingerprint | 1 failed | **VERIFIED** |
+| 6b | the revision pin | 1 failed | **VERIFIED** |
+| 7 | `TRACKED_KEYS` excludes eval-only keys | 1 failed | **VERIFIED** |
+| 8 | `_effective_n` wiring in checkpoints | 1 failed | **VERIFIED** |
+| 8b | cluster bootstrap | 1 failed | **VERIFIED** |
+| 8c | `_effective_n` singleton behaviour | 2 failed | **VERIFIED** |
+| 9 | `model_version` filter in `load_picks` | 1 failed | **VERIFIED** |
+| 10 | `_live_only()` in the ROI record | 1 failed | **VERIFIED** |
+| 10b | `paper_trading_mode` pin | 1 failed | **VERIFIED** |
+
+Not audited: `test_teams_table_import_is_used`, a lint-style check on an import
+rather than a guard over a production mechanism.
+
+**Result: 16 verified, 1 correctly scoped, 2 defective.**
+
+### The two that cannot stop what they name
+
+**Invariant 2** — MASKED. Its name asserts *before persistence*; its body calls
+`_filter_correlated_picks` directly. Delete the call site at
+`betting_agent.py:1880` and it stays green. It guards the correlation filtering
+that Stage 8 bumped `s5.2` for.
+
+**Invariant 3** — VACUOUS by fixture size. Seeds 200 paper picks against a
+300-pick minimum, so it asserts `not fitted` for a reason unrelated to the paper
+filter. Measured directly: with the filter it logs *"0 settled picks < 300
+minimum"*; without it, *"200 settled picks < 300 minimum"*. Deleting the filter
+changes nothing.
+
+### Two mutations that taught something about the method
+
+**Invariant 8c** initially survived a stubbed `_effective_n` — because the stub
+returned `(n, n, 1.0, n)`, which is exactly what 8c asserts for singleton
+clusters. The mutation coincidentally preserved the property under test. Re-run
+with a mutation that breaks it (`deff = 2.0`), it fails correctly.
+
+**Invariant 4** did not fail when `max_lead` was nulled, but did fail when the
+strictly-after gate was disabled. It is sensitive to a real mechanism; the first
+mutation simply targeted a different one. **A single non-failure is evidence
+about the mutation, not yet about the test.**
+
+### What this means for F7
+
+**The floor is largely real.** Sixteen of nineteen measured guards would halt a
+stage. Two would not.
+
+That is a better result than the partial audit suggested — and it is only
+trustworthy because the method now proves its own mutations. The half-measured
+state was the worst of the three, exactly as predicted: it invited the
+assumption that the unmeasured half resembled the measured half, and the
+measured half was split 3–2.
+
+## Retroactive annotation — the invariant-pass claim
+
+Every stage in this project has declared some version of *"all 26 invariants
+pass"* — Stages 13, 13.1 and earlier. **Those declarations are not rewritten.**
+Per this project's convention, they stand as written, with this annotation:
+
+> **Audited 2026-08-24.** The claim was weaker than it sounded. Of the 19
+> measured guards in `tests/test_experiment_invariants.py`, 16 fail when the
+> mechanism they name is disabled and 2 do not: invariant 2 (masked — tests the
+> function, not the wiring) and invariant 3 (vacuous — fixture below the
+> mechanism's threshold). A passing suite therefore verified less than the count
+> implied, in a way nobody could have detected before the disable method existed.
+
+Nothing fixed. The two defective invariants join MASK-1's three mechanism tests
+and MASK-3 as deliberate work for a later stage.
