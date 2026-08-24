@@ -281,9 +281,30 @@ jobs:
               print("All critical steps OK:", steps)
               sys.exit(0)
           msg = ("⚠️ Daily picks: step(s) FAILED — " + ", ".join(failed)
-                 + ". These run with continue-on-error, so the job may still be"
-                 + " green. Logs: " + os.environ.get("RUN_URL", ""))
+                 + ". Logs: " + os.environ.get("RUN_URL", ""))
           subprocess.run([sys.executable, "-m", "scripts.ci_alert", msg], check=False)
+
+          # DEL-2 (Stage 14). Narrow by decision: the job goes RED only when
+          # pick generation failed.
+          #
+          # continue-on-error stays on every step, deliberately. Removing it
+          # would halt the job at the failure, so --update-results, the second
+          # --settle and the cache saves would never run. This changes the run's
+          # COLOUR, not its execution.
+          #
+          # Why only this step: continue-on-error on a scraper absorbs a
+          # routine, recoverable failure — Flashscore times out, results arrive
+          # tomorrow. On pick generation it converts "the day produced nothing"
+          # into a green run. Those were never the same policy; they had the
+          # same setting because nobody had separated them.
+          #
+          # Safe to exit non-zero here: every subsequent step carries
+          # `if: always()` (verified, not assumed — including `Save ML models
+          # cache`), so a red run still saves its artifacts.
+          if steps["picks (incl. review)"] == "failure":
+              print("::error::Pick generation FAILED — no picks were produced "
+                    "for today. Failing the job so the run shows red.")
+              sys.exit(1)
           EOF
 
       - name: Send weekly performance report (Sundays only)

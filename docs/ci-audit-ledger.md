@@ -1430,3 +1430,50 @@ justification, and this one had a good one. The lesson is not "the rationale was
 wrong" — it was right — but that a documented reason for not doing X one way
 becomes, over time, a reason for not doing X.
 
+### DEL-2 — IMPLEMENTED, narrow (operator decision, 2026-08-24)
+
+`daily-picks` now exits 1 **only** when `Generate, review, and send picks`
+reports failure. Every other core-step failure keeps its existing behaviour:
+Telegram message, `::error::` annotation, exit 0.
+
+**`continue-on-error: true` was left on all 9 steps, deliberately.** Removing it
+would halt the job at the failure, so `--update-results`, the second `--settle`
+and the cache saves would never run. The change alters the run's COLOUR, not its
+execution.
+
+**Ordering constraint — verified, not read.** A step exiting non-zero skips
+later steps unless they carry `if: always()`. All five steps after the check
+already do (`Send weekly performance report`, `Save ML models cache`,
+`Save camoufox binary cache`) or carry `if: failure()`
+(`Upload logs on failure`, `Notify Telegram on workflow failure`, which will now
+correctly fire). No reordering was needed. A red run that skipped
+`Save ML models cache` would lose the retrained model every time it fired.
+
+Tested both ways against the workflow's own script:
+
+```
+all succeed                exit=0   no alert
+scraper failed, picks OK   exit=0   alert sent, annotation present
+PICKS FAILED               exit=1   alert sent, annotation present
+```
+
+Pinned by `tests/test_red_run_policy.py`, including a test that
+`continue-on-error` stays on all 9 steps — because the tempting "fix" is to
+remove it, and that would trade a colour change for a halt.
+
+**Next candidate, considered and NOT chosen:** the same argument extends to
+`--settle`. A failed settlement leaves picks ungraded, degrading the record
+silently — which is exactly the "green run means nothing" case. It was not
+selected, and a test pins the current behaviour so the next decision starts from
+evidence rather than from scratch.
+
+**For the operator:** a red run is *necessary but not sufficient* for a
+notification. GitHub only emails or notifies according to your own Actions
+notification settings. With those off, this change buys the Actions list turning
+red and nothing else — no email arrives.
+
+**Minor, unfixed, out of scope:** `ci_alert.main()` prints the alert text, which
+contains an emoji, and crashes on a console without UTF-8 (Windows cp1251).
+Irrelevant in CI, which is Linux/UTF-8, but local invocation on Windows needs
+`PYTHONIOENCODING=utf-8`. Found while testing; pre-existing.
+
