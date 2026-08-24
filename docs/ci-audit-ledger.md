@@ -51,6 +51,12 @@ Audited by `.claude/commands/daily-ci-audit.md`.
 | 31755593408 | closing-lines | 2026-08-13 23:55 | success | — | 2026-08-14 | CLEAN | nothing to do. |
 
 **Totals for this pass:** 27 runs audited — 1 BROKEN, 9 DEGRADED, 17 CLEAN.
+
+> **Annotated 2026-08-24.** This was "every run since the Stage 12 deployment
+> boundary", which is accurate and is not what a reader takes from it. It was
+> never every run. `scripts/ci_audit.py --unaudited` reports **334 runs with no
+> ledger verdict, back to 2026-02-24** — 268 CLEAN, 59 DEGRADED, 7 BROKEN.
+> Read the 27 as a window, not a census.
 **0 of 27 were flagged by CI.** Every one reported `conclusion: success`.
 
 ---
@@ -252,6 +258,25 @@ the de-vigging consensus gate. `evidence_status` is write-once, so exclusion can
 be applied later but never undone. The window is recorded here as the fact;
 membership is derivable from `pick_date`. **Open follow-up:** measure per-market
 book coverage for those 39 picks against surrounding days.
+
+### A1 — blast radius annotated, NOT re-investigated
+
+Stage 13 measured six matches that lost their review verdict (49423 on 08-12;
+49458, 49460, 49468, 49485, 49486 on 08-13) and treated that as the population.
+
+> **Annotated 2026-08-24.** Six is a **floor bounded by three days of saved
+> logs**, not a count. The daily audit finds the same `Could not apply` line in
+> **June** — before Stage 10 introduced the relationship that caused A1. So
+> either that log line has a second cause, or the timeline is wrong. Both are
+> possible and **neither has been investigated.**
+>
+> This is the same correction as the Telstar blast radius, which was also
+> bounded by log retention rather than by the defect: 1 of 65 fixtures, where 65
+> was simply how many creation lines the saved logs held.
+>
+> Whoever opens the 334-run backlog should start here. And ask first, before
+> anything else: **of the 7 BROKEN runs, is any of them a run whose failure
+> still affects current data?**
 
 ### OBS-1 — The alert that fires daily and changes nothing
 
@@ -1438,6 +1463,36 @@ The third matters most: the first two were about mutations of the code under
 test, the third was about the tooling doing the measuring. **The rule applies to
 your own instruments, not only to the thing being instrumented.** Rule out the
 measurement before believing the result.
+
+**A guard must distinguish a DEFINITION from an OCCURRENCE.** Three worked
+examples now, covering three different sources of the confusion:
+
+* **documentation** — the one-sender guard fired on a `print()` in
+  `--telegram-setup` showing a user a `getUpdates` URL
+* **data** — the secret scanner must not treat a bare 32-hex as a key, because
+  The Odds API returns 32-hex event ids in fixture data
+* **source echo** — `ci_audit`'s failed-step pattern matched the workflow's own
+  source line, which GitHub prints into the log, marking two DEGRADED runs
+  BROKEN
+
+The third is the least obvious: the text a guard scans may contain the guard's
+own subject quoted verbatim, because CI echoes what it runs.
+
+**Never rely on the platform's default codec.** Promoted from three incidents to
+a rule and pinned by `tests/test_subprocess_encoding.py`. A subprocess capture
+with `text=True` and no `encoding=` decodes with the locale codec; on a Windows
+console that is cp1251, and a byte outside it kills the reader thread so
+`.stdout` returns **None**. None reads as an empty result, an empty result reads
+as "nothing found", and "nothing found" reads as a clean finding — an audit tool
+that cannot decode a log reports a healthy pipeline.
+
+Scoped to subprocess captures deliberately. `read_text()` without an encoding is
+the same class but raises `UnicodeDecodeError` — noisy and immediate, not
+silent — and pinning 28 harmless sites would get the guard switched off.
+
+The guard found two violations in tests written during this very stage,
+including one where the symptom had been worked around with `PYTHONIOENCODING`
+instead of fixing the capture.
 
 **A rationale that rules out one direction is routinely read as ruling out the
 goal.** `ci_alert.py` correctly rejected consolidating toward `TelegramNotifier`

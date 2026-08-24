@@ -65,7 +65,8 @@ def _run(outcomes):
     env.update(OK)
     env.update(outcomes)
     r = subprocess.run([sys.executable, path], capture_output=True,
-                       text=True, env=env)
+                       text=True, encoding="utf-8", errors="replace",
+                       env=env)
     return r.returncode, (r.stdout + r.stderr)
 
 

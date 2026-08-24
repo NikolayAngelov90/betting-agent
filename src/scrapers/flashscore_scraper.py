@@ -209,7 +209,8 @@ class FlashscoreScraper(BaseScraper):
                                         _ps_out = _subprocess.run(
                                             ["powershell", "-Command",
                                              f"(Get-Item '{_path}').VersionInfo.ProductVersion"],
-                                            capture_output=True, text=True, timeout=5
+                                            capture_output=True, text=True, encoding="utf-8",
+                                            errors="replace", timeout=5
                                         ).stdout.strip()
                                         _m = _re.search(r"^(\d+)", _ps_out)
                                         if _m:
@@ -227,7 +228,8 @@ class FlashscoreScraper(BaseScraper):
                         ):
                             try:
                                 _out = _subprocess.run(
-                                    _cmd, capture_output=True, text=True, timeout=5
+                                    _cmd, capture_output=True, text=True, encoding="utf-8",
+                                    errors="replace", timeout=5
                                 ).stdout
                                 _m = _re.search(r"(\d+)\.", _out)
                                 if _m:

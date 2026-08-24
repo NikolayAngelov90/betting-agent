@@ -50,7 +50,8 @@ def _mask(value):
 
 
 def _tracked_text_files():
-    out = subprocess.run(["git", "ls-files"], capture_output=True, text=True)
+    out = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace")
     for name in out.stdout.splitlines():
         if not name:
             continue
