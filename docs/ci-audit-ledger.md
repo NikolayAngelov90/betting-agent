@@ -59,9 +59,15 @@ Audited by `.claude/commands/daily-ci-audit.md`.
 
 Every defect below is an instance of one habit:
 
-> **When something needs to be used somewhere else, a second copy appears
-> instead of the first being made reachable.** The copy is always the site that
-> drifts.
+> **When something needs to be used somewhere else, a second copy appears.**
+> The copy is always the site that drifts.
+>
+> **And the corrective is not reachability.** The first framing of this habit
+> ended "...instead of the first being made reachable", which implies making it
+> reachable prevents the copy. Instance 6 disproves that outright. The only
+> thing that has ever prevented a second definition in this repository is **a
+> test that fails when one appears** — which is exactly what separates
+> `team_names.py` from the three predicates s5.3 protects.
 
 | # | The shared thing | What appeared instead | The defect it caused |
 | --- | --- | --- | --- |
@@ -710,3 +716,73 @@ from Stage 3 as a result. Nothing in the pipeline measures egress, so it is an
 assertion, not a result — and it cannot be verified, defended, or noticed when
 it regresses. **Stage 14, with the same treatment as the "11 filter sites"
 number: do not replace it with a fresher estimate; measure it or qualify it.**
+
+---
+
+## Stage 14 handover — the largest item is the one that looks smallest
+
+### ST14-1 — Consolidating the name matchers is a COHORT EVENT, not a refactor
+
+It appears on the "same idea spelled twice" list beside `_norm` and `_tokens`,
+which makes it look like tidying. **It is the largest item on the list.**
+
+The five matchers do not merely differ in threshold. They use **four different
+algorithms**, and they disagree about what "the same club" means:
+
+| where | behaviour |
+| --- | --- |
+| `src/utils/team_names.py` | `SequenceMatcher >= 0.75` on tokens + alias table; `same_team_strict` requires equal token SETS |
+| `theodds_scraper.py:109`, `:270-293` | `>= 0.75`, a second path at `>= 0.7`, plus `startswith`, plus aliases |
+| `footballdataorg_scraper.py:260` | `SequenceMatcher >= 0.80` **after suffix-stripping** |
+| `apifootball_scraper.py:1402` | **prefix-token match, >= 70% of the shorter token list** — no ratio at all |
+| `apifootball_scraper.py:440` | **any shared anchor** — no threshold (Stage 13 Part B) |
+
+They also disagree on normalisation: which club-type tokens are stripped, which
+suffixes, and which aliases apply.
+
+**Why this is selection-affecting.** Collapsing five behaviours into one means
+choosing which fixtures resolve to which team rows. That changes which matches
+exist, which changes which fixtures are analysed, which changes which picks are
+persisted. It is the same class as s5.2 and s5.3: the model's probabilities are
+untouched and the population of predictions is not.
+
+**Therefore it needs a `CODE_REVISION` bump and a history entry**, and it must
+not be done as a tidy-up commit.
+
+**And the choice of winning behaviour cannot be made by convenience.** Picking
+whichever matcher is most convenient to keep — or whichever threshold reproduces
+today's fixtures — is exactly the threshold-fitted-to-its-own-cases problem §B4
+was written to prevent, and the problem the 2026-08-07 audit found throughout
+this project.
+
+Whatever wins has to win on the reasoning the country check earned:
+
+> **fail open on absence, fail closed on contradiction** — refuse only on a
+> field that admits one value and disagrees, never on a distance that
+> correlates with disagreement.
+
+Concretely, that means the consolidated matcher should be a **decision
+procedure** (identity keys first, then unconditional contradictions, then a
+last-resort similarity that can only propose, never confirm), not a tuned
+ratio — and the anchor test from Part B is a candidate for the last tier
+precisely because it refuses only on total disagreement.
+
+**Sequencing note.** This cannot be validated while API-Football is suspended:
+no fixtures arrive, so no consolidation can be exercised against real
+resolution. Tie it to the restoration item (OPS-1) alongside §2's ranking half
+and §7.
+
+### The rest of the Stage 14 list, unchanged
+
+* the injected-statistic design question (leading candidate — p > 0.15,
+  73% negative EV at the taken price)
+* DEL-1: a delivery guarantee, not another alert
+* D1 (closing capture writes 0 rows), D2's residual, A4 + pick 1134
+* API-Football restoration, and the OPS-1 boundary record
+* the Odds API budget decision (do not raise until D1 needs it)
+* the Neon decommission
+* `xg_for_diff` / `xg_against_diff` pruning question, and the truncated prune log
+* smoke tests for `run_baseline`, `run_clean_baseline`, `simulate_odds_quota`
+* **egress instrumentation** — a ~97% reduction nothing measures is an
+  assertion; measure it or qualify it, do not restate it
+* `.claude/commands/daily-ci-audit.md` (D3) with the Telegram evidence source
