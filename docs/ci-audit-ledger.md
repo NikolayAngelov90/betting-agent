@@ -2227,3 +2227,257 @@ correctly did not catch it. Recorded to keep the count honest and to mark the
 boundary of that guard: it pins *captures*, where failure yields `None`
 silently. Console encoding failures raise loudly and are a different, lesser
 problem. **The guard's scope is still right; the incident count is now four.**
+
+---
+
+# STAGE 16 — WHAT IS THE CHECKPOINT FOR?
+
+**Order of work, declared as required: Part A first, then Part B in full, then
+Part C.** The effect-size argument was written and its inputs measured before any
+comparison to the observed interval was made.
+
+**Contamination, stated honestly rather than denied.** I cannot claim to have
+been blind to the observed mean: it appears in the Stage 16 prompt itself
+(−0.509%, CI [−1.4%, +0.3%]) and has been in context since Stage 14. What is
+checkable instead is this: **every input to Part B is a measured overround, a
+config value, or a stated assumption from betting economics — and the thresholds
+it produces (+2%, +4%) are six to eleven standard errors away from anything in
+the observed data.** There is no path by which a mean of −0.587% is reverse
+engineered into +2%. The argument stands or falls on its inputs, which are listed
+so a reader can check rather than trust.
+
+## 500 is the fourth instance, and the most consequential
+
+README line 11: *"Real money stays off the table until **500 valid closing
+lines** exist"*; line 60: *"100 → 200 → 500 (decision-grade)"*. **No derivation
+is attached to any of the three.** After `212 credits/month`, the `~97%` egress
+reduction and `256 credits/month, 96% coverage`, this is the fourth untagged
+number — and the first that decides whether real money is ever staked.
+
+*(README line 11 also says "~3.5 months away". Stage 15 measured March 2027,
+about seven months. Stale, and flagged here rather than edited — no changes this
+stage.)*
+
+## PART A — what 500 is powered to detect
+
+MEASURED 2026-08-25 from `pick_observations`, MODEL attribution, n = 46:
+
+| quantity | value |
+| --- | --- |
+| mean | **−0.587%** |
+| SD | 2.859% |
+| SE | 0.422% |
+| median | 0.000% |
+| skewness / excess kurtosis | −0.335 / +0.170 |
+| beat the close | 15 / 46 (32.6%) |
+
+### A1. Symmetry, and whether the normal approximation holds
+
+It does, and it was checked rather than assumed. Skew is mild (−0.335) and tails
+are near-normal (+0.170). A 200,000-resample bootstrap gives **[−1.420%,
++0.218%]** against the normal **[−1.413%, +0.240%]** — agreement to 0.02pp. The
+bootstrap interval is quoted throughout.
+
+**The 21.7% point mass at exactly zero was investigated before being accepted**,
+because a pile-up at "no change" is what a stale re-read would look like. It is
+genuine price quantisation, not an artifact: every closing observation is
+**≥190.7 minutes after its `taken_at`** (mean 285) and **14.6–115 minutes before
+kickoff** (mean 51). The strictly-after rule and the 180-minute validity limit
+both hold with margin on every row.
+
+### A2. Precision as a function of n
+
+**Design effect: 1.00, confirmed from the data** — 46 observations across 46
+distinct fixtures. This is a consequence of `s5.3`'s one-pick-per-match cap, not
+a property of CLV, and it stops holding if `max_picks_per_match` is ever raised.
+*The README's `18.9% of fixtures carry two picks` is a PRE-`s5.3` HISTORICAL
+figure and should be labelled as such.*
+
+**Variance stability: the projection inherits real uncertainty.** SD = 2.859% ±
+0.301% (11% relative, from 46 observations over 11 days of one season). Every
+half-width below carries that ±11%.
+
+| n | 95% half-width | range from SD uncertainty |
+| --- | --- | --- |
+| 46 | ±0.826% | 0.739 – 0.913% |
+| 100 | ±0.560% | 0.501 – 0.619% |
+| 150 | ±0.458% | 0.409 – 0.506% |
+| 200 | ±0.396% | 0.354 – 0.438% |
+| 300 | ±0.324% | 0.289 – 0.358% |
+| **500** | **±0.251%** | 0.224 – 0.277% |
+| 750 | ±0.205% | 0.183 – 0.226% |
+
+### A3. Stated plainly
+
+> **At n = 500, this experiment can distinguish a mean CLV of ±0.25% from zero**
+> (95% interval half-width), with 80% power against a true effect of ±0.36%.
+
+## PART B — what effect size would justify real money
+
+*Written before Part C. Inputs labelled.*
+
+| input | value | provenance |
+| --- | --- | --- |
+| settled record | 1,320 picks, 52.121% win, **−5.396% flat ROI**, avg odds 1.886 | MEASURED 2026-08-25 |
+| overround, 1xBet (most represented book) | **4.86%** | MEASURED, 2,772 complete books |
+| overround, Pinnacle | 3.76% | MEASURED, 1,517 books |
+| overround, best line across books | **≥1.85%** | MEASURED, 3,241 matches — LOWER BOUND |
+| overround, exchange (Matchbook / Betfair) | 0.88 – 1.09% | MEASURED |
+| exchange commission | ~2% of net winnings | FROM LITERATURE |
+| Kelly fraction / max stake | 0.25 / 4.0% of bankroll | MEASURED (config) |
+| devigged close = true probability | — | **ASSUMED** (standard efficient-close model) |
+
+*The best-line figure is a lower bound: it takes each book's latest price, which
+may straddle timestamps, so it manufactures phantom arbitrage (582 of 3,241 sum
+below 1.0). The true simultaneous best-line overround is higher, which makes B's
+thresholds conservative in the direction that matters.*
+
+### B1. Derivation
+
+CLV here is `price_clv = taken / closing − 1`, measured against the **vigged**
+close (`src/evaluation/clv.py:137`). Under the assumption above, the true
+probability is `p = (1/O_close) / R` where `R` is the closing overround, so:
+
+```
+EV = p·O_taken − 1 = (O_taken/O_close)/R − 1 = (1 + CLV)/R − 1
+```
+
+**Break-even therefore requires CLV = R − 1: you must beat the closing line by
+the vig just to reach zero.**
+
+| where you bet | break-even CLV |
+| --- | --- |
+| retail (1xBet) | **+4.86%** |
+| Pinnacle | +3.76% |
+| best-line shopping | **+1.85%** |
+| exchange (+commission) | ~+0.88% + commission |
+
+**A sanity check that validates the model, and independently confirms the
+2026-08-07 audit.** Betting *at* the close (CLV = 0) at retail prices predicts
+`1/R − 1 = −4.64%`. The measured flat ROI over 1,320 settled picks is
+**−5.396%**. The 0.76pp gap is the model's entire contribution, and it is well
+inside the ~±2.6pp standard error of an ROI estimate on 1,320 picks. **The
+system's realised loss is, to measurement precision, exactly the vig it pays.**
+The 2026-08-07 audit reached "the model adds no information over the price"
+three independent ways on settled outcomes; this is a fourth, from prices.
+
+### B2. Range
+
+Actionability, not just significance: at avg odds 1.886, quarter-Kelly stakes
+`0.25·e/0.886 = 0.282·e`.
+
+- **Minimum decision-relevant: CLV ≥ +2%.** Below the best-line overround of
+  1.85%, expected value is at or below zero *under the most favourable
+  assumption available* — disciplined line-shopping. An edge cannot exist below
+  this.
+- **Comfortable / actionable: CLV ≥ +4%.** Clears the retail overround, survives
+  degradation of the best-line assumption, and yields an edge of ~2.1% → a
+  quarter-Kelly stake of ~0.6% of bankroll. Below roughly a 1.8% edge (stake
+  0.51%), operational cost and model-drift risk dominate the return.
+
+## PART C — comparison
+
+### C1. What n does B actually require?
+
+80% power, α = 0.05 two-sided, at the measured SD of 2.859%:
+
+| B's threshold | n required |
+| --- | --- |
+| +2.0% (minimum) | **17** |
+| +4.0% (comfortable) | **5** |
+
+**500 is over-specified by roughly 29× against the minimum decision-relevant
+effect.** It is calibrated to resolve ±0.25% — **eight times finer than the
+smallest difference that could change any decision.**
+
+### C2. What the current sample already excludes
+
+n = 46. Bootstrap 95% CI **[−1.420%, +0.218%]**. One-sided 95% upper bound
+**+0.107%**.
+
+| threshold | distance from observed mean |
+| --- | --- |
+| +2.0% | **6.1 SE** |
+| +4.0% | **10.9 SE** |
+
+**Both decision thresholds are already excluded, decisively.** At the observed
+mean, **four observations** would suffice to rule out +2%; there are 46. The
+question is no longer *when will we know* — it is **we already know**.
+
+### C3. The three outcomes
+
+1. **MODEL CLV clearly above +2%** → real money justified. **Excluded at 6.1 SE.**
+2. **MODEL CLV clearly below +2%** → real money stays off permanently. **This is
+   the observed result**, and it is the stage's answer.
+3. **Indistinguishable** → more data needed. **Not the situation.** The interval
+   is an order of magnitude tighter than the threshold it is being compared to.
+
+Taking the prompt's instruction seriously: outcome 2 is **the experiment
+succeeding**. It was built to test whether the model beats the closing line. It
+does not, and the measurement is now precise enough to say so.
+
+## PART D — recommendation (policy; no changes made)
+
+> **RECOMMENDED CHECKPOINT — replace the count with a decision rule.**
+>
+> **Rule:** stop when the one-sided 95% upper bound on MODEL CLV lies below the
+> best-line break-even overround (+1.85%).
+> **Effect size:** +2.0% minimum decision-relevant (DERIVED, Part B).
+> **Power:** ≥80% at n = 17; ≥99.9% at n = 46.
+> **Status: ALREADY SATISFIED** — upper bound +0.107% vs +1.85% threshold.
+> **Date:** 2026-08-25. **Provenance:** DERIVED from measured overrounds
+> (2,772/1,517/3,241 books), measured SD (n = 46), and config staking rules.
+>
+> **If a count is preferred:** n = 50, not 500 — 80% power needs 17, and 50
+> carries the +2% test at >99% power with margin for variance drift.
+
+### What the current data supports, and what it does not
+
+**Supported:** for this cohort, in these markets, the MODEL series does not beat
+the closing line, and the shortfall against actionability is not marginal — it is
+six standard errors. Real money is not justified, and no plausible continuation
+of the current series changes that.
+
+**NOT supported — and this is the honest limit of the stage.** The 46
+observations span **11 days of one season**, one cohort (`s5.3`, which opened
+inside an API-Football outage), and a narrow set of leagues concentrated in the
+`h2h`+`totals` markets. **The statistical precision is ample; the external
+validity is the weak point.** Whether the result holds across seasons, in winter
+fixture lists, or in the four markets the refresh never prices is genuinely
+unknown — and **more observations of the same 11-day regime do not answer it.**
+That is a coverage-and-diversity question, not a sample-size question, and it is
+the one thing 500 would have bought that 50 does not.
+
+**Which reframes the whole frontier.** Stage 15 concluded that reaching 500 costs
+seven months and that only money moves the date. Part C says the decision does
+not need 500. **The binding question was never "how do we afford more
+observations" — it was "more observations of what".**
+
+### THE HABIT, third instance in the data layer
+
+The overround query first returned empty: `odds.selection` carries **both**
+`Home`/`Away` and `Home Win`/`Away Win`. Two vocabularies for one concept, in the
+same column — after the display-vs-storage market taxonomy found in Stage 15 and
+the two `180`s. Recorded, not fixed; no changes this stage.
+
+## E. Downstream, deferred
+
+**L6a remains unfixed and is now cheaper to justify.** It was priced at +34
+credits/month against a binding cap. If the checkpoint falls from 500 to ~50, the
+credit pressure that made it unaffordable falls with it, and it becomes a
+correctness fix — the interval clock is reset by a `taken_at` write that can
+never satisfy the strictly-after rule — rather than a purchase.
+
+**L4 is SHIPPED AND KNOWN-INERT.** The 10:47 window is suppressed by exactly that
+interval reset. Recorded here so that its zero is never read as a measurement:
+this is a deployment whose null result is indistinguishable from its success,
+which is the condition Stage 15 generalised. **It is inert by diagnosis, not by
+observation.**
+
+---
+
+**STAGE 16 — CHECKPOINT DERIVED.**
+
+500 is powered to detect ±0.25%. The smallest effect that could change any
+decision is +2%. The checkpoint is over-specified by ~29×, and the decision it
+gates was already resolved at n = 46 — six standard errors clear.
