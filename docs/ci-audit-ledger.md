@@ -3458,3 +3458,139 @@ codebase had already neutralised in Stage 4.
 
 Three of the five paths were protected by work this project had already done and
 recorded. **The failure was mine in not reading it.**
+
+---
+
+# STAGE 18 — SUBSTRATE BUILT (Parts C, D, E)
+
+Migration `009_price_and_injury_history` applied 2026-08-25. Additive only, with
+a rollback. **`CODE_REVISION` stays `s5.3`; `model_version` unchanged.**
+
+## PART C — what is now stored
+
+### C1. `odds_snapshots` — a separate table, not a taller `odds`
+
+The design decision that makes this cohort-neutral and egress-neutral **by
+construction rather than by care**:
+
+- `odds` keeps its unique key, its columns and its contents. **Every
+  current-price consumer reads exactly what it read yesterday**, so Stage 3's
+  ~97% column-projection egress work is untouched and no existing query scans a
+  single extra row.
+- `odds_snapshots` has **deliberately no unique constraint** on
+  `(match_id, bookmaker, market_type, selection)`. That absence *is* the
+  feature — a second row for the same key at a later `observed_at` is the entire
+  point, and a unique index there would silently restore overwrite semantics.
+
+Written from **both** odds writers via one shared helper
+(`src/data/price_history.py`), because two scrapers needing identical behaviour
+is precisely how `(1.005, 1.25)` came to exist three times.
+
+An **update** is recorded, not just an insert. The update is exactly the
+observation that overwrite semantics used to destroy.
+
+**Fails open.** A snapshot insert that raises must not take down pick
+generation: history is a research nicety, pricing picks is the job.
+
+**The same-snapshot rule gets simpler, as predicted.** A closing observation
+must come from a price observed strictly after `taken_at`; with a real
+`observed_at` that is a timestamp comparison rather than an inference about row
+identity.
+
+### C2. `odds.first_seen_at`
+
+Nullable, never backfilled. Existing rows stay NULL because **a guessed
+first-sight time would look like evidence** — and `matches.created_at` cannot
+proxy for it, since 53.5% of match rows were created after their own kickoff
+(mean +14 days) as backfill stamps.
+
+Write-once by construction: the only site that sets it sets it only when absent,
+and the bulk `ON CONFLICT` clause deliberately omits it, so a refresh cannot
+turn first-seen into last-seen.
+
+### C3. `injury_observations`
+
+`observed_at` is the whole point: an injury moves a line **when the news
+arrives**, and a current-status snapshot cannot distinguish a two-week-old
+absence from this morning's announcement. Recorded at both write sites,
+including the UPDATE branch — the branch where a status change used to overwrite
+what was previously known.
+
+**Cohort-neutral, confirmed not assumed:** Stage 14 established injuries reach
+only the Claude review prompt and never the model.
+
+## PART D — proof, not trust
+
+`tests/test_price_history_accumulates.py`, 9 checks. The failure this guards
+against is L2's: **shipped, wired, and dead — which measures identically to
+working.**
+
+| check | result |
+| --- | --- |
+| three writes to one key produce three rows, ordered | **pass** |
+| the natural key is NOT unique (accumulation possible at all) | **pass** |
+| injury status changing three times keeps three rows | **pass** |
+| `first_seen_at` does not move on a second write | **pass** |
+| `first_seen_at` absent from the `ON CONFLICT` set | **pass** |
+| **both** odds writers call the recorder | **pass** |
+| **nothing reads the snapshot table** — cohort guard | **pass** |
+| `odds` keeps its columns and its unique constraint | **pass** |
+| two-way refusal: 20 contaminated refused, 20 legitimate admitted, refused set ≡ discarded set | **pass** (44 checks, previous commit) |
+
+**819 + 9 = 828 tests pass. 26 invariants pass.**
+
+**What could NOT be checked without waiting:** *"after one real day, at least one
+key has three observations."* The tables are live and empty; the first rows land
+on the next scraper run. The verification query is:
+
+```sql
+SELECT match_id, bookmaker, selection, count(*) AS observations
+FROM odds_snapshots
+GROUP BY 1,2,3 HAVING count(*) >= 3
+ORDER BY observations DESC LIMIT 20;
+```
+
+**If that returns nothing after a full day, the substrate is inert and Stage 19
+must not begin.**
+
+## PART E — when each hypothesis becomes testable
+
+**Derived from the measured observation rate, not estimated.**
+
+Rate basis, MEASURED 2026-08-25: **274 of 875 August matches (24 days) already
+receive ≥2 observations under overwrite — 11.4 matches/day.** Those become ≥2
+snapshot rows; the pick-bearing subset gains a third from the closing refresh.
+Conservatively taking half as reaching a genuine three-point trajectory gives
+**~5.5 trajectory-fixtures/day**.
+
+Target n = 50 independent fixtures — Stage 16's recommended checkpoint, chosen
+because 17 suffices at 80% power for a +2% effect and 50 carries it with margin
+for a movement variance that may differ from CLV's.
+
+| hypothesis | needs | derived date |
+| --- | --- | --- |
+| **H1 momentum** | ≥3 observations per key, 50 fixtures at 5.5/day ≈ 9 days, +5 for fixture-calendar irregularity | **2026-09-08** |
+| **H4 lead time** | `first_seen_at` plus one later observation — same writes, same rate | **2026-09-08** |
+| **H3 injuries** | injury STATUS TRANSITIONS near kickoff, not just presence; needs ~30 days of daily snapshots | **2026-09-24** |
+
+**H3 carries a live risk:** the June collapse (47 runs, 5 producing any
+injuries, max 7 against 128–198 in March–May) is unexplained and deferred. If it
+recurs, H3's date moves and nothing will announce that. **Check the injury
+observation count before starting Stage 19, not after.**
+
+## Open questions, recorded and not pursued
+
+- **The 498 books in (1.15, 1.25].** They pass the band and may be trap residue
+  or genuinely wide markets. **Tightening the band IS prediction-affecting**, so
+  establishing which they are is a cohort decision, not a diagnostic.
+- The June injury collapse; the 08-23/08-25 thin cards; the 35 picks with no
+  review decision and the two unapplied CHANGE decisions — all from the
+  2026-08-25 audit, all still deferred.
+
+---
+
+**STAGE 18 — SUBSTRATE BUILT.**
+
+H1 and H4 testable **2026-09-08**, H3 **2026-09-24**, subject to the one-day
+accumulation check above. Stage 19 is a research stage and must not begin before
+that query returns rows.

@@ -235,6 +235,13 @@ class Odds(Base):
     odds_value = Column(Float, nullable=False)
     opening_odds = Column(Float, nullable=True)  # First-seen odds value (never overwritten)
     timestamp = Column(DateTime, default=utcnow)
+    # Stage 18 C2. WHEN this system first saw the price. `opening_odds` is
+    # frozen at first sight but carries no time, so "how long before kickoff was
+    # this taken" was unanswerable (Stage 17's H4). matches.created_at cannot
+    # proxy: 53.5% of match rows were created AFTER their own kickoff (mean +14
+    # days) because they are backfill stamps. Existing rows stay NULL and are
+    # never backfilled — a guessed first-sight time would look like evidence.
+    first_seen_at = Column(DateTime, nullable=True)
 
     # Relationships
     match = relationship("Match", back_populates="odds")
@@ -544,3 +551,71 @@ class PickObservation(Base):
         return (f"<PickObservation(pick={self.pick_id} {self.attribution} "
                 f"{self.selection} @{self.taken_odds} "
                 f"close={self.closing_odds} {self.closing_status})>")
+
+
+class OddsSnapshot(Base):
+    """Stage 18 C1 — the price PATH. Append-only; `odds` keeps the price.
+
+    DELIBERATELY NO UNIQUE CONSTRAINT on (match, bookmaker, market, selection).
+    That absence is the feature: a second row for the same key at a later
+    `observed_at` is the entire point. `odds` is unique on that key and is
+    overwritten, which is why it holds two observations and never a third, and
+    why Stage 17 could not test momentum.
+
+    Nothing reads this table yet. It is written so that Stage 19 can.
+    """
+
+    __tablename__ = 'odds_snapshots'
+
+    id = Column(Integer, primary_key=True)
+    match_id = Column(Integer, ForeignKey('matches.id'), nullable=False)
+    bookmaker = Column(String(100), nullable=False)
+    market_type = Column(String(50), nullable=False)
+    selection = Column(String(50), nullable=False)
+    odds_value = Column(Float, nullable=False)
+    observed_at = Column(DateTime, nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index('ix_odds_snapshots_key_time', 'match_id', 'bookmaker',
+              'market_type', 'selection', 'observed_at'),
+    )
+
+    def __repr__(self):
+        return (f"<OddsSnapshot({self.bookmaker} {self.market_type}: "
+                f"{self.selection} @ {self.odds_value} at {self.observed_at})>")
+
+
+class InjuryObservation(Base):
+    """Stage 18 C3 — what was known about an injury, and WHEN it was known.
+
+    `injuries` holds current status and is overwritten. Measured 2026-08-25: 34
+    rows in the whole database, all dated 2026-08-17/18, while CI logs show runs
+    fetching 128-198 injuries in March-May. The history was fetched daily and
+    discarded daily.
+
+    `observed_at` is the point. An injury moves a line WHEN THE NEWS ARRIVES; a
+    current-status snapshot cannot tell a two-week-old absence from this
+    morning's announcement.
+
+    Cohort-neutral: Stage 14 established injuries reach only the Claude review
+    prompt and never the model.
+    """
+
+    __tablename__ = 'injury_observations'
+
+    id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, nullable=True)
+    team_id = Column(Integer, nullable=False)
+    injury_type = Column(String(100))
+    status = Column(String(50))
+    start_date = Column(Date)
+    source = Column(String(50))
+    observed_at = Column(DateTime, nullable=False, default=utcnow)
+
+    __table_args__ = (
+        Index('ix_injury_obs_team_time', 'team_id', 'observed_at'),
+    )
+
+    def __repr__(self):
+        return (f"<InjuryObservation(team={self.team_id} {self.status} "
+                f"at {self.observed_at})>")

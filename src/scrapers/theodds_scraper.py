@@ -19,6 +19,7 @@ from src.data.sql_helpers import id_in
 from src.data.database import get_db
 from src.data.models import Match, Odds, SavedPick, Team
 from src.utils.logger import get_logger, utcnow
+from src.data.price_history import record_price as _record_price
 from src.scrapers.barren_leagues import (
     BARREN_CONSECUTIVE_THRESHOLD, BARREN_TTL_DAYS, BarrenLeagueCache)
 
@@ -576,9 +577,10 @@ class TheOddsScraper:
                     )
                     .first()
                 )
+            _now = datetime.now(timezone.utc).replace(tzinfo=None)
             if existing:
                 existing.odds_value = odds_value
-                existing.timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
+                existing.timestamp = _now
             else:
                 new_row = Odds(
                     match_id=match_id,
@@ -587,10 +589,18 @@ class TheOddsScraper:
                     selection=selection,
                     odds_value=odds_value,
                     opening_odds=odds_value,
+                    first_seen_at=_now,
                 )
                 session.add(new_row)
                 if existing_index is not None:
                     existing_index[key] = new_row  # prevent re-insert on dup
+
+            # Stage 18 C1: append the observation to the price PATH. Every
+            # write, insert or update — an update is exactly the observation
+            # that overwrite semantics used to destroy. Fails open.
+            _record_price(session, match_id=match_id, bookmaker=bookmaker,
+                          market_type=market_type, selection=selection,
+                          odds_value=odds_value, observed_at=_now)
             return 1
         except Exception as e:
             logger.debug(f"TheOddsAPI upsert failed ({bookmaker} / {market_type} / {selection}): {e}")

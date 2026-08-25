@@ -9,6 +9,7 @@ from datetime import datetime, date, timedelta, timezone
 from typing import List, Optional
 
 from src.data.models import Player, Injury, Team, Match, Odds
+from src.data.price_history import record_injury as _record_injury
 from src.data.database import get_db
 from src.utils.logger import get_logger
 
@@ -346,6 +347,13 @@ class InjuryScraper:
                         session.add(injury)
                         saved += 1
 
+                    # Stage 18 C3: append the observation regardless of branch.
+                    # The UPDATE branch is the one that matters — it is where a
+                    # status change used to overwrite what was known before.
+                    _record_injury(session, team_id=team_id, player_id=player.id,
+                                   injury_type=reason, status=status,
+                                   start_date=date.today(), source="api-football")
+
                 except Exception as e:
                     logger.debug(f"Error parsing injury entry: {e}")
                     continue
@@ -417,6 +425,10 @@ class InjuryScraper:
                             source="api-football",
                         ))
                         saved += 1
+
+                    _record_injury(session, team_id=team_db_id, player_id=player.id,
+                                   injury_type=reason, status=status,
+                                   start_date=date.today(), source="api-football")
                 except Exception as e:
                     logger.debug(f"Error parsing team injury entry: {e}")
                     continue

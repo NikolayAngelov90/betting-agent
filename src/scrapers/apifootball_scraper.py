@@ -24,6 +24,7 @@ from src.data.models import Match, Team, Odds
 from src.data.sql_helpers import id_in
 from src.data.market_spec import (
     validate_write as _validate_write, extract_legs as _extract_legs)
+from src.data.price_history import record_price as _record_price
 from src.data.api_budget import ApiBudgetStore
 from src.data.database import get_db
 from src.utils.logger import get_logger
@@ -2023,6 +2024,17 @@ class APIFootballScraper(BaseScraper):
                                 continue
                             _written_by[key] = bet_name
 
+                            # Stage 18 C1: append to the price PATH before the
+                            # branching below, so an observation is recorded
+                            # whether the row is new, updated or already queued
+                            # — an update is precisely the observation that
+                            # overwrite semantics used to destroy. Fails open.
+                            _record_price(session, match_id=match_id,
+                                          bookmaker=bookie_name,
+                                          market_type=market_type,
+                                          selection=selection,
+                                          odds_value=odds_value, observed_at=now)
+
                             existing = existing_index.get(key)
                             if existing is not None:
                                 # Already persisted → in-session ORM update.
@@ -2068,6 +2080,10 @@ class APIFootballScraper(BaseScraper):
                                 "odds_value": odds_value,
                                 "opening_odds": odds_value,
                                 "timestamp": now,
+                                # Stage 18 C2 — only on INSERT. The ON CONFLICT
+                                # clause below deliberately does not touch it,
+                                # so first_seen_at stays first-seen.
+                                "first_seen_at": now,
                             }
                             new_rows.append(row)
                             queued_index[key] = row
