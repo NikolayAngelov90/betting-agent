@@ -3167,3 +3167,186 @@ no failed step, which for this repository is the normal state of a broken run.
 | 32843550194 | closing-lines | 2026-08-25 11:40 | success | — | 2026-08-25 | CLEAN | counts agree |
 
 *Backlog cleared 2026-08-25. Every run in the repository now carries a verdict.*
+
+---
+
+# STAGE 18 — HALTED AT PART B BY A COHORT EVENT
+
+**No code, config, schema or migration changes were made.** The stage stopped
+where its own rule 5 and §B4 say it must: *"If any model or feature currently
+reads those rows, it is [prediction-affecting], and that stops this stage."*
+
+**A model feature does read them, and the contamination is worse than recorded.**
+
+## PART A — sizing. Complete, and the answer is yes.
+
+### A1. What the current table costs (MEASURED 2026-08-25)
+
+| | |
+| --- | --- |
+| `odds` rows | **365,269** (the prompt's ~317,657 is stale) |
+| `odds` total size | **74 MB** — 33 MB heap + **40 MB index** |
+| per row, all-in | **211 bytes** |
+| whole database | **108 MB** of a 500 MB free tier |
+| rows eligible for the 400-day prune today | **0** |
+| date the prune first bites | **2027-04-04** |
+
+**Indexes cost more than the data** (40 MB vs 33 MB). Any snapshot design pays
+that multiple on every retained row, which is why the per-row figure used below
+is 211 bytes and not the ~90 bytes the heap alone would suggest.
+
+The 400-day prune preserves rows for pick-bearing matches. It removes nothing
+today and cannot until 2027-04-04, so **pruning is not a constraint on this
+decision** — it is a ceiling that arrives after the research window.
+
+### A2. What snapshots would cost — derived from write volume, not fixtures
+
+Under snapshot semantics every upsert becomes an insert, so the growth driver is
+**measured write volume**. August is the most complete month in the log cache
+(146 of ~150 runs): **76,882 odds rows written in 25 days → ~92,000/month.**
+
+| basis | rows/month | storage/month |
+| --- | --- | --- |
+| current (new keys only — 365,269 over 6 months) | ~61,000 | 12.9 MB |
+| **snapshot (every write persists)** | **~92,000** | **19.4 MB** |
+| **delta** | **+31,000** | **+6.5 MB** |
+
+**Only a 1.5× multiplier.** Most writes already create new keys rather than
+updating existing ones, which is why snapshotting is far cheaper here than the
+"overwrite-in-place" framing suggests.
+
+| horizon | projected database | % of 500 MB free tier |
+| --- | --- | --- |
+| today | 108 MB | 22% |
+| +6 months | ~224 MB | **45%** |
+| +12 months | ~341 MB | **68%** |
+
+**Egress.** Stage 3 cut egress ~97% by column projection, and a taller `odds`
+would undo part of that for any consumer that reads by `match_id` without a
+latest-only filter. **The design below avoids this entirely rather than
+mitigating it** — see C1.
+
+### A3. Retention — keep everything
+
+Full retention fits comfortably, so the honest answer is the simple one: **no
+retention policy beyond the existing 400-day prune.** The research question needs
+≥3 observations per key with meaningful spacing; the measured run cadence
+supplies 1 pick-time write plus ~2–3 surviving closing refreshes per pick-bearing
+key on match day. Designing a cleverer policy would add a mechanism to defend
+without buying headroom that is needed.
+
+**PART A VERDICT: affordable. `SUBSTRATE NOT AFFORDABLE` does not apply.**
+
+## PART B — the contamination. This is where the stage stops.
+
+### B2. Extent (MEASURED 2026-08-25)
+
+The overround check works as a per-row detector, cleanly:
+
+| source | complete 3-leg books | avg overround | **> 15%** |
+| --- | --- | --- | --- |
+| API-Football | 11,191 | **+18.90%** | **5,242 (47%)** |
+| The Odds API | 32,468 | +6.63% | 166 (0.5%) |
+
+A 47% vs 0.5% separation at a 15% threshold. **Mechanism confirmed
+arithmetically:** a two-way Home/Away pair sums to ~1.03–1.05, and adding a
+genuine 1X2 Draw leg (~0.25) yields ~1.30 — which is the ~32% overround observed,
+not a coincidence of scale.
+
+| | |
+| --- | --- |
+| contaminated (match, book) snapshots | **5,408** |
+| **matches affected** | **2,608** |
+| rows affected | **16,224** |
+| books affected | 15 |
+| period | **2026-02-01 → 2026-08-23** |
+| saved picks on affected matches | **304** |
+| pick observations on affected matches | 16 |
+
+### B3/B4. Why the stage stops
+
+| book | contaminated | avg overround |
+| --- | --- | --- |
+| **Bet365** | **2,565 / 2,775 = 92.4%** | **32.13%** |
+| **Pinnacle** | 720 / 2,778 = **25.9%** | 11.68% |
+| William Hill | 396 / 405 = 97.8% | 35.40% |
+| Unibet | 392 / 396 = 99.0% | 35.67% |
+| 10Bet, Betano | 255 / 255 = 100% | 34.5–36.1% |
+
+`feature_engineer._get_bookmaker_features()` reads
+`market_type IN ("1X2", "over_under", "btts", "team_goals")` across all
+bookmakers, with a documented preference order of **Bet365 → Pinnacle → any**.
+
+> **The model's first-choice bookmaker input is 92.4% contaminated, and has been
+> since 2026-02-01.**
+
+Consequently:
+
+- **Refusing at the write (B3) is prediction-affecting.** It would stop Bet365
+  1X2 rows being written for ~92% of matches, changing the bookmaker consensus,
+  the de-vigged implied probabilities, and the 40% bookmaker blend. That is a
+  cohort event.
+- **Marking rows (B4) is prediction-neutral only while nothing filters on the
+  mark.** Adding a nullable reason column changes no read. The moment any
+  consumer honours it, it becomes the same cohort event.
+- **Building Part C now would be actively harmful.** §B1 says the defect must be
+  fixed *"before any history accumulates, or the accumulated history inherits
+  it."* Snapshotting today would bake a 92%-contaminated Bet365 series into
+  precisely the history the momentum research is meant to use. **Halting C is not
+  literal compliance; it is the correct engineering call.**
+
+### This corrects a previously recorded figure
+
+The ledger records the blast radius as *"SEVEN books affected incl. Pinnacle
+26%"*. **Pinnacle reproduces exactly at 25.9%** — but the true radius is **15
+books**, and **Bet365 at 92.4% was never recorded at all.** The earlier
+measurement understated the most important book in the pipeline.
+
+## PARTS C AND D — not built
+
+Designed but deliberately not implemented, recorded so the decision has something
+concrete to act on:
+
+- **C1 — a separate `odds_snapshots` table, not a taller `odds`.** Keeps the
+  existing unique constraint and every current-price consumer untouched, so **no
+  existing query reads a single extra row** and Stage 3's egress work is
+  preserved by construction rather than by care. The same-snapshot rule becomes a
+  timestamp comparison instead of an inference about row identity.
+- **C2 — an explicit `first_seen_at`.** `created_at` cannot proxy for it: 53.5%
+  of match rows were created after their own kickoff, mean +14 days.
+- **C3 — injury history with a known-at timestamp.** Cohort-neutral: Stage 14
+  established injuries reach only the Claude review prompt and never the model.
+- **D — the proof-of-accumulation checks**, including the 20-of-20 replay
+  standard for the two-way refusal, are not reached.
+
+## The decision this stage hands back
+
+Three options, none of which are mine to take:
+
+1. **Fix at the write and accept a cohort break** — a new `CODE_REVISION`, a new
+   `model_version`, and a documented boundary. Cleanest data, and every
+   comparison across 2026-02-01 → now becomes two cohorts.
+2. **Mark only, filter nothing, build the substrate** — cohort-neutral today, but
+   the accumulated history inherits the defect and the momentum research runs on
+   a 92%-contaminated primary book.
+3. **Fix at the write, restricted to the snapshot table only** — `odds` keeps
+   feeding the model exactly as today, `odds_snapshots` refuses contaminated
+   writes. Cohort-neutral, research-clean, at the cost of two tables that
+   disagree on purpose. **This is the option worth examining first**, and it was
+   not examined here because examining it means designing the fix, which is
+   Part C, which is halted.
+
+**Note for whoever takes it:** four independent tests already say the model adds
+nothing over the price. A 92% contaminated primary bookmaker input is a candidate
+explanation for *why* that has never been tested, and option 1 is the only one
+that would let it be.
+
+---
+
+**STAGE 18 — HALTED: COHORT EVENT AT PART B.**
+
+Neither `SUBSTRATE BUILT` nor `SUBSTRATE NOT AFFORDABLE` applies. Part A shows
+the free tier holds the substrate comfortably (68% at twelve months). Part B
+shows the substrate cannot be built cleanly without changing what the model
+reads. **The blocker is not storage. It is that the fix touches the predictive
+core, and this stage is not allowed to.**
