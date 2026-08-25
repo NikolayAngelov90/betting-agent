@@ -2702,3 +2702,468 @@ fourth gave +0.705% held-out against a +1.85% cost, with its whole interval
 below the threshold. The route to the untestable three is storage, not
 modelling, and costs no API credits — but the one effect that could be measured
 argues that what lies down it will also be too small.
+
+---
+
+# DAILY CI AUDIT — THE BACKLOG, CLEARED (audited 2026-08-25)
+
+**343 runs, 2026-02-24 → 2026-08-25**, every run in the repository that had no
+ledger verdict. Rows follow this section.
+
+| verdict | runs |
+| --- | --- |
+| CLEAN | 276 |
+| **DEGRADED** | **60** |
+| **BROKEN** | **7** |
+
+By workflow: daily-picks 247, closing-lines 84, paper-report 12.
+
+## The number this audit exists to produce
+
+> **63 of the 67 non-CLEAN runs were reported `success` by GitHub.**
+
+Stage 13 Part A found 1 BROKEN and 9 DEGRADED green runs in a three-day window
+and called it a window, not a census. It was right to. **Across six months the
+same condition holds at 63 runs.** Every core step in `daily-picks.yml` carries
+`continue-on-error: true`, so green means the runner survived, not that the
+pipeline worked. DEL-2 narrowed this for pick-generation failures only; the
+other 62 remain green by design and by decision.
+
+## Tool validation before use
+
+`scripts/ci_audit.py` was re-run over 2026-08-11 → 08-13 first and **reproduced
+the manual pass exactly: 27 runs, 1 BROKEN, 9 DEGRADED, 17 CLEAN, zero
+disagreements.** This mattered because Stage 15 changed `theodds_scraper.py`'s
+`result=ok|no_rows` emission, which this script greps.
+
+## What the counts mean — the half the script cannot do
+
+### `injuries = 0` is not 24 incidents. It is one collapse and one recovery.
+
+24 DEGRADED runs carry it, which reads as a chronic fault. Measured across 187
+cached logs that mention injuries:
+
+| month | runs | runs with injuries > 0 | max seen |
+| --- | --- | --- | --- |
+| 2026-03 | 22 | 9 | 128 |
+| 2026-04 | 16 | 10 | 136 |
+| 2026-05 | 23 | 18 | 198 |
+| **2026-06** | **47** | **5** | **7** |
+| 2026-07 | 53 | 23 | 70 |
+| 2026-08 | 26 | 12 | 98 |
+
+**June is a step change, not a run of bad luck** — 47 runs, 5 with any injuries
+at all, and a maximum of 7 where the surrounding months reach 128–198. The
+integration substantially stopped in June and partially recovered in July.
+*(Counts extracted by pattern from cached logs; indicative, not authoritative.)*
+
+**Recorded, not pursued**, per the standing rule.
+
+### The two `injuries = 0` runs marked BROKEN are not a classification
+inconsistency
+
+`22796448665` and `29327973062` carry 3 and 2 traceback matches respectively and
+escalate on those. The injuries finding merely displaced the traceback finding in
+the truncated findings column. **Checked before being reported as a tool
+defect.**
+
+### Review coverage — checked against the database, not the logs
+
+`saved_picks.review_action` (**not** `disposition` — see below), picks from
+2026-08-14:
+
+| date | picks | reviewed | **no decision** | CHANGE | actually changed |
+| --- | --- | --- | --- | --- | --- |
+| 08-14 | 26 | 25 | 1 | 10 | **9** |
+| 08-15 | 57 | 39 | **18** | 14 | 14 |
+| 08-16 | 46 | 32 | **14** | 15 | 15 |
+| 08-17 | 13 | 12 | 1 | 11 | **10** |
+| 08-18 → 08-24 | 59 | 59 | 0 | — | — |
+| 08-25 | 1 | 0 | 1 | 0 | 0 |
+
+**35 picks carry no review decision at all**, concentrated on 08-15 and 08-16
+(18 of 57 and 14 of 46). The documented behaviour is that Claude reviews EVERY
+pick. **And on 08-14 and 08-17, one CHANGE decision each was recorded but never
+applied** — `review_action = CHANGE` while `model_market`/`model_selection` still
+equal the final pick. That is the discarded-decision signature the script counts
+from logs, confirmed independently in the data.
+
+### A vocabulary trap, caught before it became a false finding
+
+I first measured review coverage from `saved_picks.disposition` and found **1,336
+of 1,338 picks NULL**, with the only non-null value being `consolidated`. That
+reads as "the KEEP/CHANGE record does not exist". **It was the wrong column** —
+`disposition` is the Stage 13 supersession marker; `review_action` holds the
+decision. Caught by the standing rule that an implausible count is a vocabulary
+bug until proven otherwise. **Third instance in the data layer** after the two
+market taxonomies and `Home`/`Home Win`.
+
+### Zeros checked against fixture availability, not assumed
+
+| date | picks | fixtures available | reading |
+| --- | --- | --- | --- |
+| 2026-08-19 | 4 | 56 | API-Football suspended 10:10:28 UTC — expected |
+| 2026-08-23 | 11 | 110 | **low; not explained by card size** |
+| 2026-08-25 | 1 | 24 | **low; not explained by card size** |
+| 2026-08-18 | 3 | 4 | genuinely thin card — CLEAN |
+| 2026-08-20 | 1 | 5 | thin card — CLEAN |
+
+**`pick_observations` = 2 × picks saved on all 12 days**, exactly. The dual
+MODEL/FINAL attribution is intact end to end.
+
+The 08-23 and 08-25 ratios are **recorded, not pursued**. 08-23 is the `s5.3`
+cohort boundary, where a one-pick-per-match cap first applies; the cap explains
+part of a drop from 110 fixtures but was not verified to explain all of it.
+
+## Ledger rows
+
+Notes carry counts, not adjectives. `—` in *steps failed* means GitHub reported
+no failed step, which for this repository is the normal state of a broken run.
+
+| run_id | workflow | started (UTC) | conclusion | steps failed | audited on | verdict | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 22356085285 | daily-picks | 2026-02-24 14:51 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22390583197 | daily-picks | 2026-02-25 09:26 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22435400466 | daily-picks | 2026-02-26 09:11 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22441944420 | daily-picks | 2026-02-26 12:24 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22479870379 | daily-picks | 2026-02-27 09:06 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22488191886 | daily-picks | 2026-02-27 13:30 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22517485924 | daily-picks | 2026-02-28 08:51 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 22517577820 | daily-picks | 2026-02-28 08:57 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22523678012 | daily-picks | 2026-02-28 15:36 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22538743687 | daily-picks | 2026-03-01 07:40 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22565905564 | daily-picks | 2026-03-02 07:31 | success | — | 2026-08-25 | **BROKEN** | 1 **traceback(s)** reached the log |
+| 22612714122 | daily-picks | 2026-03-03 07:24 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22634136633 | daily-picks | 2026-03-03 17:07 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22635284943 | daily-picks | 2026-03-03 17:37 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22635667867 | daily-picks | 2026-03-03 17:46 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22639036536 | daily-picks | 2026-03-03 19:24 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22641450764 | daily-picks | 2026-03-03 20:31 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22658999875 | daily-picks | 2026-03-04 07:11 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22662151730 | daily-picks | 2026-03-04 08:56 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22666672206 | daily-picks | 2026-03-04 11:06 | failure | — | 2026-08-25 | **BROKEN** | 2 **traceback(s)** reached the log |
+| 22668603145 | daily-picks | 2026-03-04 12:05 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22707041964 | daily-picks | 2026-03-05 07:24 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22753178761 | daily-picks | 2026-03-06 07:12 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 22756001792 | daily-picks | 2026-03-06 08:46 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22794362759 | daily-picks | 2026-03-07 07:03 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22796448665 | daily-picks | 2026-03-07 09:26 | failure | — | 2026-08-25 | **BROKEN** | injuries **0** where the previous 7 runs produced some |
+| 22816159463 | daily-picks | 2026-03-08 07:06 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22820293045 | daily-picks | 2026-03-08 11:36 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22843020196 | daily-picks | 2026-03-09 07:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22891339475 | daily-picks | 2026-03-10 07:13 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 22893212883 | daily-picks | 2026-03-10 08:14 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22941560722 | daily-picks | 2026-03-11 07:26 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 22991168777 | daily-picks | 2026-03-12 07:28 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23040727447 | daily-picks | 2026-03-13 07:27 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23083041755 | daily-picks | 2026-03-14 07:11 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23105834679 | daily-picks | 2026-03-15 07:27 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23133370856 | daily-picks | 2026-03-16 07:53 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23183449389 | daily-picks | 2026-03-17 07:35 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23234008813 | daily-picks | 2026-03-18 07:35 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23284467373 | daily-picks | 2026-03-19 07:30 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23333239155 | daily-picks | 2026-03-20 07:28 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23374494765 | daily-picks | 2026-03-21 07:07 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23398025277 | daily-picks | 2026-03-22 07:12 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23426635615 | daily-picks | 2026-03-23 07:43 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23478251165 | daily-picks | 2026-03-24 07:35 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23530013971 | daily-picks | 2026-03-25 07:34 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23583046721 | daily-picks | 2026-03-26 07:41 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23636255597 | daily-picks | 2026-03-27 07:40 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23680318755 | daily-picks | 2026-03-28 07:28 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23704197572 | daily-picks | 2026-03-29 07:33 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23734505286 | daily-picks | 2026-03-30 08:08 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23786490086 | daily-picks | 2026-03-31 07:50 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 23838336849 | daily-picks | 2026-04-01 08:00 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23889918843 | daily-picks | 2026-04-02 07:46 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23938461557 | daily-picks | 2026-04-03 07:38 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 23938580915 | daily-picks | 2026-04-03 07:42 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23941450983 | daily-picks | 2026-04-03 09:25 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23974282950 | daily-picks | 2026-04-04 07:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 23996980830 | daily-picks | 2026-04-05 07:36 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24024282796 | daily-picks | 2026-04-06 08:09 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 24070722185 | daily-picks | 2026-04-07 07:55 | failure | — | 2026-08-25 | **BROKEN** | 1 **traceback(s)** reached the log |
+| 24124518344 | daily-picks | 2026-04-08 07:58 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24179358039 | daily-picks | 2026-04-09 08:00 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24233149548 | daily-picks | 2026-04-10 08:05 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24277721584 | daily-picks | 2026-04-11 07:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24301797686 | daily-picks | 2026-04-12 07:48 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24333465501 | daily-picks | 2026-04-13 08:27 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24388243534 | daily-picks | 2026-04-14 08:10 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24443729069 | daily-picks | 2026-04-15 08:12 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24496880881 | daily-picks | 2026-04-16 07:04 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 24499259777 | daily-picks | 2026-04-16 08:06 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 24499477149 | daily-picks | 2026-04-16 08:11 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24553301763 | daily-picks | 2026-04-17 07:26 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24599391846 | daily-picks | 2026-04-18 07:01 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24614508173 | daily-picks | 2026-04-18 21:41 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 24623281052 | daily-picks | 2026-04-19 06:56 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 24623910911 | daily-picks | 2026-04-19 07:34 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24654148913 | daily-picks | 2026-04-20 07:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24655009369 | daily-picks | 2026-04-20 07:54 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24709639285 | daily-picks | 2026-04-21 07:24 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24765713700 | daily-picks | 2026-04-22 07:22 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24822553699 | daily-picks | 2026-04-23 07:24 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24878564810 | daily-picks | 2026-04-24 07:50 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24925306690 | daily-picks | 2026-04-25 07:04 | failure | — | 2026-08-25 | **BROKEN** | 6 **traceback(s)** reached the log |
+| 24935579884 | daily-picks | 2026-04-25 16:39 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24950740512 | daily-picks | 2026-04-26 07:03 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 24951005409 | daily-picks | 2026-04-26 07:18 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24955399010 | daily-picks | 2026-04-26 11:22 | cancelled | — | 2026-08-25 | CLEAN | counts agree |
+| 24955692121 | daily-picks | 2026-04-26 11:38 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 24983785093 | daily-picks | 2026-04-27 08:08 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25041553428 | daily-picks | 2026-04-28 08:10 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25097679510 | daily-picks | 2026-04-29 08:03 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25154580275 | daily-picks | 2026-04-30 08:07 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25209335617 | daily-picks | 2026-05-01 09:16 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25248259491 | daily-picks | 2026-05-02 08:50 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25275009236 | daily-picks | 2026-05-03 09:05 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25311888227 | daily-picks | 2026-05-04 09:38 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25368488651 | daily-picks | 2026-05-05 09:28 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25427906402 | daily-picks | 2026-05-06 09:42 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25489125745 | daily-picks | 2026-05-07 10:00 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25546708707 | daily-picks | 2026-05-08 08:56 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25597139519 | daily-picks | 2026-05-09 09:00 | success | — | 2026-08-25 | **BROKEN** | 2 **traceback(s)** reached the log |
+| 25624924915 | daily-picks | 2026-05-10 09:13 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25665491812 | daily-picks | 2026-05-11 10:46 | success | — | 2026-08-25 | **DEGRADED** | 1 alert(s) **built but NOT delivered** |
+| 25727593132 | daily-picks | 2026-05-12 10:05 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25792324938 | daily-picks | 2026-05-13 10:05 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25853766716 | daily-picks | 2026-05-14 09:55 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25912019463 | daily-picks | 2026-05-15 10:02 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25958160130 | daily-picks | 2026-05-16 09:12 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 25986929640 | daily-picks | 2026-05-17 09:19 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26030780062 | daily-picks | 2026-05-18 11:30 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26092333988 | daily-picks | 2026-05-19 10:47 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26157007041 | daily-picks | 2026-05-20 10:34 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26221514428 | daily-picks | 2026-05-21 10:52 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26282758907 | daily-picks | 2026-05-22 10:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26329139519 | daily-picks | 2026-05-23 09:21 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26357587305 | daily-picks | 2026-05-24 09:28 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26398420094 | daily-picks | 2026-05-25 11:35 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26507319230 | daily-picks | 2026-05-27 11:04 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 26570901520 | daily-picks | 2026-05-28 11:05 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 26633321514 | daily-picks | 2026-05-29 10:56 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26680425750 | daily-picks | 2026-05-30 09:30 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26709558467 | daily-picks | 2026-05-31 10:00 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 26757106548 | daily-picks | 2026-06-01 13:13 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 26772039386 | daily-picks | 2026-06-01 17:51 | failure | — | 2026-08-25 | CLEAN | counts agree |
+| 27293639301 | daily-picks | 2026-06-10 17:25 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27338242478 | daily-picks | 2026-06-11 09:44 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 27339814324 | daily-picks | 2026-06-11 10:14 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 27361989883 | daily-picks | 2026-06-11 16:31 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 27416379675 | daily-picks | 2026-06-12 12:43 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 27421481322 | daily-picks | 2026-06-12 14:17 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27426338194 | daily-picks | 2026-06-12 15:42 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27465524983 | daily-picks | 2026-06-13 11:30 | success | — | 2026-08-25 | **DEGRADED** | 1 briefing decision(s) **DISCARDED** — review ran, verdict not applied |
+| 27469521509 | daily-picks | 2026-06-13 14:29 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27497748287 | daily-picks | 2026-06-14 11:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27501958069 | daily-picks | 2026-06-14 14:31 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27555928145 | daily-picks | 2026-06-15 15:08 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27557379483 | daily-picks | 2026-06-15 15:31 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27564105033 | daily-picks | 2026-06-15 17:27 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27616902878 | daily-picks | 2026-06-16 12:17 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27625103306 | daily-picks | 2026-06-16 14:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27635669856 | daily-picks | 2026-06-16 17:23 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27690732492 | daily-picks | 2026-06-17 12:59 | success | — | 2026-08-25 | **DEGRADED** | 1 briefing decision(s) **DISCARDED** — review ran, verdict not applied |
+| 27690859911 | daily-picks | 2026-06-17 13:01 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27702775527 | daily-picks | 2026-06-17 16:07 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27760010043 | daily-picks | 2026-06-18 12:38 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27772060952 | daily-picks | 2026-06-18 15:54 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27827223178 | daily-picks | 2026-06-19 13:00 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27835285929 | daily-picks | 2026-06-19 15:44 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27869868638 | daily-picks | 2026-06-20 11:31 | success | — | 2026-08-25 | **DEGRADED** | 2 briefing decision(s) **DISCARDED** — review ran, verdict not applied |
+| 27874168621 | daily-picks | 2026-06-20 14:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27903635203 | daily-picks | 2026-06-21 12:00 | success | — | 2026-08-25 | **DEGRADED** | 1 briefing decision(s) **DISCARDED** — review ran, verdict not applied |
+| 27907566451 | daily-picks | 2026-06-21 14:34 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27962743457 | daily-picks | 2026-06-22 15:07 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 27970588764 | daily-picks | 2026-06-22 17:13 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28025876176 | daily-picks | 2026-06-23 12:23 | success | — | 2026-08-25 | **DEGRADED** | 2 briefing decision(s) **DISCARDED** — review ran, verdict not applied |
+| 28036906306 | daily-picks | 2026-06-23 15:26 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28097312462 | daily-picks | 2026-06-24 12:07 | success | — | 2026-08-25 | **DEGRADED** | 3 briefing decision(s) **DISCARDED** — review ran, verdict not applied |
+| 28108684871 | daily-picks | 2026-06-24 15:10 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28168719073 | daily-picks | 2026-06-25 12:03 | success | — | 2026-08-25 | **DEGRADED** | 2 briefing decision(s) **DISCARDED** — review ran, verdict not applied |
+| 28180659344 | daily-picks | 2026-06-25 15:18 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28236632011 | daily-picks | 2026-06-26 12:00 | success | — | 2026-08-25 | **DEGRADED** | 3 briefing decision(s) **DISCARDED** — review ran, verdict not applied |
+| 28245636814 | daily-picks | 2026-06-26 14:48 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28287518114 | daily-picks | 2026-06-27 11:13 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28291554441 | daily-picks | 2026-06-27 14:07 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28320584590 | daily-picks | 2026-06-28 11:22 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28325087751 | daily-picks | 2026-06-28 14:17 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28377137724 | daily-picks | 2026-06-29 13:52 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28386237573 | daily-picks | 2026-06-29 16:13 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28442596088 | daily-picks | 2026-06-30 11:59 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28453089347 | daily-picks | 2026-06-30 14:44 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28517087943 | daily-picks | 2026-07-01 12:21 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28527824544 | daily-picks | 2026-07-01 15:13 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28588019500 | daily-picks | 2026-07-02 11:55 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28597984718 | daily-picks | 2026-07-02 14:30 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28658837423 | daily-picks | 2026-07-03 11:53 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28667064129 | daily-picks | 2026-07-03 14:33 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28704293790 | daily-picks | 2026-07-04 11:08 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28708549879 | daily-picks | 2026-07-04 14:00 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28738980918 | daily-picks | 2026-07-05 11:18 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28743543697 | daily-picks | 2026-07-05 14:11 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28793732702 | daily-picks | 2026-07-06 13:06 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28804784525 | daily-picks | 2026-07-06 15:55 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 28865408266 | daily-picks | 2026-07-07 12:16 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28877446676 | daily-picks | 2026-07-07 15:17 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 28939008649 | daily-picks | 2026-07-08 11:26 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 28951403546 | daily-picks | 2026-07-08 14:42 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29017818302 | daily-picks | 2026-07-09 12:20 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29030116785 | daily-picks | 2026-07-09 15:35 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29091930551 | daily-picks | 2026-07-10 12:14 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29102226093 | daily-picks | 2026-07-10 15:03 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29149814240 | daily-picks | 2026-07-11 10:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29155218848 | daily-picks | 2026-07-11 13:56 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29190030196 | daily-picks | 2026-07-12 10:58 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29195364533 | daily-picks | 2026-07-12 13:57 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29249532268 | daily-picks | 2026-07-13 12:21 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29261304347 | daily-picks | 2026-07-13 15:13 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29327973062 | daily-picks | 2026-07-14 11:10 | success | — | 2026-08-25 | **BROKEN** | injuries **0** where the previous 7 runs produced some |
+| 29340035297 | daily-picks | 2026-07-14 14:15 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29410851248 | daily-picks | 2026-07-15 11:12 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29422577440 | daily-picks | 2026-07-15 14:13 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29494050000 | daily-picks | 2026-07-16 11:20 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29506513304 | daily-picks | 2026-07-16 14:25 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29575833777 | daily-picks | 2026-07-17 11:08 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29586509564 | daily-picks | 2026-07-17 14:04 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29641445761 | daily-picks | 2026-07-18 10:47 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29646944410 | daily-picks | 2026-07-18 13:52 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29684298183 | daily-picks | 2026-07-19 10:58 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29689821756 | daily-picks | 2026-07-19 13:55 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29740671362 | daily-picks | 2026-07-20 12:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29751216855 | daily-picks | 2026-07-20 14:34 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29826106817 | daily-picks | 2026-07-21 11:26 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 29839016353 | daily-picks | 2026-07-21 14:25 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 29915776892 | daily-picks | 2026-07-22 11:27 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 30003266094 | daily-picks | 2026-07-23 11:28 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 30089229751 | daily-picks | 2026-07-24 11:20 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 30155284880 | daily-picks | 2026-07-25 10:53 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 30199482479 | daily-picks | 2026-07-26 11:05 | success | — | 2026-08-25 | **DEGRADED** | API-Football **account suspended** |
+| 30204273355 | daily-picks | 2026-07-26 13:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 30267093066 | daily-picks | 2026-07-27 12:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 30355496884 | daily-picks | 2026-07-28 11:36 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 30448957612 | daily-picks | 2026-07-29 11:47 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 30538844155 | daily-picks | 2026-07-30 11:30 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 30628079467 | daily-picks | 2026-07-31 11:44 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 30696942420 | daily-picks | 2026-08-01 11:03 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 30744998217 | daily-picks | 2026-08-02 11:04 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 30814751466 | daily-picks | 2026-08-03 12:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 30906275362 | daily-picks | 2026-08-04 11:47 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 31002235726 | daily-picks | 2026-08-05 11:38 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 31112133734 | daily-picks | 2026-08-06 14:42 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 31170325270 | daily-picks | 2026-08-07 10:30 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31252035375 | daily-picks | 2026-08-08 10:05 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31307570446 | daily-picks | 2026-08-09 10:07 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31380557463 | daily-picks | 2026-08-10 10:46 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31407338578 | closing-lines | 2026-08-10 16:08 | success | — | 2026-08-25 | **DEGRADED** | 2 credits claimed, **0 closing lines captured** |
+| 31416982312 | closing-lines | 2026-08-10 18:01 | success | — | 2026-08-25 | **DEGRADED** | 2 credits claimed, **0 closing lines captured** |
+| 31426838071 | closing-lines | 2026-08-10 19:59 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31436110648 | closing-lines | 2026-08-10 21:56 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31443804685 | closing-lines | 2026-08-10 23:49 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31792895823 | daily-picks | 2026-08-14 10:36 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31796284378 | paper-report | 2026-08-14 11:27 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31798148700 | closing-lines | 2026-08-14 11:55 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31808922756 | closing-lines | 2026-08-14 14:19 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31817584121 | closing-lines | 2026-08-14 16:04 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31827003802 | closing-lines | 2026-08-14 18:05 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31835392007 | closing-lines | 2026-08-14 19:54 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31843261983 | closing-lines | 2026-08-14 21:37 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31850797893 | closing-lines | 2026-08-14 23:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31878183679 | daily-picks | 2026-08-15 09:54 | success | — | 2026-08-25 | **DEGRADED** | 1 alert(s) **built but NOT delivered** |
+| 31880839259 | paper-report | 2026-08-15 10:57 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31882302007 | closing-lines | 2026-08-15 11:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31887897469 | closing-lines | 2026-08-15 13:41 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31893054820 | closing-lines | 2026-08-15 15:33 | success | — | 2026-08-25 | **DEGRADED** | 4 credits claimed, **0 closing lines captured** |
+| 31898638147 | closing-lines | 2026-08-15 17:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31904161875 | closing-lines | 2026-08-15 19:31 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31909759683 | closing-lines | 2026-08-15 21:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31915024968 | closing-lines | 2026-08-15 23:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31940324038 | daily-picks | 2026-08-16 09:55 | success | — | 2026-08-25 | **DEGRADED** | 1 alert(s) **built but NOT delivered** |
+| 31943094556 | paper-report | 2026-08-16 10:58 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31944620086 | closing-lines | 2026-08-16 11:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31950625630 | closing-lines | 2026-08-16 13:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31956047427 | closing-lines | 2026-08-16 15:34 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31961920210 | closing-lines | 2026-08-16 17:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31967824022 | closing-lines | 2026-08-16 19:31 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31973813130 | closing-lines | 2026-08-16 21:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 31979444279 | closing-lines | 2026-08-16 23:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32018632341 | daily-picks | 2026-08-17 10:07 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32022968316 | paper-report | 2026-08-17 11:02 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32025815082 | closing-lines | 2026-08-17 11:37 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32036923026 | closing-lines | 2026-08-17 13:51 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32042840589 | closing-lines | 2026-08-17 15:36 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32051530862 | closing-lines | 2026-08-17 17:42 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32061612730 | closing-lines | 2026-08-17 19:40 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32072097546 | closing-lines | 2026-08-17 21:37 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32081051345 | closing-lines | 2026-08-17 23:35 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32124630406 | daily-picks | 2026-08-18 10:01 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 32129707558 | paper-report | 2026-08-18 11:02 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32132644028 | closing-lines | 2026-08-18 11:37 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32145189728 | closing-lines | 2026-08-18 13:55 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32156275205 | closing-lines | 2026-08-18 15:44 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32166853804 | closing-lines | 2026-08-18 17:40 | success | — | 2026-08-25 | **DEGRADED** | Odds API **0 rows** where the previous 7 runs produced some |
+| 32177739185 | closing-lines | 2026-08-18 19:38 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32188574141 | closing-lines | 2026-08-18 21:36 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32197745800 | closing-lines | 2026-08-18 23:34 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32240633728 | daily-picks | 2026-08-19 10:01 | success | — | 2026-08-25 | **DEGRADED** | injuries **0** where the previous 7 runs produced some |
+| 32245546696 | paper-report | 2026-08-19 11:01 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32248451160 | closing-lines | 2026-08-19 11:36 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32260926223 | closing-lines | 2026-08-19 13:55 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32271817127 | closing-lines | 2026-08-19 15:44 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32282678520 | closing-lines | 2026-08-19 17:37 | success | — | 2026-08-25 | **DEGRADED** | 1 league request(s) returned **no_rows** (credits spent, nothing written) |
+| 32293929208 | closing-lines | 2026-08-19 19:36 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32304880706 | closing-lines | 2026-08-19 21:38 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32313813438 | closing-lines | 2026-08-19 23:34 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32357064869 | daily-picks | 2026-08-20 10:04 | success | — | 2026-08-25 | **DEGRADED** | API-Football **account suspended** |
+| 32361917103 | paper-report | 2026-08-20 11:03 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32364904225 | closing-lines | 2026-08-20 11:39 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32377235665 | closing-lines | 2026-08-20 13:57 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32388201580 | closing-lines | 2026-08-20 15:47 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32399202101 | closing-lines | 2026-08-20 17:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32410255699 | closing-lines | 2026-08-20 19:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32420683407 | closing-lines | 2026-08-20 21:41 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32429424699 | closing-lines | 2026-08-20 23:37 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32470865675 | daily-picks | 2026-08-21 10:03 | success | — | 2026-08-25 | **DEGRADED** | API-Football **account suspended** |
+| 32475389199 | paper-report | 2026-08-21 11:02 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32478166285 | closing-lines | 2026-08-21 11:38 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32489492899 | closing-lines | 2026-08-21 13:56 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32499416119 | closing-lines | 2026-08-21 15:46 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32509601944 | closing-lines | 2026-08-21 17:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32519261167 | closing-lines | 2026-08-21 19:35 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32529285066 | closing-lines | 2026-08-21 21:36 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32537443805 | closing-lines | 2026-08-21 23:35 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32566236079 | daily-picks | 2026-08-22 09:55 | success | — | 2026-08-25 | **DEGRADED** | API-Football **account suspended** |
+| 32569046033 | paper-report | 2026-08-22 10:58 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32570608261 | closing-lines | 2026-08-22 11:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32576577708 | closing-lines | 2026-08-22 13:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32582063138 | closing-lines | 2026-08-22 15:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32588112161 | closing-lines | 2026-08-22 17:33 | success | — | 2026-08-25 | **DEGRADED** | 4 league request(s) returned **no_rows** (credits spent, nothing written) |
+| 32594025485 | closing-lines | 2026-08-22 19:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32599968642 | closing-lines | 2026-08-22 21:34 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32605543775 | closing-lines | 2026-08-22 23:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32632354001 | daily-picks | 2026-08-23 09:55 | success | — | 2026-08-25 | **DEGRADED** | API-Football **account suspended** |
+| 32635235347 | paper-report | 2026-08-23 10:58 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32636878301 | closing-lines | 2026-08-23 11:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32643241921 | closing-lines | 2026-08-23 13:43 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32646469497 | daily-picks | 2026-08-23 14:46 | success | — | 2026-08-25 | **DEGRADED** | API-Football **account suspended** |
+| 32648982545 | closing-lines | 2026-08-23 15:34 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32655184546 | closing-lines | 2026-08-23 17:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32661566816 | closing-lines | 2026-08-23 19:32 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32667908338 | closing-lines | 2026-08-23 21:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32673983048 | closing-lines | 2026-08-23 23:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32716289408 | daily-picks | 2026-08-24 10:20 | success | — | 2026-08-25 | **DEGRADED** | API-Football **account suspended** |
+| 32720148367 | paper-report | 2026-08-24 11:06 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32723195851 | closing-lines | 2026-08-24 11:42 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32736037003 | closing-lines | 2026-08-24 14:00 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32747605838 | closing-lines | 2026-08-24 15:53 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32758407323 | closing-lines | 2026-08-24 17:44 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32769671034 | closing-lines | 2026-08-24 19:42 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32780903101 | closing-lines | 2026-08-24 21:42 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32789857642 | closing-lines | 2026-08-24 23:33 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32835286636 | daily-picks | 2026-08-25 10:04 | success | — | 2026-08-25 | **DEGRADED** | API-Football **account suspended** |
+| 32840387478 | paper-report | 2026-08-25 11:04 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32840749965 | closing-lines | 2026-08-25 11:08 | success | — | 2026-08-25 | CLEAN | counts agree |
+| 32843550194 | closing-lines | 2026-08-25 11:40 | success | — | 2026-08-25 | CLEAN | counts agree |
+
+*Backlog cleared 2026-08-25. Every run in the repository now carries a verdict.*
