@@ -19,6 +19,8 @@ from src.data.sql_helpers import id_in
 from src.data.database import get_db
 from src.data.models import Match, Odds, SavedPick, Team
 from src.utils.logger import get_logger, utcnow
+from src.scrapers.barren_leagues import (
+    BARREN_CONSECUTIVE_THRESHOLD, BARREN_TTL_DAYS, BarrenLeagueCache)
 
 logger = get_logger()
 
@@ -687,6 +689,17 @@ class TheOddsScraper:
             else:
                 league_games[league] = result
 
+        # Per-league outcome, recorded because the aggregate hid it. The
+        # attribution log in refresh_imminent used to derive `result=` from the
+        # TOTAL rows written across the whole batch, so a batch where one league
+        # returned rows and three returned nothing emitted four `result=ok`
+        # lines. Every no_rows figure ever read out of those logs is therefore a
+        # LOWER bound on the waste, including Stage 15's.
+        self._last_league_outcomes = {
+            lg: ("error" if games is None else ("no_rows" if not games else "ok"))
+            for lg, games in league_games.items()
+        }
+
         total_written = 0
         matched_games = 0
         unmatched_games = 0
@@ -947,6 +960,19 @@ class TheOddsScraper:
                         f"refreshed within the last {min_interval_minutes} min")
                     league_fixtures.pop(league)
 
+        # L2: a league that returned an empty event list three runs running is
+        # not priced by the provider. Requesting it again cannot produce an
+        # observation, so declining costs no coverage. The exclusion expires.
+        barren = BarrenLeagueCache()
+        if league_fixtures:
+            for league in list(league_fixtures):
+                if barren.should_skip(league):
+                    plan["skipped"][league] = (
+                        "no odds returned on the last "
+                        f"{BARREN_CONSECUTIVE_THRESHOLD} attempts "
+                        f"(retried after {BARREN_TTL_DAYS}d)")
+                    league_fixtures.pop(league)
+
         plan["requested"] = list(league_fixtures)
         plan["credits_estimated"] = credits_for(len(league_fixtures))
 
@@ -967,6 +993,15 @@ class TheOddsScraper:
         written = await self._fetch_and_persist(league_fixtures, quota=quota)
         after = getattr(quota, "spent_this_run", 0) if quota else 0
         plan["odds_written"] = written
+        outcomes = getattr(self, "_last_league_outcomes", {})
+        for league, outcome in outcomes.items():
+            # An exception is not evidence the league is unpriced — a timeout
+            # says nothing about the provider's catalogue. Only a clean empty
+            # response counts toward exclusion.
+            if outcome in ("ok", "no_rows"):
+                barren.record(league, empty=(outcome == "no_rows"))
+        barren.save()
+        plan["barren"] = barren.describe()
         plan["credits_claimed"] = (after - before) if quota else plan["credits_estimated"]
         plan["credits_remaining_header"] = self._remaining_requests
 
@@ -988,7 +1023,8 @@ class TheOddsScraper:
                 f"ODDS_REFRESH date={now:%Y-%m-%d} time={now:%H:%M} "
                 f"league={league} sport_key={LEAGUE_TO_THEODDS_SPORT.get(league)} "
                 f"requests=1 est_credits={CREDITS_PER_REQUEST} "
-                f"result={'ok' if written else 'no_rows'} reason=imminent_pending_pick")
+                f"result={outcomes.get(league, 'ok' if written else 'no_rows')} "
+                f"reason=imminent_pending_pick")
         for league, why in plan["skipped"].items():
             logger.info(
                 f"ODDS_REFRESH date={now:%Y-%m-%d} time={now:%H:%M} "

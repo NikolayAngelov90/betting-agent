@@ -111,6 +111,18 @@ jobs:
             exit 1
           fi
 
+      # Stage 15, L2. WITHOUT THIS THE LEVER IS A NO-OP. This workflow had no
+      # cache step at all, so every run started from a fresh checkout and the
+      # barren-league record was written, used once, and thrown away. Same
+      # restore/save pattern as daily-picks' briefings-sent guard.
+      - name: Restore barren-league record
+        uses: actions/cache/restore@v5
+        with:
+          path: data/odds_barren_leagues.json
+          key: barren-leagues-${{ github.run_id }}
+          restore-keys: |
+            barren-leagues-
+
       - name: Refresh imminent odds and capture closing lines
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -122,6 +134,15 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
           if [ -n "${{ inputs.window_minutes }}" ]; then ARGS="$ARGS --window ${{ inputs.window_minutes }}"; fi
           python -m scripts.refresh_and_capture $ARGS
+
+      # Saved even on failure: a run that recorded three empty fetches and
+      # then died still learned something worth keeping.
+      - name: Save barren-league record
+        uses: actions/cache/save@v5
+        if: always()
+        with:
+          path: data/odds_barren_leagues.json
+          key: barren-leagues-${{ github.run_id }}
 
       - name: Report quota and CLV coverage
         if: always()

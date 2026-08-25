@@ -1789,3 +1789,239 @@ number would preserve the error. Same treatment as "11 filter sites".
 observations per 9 days against a 500-observation target, and a budget that
 affords roughly three weeks of every month, the question is no longer *"is it
 measuring"* — it is **"how many days a month can it afford to?"**
+
+---
+
+# STAGE 15 — THE COVERAGE/CREDIT FRONTIER
+
+One question: **what does each additional valid closing observation cost, and
+which gains are cheapest?**
+
+## Part A — the arithmetic
+
+Measured 2026-08-25, re-derived rather than carried forward from Stage 14 (the
+57 quoted there was nine days old and is now 61):
+
+| series | observations | distinct fixtures | design effect |
+| --- | --- | --- | --- |
+| FINAL (post-review) | 61 | 61 | 1.00 |
+| **MODEL (frozen model's own selection)** | **46** | 46 | 1.00 |
+
+**MODEL is the binding series.** It is smaller because the review changes the
+pick in 27 of 61 cases (44%), and when it does, the captured close prices the
+FINAL selection — the model's own selection resolves only if it happens to sit
+in the same requested market. **500 − 46 = 454 observations still required.**
+
+**Why deff is exactly 1.00, which is not luck.** Every captured fixture carries
+exactly one observation because Stage 13 imposed one pick per match. Before that
+rule, multiple picks on one fixture would have been correlated within it and the
+effective n would have been strictly below the nominal n. The clean design
+effect is a *consequence of a Stage 13 decision*, and it holds only while that
+rule holds — if `max_picks_per_match` is ever raised, the bootstrap must cluster
+by fixture and 500 nominal will stop meaning 500 effective.
+
+## Part B — every lever, priced against MODEL
+
+Marginal rate, measured directly: 73 request outcomes in 2026-08-10 → 08-24 at
+2 credits each = 146 credits, producing 46 MODEL observations = **3.17 credits
+per MODEL observation**.
+
+| lever | Δ credits/mo | MODEL gained | cr / MODEL obs |
+| --- | --- | --- | --- |
+| **L2** stop requesting leagues the provider does not price | **−17** | 0 | **negative — free** |
+| **L4** move the 21:17/23:17 windows earlier | +0 (reallocated) | ~14/mo | ~1.4 |
+| **L1** add an earlier run | +20 | ~14/mo | ~1.4 |
+| **L6b** `min_interval` 180 → 110 | +54 | ~16/mo | ~3.3 |
+| **L6a** stop pick-time writes suppressing the first close | +16 | ~5/mo | ~3.3 |
+| **L3a** add `team_totals` | +72 | ~9/mo | ~8 |
+| **L3b** add `double_chance` / `draw_no_bet` | +72 each | **0** | **infinite** |
+| **L5** cut pick-time pricing | −213 max | negative | **disqualified** |
+
+### L5 — pick-time pricing is not waste, it is the product
+
+61% of the budget (213 credits/month) had never been examined. It is not waste.
+Of **66 league-days priced at pick time, 2 produced no pick at all** — 3%. The
+other 64 did exactly what they were paid to do. The 27 that produced a pick but
+no closing observation are a *capture* failure, not a pricing one: the credit
+bought the pick, which is the thing the experiment is about.
+
+So the L2 question, asked of the larger consumer, returns almost nothing. Any
+larger cut means pricing fewer books or markets, which changes the blend and
+therefore the model's probability — **a cohort event, out of scope**, and now
+recorded with its arithmetic rather than left as an open suspicion.
+
+**The consequence is the important part.** 213 of 450 credits is committed
+before capture gets any. The capture budget is not "whatever is left over" — it
+is **237/month, fixed**, unless the cohort is broken or the tier is paid.
+
+### L6 — structural AND a defect, and they are different halves
+
+11 picks kick off at hour 12; 0 captured. But **7 of the 11 are outside
+`h2h`+`totals`** (Double Chance ×2, BTTS ×2, Team Goals ×2, Draw No Bet ×1), so
+the anomaly is worth **at most 4** observations, not 11. That alone demoted it.
+
+Then the refresh plan gave the cause: every candidate league was skipped as
+`refreshed within the last 180 min`. Across all cached logs that is **35
+league-requests, the largest single skip reason** — ahead of `not mapped` (21)
+and `no pending pick` (7). It splits cleanly by the hour of the run:
+
+- **8 suppressions at 11:00** — `daily-picks` fires at 09:37 and writes odds at
+  pick time. Those rows are the `taken_at` rows. **A `taken_at` row can never
+  satisfy the strictly-after rule**, so treating it as "recently refreshed"
+  guarantees `missing`. This half is a genuine defect.
+- **27 suppressions at 15:00/17:00** — the cron is `17 11,13,15,17,19,21,23`,
+  every **120** minutes, and the interval is **180**. Consecutive runs cannot
+  both fire for the same league. **Every second closing-lines run is a no-op by
+  construction.**
+
+**The two 180s are different quantities that share a number.**
+`clv.DEFAULT_MAX_CAPTURE_LEAD = 180 min` is the maximum gap between the close
+and *kickoff*. `odds_refresh_min_interval_minutes = 180` is the minimum gap
+between two *fetches*. The config comment reasons from the first to justify the
+second — but "fresh enough" for CLV means *close to kickoff*, not *recently
+fetched*. A price pulled 170 minutes ago for a fixture kicking off in 10 minutes
+is at the validity edge, not comfortably inside it.
+
+The same comment records `2-hourly runs, 256 credits/month, 96% coverage` as
+the chosen operating point. That is **`simulate_odds_quota.py` output, the third
+time this simulator's numbers have been recorded as measurement** (after the
+README's `212 credits/month` and its `212 cr at 88%` comparison). Measured
+coverage is **63% of capturable picks**, not 96%.
+
+**Neither half of L6 qualifies for Part D**: lifting a skip *spends* credits.
+L6 is a coverage-for-credits trade at ~3.3 cr/obs, i.e. an operator's decision.
+
+### A defect found in the instrumentation itself
+
+`refresh_imminent` derived its per-league `result=ok|no_rows` attribution line
+from `written`, the **batch total**. A batch where one league returned rows and
+three returned nothing logged four `result=ok` lines. **Every `no_rows` figure
+ever read out of these logs — including Stage 15's own — is a lower bound.**
+Fixed in Part D, because L2 cannot be implemented on a signal that is wrong.
+
+## Part C — recommendation
+
+**The experiment reaches 500 MODEL observations around March 2027, and that is
+the optimistic case.** 454 needed ÷ (237 capture credits ÷ 3.17 per
+observation ≈ 75/month) = **6.1 months**. This is the number the project has
+been circling since paper trading began, and it is the first time it has
+existed.
+
+It is optimistic because it assumes the full 450 is available every month.
+August spent 349 in 24 days — **~436/month against a 450 cap.** The cap is
+already binding. At August's *realised* capture rate, which stopped on the 22nd
+when the money ran out, the answer is 46/month and **June 2027**.
+
+| scenario | MODEL obs/month | 500 reached |
+| --- | --- | --- |
+| realised August (budget exhausted on the 22nd) | 46 | June 2027 |
+| **full 450 spent, no changes** | **75** | **March 2027** |
+| + L2 (free) | 80 | mid-February 2027 |
+| + L2 + L4 (free, reallocation only) | ~90 | late January 2027 |
+| + L6b (spends 54 more) | — | not affordable inside 450 |
+
+**Recommended, in order:** L2 (implemented, Part D — it is free). Then **L4**,
+which is the best lever on the board and costs nothing: it does not add a run,
+it *moves* the 21:17 and 23:17 windows earlier, into the hours where fixtures
+actually kick off. Every `late` pick measured kicks off at 11:00 or 11:30 UTC,
+before the day's first capture attempt exists. **L4 is a scheduling change with
+zero credit cost and it is the single highest-value action available.**
+
+**Do not buy L3b at any price. A lever that moves the non-binding series is not
+a lever.** `double_chance` and `draw_no_bet` add FINAL observations and **zero**
+MODEL observations, and MODEL is the series that is short. FINAL is already at
+61 and is not the constraint. The same test disqualifies any future proposal
+that widens post-review coverage without widening the frozen model's own.
+
+**On the free tier the checkpoint is not reachable before 2027.** No combination
+of free levers gets there in 2026; the cheapest levers are exhausted at ~90
+observations/month, and 454 will not fit in four months at that rate. Reaching
+it sooner requires either paid credits or breaking the cohort — **both are
+Niki's decisions, not this stage's.**
+
+**Not implemented, by the stage's own rule:** L1, L3a, L4, L6a, L6b all cost
+credits or change the schedule. L4 in particular is *recommended and left
+undone* — it is a one-line cron change, but it is an operating decision about
+when the system runs, and Stage 15 was scoped to measure, not to re-time.
+
+## Part D — L2 implemented, and nothing else
+
+`src/scrapers/barren_leagues.py`. A league that returns an empty event list
+**three runs running** is not priced by the provider; the request cannot produce
+an observation, so declining it cannot lose one. Strictly negative credits,
+exactly zero coverage.
+
+**Not a blocklist, deliberately.** A hard-coded UEFA set would have excluded
+`france/ligue-1`, `netherlands/eredivisie`, `spain/laliga` and
+`portugal/primeira-liga` — each returned `no_rows` exactly once in this window
+and each is plainly priced. And coverage *changes*: the provider does not price
+Conference League qualifiers in July and does price the group stage in
+September. So the exclusion is earned (3 consecutive), **expires** (10 days),
+must be **re-earned** after expiry, and is **cleared** by one success.
+
+**Verified by replay, not by assertion.** The 73 real request outcomes from
+2026-08-10 → 08-24 were replayed through the cache:
+
+```
+requests avoided       : 4  = 8 credits   (~17/month at this rate)
+of which WRONG (was ok): 0
+```
+
+**Smaller than Part B first priced it (−26/month), and the correction stands.**
+Two reasons: the threshold of 3 is deliberately conservative, and the
+attribution defect above means the logged `no_rows` count it replays is itself a
+lower bound. With attribution fixed, the cache will exclude sooner and save
+more — but that is a prediction, and it is written here as one.
+
+The load-bearing guard is `test_the_exclusion_expires`. An exclusion that never
+lifts encodes a fact that expires and never learns it was wrong — which is worse
+than the 17 credits it saves. 769 passed.
+
+### The lever was a no-op when first written, and nothing would have said so
+
+`closing-lines.yml` **had no cache step of any kind.** Every run starts from a
+fresh checkout, so the record would have been written, consulted once inside the
+same process, and thrown away. The exclusion threshold is three *consecutive*
+empty fetches — unreachable when nothing survives a single run.
+
+**The failure mode is the one this ledger keeps recording.** It would have
+reported as "L2 implemented, 0 credits saved", which is indistinguishable from
+"the provider started pricing everything". A lever that measures as working
+while doing nothing is worse than an absent lever, because the next stage
+prices its successor against a saving that never happened.
+
+Fixed with the restore/save pair already used for `data/briefings_sent.json`
+(run-id key + `restore-keys` prefix), and pinned by
+`test_the_workflow_persists_the_record_across_runs`, which fails if either half
+is removed. The record is gitignored: committing it would ship one machine's
+observations as every deployment's permanent exclusions.
+
+Two designs were tried and rejected first, and the reasons are worth keeping:
+
+- **Derive it from the `odds` table, no new state.** Fails: the UEFA
+  competitions carry thousands of odds rows (Bet365, 1xBet, Pinnacle) from
+  API-Football, and there is no source column, so "has this league received
+  odds" cannot distinguish the provider that declined to price it from the one
+  that did.
+- **A new table in Neon.** Correct and durable, and rejected as disproportionate
+  for a 17-credit lever inside a stage scoped to measurement.
+
+### Instrumentation added, as approved
+
+`OddsApiQuota.claim_requests` now emits one structured line per claim:
+
+```
+CREDITS_CLAIMED account=<workflow> credits=N requests=N asked=N month=YYYY-MM
+```
+
+The 213/144 split this stage's entire frontier rests on was **reconstructed by
+inference over CI logs and reconciled to within 2.3%** — it was never measured.
+Next stage reads it off the logs instead of arguing for it.
+
+---
+
+**STAGE 15 — FRONTIER MEASURED.**
+
+454 MODEL observations remain; the capture budget is 237 credits/month against a
+measured 3.17 credits per MODEL observation; the checkpoint arrives around
+**March 2027**, and no combination of free levers brings it into 2026.

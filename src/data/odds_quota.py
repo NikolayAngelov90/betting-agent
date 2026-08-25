@@ -87,6 +87,17 @@ MARKETS = 2
 CREDITS_PER_REQUEST = REGIONS * MARKETS
 
 
+def _credit_account() -> str:
+    """Which scheduled job is spending. GITHUB_WORKFLOW in CI, else 'local'.
+
+    Deliberately an env read rather than a parameter: every call site would
+    otherwise have to thread it through, and a call site that forgot would be
+    indistinguishable from one that spent nothing.
+    """
+    import os
+    return (os.environ.get("GITHUB_WORKFLOW") or "local").replace(" ", "-")
+
+
 def month_key(today: Optional[_date] = None) -> _date:
     """The ledger key for a calendar month: its first day."""
     d = today or _date.today()
@@ -186,6 +197,17 @@ class OddsApiQuota:
             want -= 1
 
         self.spent_this_run += credits_for(granted)
+
+        # Stage 15 instrumentation. The 213/144 split between pick-time pricing
+        # and closing capture was RECONSTRUCTED by inference over CI logs and
+        # reconciled to within 2.3%; it drove the whole frontier calculation and
+        # nothing measured it directly. One structured line per claim, tagged
+        # with the workflow that spent it, makes the next stage's version of
+        # that number a measurement instead of an argument.
+        logger.info(
+            f"CREDITS_CLAIMED account={_credit_account()} "
+            f"credits={credits_for(granted)} requests={granted} "
+            f"asked={n_requests} month={day:%Y-%m}")
 
         if granted < n_requests:
             logger.warning(

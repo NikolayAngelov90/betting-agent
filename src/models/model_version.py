@@ -113,6 +113,15 @@ TRACKED_KEYS: List[str] = [
 #:           of 2 that was survivable; at a cap of 1 it decides which single
 #:           pick represents the match. All three now use `_rank_key`.
 #:
+#:           MEASURED EFFECT, recorded because a cohort break with an unstated
+#:           magnitude invites the assumption that it was large: the 2 -> 1 cap
+#:           removes AT MOST 1.6% of picks — 3 of 181 matches carried a second
+#:           pick at all. **The fingerprint break is therefore dominated by the
+#:           ranking unification, not by the cap.** Anyone comparing across this
+#:           boundary should expect the selection to differ on the ~1.6% the cap
+#:           touches and on any match where the three old orderings disagreed,
+#:           and should not attribute a large behavioural change to the cap.
+#:
 #:       Selection-affecting, not in the fingerprint's inputs:
 #:         · Team-identity gate at API-Football team resolution. A row matched
 #:           by AF id is now verified against the payload in hand — country

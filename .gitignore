@@ -73,3 +73,6 @@ _bmad/custom/*.user.toml
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Stage 15 L2: runtime record, restored from the Actions cache, never committed.
+data/odds_barren_leagues.json
