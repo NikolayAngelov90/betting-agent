@@ -3350,3 +3350,111 @@ the free tier holds the substrate comfortably (68% at twelve months). Part B
 shows the substrate cannot be built cleanly without changing what the model
 reads. **The blocker is not storage. It is that the fix touches the predictive
 core, and this stage is not allowed to.**
+
+---
+
+# STAGE 18 DIAGNOSTIC — THE HALT PREMISE WAS WRONG
+
+Read-only. No code, config or schema changes.
+
+## The correction, first
+
+**Stage 18's halt rested on a stale docstring, not on the implementation.**
+
+`_get_bookmaker_features()` opens with *"For each market the preferred bookmaker
+order is: Bet365 → Pinnacle → any."* Thirty lines below, the code says:
+
+> `# This used to de-vig ONE bookmaker, chosen Bet365 -> Pinnacle -> any.`
+> `# Two problems, both measured on 2026-08-07: 1. Bet365's stored 1X2 was`
+> `# corrupt for all 2,486 matches ... An overround plausibility gate runs`
+> `# first, so a book whose market does not sum to a believable figure is`
+> `# excluded outright rather than averaged in.`
+
+**The docstring describes behaviour that was replaced in Stage 4 because of this
+exact defect.** I read the docstring and reported "the model's first-choice
+bookmaker input is 92.4% contaminated". The live code gates every book at
+`[1.005, 1.25]` and then takes a **per-outcome median across surviving books**.
+
+This is the project's own catalogued error class — *a definition read as an
+occurrence* — committed by me, on the stage whose purpose was to find it.
+
+**Two further claims in that commit are also wrong:**
+
+- *"the true radius is FIFTEEN books"* — no. Fifteen counts books above a 1.15
+  threshold, which sweeps in high-margin French Odds API books (`pmu_fr` 11.1%,
+  `winamax_fr` 11.4%) that are not the two-way trap. **The real trap population
+  is 9 bookmakers, 4,907 book-snapshots, 2,408 matches**, against the recorded
+  seven. Only **3** Odds API books exceed 1.25 in the entire table.
+- *"Bet365 at 92.4% was never recorded at all"* — no. `clean_dataset.py`'s module
+  docstring records **"Bet365 92% of matches, William Hill 94%, Unibet 96%,
+  Betfair 86%, 10Bet 98%, Betano 96%, 888Sport 97%, Pinnacle 26%"**. It was
+  recorded in the evaluation harness; it was absent only from the ledger's
+  blast-radius entry. **The Stage 4 measurement was substantially right and I
+  reported it as substantially wrong.**
+
+## The five paths (MEASURED 2026-08-25)
+
+| # | path | reads contaminated rows? | protection |
+| --- | --- | --- | --- |
+| 1 | `_get_bookmaker_features()` | **no** | overround gate `[1.005, 1.25]` → per-outcome cross-book median |
+| 2 | bookmaker blend, `w = 0.8` | **no** | reads the gated feature vector; inherits the gate |
+| 3 | de-vig / EV path | **no** | `value_calculator._MARKET_PROB_KEYS` documents it consumes the gated consensus |
+| 4 | CLV series | **no — 0 of 46** MODEL observations on trap matches | Stage 13 gate holds |
+| 5 | `run_baseline` → `baseline.py` | **no** | `OVERROUND_3WAY = (1.005, 1.25)`, comment cites Bet365's 1.3524 |
+
+### Residual exposure — the honest remainder
+
+The gate rejects **4,910 of 5,408** contaminated books (**90.8%**). What survives:
+
+| | |
+| --- | --- |
+| contaminated books passing the gate (1.15 < r ≤ 1.25) | **498** |
+| as a share of the 38,250 passing books | **1.30%** |
+| matches with ≥1 contaminated book in consensus | 379 of 3,191 (**11.9%**) |
+| **matches where contaminated books are a MAJORITY of the consensus** | **25 (0.78%)** |
+| single-book matches that are contaminated | **0** of 474 |
+
+Consensus depth is a median of 5 books and a mean of 12. **A 1.3% minority
+cannot move a median.** Only the 25 majority-contaminated matches could carry a
+materially wrong consensus — 0.78% of the training population.
+
+The user's point about normalisation is correct and the code already acts on it:
+`_devig` returns **None** for an implausible book rather than normalising it,
+with the comment *"an implausible book is dropped, not silently normalised into a
+plausible-looking answer."*
+
+## What this does to the decision
+
+**The blend sweep stands. It does not need re-running.** The 2026-08-07 result
+that the market beats the model monotonically to `w = 1.0` was computed through
+`baseline.py`, which excludes these books by the same band. Both sides of that
+comparison were clean.
+
+**And that removes option 1's principal justification.** The case for accepting a
+cohort break was that a 92%-corrupt primary market input might explain four
+tests' worth of model inertness. **It cannot, because it was never in those
+measurements.** The corruption has been gated out of every consumer since Stage
+4. It explains neither why the model is bad nor why the market is good.
+
+**A fourth option exists, and it is cohort-neutral by construction.** A write-side
+refusal using **the same `[1.005, 1.25]` band the readers already apply** removes
+exactly the rows every consumer already discards. **Prediction impact: zero, by
+identity.** It fixes the storage defect, stops the momentum history inheriting
+it, and needs no cohort break — and it is the one-definition consolidation §B3
+asked for, since the band would then live once at the write instead of being
+re-implemented in `feature_engineer`, `baseline` and `clean_dataset`.
+
+Its limit, stated plainly: it leaves the 498 books in `(1.15, 1.25]` alone,
+because tightening the band *is* prediction-affecting. Whether those 498 are
+two-way contamination or genuinely wide markets was **not** established here and
+should not be assumed.
+
+## Status
+
+**Stage 18's halt is withdrawn as to its premise.** Halting was still correct on
+§B1's ordering — history must not accumulate on a defect — but the reason given
+was wrong, and the decision it framed was framed around a danger that the
+codebase had already neutralised in Stage 4.
+
+Three of the five paths were protected by work this project had already done and
+recorded. **The failure was mine in not reading it.**
