@@ -2481,3 +2481,224 @@ observation.**
 500 is powered to detect ±0.25%. The smallest effect that could change any
 decision is +2%. The checkpoint is over-specified by ~29×, and the decision it
 gates was already resolved at n = 46 — six standard errors clear.
+
+---
+
+# STAGE 17 — IS THERE ANY SIGNAL LEFT?
+
+**Pre-registration committed before analysis:
+`6e3a59c04700bc1786d4272a71303465d4215a48`** (`docs/stage17-preregistration.md`).
+It discloses the single query run before it was written — substrate extent only,
+no predictor, no target, no relationship. **No code, config or schedule changes
+were made in this stage; the working tree is clean.**
+
+## Headline
+
+**Three of the four pre-registered hypotheses cannot be tested on this data at
+all. The one that can was real, replicated out of sample, and is less than half
+the size required to be worth anything.**
+
+## PART A — the substrate, and its limits
+
+### A1. `opening_odds` is thinner and stranger than it looks
+
+`odds` is unique on `(match_id, bookmaker, market_type, selection)` and
+overwritten on refresh. `opening_odds` is first-seen-by-this-system, never
+overwritten; `timestamp` is the LAST update. **There is no opening timestamp.**
+
+MEASURED 2026-08-25, training window (kickoff 2026-02-28 → 06-30), 1X2:
+
+| | |
+| --- | --- |
+| 1X2 rows | 99,943 |
+| with `opening_odds` | 92,379 |
+| **`opening` ≠ `current`** | **9,394 (10.2%)** |
+| matches / with movement | 2,464 / 1,883 |
+| selections unmapped by the two-vocabulary normaliser | **0** |
+
+### A2. Selection: "movement" mostly records which matches were REFRESHED
+
+The 400-day prune horizon (2025-07-21) has not yet reached any data in the study
+window, so pruning survivorship is **not** yet a factor. The live selection
+mechanism is a different and larger one:
+
+| training matches | count | rows moved |
+| --- | --- | --- |
+| system took a pick | 391 | **16.64%** |
+| system took none | 1,135 | **5.41%** |
+
+**A 3× difference, and it is not the market.** Only pick-bearing matches get a
+second observation from the closing refresh; the rest are seen once, so
+`opening == current` by construction. **Movement in this database is largely a
+record of the system's own pick selection.**
+
+### A3. Two anomalies, investigated before being accepted (rule 5)
+
+**First: max M = +1,129%.** Traced to one fixture — match 41242, Viking vs
+Start, Eliteserien. Pinnacle held `Draw 7.79 → 7.79`, `Home 12.97 → 1.20`, and
+**no Away row at all**. Viking at home are ~1.20; 12.97 is Start's away price
+sitting in the Home row. **I initially generalised this into a claim that the
+opening snapshot was broadly corrupt, and that was wrong** — checked against the
+whole population, opening books are 98.9% complete three-leg with a 6.24% mean
+overround and exactly one impossible book in 22,895. Viking/Start is an outlier.
+
+**Second, and decisive: a median move of +37% and a shortened:drifted ratio of
+43:1.** No market does that. It splits perfectly by provider:
+
+| source | n | median M | shortened : drifted |
+| --- | --- | --- | --- |
+| API-Football books (10) | 2,709 | **+37.3%** | **2,647 : 62** |
+| The Odds API books (26) | 1,418 | **−0.61%** | 661 : 757 |
+
+The API-Football pairs carry the **already-documented two-way / draw-excluded
+"Home/Away" trap** in `odds_value`: a shorter two-way price overwrites a genuine
+1X2 opening, manufacturing a fake 37% "shortening". Ledger-recorded since Stage
+13 and gated for the CLV series per `(match, book)` — **but never excluded from
+the odds table, so it silently poisons any movement study that does not split by
+provider.** The Odds API rows, by contrast, look like a real market: near
+symmetric, mean +0.67%.
+
+**The usable substrate is The Odds API rows only.**
+
+### What the substrate can and cannot answer
+
+It can answer **one cross-sectional question**: does a price that is an outlier
+against its cross-book peers revert? It cannot answer anything requiring a price
+*path*, because there are **exactly two observations per key and never three**,
+and it cannot date the first of them.
+
+## PART B — hypotheses
+
+| | hypothesis | status |
+| --- | --- | --- |
+| **H1** | momentum | **UNTESTABLE** — needs t0→t1 to predict t1→t2; only two observations per key exist |
+| **H2** | cross-book disagreement | **TESTED** |
+| **H3** | injuries | **UNTESTABLE** — **34 injury rows in the entire database**, 10 teams, all dated 2026-08-17/18: zero in training, and what exists lies inside the sealed window |
+| **H4** | elapsed time | **UNTESTABLE** — no opening timestamp; `matches.created_at` is unusable as a proxy because **53.5% of match rows were created AFTER their own kickoff** (mean +14 days), being backfill stamps |
+
+**H3's 34 rows deserve their own line.** Stage 14 established that injuries reach
+only the Claude review prompt and never the model. The reason this stage could
+not test whether injury news moves lines is that **the system does not retain
+injury history at all** — it holds a two-day snapshot.
+
+### B2. The null
+
+Clean Odds API population, training: 89.3% of rows unchanged, median 0.000%.
+Distribution near-symmetric once the API-Football contamination is removed.
+
+**M is an odds RATIO and is not comparable across price levels** — a longshot
+moving 15.0 → 12.0 is +25% in M but ~1.7pp of implied probability. This is a
+registered consequence of defining M in CLV units for comparability, and it is
+why the raw pooled mean (+2.69%) is meaningless and the banded/provider-split
+figures are the ones reported.
+
+### B3. H2, training period, pre-registered quintiles
+
+| quintile | above consensus | mean M | 95% CI |
+| --- | --- | --- | --- |
+| 1 | −6.04% | +0.724% | [+0.331, +1.118] |
+| 4 | +1.70% | +0.465% | [+0.191, +0.739] |
+| **5** | **+6.56%** | **+1.313%** | **[+0.695, +1.932]** |
+
+Direction as pre-registered — an outlier-high price shortens. **The CI lower
+bound is +0.695%, far below the +1.85% the decision rule requires.**
+
+## PART D — the held-out period
+
+Opened only after the above. Identical query, window swapped, no additions.
+
+| quintile | above consensus | mean M | 95% CI | fixtures |
+| --- | --- | --- | --- | --- |
+| 1 | −5.90% | +0.166% | [−0.106, +0.438] | 400 |
+| 4 | +1.78% | +0.429% | [+0.197, +0.660] | 402 |
+| **5** | **+6.78%** | **+0.705%** | **[+0.412, +0.999]** | 402 |
+
+**Differences from training, stated as required:**
+
+1. **The direction replicates**, and more cleanly — held-out is close to
+   monotone across quintiles, where training was U-shaped (Q1 +0.724% was the
+   second-highest cell, which the mean-reversion story does not explain).
+2. **The magnitude halves: +1.313% → +0.705%**, and the held-out interval
+   **excludes the training point estimate.** The training figure was inflated.
+3. **The conclusion does not change**, because both fail the same pre-registered
+   threshold — and the held-out result fails it *decisively*: its **upper** bound
+   (+0.999%) is below break-even (+1.85%). The effect is not merely unproven; it
+   is excluded from being large enough.
+
+**Verdict against the pre-registered rule: NO SIGNAL.**
+
+### Not tested because it was not pre-registered
+
+Listed for a future stage, not run:
+
+- whether the *magnitude* of cross-book dispersion (rather than a selection's
+  signed distance from consensus) predicts |M| — the U-shaped training result
+  hints at it and it is a different hypothesis
+- per-league and per-price-band variation in the H2 effect
+- whether the effect differs between exchange and sportsbook closes
+- H2 on `totals` rather than `1X2`
+
+## PART C — economic size
+
+| | value |
+| --- | --- |
+| held-out effect (Q5) | **+0.705%** [+0.412, +0.999] |
+| best-line break-even | +1.85% |
+| minimum decision-relevant | +2.00% |
+| comfortable | +4.00% |
+
+**Short of break-even by 1.15pp, and its entire confidence interval sits below
+the threshold.** Capacity is not the constraint — Q5 spans 402 fixtures in 55
+days (~220/month) — the size is. A +0.7% effect against a 1.85% cost is the
+"smaller version of the same nothing" this stage was told to watch for.
+
+**One observation worth carrying forward.** The system's own realised MODEL CLV
+is **−0.587%** (Stage 16). Taking the outlier-high price instead yields
+**+0.705%** — a ~1.3pp improvement that is pure execution, not prediction. **It
+is still not enough to clear the vig**, so it changes nothing about whether to
+bet real money; but it is the only concrete improvement this stage identified,
+and it costs no model change.
+
+## PART E — recommendation
+
+**STAGE 17 — NO SIGNAL, ROUTE IDENTIFIED**, with the route stated honestly
+rather than optimistically.
+
+**There is no signal in this data.** The one hypothesis the substrate supported
+produced a real, out-of-sample-replicating effect of +0.705% against a +1.85%
+cost.
+
+**The route is not a better model — it is retaining data already being
+fetched and thrown away.** Three of four hypotheses failed for want of storage,
+not for want of evidence:
+
+| what is needed | what it enables | cost |
+| --- | --- | --- |
+| timestamped price snapshots instead of overwrite-in-place | H1 (momentum), H4 (time) — a price *path* rather than two endpoints | **zero API credits** — the prices are already fetched; the row is overwritten |
+| retained injury history rather than a live snapshot | H3 | zero — already fetched for the review prompt |
+| an `opening_odds` timestamp | dates the first observation | one column |
+
+**Price momentum is the most-documented effect in this space and it has never
+been tested here — not tested and absent, but untestable.** That is a genuine
+reason to think a signal could exist that this stage could not reach.
+
+**The honest counterweight, which belongs in the same paragraph.** The one
+market-microstructure effect that *could* be measured was real, replicated, and
+came to **less than half of break-even**. That is evidence — not proof — that
+effects of this kind here are sub-vig. Anyone acting on the route above should
+expect to find something small and real and insufficient, because that is
+exactly what was found in the one place it was possible to look.
+
+**Nothing here disturbs the four independent confirmations that the model adds
+no information over the price.** This stage did not test the model; it tested the
+market, and found the market's own inefficiencies too small to pay the vig.
+
+---
+
+**STAGE 17 — NO SIGNAL, ROUTE IDENTIFIED.**
+
+Three of four pre-registered hypotheses were untestable on this substrate. The
+fourth gave +0.705% held-out against a +1.85% cost, with its whole interval
+below the threshold. The route to the untestable three is storage, not
+modelling, and costs no API credits — but the one effect that could be measured
+argues that what lies down it will also be too small.
