@@ -952,8 +952,19 @@ class FeatureEngineer:
           • btts         → BTTS Yes/No probabilities
           • team_goals   → Home Over 1.5 and Away Over 1.5 probabilities
 
-        For each market the preferred bookmaker order is: Bet365 → Pinnacle → any.
-        Bookmaker overround is removed via the standard margin-normalisation formula.
+        NOT a preferred-bookmaker lookup. Each market's probability is the
+        PER-OUTCOME MEDIAN across every book whose overround falls inside the
+        market's declared band (src.data.market_spec.OVERROUND_3WAY / _2WAY).
+        A book outside the band is DROPPED, not normalised — normalising a
+        two-way pair plus a genuine draw leg produces a plausible-looking
+        distribution of the wrong shape.
+
+        This docstring used to read "the preferred bookmaker order is: Bet365 →
+        Pinnacle → any". That was replaced in Stage 4 and the sentence was left
+        behind. On 2026-08-25 it caused Stage 18 to be halted on the false
+        finding that the model's primary input was 92% contaminated. See the
+        guard-design notes: a stale docstring is a definition read as an
+        occurrence, and it survives greps for the thing it misdescribes.
         """
         defaults = {
             # 1X2
@@ -1074,8 +1085,8 @@ class FeatureEngineer:
             # Plausible overround bands. A 3-way book runs ~1.02-1.15 and a 2-way
             # ~1.01-1.12; the ceilings are deliberately generous so that only
             # genuinely broken markets (the 1.35 above) are rejected.
-            _OR3 = (1.005, 1.25)
-            _OR2 = (1.005, 1.20)
+            from src.data.market_spec import (
+                OVERROUND_3WAY as _OR3, OVERROUND_2WAY as _OR2)
 
             # ── 1X2 ──────────────────────────────────────────────────────────
             r = _consensus(

@@ -64,8 +64,18 @@ class MarketSpec:
 #: Three-way books run ~1.02-1.12 in practice; 1.25 is a deliberately generous
 #: ceiling so only genuinely broken markets are rejected. The corruption sat at a
 #: median of 1.3524, comfortably outside.
-_OR3 = (1.005, 1.25)
-_OR2 = (1.005, 1.20)
+#: THE canonical overround bands. Stage 18 found THREE copies of this tuple —
+#: here, feature_engineer and baseline — the fifth data-layer instance of THE
+#: HABIT, and the worst placed: it is the constant that DEFINES what
+#: "contaminated" means, so three copies drifting apart would silently change
+#: which rows every consumer trusts, in different directions, with nothing
+#: failing. Import these; do not retype them. tests/test_overround_band_is_one_definition.py
+#: fails if a fourth appears.
+OVERROUND_3WAY = (1.005, 1.25)
+OVERROUND_2WAY = (1.005, 1.20)
+
+_OR3 = OVERROUND_3WAY
+_OR2 = OVERROUND_2WAY
 
 MARKET_SPECS: Dict[str, MarketSpec] = {
     "1X2": MarketSpec(
@@ -220,11 +230,24 @@ def extract_legs(market_type: str, odds_by_selection: Dict[str, float],
 
 
 def validate_write(market_type: str, bet_name: str,
-                   selections: Iterable[str]) -> Tuple[bool, str]:
+                   selections: Iterable[str],
+                   prices: Optional[Sequence[float]] = None) -> Tuple[bool, str]:
     """Gate for an odds WRITER, applied before persisting a bookmaker's market.
 
     Rejects the exact class of bug that caused the incident: a non-authoritative
     source bet writing into a declared market type.
+
+    ``prices`` — Stage 18, option 4. When the writer can supply every declared
+    leg's price, the SAME overround band the readers apply is applied here, at
+    the source. This is cohort-neutral BY IDENTITY: it refuses exactly the rows
+    that ``feature_engineer``, ``baseline`` and ``clean_dataset`` already
+    discard, so no consumer's input changes. What it buys is that the
+    accumulating snapshot history stops filling with rows nothing reads, and
+    that the band is declared ONCE.
+
+    Pass ``None`` when the legs are incomplete — an overround cannot be computed
+    from a partial book and a missing leg is a different defect, already handled
+    by ``extract_legs``.
     """
     if not is_authoritative(market_type, bet_name):
         return False, (
@@ -239,4 +262,8 @@ def validate_write(market_type: str, bet_name: str,
     sels = list(selections)
     if len(set(sels)) != len(sels):
         return False, f"duplicate selections in one write: {sels}"
+    if prices:
+        ok, why = check_overround(market_type, prices)
+        if not ok:
+            return False, why
     return True, "ok"

@@ -45,7 +45,7 @@ DEFAULT_BOOKMAKERS = ("Pinnacle", "Bet365", "1xBet")
 #: Overround bands outside which a book's market is treated as broken and
 #: dropped. See feature_engineer._get_bookmaker_features for the incident that
 #: made this necessary (Bet365 1X2 at a median overround of 1.3524).
-OVERROUND_3WAY = (1.005, 1.25)
+from src.data.market_spec import OVERROUND_3WAY  # one definition, see market_spec
 
 
 @dataclass

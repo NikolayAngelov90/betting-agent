@@ -22,7 +22,8 @@ from sqlalchemy import func
 from src.scrapers.base_scraper import BaseScraper
 from src.data.models import Match, Team, Odds
 from src.data.sql_helpers import id_in
-from src.data.market_spec import validate_write as _validate_write
+from src.data.market_spec import (
+    validate_write as _validate_write, extract_legs as _extract_legs)
 from src.data.api_budget import ApiBudgetStore
 from src.data.database import get_db
 from src.utils.logger import get_logger
@@ -1953,8 +1954,31 @@ class APIFootballScraper(BaseScraper):
 
                         # Structural guard: only a declared-authoritative bet may
                         # write a declared market type. See src/data/market_spec.py.
+                        #
+                        # Stage 18 option 4: when every declared leg is present,
+                        # the SAME overround band the readers apply is applied
+                        # here. Restricted to markets whose legs resolve without
+                        # a line qualifier (1X2, btts) — over_under and
+                        # team_goals need a line, which is only known per
+                        # selection below, and the two-way trap is a 1X2 defect.
+                        _prices = None
+                        if market_type in ("1X2", "btts"):
+                            _by_sel = {}
+                            for _v in bet.get("values", []):
+                                _s = selection_map.get(_v.get("value", ""))
+                                if not _s:
+                                    continue
+                                try:
+                                    _p = float(_v.get("odd", ""))
+                                except (ValueError, TypeError):
+                                    continue
+                                if _p > 1.0:
+                                    _by_sel[_s] = _p
+                            _prices = _extract_legs(market_type, _by_sel)
+
                         _ok, _why = _validate_write(
-                            market_type, bet_name, selection_map.values())
+                            market_type, bet_name, selection_map.values(),
+                            prices=_prices)
                         if not _ok:
                             logger.error(
                                 f"[Odds] REFUSING write for match {match_id} "
