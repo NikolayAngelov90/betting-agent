@@ -34,6 +34,27 @@ on:
     # Every 2 hours across the window that covers European kickoffs
     # (~11:00-23:00 UTC) plus a late slot for North/South American fixtures.
     # Off-hour minute to avoid the top-of-hour scheduling crush.
+    #
+    # Stage 15, L4 (2026-08-25). The 10:47 slot is an ADDITION, not a move.
+    # Moving the 21:17/23:17 runs was considered and rejected: they currently
+    # claim nothing, so removing them saves ZERO credits, and what they cost is
+    # not credits but a schedule shaped by ONE MONTH of ONE SEASON's kickoff
+    # distribution. Winter fixture lists carry late kickoffs. Free in credits is
+    # not free in seasonal robustness, and only the first was in the model.
+    #
+    # WHY 10:47 AND NOT 09:17 OR 10:17. MEASURED 2026-08-25: picks for early
+    # kickoffs are written between 10:07 and 10:32 UTC (daily-picks fires 09:37
+    # and runs Claude's per-match review before saving). At 09:17 ZERO of 54
+    # early-kickoff observations exist yet; at 10:17, 8 of 54. A window that
+    # runs before its input exists finds no pending picks and claims no credits
+    # — it would have measured as "added, 0 credits, 0 observations", which is
+    # indistinguishable from a lever that does not work.
+    #
+    # 10:47 clears the latest observed pick write by 15 minutes and precedes an
+    # 11:00 kickoff by 13. When GitHub's scheduler is late (0.5-5.7h observed)
+    # this slot degrades to behaving like the 11:17 one, which is the existing
+    # status quo, not a regression.
+    - cron: '47 10 * * *'
     - cron: '17 11,13,15,17,19,21,23 * * *'
   workflow_dispatch:
     inputs:

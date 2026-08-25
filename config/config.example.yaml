@@ -256,9 +256,21 @@ betting:
   # min_interval: a league refreshed inside this many minutes is already fresh
   # enough; refreshing again buys nothing and costs 2 credits.
   #
-  # Chosen by simulation over production history under a rule fixed in advance —
+  # SIMULATED (scripts/simulate_odds_quota.py, pre-2026-08): replaying the
+  # selection rules over production history under a rule fixed in advance —
   # fewest scheduled runs subject to <=400 credits/month, >=95%% pick coverage,
-  # and window <=150 min. Result: 2-hourly runs, 256 credits/month, 96%% coverage.
+  # and window <=150 min — returned 2-hourly runs, 256 credits/month, 96%%
+  # coverage. That is a SIMULATION and was recorded here as though it were a
+  # measurement; it is the third instance of this simulator's output being read
+  # back as fact (see the README's 212 credits/month and its 212-vs-340
+  # comparison). Relabelled rather than replaced, because swapping in a fresher
+  # number would preserve the error.
+  #
+  # MEASURED 2026-08-25 over 2026-08-14 -> 08-25: 63%% of CAPTURABLE picks
+  # captured (61 of 116 in requested markets), ~436 credits/month actual burn.
+  # The 96%% and the 63%% are not the same quantity measured twice — the
+  # simulation counted pick coverage, this counts closing-line capture — and
+  # the fact that they were ever compared is exactly what untagged numbers do.
   odds_refresh_window_minutes: 120
   odds_refresh_min_interval_minutes: 180
 

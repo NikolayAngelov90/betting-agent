@@ -2025,3 +2025,205 @@ Next stage reads it off the logs instead of arguing for it.
 454 MODEL observations remain; the capture budget is 237 credits/month against a
 measured 3.17 credits per MODEL observation; the checkpoint arrives around
 **March 2027**, and no combination of free levers brings it into 2026.
+
+---
+
+# STAGE 15 (continued) — L4 SHIPPED, AND PART B's RANKING WAS WRONG
+
+## The correction that matters: L3b is not worthless, and market expansion is not cheap
+
+Part B asserted: *"`double_chance` and `draw_no_bet` add FINAL observations and
+**zero** MODEL observations."* **That is false.** Uncaptured picks since
+2026-08-14, grouped by the FROZEN MODEL's own market:
+
+| `model_market` | uncaptured |
+| --- | --- |
+| Team Goals | 25 |
+| **Draw No Bet** | **24** |
+| **Double Chance** | **22** |
+| Over 2.5 | 20 |
+| BTTS | 16 |
+| Under 3.5 | 15 |
+| Under 2.5 | 12 |
+| 1X2 | 5 |
+
+**46 uncaptured MODEL observations sit in exactly the two markets I declared
+worthless for MODEL.**
+
+**How the error was made, because the shape recurs.** The claim came from
+measuring the market mix of *captured* picks, where Double Chance and Draw No
+Bet are 0 by construction — they cannot be captured, which is the entire point.
+**Selection on the outcome.** Asking "what do our observations look like?" and
+concluding "therefore nothing else exists" is the same move as reading a
+survivor's traits off the survivors. The corrective is to measure the
+*population*, not the sample the process already filtered.
+
+### But correcting it does NOT make market expansion cheap
+
+The second half of the correction cancels most of the first. Credits are
+`requests × regions × markets`, so **adding a market raises the cost of every
+request**, not just the ones that yield a new observation:
+
+| configuration | credits | MODEL obs | **obs per credit** |
+| --- | --- | --- | --- |
+| current (h2h + totals) | 72 × 2 = 144 | 46 | **0.319** |
+| + `draw_no_bet` | 72 × 3 = 216 | 70 | **0.324** |
+| + `draw_no_bet` + `double_chance` | 72 × 4 = 288 | 92 | 0.319 |
+| + all four missing markets | 72 × 6 = 432 | 133 | 0.308 |
+
+**The frontier is nearly FLAT at ~0.32 MODEL observations per credit.** Adding
+Draw No Bet is a 1.6% improvement; adding everything is a 3% *degradation*.
+
+## The finding this stage actually produced
+
+**Almost every lever prices at the same rate, and the rate is set by the budget,
+not by the schedule.** Both of Part B's headline recommendations were wrong in
+opposite directions and land in the same place:
+
+- L3b was priced at **infinity** and is really **~0.32** — the average.
+- L4 was priced at **1.4 cr/obs** and is really **~5** — worse than average.
+
+**Only L2 beats the frontier**, because it removes requests that return nothing
+rather than adding requests that return something. That asymmetry is the whole
+lesson: on a flat frontier the only free move is deleting waste.
+
+**March 2027 stands, and is now better supported than when it was a guess.** It
+is not movable by re-timing, re-intervalling or re-marketing. It is a function
+of 237 capture credits per month and ~0.32 observations per credit. **Moving it
+requires more money or a smaller target — nothing else on the board touches it.**
+
+## Where the shortfall actually lives
+
+Uncaptured picks since 2026-08-14, by whether the refresh could price them:
+
+| | picks | captured |
+| --- | --- | --- |
+| in requested markets (`h2h` + `totals`) | 116 | **61 (53%)** |
+| outside them (DC 28, DNB 24, TG 19, BTTS 14) | 85 | **0** |
+
+**55 of 140 uncaptured picks (39%) are schedule or budget losses; 85 (61%)
+require a market that is not requested.** An earlier reading of this table said
+10% — that was a **defect in the query, not in the data**: `saved_picks.market`
+uses a display taxonomy (`Over 2.5`, `Under 3.5`), not the odds table's
+(`over_under`), so `market IN ('1X2','over_under')` silently matched no totals
+picks at all. Two vocabularies for one concept, which is THE HABIT in its
+purest form and was found here by a number that looked implausible.
+
+## L4 — shipped as approved, and inert until L6a is fixed
+
+Added `47 10 * * *`; **all seven existing windows kept.** The correction was
+right and my reasoning had the error the operator identified: moving is free in
+credits and **not free in seasonal robustness**, and only the first was in the
+model. The 21:17/23:17 runs claim nothing against an *August* kickoff
+distribution; winter fixture lists carry late kickoffs, so what looked like dead
+weight is unpriced insurance against a one-month, one-season sample.
+
+**Not 09:17, and not 10:17.** MEASURED: picks for early kickoffs are written
+**10:07 → 10:32 UTC** (daily-picks fires 09:37, then runs Claude's per-match
+review before saving). At 09:17, **0 of 54** early-kickoff observations exist
+yet; at 10:17, **8 of 54**. A window scheduled before its input exists finds no
+pending picks and claims no credits — it would have measured as *"added, 0
+credits, 0 observations"*, indistinguishable from a lever that does not work.
+**10:47** clears the last observed write by 15 minutes and precedes an 11:00
+kickoff by 13.
+
+**AND IT CANNOT PRODUCE AN OBSERVATION UNTIL L6a IS FIXED.** daily-picks writes
+odds at ~10:30. A 10:47 refresh is 17 minutes later, so `min_interval: 180`
+skips every candidate league — the same suppression L6a describes. **L4 and L6a
+target the same picks, and L4 is downstream of L6a.** Shipped anyway because it
+costs nothing precisely because it is suppressed, and it activates the moment
+L6a lands. Recorded so nobody reads its zero as a verdict on the schedule.
+
+## L6a and L6b, priced
+
+| lever | Δ credits/mo | recoverable in-market picks | cr / MODEL obs |
+| --- | --- | --- | --- |
+| **L6a** pick-time write resets the interval clock | +34 | 2 per 11 days | **~8.5** |
+| **L6b** `min_interval` 180 → 120 | +116 | 12 per 11 days | **~4.6** |
+
+**L6a is a defect and is still not worth buying yet.** The operator's reasoning
+is exactly right — the interval clock is reset by a write that can *never* serve
+as a close, so the skip guarantees a lost observation rather than deferring one.
+But the picks it guarantees losing are overwhelmingly in markets the refresh
+does not request: at kickoff hours 11–12, **27 uncaptured picks, 2 of them in
+`h2h`+`totals`**. Fixing the bug recovers 2 per 11 days at ~8.5 credits each,
+the most expensive lever measured. **It should still be fixed** — a clock reset
+by a non-qualifying write is wrong independent of its yield, and its yield rises
+the moment market coverage widens. It is a correctness fix whose value is
+currently held down by a *different* constraint.
+
+**L6b is the second-cheapest lever, and it was never on the board.** Aligning
+the interval to the cron recovers ~12 in-market picks per 11 days for +116
+credits/month. At ~4.6 cr/MODEL obs it is worse than the 3.13 average and
+better than everything except L2 — but **there is no headroom to buy it**: the
+cap is already binding at ~436/month against 450.
+
+## PROVENANCE — a convention, not a third correction
+
+`256 credits/month, 96% coverage` in `config.example.yaml` is relabelled
+**SIMULATED (`scripts/simulate_odds_quota.py`, pre-2026-08)** with the measured
+figure stated beside it — relabelled, not restated, the same treatment as the
+README's `212 credits/month` and the `~97% egress reduction`. The two numbers
+were never the same quantity: the simulation counted *pick* coverage, the 63%
+counts *closing-line capture*. **That they were ever compared is precisely what
+untagged numbers cause.**
+
+### The review rule
+
+> **Every quantitative claim in a config comment, docstring or README carries
+> its provenance — MEASURED, SIMULATED or ASSUMED — and its date. An untagged
+> number is the defect; specific wrong values are only its instances.**
+
+**A mechanical guard was prototyped and deliberately NOT shipped.** Scanning
+config, README, `src/` and `scripts/` for claim-shaped figures (`N credits/month`,
+`N requests/day`, `N% coverage|win|ROI`) found **40 figures, 27 untagged** — and
+several of the 27 are vendor specifications (`free tier, 100 requests/day`)
+where the convention does not naturally apply. That is the profile the project
+already ruled unacceptable in `test_subprocess_encoding.py`: *a guard that flags
+28 harmless sites gets switched off.* Stated once as a review rule, per the
+operator's own fallback, and left to code review.
+
+## Two measurement defects that deserve their own line
+
+### 1. Every `no_rows` figure ever read from these logs is a lower bound
+
+`refresh_imminent` derived per-league `result=ok|no_rows` from `written`, the
+**batch total**: a batch where one league returned rows and three returned
+nothing logged four `result=ok` lines. Fixed in Part D.
+
+**This touches a conclusion already acted upon.** The `no_rows` counts were part
+of the evidence used to overrule Stage 12.2, and they were systematically
+*understated* — the true rate of empty responses was higher than the number that
+argument was built on. The overrule was later falsified on independent grounds
+(D1: capture began when the domestic season resumed), so the conclusion did not
+survive on this evidence either way. But **the reasoning had a silent bias in
+it, and nothing in the pipeline would have surfaced that.**
+
+### 2. L2 as first written would have measured as success — MASK-1's shape in a lever
+
+`closing-lines.yml` had no cache step, so the barren record could never survive
+to a second run and the three-run threshold was unreachable. It would have
+reported **"implemented, 0 credits saved"** — indistinguishable from *"the
+provider started pricing everything"*.
+
+**MASK-1 was a test whose outcome was masked by a downstream corrective. This is
+the same shape in a production lever**: a component that cannot work, reporting
+a value that a working component could legitimately produce. The generalisation
+is now explicit:
+
+> **A lever's null result must be distinguishable from its success. If "it did
+> nothing" and "there was nothing to do" produce the same measurement, the lever
+> is unverifiable and the replay-against-real-outcomes step is not optional.**
+
+Replay is what caught it: 73 real request outcomes, 4 avoided, 0 wrongly
+skipped. A unit test on the cache would have passed in every one of these cases,
+because the cache was correct — **it was the deployment that was inert.**
+
+### Postscript: cp1251, fourth instance
+
+Hit again while writing the provenance scan — this time on `print()` to a
+cp1251 console, not a subprocess capture, so `test_subprocess_encoding.py`
+correctly did not catch it. Recorded to keep the count honest and to mark the
+boundary of that guard: it pins *captures*, where failure yields `None`
+silently. Console encoding failures raise loudly and are a different, lesser
+problem. **The guard's scope is still right; the incident count is now four.**
