@@ -3972,3 +3972,201 @@ covers Champions League and LaLiga and has not been ruled out, and that is where
 the next work belongs.
 
 **833 tests pass. 26 invariants pass. `CODE_REVISION` unchanged at `s5.3`.**
+
+---
+
+# THE SILENT SUBSTITUTION — the class, recorded in its own terms
+
+**Flashscore's fixture scraper died on 2026-05-30 and nothing noticed for 88
+days, because API-Football silently covered for it.**
+
+This is the same family as MASK-1's safety net, and it is the strongest instance
+the project has found:
+
+> **A fallback that substitutes silently makes the primary's failure invisible.
+> Redundancy that is never tested per component is not redundancy — it is one
+> working source and two unverified claims.**
+
+The system had three fixture sources and believed itself resilient. It was
+running on one. The other two had been dead or degraded for months and every
+aggregate measurement — fixtures discovered, picks generated, runs green — said
+the pipeline was healthy, because the survivor's output filled the hole exactly
+where a monitor would have looked.
+
+**It generalises past this incident.** Any component with a fallback needs a
+per-component liveness check, or its failure is deferred until the fallback also
+fails — at which point two failures surface together and the older one is
+invisible inside the newer. That is precisely how this presented: the operator
+saw "zero fixtures today" on 2026-08-26, seven days after API-Football's
+suspension and **88 days after the actual failure**.
+
+## Item 1 — the assertion I shipped carried the same blindness
+
+**Tested against the day that matters, 2026-05-31:**
+
+| source | fixtures |
+| --- | --- |
+| Flashscore | **0** |
+| football-data.org | **0** |
+| API-Football | **13** |
+
+**Total discovery was healthy, so the aggregate assertion did NOT fire.** The
+check written in response to an 88-day blindness would have reproduced it.
+
+**Fixed: per source, never aggregate.** Each fixture source is now watched on its
+own — `src_flashscore_fixtures`, `src_footballdataorg_fixtures`,
+`src_apifootball_fixtures` — through the existing self-calibrating mechanism, so
+a source that produced within the last 7 runs and now produces none alarms
+regardless of what the others do.
+
+**Gated to the day's FIRST run.** The first per-source version fired repeatedly on
+2026-03-03, a day discovery was working, because a same-day re-run legitimately
+finds no *new* fixtures. Only the day's first run exercises discovery from cold.
+
+**Replayed both directions:**
+
+| window | result |
+| --- | --- |
+| **2026-05-31** | **FIRES** — names Flashscore and football-data.org while API-Football is healthy |
+| 2026-03-03 re-runs | **silent** (was firing 5× before the gate) |
+| 2026-03-01 → 03-04 first runs | silent except one genuine one-day zero |
+
+Nine tests pin it, including `test_one_dead_source_fires_even_while_others_produce`
+and `test_a_same_day_rerun_does_not_fire`.
+
+## Item 2b — PART B REPRODUCED. One upstream change caused both defects.
+
+Camoufox installed (`pip install camoufox`, `python -m camoufox fetch`) and one
+`/fixtures/` page loaded. **The blocker was a setup gap, as stated.**
+
+`https://www.flashscore.com/football/spain/laliga/fixtures/` — **HTTP 200**,
+title `LaLiga Fixtures - Football/Spain`, 1.77 MB of HTML, **113 fixture rows
+present**, including `26.08. 22:00 | Real Madrid | Real Sociedad`.
+
+**The page was fine. The selectors were not.**
+
+| selector | found |
+| --- | --- |
+| `.event__match` (fallback) | **113** |
+| `.event__match.event__match--static.event__match--twoLine` (**primary**) | **0** |
+| `.event__time` (what `_parse_match_date` read) | **0** |
+| `wcl-*` classes | **1,775** |
+
+Flashscore's 2026 redesign renamed `event__match--static` →
+`event__match--withRowLink` and moved the kickoff out of `.event__time` into
+**build-hashed CSS-module classes**:
+
+```
+row: event__match event__match--withRowLink event__match--twoLine event__match--scheduled
+     wcl-scores-simple-text-01_-OvnR wcl-scores_Na715 …  '26.08. 22:00'
+```
+
+**ONE CHANGE, BOTH DEFECTS:**
+
+- the **primary** selector requires `--static` → **fixtures return 0** (Part B)
+- the **fallback** still matches rows on the results page, but `.event__time` is
+  gone → every kickoff unparseable → `datetime.now()` → **the phantoms** (Part A)
+
+Two symptoms, 88 days apart in visibility, one cause.
+
+**Fixed structurally, not cosmetically.** The hashed classes (`_-OvnR`, `_Na715`)
+change on every Flashscore deploy, so selecting on them would be a countdown, not
+a fix. The row class `event__match` is stable and the kickoff is read from the
+row's **text** by shape (`\d{2}\.\d{2}\.(\d{4})?\s+\d{2}:\d{2}`). Verified against
+the live page text: `'26.08. 22:00'` → `2026-08-26 22:00:00`, a whole-minute
+kickoff rather than a `now()` stamp.
+
+## Item 2a — PART C RESOLVED. The API has the fixture; the pipeline drops it.
+
+`FOOTBALL_DATA_ORG_KEY` was in `.env` under a name I did not search for. **The
+blocker was mine.**
+
+Live call, 2026-08-26, masked key `e1e6…fea1`:
+
+```
+2 matches for 2026-08-26
+  CLI FINISHED  Independiente del Valle vs CD Tolima     (not in COMPETITION_MAP)
+  PD  ...       Real Madrid CF vs Real Sociedad de Fútbol  19:00Z
+```
+
+**The LaLiga fixture Niki named is in the API**, `PD` maps to `spain/laliga`, and
+both names resolve through `TEAM_NAME_MAP` (`Real Madrid`, `Sociedad`). It should
+have been created.
+
+**Why it was not — and this is an upstream data defect.** The `status` field on
+that match is malformed:
+
+```
+status : '2026-08-26 19:00:00Z'      <-- a timestamp where an enum belongs
+utcDate: '2026-08-26T19:00:00Z'
+```
+
+A call minutes earlier returned `status: 'TIMED'`. **The field flaps.** The
+pipeline's `status not in ("SCHEDULED","TIMED") → continue` then drops the
+fixture, **with no log line at all**.
+
+**And the log cannot distinguish this from any other zero.** `_get` returns
+`None` on a non-200 or an exception, logging only at `logger.debug`;
+`fetch_matches` turns `None` into `[]`; `sync_fixtures` reports `0 new fixtures
+added` at INFO. Three different failures, one message. *A default that makes a
+failure look like a success* — the fifth instance, now in the third source.
+
+**Discriminated rather than assumed:** the CI log carries **46 DEBUG lines** and
+**no football-data.org error among them**, so on 2026-08-26 `_get` returned 200
+and the drop happened downstream, in the filter.
+
+**Not fixed here** — the silent `continue` and the status-tolerance question are a
+change to what gets discovered and belong with the operator, now that the cause
+is known rather than suspected.
+
+**Coverage, for the record:** football-data.org maps 9 club competitions of 30
+configured leagues — a **30% discovery floor** — and `sync_fixtures(days_ahead=0)`
+looks only at today, with no lookahead.
+
+## Item 3 — the 510 phantoms EXCLUDED, and the cohort break taken once
+
+Marked `training_exclusion_reason = 'phantom_kickoff_now_stamp'`. **Marked, never
+deleted.** Stage 13's 29 `corrupt_team_identity` marks preserved; 0 phantoms left
+unmarked; fitting set 39,290 → **38,787**.
+
+**MEASURED EFFECT, recorded in the `s5.4` history entry as decay weight, because
+the count understates it:**
+
+| | |
+| --- | --- |
+| share by count | 503 / 39,290 = **1.280%** |
+| **share by decay weight** (H = 540d) | 486.8 / 17,281.6 = **2.817%** |
+| average weight, phantom | **0.9677** |
+| average weight, real match | **0.4330** |
+
+**Each phantom carried 2.23× the weight of an average real match** — because a
+`now()` stamp sits at weight ≈1.0 by construction. Their harm was disproportionate
+to their count, which is the opposite of the usual argument for tolerating 1.3%
+of a fitting set.
+
+### `CODE_REVISION` → `s5.4`, one break covering three changes
+
+Folded together as instructed, so there is one boundary and not three:
+
+1. the 510 exclusions
+2. `_parse_match_date` failing closed (future rows refused, not invented)
+3. the Flashscore selector/time repair, which changes **which fixtures are
+   discovered**
+
+`model_version`: `stage5_baseline_20260807.098437` → **`stage5_baseline_20260807.0976b8`**.
+Both pins in `tests/experiment_pins.py` updated to match.
+
+**Authorised on the ground that there is no longer an experiment to protect:**
+Stage 16 established the MODEL CLV upper bound at **+0.107%** against a **+1.85%**
+requirement.
+
+---
+
+**837 tests pass. 26 invariants pass. `CODE_REVISION` = `s5.4`.**
+
+**Discovery is repaired but NOT yet demonstrated in production.** The declaration
+`STAGE 19 — DISCOVERY RESTORED` requires a measured fixture count over a full day
+against the real card, and the next scheduled run has not happened. **The honest
+status is DISCOVERY REPAIRED, PENDING PROOF**, and the proof is tomorrow's run:
+if `spain/laliga` and the other 29 leagues return non-zero fixture counts and the
+per-source assertion stays silent, it is restored.

@@ -24,10 +24,10 @@ History:
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.3"
+CODE_REVISION_PIN = "s5.4"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.098437"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.0976b8"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 PREVIOUS_CODE_REVISION = "s5.2"

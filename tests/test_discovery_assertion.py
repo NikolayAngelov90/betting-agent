@@ -64,3 +64,64 @@ def test_the_off_season_exclusion_is_inherited_not_reimplemented():
 def test_patterns_are_valid_regexes():
     for name, pat in PATTERNS.items():
         re.compile(pat)
+
+
+# Stage 19 item 1: PER-SOURCE, not aggregate.
+#
+# The first assertion shipped in Stage 19 keyed on total discovery. Replayed
+# against 2026-05-31 -- the day Flashscore went silent -- it did NOT fire:
+# flashscore=0, football-data.org=0, API-Football=13, so the total looked
+# healthy. It then stayed silent for 88 days. The aggregate rebuilt the very
+# blindness it was written to remove.
+
+FLASHSCORE_DEAD_AF_ALIVE = chr(10).join([
+    "Scraped 0 fixtures from spain/laliga",
+    "API-Football: creating new fixture Roma vs Fiorentina",
+    "API-Football: creating new fixture Torino vs Milan",
+])
+ALL_HEALTHY = chr(10).join([
+    "Scraped 11 fixtures from spain/laliga",
+    "football-data.org: 3 scores updated, 4 new fixtures added",
+    "API-Football: creating new fixture Roma vs Fiorentina",
+])
+
+
+def _hist(**counts):
+    """History in which each named source recently produced."""
+    return [dict(counts) for _ in range(3)]
+
+
+def test_one_dead_source_fires_even_while_others_produce():
+    """THE 2026-05-31 CASE. This is the whole point of the per-source design."""
+    facts = extract(FLASHSCORE_DEAD_AF_ALIVE)
+    facts["is_first_run_of_day"] = True
+    hits = assertions(facts, _hist(src_flashscore_fixtures=11,
+                                   src_apifootball_fixtures=6))
+    assert any("Flashscore fixtures = 0" in h for h in hits), (
+        "Flashscore produced nothing while API-Football produced 2, and the "
+        "audit stayed silent. That is the 88-day blindness, rebuilt.")
+
+
+def test_all_sources_healthy_is_silent():
+    facts = extract(ALL_HEALTHY)
+    facts["is_first_run_of_day"] = True
+    hits = assertions(facts, _hist(src_flashscore_fixtures=11,
+                                   src_footballdataorg_fixtures=4,
+                                   src_apifootball_fixtures=6))
+    assert not any("fixtures = 0" in h for h in hits), hits
+
+
+def test_a_same_day_rerun_does_not_fire():
+    """A second run finds no NEW fixtures because the first added them."""
+    facts = extract(FLASHSCORE_DEAD_AF_ALIVE)
+    facts["is_first_run_of_day"] = False
+    hits = assertions(facts, _hist(src_flashscore_fixtures=11))
+    assert not any("fixtures = 0" in h for h in hits), (
+        "fired on a same-day re-run, where zero new fixtures is correct")
+
+
+def test_no_history_says_nothing():
+    """An empty history means nothing can be said, and saying nothing is right."""
+    facts = extract(FLASHSCORE_DEAD_AF_ALIVE)
+    facts["is_first_run_of_day"] = True
+    assert not any("fixtures = 0" in h for h in assertions(facts, []))

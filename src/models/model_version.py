@@ -182,7 +182,52 @@ TRACKED_KEYS: List[str] = [
 #:
 #:       Verification prompt written BEFORE deployment:
 #:       docs/stage-13-s53-verification-prompt.md
-CODE_REVISION = "s5.3"
+#: s5.4  Stage 19 (2026-08-26). ONE break covering three prediction-affecting
+#:       changes, deliberately folded together rather than taken as three.
+#:       Authorised on the ground that Stage 16 answered the frozen
+#:       experiment's question — MODEL CLV upper bound +0.107% against a
+#:       +1.85% requirement — so there is no longer an experiment being
+#:       protected by holding the cohort still.
+#:
+#:       1. 510 phantom matches EXCLUDED from fitting via
+#:          `training_exclusion_reason = 'phantom_kickoff_now_stamp'`. Marked,
+#:          never deleted.
+#:
+#:          MEASURED EFFECT, recorded so nobody later attributes a cohort
+#:          difference to it — and recorded as DECAY WEIGHT, because the count
+#:          understates it:
+#:            · 503 of 39,290 fitting rows = 1.280% BY COUNT
+#:            · 486.8 of 17,281.6 decay weight = 2.817% BY WEIGHT at H=540d
+#:            · average weight 0.9677 vs 0.4330 for a real match — 2.23x
+#:          A `now()`-stamped row is a real result inserted at MAXIMUM recency
+#:          weight and in the wrong sequence, so it also perturbs Elo replay
+#:          order, rolling form windows and H2H recency. Its harm is
+#:          disproportionate to its count, which is the opposite of the usual
+#:          argument for tolerating 1.3% of a fitting set.
+#:
+#:          Repair would have been better and was not cheaply available: the
+#:          date failed to parse because the source gave something unusable,
+#:          and recovering the true kickoff means matching teams and score
+#:          against a source that could not see fixtures either.
+#:
+#:       2. `_parse_match_date` now FAILS CLOSED. It returned `datetime.now()`
+#:          on parse failure — the fourth instance of "a default that makes a
+#:          failure look like a success". Future rows are refused and logged
+#:          with the raw unparsed text instead of invented.
+#:
+#:       3. Flashscore row/time selectors repaired for the 2026 redesign:
+#:          `event__match--static` became `event__match--withRowLink`, and
+#:          `.event__time` no longer exists — the kickoff moved into
+#:          BUILD-HASHED CSS-module classes (`wcl-scores-simple-text-01_-OvnR`)
+#:          that change on every deploy. The time is now read from the row's
+#:          TEXT by shape, which is stable across deploys. This changes WHICH
+#:          fixtures are discovered and therefore what the model sees.
+#:
+#:       ONE UPSTREAM CHANGE CAUSED 1 AND 3. The same redesign that killed
+#:       fixture discovery on 2026-05-30 also made every results row's kickoff
+#:       unparseable, which is what manufactured the phantoms. Two symptoms,
+#:       88 days apart in visibility, one cause.
+CODE_REVISION = "s5.4"
 
 
 def _stable(value: Any) -> Any:

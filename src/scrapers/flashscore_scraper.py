@@ -703,7 +703,7 @@ class FlashscoreScraper(BaseScraper):
         """
         import time as _t
         LOAD_MORE_SELECTOR = '[data-testid="wcl-buttonLink"]'
-        MATCH_SELECTOR = ".event__match.event__match--static.event__match--twoLine"
+        MATCH_SELECTOR = ".event__match.event__match--twoLine"
         MAX_EMPTY_CYCLES = 4
         empty_cycles = 0
         deadline = _t.monotonic() + max_seconds
@@ -761,7 +761,7 @@ class FlashscoreScraper(BaseScraper):
 
             match_elements = driver.find_elements(
                 By.CSS_SELECTOR,
-                ".event__match.event__match--static.event__match--twoLine"
+                ".event__match.event__match--twoLine"
             )
             if not match_elements:
                 # Fall back to generic selector if the specific one returns nothing
@@ -824,7 +824,7 @@ class FlashscoreScraper(BaseScraper):
 
             match_elements = driver.find_elements(
                 By.CSS_SELECTOR,
-                ".event__match.event__match--static.event__match--twoLine"
+                ".event__match.event__match--twoLine"
             )
             if not match_elements:
                 match_elements = driver.find_elements(By.CLASS_NAME, "event__match")
@@ -939,19 +939,39 @@ class FlashscoreScraper(BaseScraper):
                        in the future it is almost certainly a year-parse error
                        (e.g. Dec 2025 stored as Dec 2026) and we subtract one year.
         """
+        # STAGE 19. `event__time` no longer exists. Flashscore's 2026 redesign
+        # moved the kickoff into BUILD-HASHED CSS-module classes
+        # (`wcl-scores-simple-text-01_-OvnR`), which change on every deploy —
+        # so selecting on them would break again at the next release and is not
+        # a fix, it is a countdown.
+        #
+        # The row's TEXT is stable: "26.08. 22:00" is the first token matching a
+        # date-time shape. Structure over styling.
+        candidates = []
         for selector, by in [
             ("event__time", By.CLASS_NAME),
             (".duelParticipant__startTime", By.CSS_SELECTOR),
         ]:
             try:
-                time_el = element.find_elements(by, selector)
-                if not time_el:
-                    continue
-                date_text = time_el[0].text.strip()
+                els = element.find_elements(by, selector)
+                if els:
+                    candidates.append(els[0].text.strip())
+            except Exception:
+                continue
+        try:
+            m = re.search(r"\d{2}\.\d{2}\.(?:\d{4})?\s+\d{2}:\d{2}",
+                          element.text or "")
+            if m:
+                candidates.append(m.group(0))
+        except Exception:
+            pass
+
+        for date_text in candidates:
+            try:
                 # "18.02.2026 22:00" (full) or "18.02. 22:00" (no year)
                 for fmt in ("%d.%m.%Y %H:%M", "%d.%m. %H:%M"):
                     try:
-                        dt = datetime.strptime(date_text, fmt)
+                        dt = datetime.strptime(" ".join(date_text.split()), fmt)
                         if fmt == "%d.%m. %H:%M":
                             dt = dt.replace(year=datetime.now().year)
                             # For results: if parsed date is >60 days in the future

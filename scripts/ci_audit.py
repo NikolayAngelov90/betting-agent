@@ -153,6 +153,18 @@ PATTERNS = {
     "fixtures_zero_active": r"returned 0 fixtures for \S+ . expected .1 for active season",
     "no_fixtures_at_all": r"No fixtures found for \d{4}-\d{2}-\d{2}",
     "fixtures_scraped": r"Scraped (\d+) fixtures from",
+    # PER-SOURCE discovery. The aggregate assertion shipped earlier in Stage 19
+    # would NOT have fired on 2026-05-31, the day Flashscore went silent:
+    # flashscore=0, football-data.org=0, apifootball=13, so the TOTAL was
+    # healthy and nothing alarmed. It then stayed silent for 88 days.
+    #
+    # A fallback that substitutes silently makes the primary's failure
+    # invisible. Redundancy that is not checked PER COMPONENT is not
+    # redundancy — it is one working source and two unverified claims. Each
+    # source is therefore watched on its own, regardless of the others.
+    "src_flashscore_fixtures": r"Scraped (\d+) fixtures from",
+    "src_footballdataorg_fixtures": r"football-data\.org: \d+ scores updated, (\d+) new fixtures added",
+    "src_apifootball_fixtures": r"API-Football: creating new fixture",
 }
 
 
@@ -175,6 +187,16 @@ def extract(log: str) -> Dict[str, object]:
                 f[key] = int(ms[-1] if isinstance(ms[-1], str) else ms[-1][0])
             except (TypeError, ValueError):
                 pass
+    # Per-source: sum every occurrence (Flashscore logs one line per league),
+    # count occurrences for API-Football (one line per fixture created).
+    f["src_flashscore_fixtures"] = sum(
+        int(x) for x in re.findall(PATTERNS["src_flashscore_fixtures"], log))
+    _fdo = re.findall(PATTERNS["src_footballdataorg_fixtures"], log)
+    if _fdo:
+        f["src_footballdataorg_fixtures"] = sum(int(x) for x in _fdo)
+    f["src_apifootball_fixtures"] = len(
+        re.findall(PATTERNS["src_apifootball_fixtures"], log))
+
     _fx = re.findall(PATTERNS["fixtures_scraped"], log)
     if _fx:
         f["fixtures_scraped"] = sum(int(x) for x in _fx)
@@ -219,6 +241,25 @@ def assertions(facts: Dict[str, object],
             hits.append(
                 f"{label} = 0, but this workflow produced {label} within the "
                 f"last {LOOKBACK_RUNS} runs")
+
+    # PER-SOURCE discovery, on the day's first run only.
+    #
+    # The aggregate version shipped earlier in Stage 19 would NOT have fired on
+    # 2026-05-31, the day Flashscore went silent: flashscore=0,
+    # football-data.org=0, API-Football=13, so the TOTAL looked healthy. It then
+    # stayed silent for 88 days.
+    #
+    # A fallback that substitutes silently makes the primary's failure
+    # invisible. Redundancy that is not checked PER COMPONENT is not redundancy
+    # — it is one working source and two unverified claims.
+    if facts.get("is_first_run_of_day", True):
+        for key, label in (("src_flashscore_fixtures", "Flashscore fixtures"),
+                           ("src_footballdataorg_fixtures", "football-data.org fixtures"),
+                           ("src_apifootball_fixtures", "API-Football fixtures")):
+            if key in facts and (facts.get(key) or 0) == 0 and produced_recently(key):
+                hits.append(
+                    f"{label} = 0 while other sources still produce — this "
+                    f"source produced within the last {LOOKBACK_RUNS} runs")
 
     picks = facts.get("picks_saved") or facts.get("picks_saved_live") or 0
     obs = facts.get("observations")
@@ -307,9 +348,17 @@ def main() -> int:
     by_wf: Dict[str, List[Dict[str, object]]] = defaultdict(list)
     print(f"{'run':<12} {'workflow':<14} {'started':<17} {'verdict':<10} findings")
     print("-" * 100)
+    seen_days: set = set()
     for r in runs:
         rid = str(r["databaseId"])
         facts = extract(fetch_log(rid))
+        # Only the DAY'S FIRST run of a workflow exercises discovery from cold.
+        # A same-day re-run legitimately finds no NEW fixtures, because the
+        # first run already added them — so applying the per-source check to
+        # every run fires on 2026-03-03, a day discovery was working fine.
+        _day = (r["workflow"], (r.get("startedAt") or "")[:10])
+        facts["is_first_run_of_day"] = _day not in seen_days
+        seen_days.add(_day)
         hits = assertions(facts, by_wf[r["workflow"]])
         by_wf[r["workflow"]].append(facts)
         v = verdict(facts, hits)
