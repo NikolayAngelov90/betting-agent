@@ -3594,3 +3594,162 @@ observation count before starting Stage 19, not after.**
 H1 and H4 testable **2026-09-08**, H3 **2026-09-24**, subject to the one-day
 accumulation check above. Stage 19 is a research stage and must not begin before
 that query returns rows.
+
+---
+
+# DAILY CI AUDIT — 2026-08-26, and two promoted findings
+
+Read-only. No code, config or schema changes.
+
+## Routine pass — 10 runs
+
+| run_id | workflow | started (UTC) | conclusion | steps failed | audited on | verdict | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 32856933640 | closing-lines | 2026-08-25 14:01 | success | — | 2026-08-26 | CLEAN | nothing to do. |
+| 32869076321 | closing-lines | 2026-08-25 15:58 | success | — | 2026-08-26 | CLEAN | nothing to do. |
+| 32879621488 | closing-lines | 2026-08-25 17:44 | success | — | 2026-08-26 | CLEAN | the ONLY run to write snapshots: 85 rows, 1 match. |
+| 32891242489 | closing-lines | 2026-08-25 19:44 | success | — | 2026-08-26 | CLEAN | nothing to do. |
+| 32902385047 | closing-lines | 2026-08-25 21:42 | success | — | 2026-08-26 | CLEAN | nothing to do. |
+| 32911466157 | closing-lines | 2026-08-25 23:35 | success | — | 2026-08-26 | CLEAN | nothing to do. |
+| 32957334452 | daily-picks | 2026-08-26 10:15 | success | — | 2026-08-26 | **DEGRADED** | **0 fixtures discovered, 0 picks.** AF suspended (1 request used); Flashscore 0 fixtures for all 3 leagues scraped; f-d.org 0 new fixtures. |
+| 32961678226 | paper-report | 2026-08-26 11:06 | success | — | 2026-08-26 | CLEAN | 61 captured, CLV series unchanged. |
+| 32962222174 | closing-lines | 2026-08-26 11:13 | success | — | 2026-08-26 | CLEAN | no pending picks. |
+| 32964698782 | closing-lines | 2026-08-26 11:42 | success | — | 2026-08-26 | CLEAN | no pending picks. |
+
+**AUDIT GAP, recorded:** `scripts/ci_audit.py` flagged run 32957334452 only for the
+API-Football suspension. **It has no assertion for "zero fixtures analysed"**, so
+the largest event of the day was invisible to the mechanical pass and was found
+only because Niki said six fixtures existed. A day that discovers nothing is not
+currently a finding.
+
+## FINDING 1 — zero fixtures. It is BOTH failures, and they are unrelated.
+
+### (a) Discovery failure — this is the cause of zero picks
+
+**The six fixtures are ABSENT from `matches` as fixtures.** All three sources
+were asked and all three returned nothing. From the log, not from intent:
+
+| source | what it actually returned |
+| --- | --- |
+| API-Football | `account suspended`, then `update complete (1 requests used)` — the dead-integration signature: first call refused, a flag suppresses every later call *before* it logs |
+| **Flashscore** | scraped `spain/laliga`, `portugal/primeira-liga`, `europe/champions-league` and returned **0 fixtures for all three** |
+| football-data.org | `1 scores updated, 0 new fixtures added` |
+
+→ `_check_empty_fixture_leagues: Flashscore: 0 fixtures / timeout for:
+europe/champions-league`, and `0 fixtures for tier-1 league` for both
+portugal/primeira-liga and spain/laliga
+→ `get_daily_picks: No fixtures found for 2026-08-26`.
+
+**The suspension explains only API-Football.** Flashscore is independent, was
+asked for exactly the leagues Niki names, and returned zero. That is a second,
+separate failure and it is the one that matters, because Flashscore is the
+fallback the suspension was supposed to be survivable by.
+
+UEFA discovery has a longer history: `europe/champions-league` was last
+discovered **2026-08-19** — the day of the suspension — and
+`europe/europa-conference-league` on **2026-08-14**. Those competitions have
+**0 corrupt rows**, i.e. they only ever came from API-Football.
+
+### (b) A separate corruption — results rows stamped `now()`
+
+The 20 rows dated 2026-08-26 are **not fixtures**. All 20 carry a score, and all
+20 were created 10:22–10:33 — *after* `No fixtures found` at 10:22:25. They are
+completed matches from the post-picks results scrape.
+
+`flashscore_scraper._parse_match_date(element, default, is_result)` returns
+`default=datetime.now()` when the time text cannot be parsed. **Silently.** So an
+unparseable kickoff becomes "now", which is exactly why every corrupt row has
+`match_date ≈ created_at`:
+
+| created | matches | `match_date` == `created_at` | % |
+| --- | --- | --- | --- |
+| 08-19 | 56 | 51 | 91.1% |
+| 08-22 | 50 | 16 | 32.0% |
+| 08-23 | 110 | 97 | 88.2% |
+| 08-24 | 39 | 33 | 84.6% |
+| 08-25 | 24 | 23 | 95.8% |
+| **08-26** | **20** | **20** | **100.0%** |
+
+### (c) THIS CORRECTS TWO EARLIER AUDIT ENTRIES OF MINE
+
+The 2026-08-25 audit recorded *"08-23: 11 picks from 110 fixtures"* and
+*"08-25: 1 from 24"* as **"low and not explained by card size"**. **Those
+denominators were mostly phantom.** Removing the results-artifacts:
+
+| day | real fixtures | picks | conversion |
+| --- | --- | --- | --- |
+| 08-23 | 13 | 11 | 85% |
+| 08-24 | 6 | 6 | **100%** |
+| 08-25 | 1 | 1 | **100%** |
+| 08-26 | 0 | 0 | — |
+
+**There was never a pick-selection collapse.** The pipeline converted nearly
+every real fixture it was given. What collapsed is **fixture discovery**, and the
+growing pile of `now()`-stamped results rows disguised it by inflating the
+denominator — a failure that looked like a filter problem because the count it
+was measured against was wrong.
+
+### (d) Do the three days share one cause?
+
+**Yes, one cause, and it is monotone.** Real fixtures discovered: 13 → 6 → 1 →
+**0**. Picks: 11 → 6 → 1 → 0. The team-identity gate, `club_pick_min_coverage`,
+the odds requirement and the briefing freeze are all **irrelevant here** — no
+`SKIPPED on team-identity mismatch` line appears, and nothing reached those
+filters because nothing reached the analyser at all. **§7 stays UNTESTABLE: a
+gate that never ran is not a gate that passed.**
+
+## FINDING 2 — substrate verification, and the date is withdrawn
+
+Part D's deferred check, run 2026-08-26:
+
+```
+keys with >= 3 observations : 0
+total odds_snapshots rows   : 85
+distinct matches            : 1
+observation window          : 2026-08-25 17:44:33.637 -> .642  (a single 5ms burst)
+injury_observations         : 0
+odds.first_seen_at populated: 0
+```
+
+**The machinery is NOT inert — 85 rows prove the wiring fires.** It has simply
+had almost nothing to record: one match, in one run, ever. `first_seen_at` is 0
+because those 85 writes were all UPDATES to existing keys, and it is set only on
+insert — correct by design, but it means the column fills only as genuinely new
+(match, book, market, selection) keys appear.
+
+### Re-derived from what is actually accumulating
+
+Stage 18 derived 2026-09-08 for H1 and H4 from **11.4 matches/day with ≥2
+observations, measured in August**. That rate assumed fixtures were being
+discovered. Measured since deployment:
+
+| | August basis | actual since deploy |
+| --- | --- | --- |
+| matches accumulating observations | 11.4 / day | **1 total** |
+| keys reaching 3 observations | — | **0** |
+| injury observations | — | **0** |
+
+> **STAGE 19 HAS NO TRIGGER DATE.** 2026-09-08 and 2026-09-24 are withdrawn. At
+> the observed rate H1 and H4 are never testable, because a price path needs a
+> fixture to have a price, and no fixtures are being discovered.
+
+**This is the failure mode flagged in Stage 18 arriving early on a different
+input.** The warning was written about H3's injury dependency — *"if it recurs
+the date moves and nothing will announce it"* — and the same structure applied
+to fixture discovery, which was not identified as a dependency at all. **The
+substrate's accumulation rate is a function of the pipeline's health, and Stage
+18 treated it as a constant.**
+
+**Fixture discovery must be understood before Stage 19 has any date**, and the
+accumulation query is the honest trigger — not a calendar date.
+
+## Recorded, not pursued
+
+- `_parse_match_date`'s silent `datetime.now()` default (read-only stage; this is
+  a fix, and it needs its own decision — the rows it has already written are
+  historical data, and this project has twice decided such rows are marked, not
+  deleted)
+- Why Flashscore returns 0 fixtures for tier-1 leagues it successfully reaches
+- `ci_audit.py` has no "zero fixtures analysed" assertion
+- The June injury collapse; the 35 picks with no review decision; the two
+  unapplied CHANGE decisions; the 498 books in (1.15, 1.25]
