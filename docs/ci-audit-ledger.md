@@ -3753,3 +3753,222 @@ accumulation query is the honest trigger — not a calendar date.
 - `ci_audit.py` has no "zero fixtures analysed" assertion
 - The June injury collapse; the 35 picks with no review decision; the two
   unapplied CHANGE decisions; the 498 books in (1.15, 1.25]
+
+---
+
+# STAGE 19 — DISCOVERY DIAGNOSED, NOT RESTORED
+
+Four reports. **Part A halts for a cohort decision. Part B's cause is found but
+not reproduced. Part D is shipped and proven both directions.**
+
+## PART A — the phantom rows
+
+### A1. The defect, named as the family it belongs to
+
+`_parse_match_date` returned `default` on parse failure, and both callers passed
+`datetime.now()` (results) or `datetime.now() + 1 day` (fixtures). An unparseable
+kickoff silently became "kicks off at this instant".
+
+**This is the fourth instance of one family: a default that makes a failure look
+like a success** — after the swallowed `IntegrityError`, the short-circuit that
+suppressed its own logging, and the safety net that masked its mechanism. The
+answer has been the same every time: fail closed and say so.
+
+### A2. Quantified, MEASURED 2026-08-26
+
+**The test, and its precision.** A real kickoff is scheduled on a whole minute; a
+`now()` stamp carries seconds *and* microseconds. Two candidate tests:
+
+| test | rows |
+| --- | --- |
+| `EXTRACT(SECOND FROM match_date) <> 0` | **510** |
+| within 60s of `created_at` | 378 |
+| both | 378 |
+| sub-minute but NOT near creation | **132** |
+| **near creation but on a whole minute** | **0** |
+
+The last row is what establishes precision: **no row is near its creation time
+while carrying a legitimate whole-minute kickoff**, so the 60-second heuristic is
+a strict subset and the precision test is the correct one. The 132 extra rows
+resolve by offset — **495 at 0h** (the results default) and **7 at 24h** (the
+fixtures default, which fired only until 2026-03-09).
+
+**Separated from Stage 17's finding, which they were never distinguished from.**
+Stage 17 attributed "53.5% of match rows created after their own kickoff, mean
++14 days" to backfill stamps. The populations are **completely disjoint**:
+
+| population | rows | mean days created-after-kickoff |
+| --- | --- | --- |
+| created after kickoff | 37,072 | **637.3** |
+| phantoms | 510 | **max 0.014** (20 minutes) |
+
+**Stage 17's 53.5% was genuine backfill. None of it is this defect.**
+
+**Consumers:**
+
+| consumer | exposure |
+| --- | --- |
+| saved picks | **0** |
+| pick observations | **0** |
+| odds rows | 142 |
+| **the fitting set** (`is_fixture=false AND home_goals IS NOT NULL AND training_exclusion_reason IS NULL`) | **503 of 510** |
+| already excluded | **0** |
+
+**All 503 sit inside the 180-day half-life** — stamped "now", they carry
+**maximum recency weight** in the time-decayed Poisson.
+
+### A3. Forward fix SHIPPED; historical marking HALTED
+
+**Shipped:** `_parse_match_date` now returns `None` on failure. Both callers
+refuse the row, log the **raw unparsed text** (`_raw_time_text`), and increment
+`_unparseable_dates` for the run summary. A refusal that does not quote what it
+could not parse makes a selector change look like a quiet drop in counts.
+
+**HALTED, per rule 8 and §A3.** Marking the 503 removes them from fitting. Their
+scores and teams are real — only the *date* is wrong — so this is not cleanup:
+
+- **exclude** → lose 503 real results
+- **keep** → 503 real results carry a false date at maximum decay weight
+- **repair** → recover true kickoffs from source; best, still prediction-affecting
+
+**All three change what the model learns. This is a cohort event and it is
+Niki's decision.**
+
+## PART B — why Flashscore returns zero
+
+### B2 first, because it reframes B1
+
+| | |
+| --- | --- |
+| **last day Flashscore produced ANY fixture** | **2026-05-30** |
+| consecutive days at zero | **88** |
+| attempts in that window | 200+ |
+| fixtures produced | **0** |
+| non-zero scrapes before that | 406, totalling 2,592 fixtures |
+
+**Fixture discovery has been dead since 2026-05-30 and nothing reported it**,
+because API-Football silently covered for it until its suspension on 2026-08-19.
+The 13 → 6 → 1 → 0 decline is not Flashscore degrading — it is **cached
+API-Football knowledge ageing out of a source that had already stopped working
+three months earlier.**
+
+### An amplifier I initially mistook for the cause
+
+```python
+_fixture_leagues = [l for l in _ordered_leagues
+                    if l in _important        # has today's fixtures or pending picks
+                    and l not in _fs_skip_fixtures]
+```
+
+`_important = _today_leagues | _pending_leagues`, both derived from fixtures
+**already known**. So a league is scraped for fixtures only if it is already
+known to have fixtures — circular, and it can only shrink. Today: **30 leagues
+configured, 26 scraped for results, 3 for fixtures.**
+
+**But it is not the binding cause, and I reported it as one before checking.**
+Scraping all 30 would still yield zero, because the parser produces nothing for
+any league. Recorded as a real defect of its own.
+
+### B1. Where it breaks, from the log
+
+| league | duration | reading |
+| --- | --- | --- |
+| `spain/laliga` | **13.0s** | page fetched, parser found no rows |
+| `portugal/primeira-liga` | **10.0s** | page fetched, parser found no rows |
+| `europe/champions-league` | **1.2s** | **too fast for a page load — likely never fetched** |
+
+CI runs **Chrome/Selenium under Xvfb**, not camoufox
+(`_get_driver: Xvfb detected — running Chrome in headed mode`).
+
+**The decisive discrimination:** results and fixtures use the **same selectors**
+(`.event__match.event__match--static.event__match--twoLine`, falling back to
+`.event__match`) on the **same domain in the same run** — and **results
+succeeded**, creating 20 rows. So this is **not** bot-blocking, **not** the
+driver, and **not** the session. It is specific to `/fixtures/`.
+
+### B3. NOT REPRODUCED, and that is the finding
+
+Camoufox is not installed locally and I did not fetch the live site from here, so
+**the fixtures page was never inspected directly**. What is established bounds
+the fix: the failure is on the fixtures page, with working selectors, in a run
+where the results page worked. **What it would take:** one run against
+`flashscore.com/football/spain/laliga/fixtures/` capturing the served HTML, to
+separate *page had nothing* from *page had something unrecognised*. Until then,
+iterating on selectors would be guessing.
+
+## PART C — football-data.org
+
+**Its map contains exactly the leagues that went missing.**
+
+```
+"CL": europe/champions-league        "PD": spain/laliga
+```
+
+Nine club competitions plus the World Cup, of **30 configured leagues — a 30%
+discovery floor** if both other sources stay unavailable.
+
+`sync_fixtures(days_ahead=0)` fetches **today only**, with no lookahead, and
+admits only `SCHEDULED`/`TIMED` matches that also resolve through
+`TEAM_NAME_MAP`.
+
+**Why it reported `0 new fixtures added` is NOT established.** The integration is
+demonstrably live — `1 scores updated` in the same run — so the key works and the
+API answers. The remaining candidates are: the API returned nothing for today;
+it returned matches filtered out by status; or names failed to resolve. **The log
+conflates all three and I could not separate them**: `FOOTBALL_DATA_ORG_KEY` is a
+CI secret and is absent locally, so the call is unreproduced.
+
+**This is the highest-value open thread in the stage.** If football-data.org can
+supply Champions League and LaLiga and simply is not, discovery is recoverable
+without Flashscore and without API-Football.
+
+## PART D — the audit could not see it. Now it can.
+
+**The assertion was never implemented for discovery.** Stage 14 specified the
+self-calibrating shape and discovery never received one.
+
+Added to `ci_audit.py`, keyed on **the scraper's own warning**
+(`returned 0 fixtures for X — expected ≥1 for active season`), which already
+excludes `off_season_leagues`. **A second off-season list in the audit would be a
+sixth data-layer copy of a definition; inheriting the scraper's judgement avoids
+it**, and `test_discovery_assertion.py` pins that reasoning.
+
+**Proven by replay, both directions — the positive control matters as much as
+the assertion:**
+
+| window | result |
+| --- | --- |
+| 2026-08-23 → 08-26 | **fires on all four days** (8, 7, 6, 5, 3 active leagues at zero) |
+| 2026-05-28 → 05-31 | **silent — all CLEAN** (discovery still worked; 05-30 is the last good day) |
+
+### The deeper point, recorded as a proposal
+
+**The audit measures what the pipeline reports about itself.** It has no external
+reference for "how many matches were actually played today", so a pipeline that
+sees nothing and says nothing reads as a quiet day — which is exactly what
+happened for 88 days. The new assertion closes this instance by watching the
+scraper's own expectation, but not the class.
+
+An external check — one weekly call to any free fixture list, compared against
+what the pipeline discovered — would close the class. **Proposal only, not
+implemented:** it is a new external dependency and belongs to a decision, not to
+this stage.
+
+## Recorded, not pursued
+
+- `_important` circularity in fixture-league selection (real, not binding)
+- The 1.2s Champions League scrape — a different failure from the 10–13s ones
+- cp1251, **fifth instance**, in this stage's own diagnostic output
+- `feature_engineer`'s hand-copied training predicate (known since Stage 13)
+
+---
+
+**STAGE 19 — DISCOVERY DIAGNOSED, NOT RESTORED.**
+
+Neither declaration in the prompt applies. Discovery is **not restored**: the
+Flashscore fixtures parser has produced nothing since 2026-05-30 and was not
+reproduced. It is **not established as unrestorable** either — football-data.org
+covers Champions League and LaLiga and has not been ruled out, and that is where
+the next work belongs.
+
+**833 tests pass. 26 invariants pass. `CODE_REVISION` unchanged at `s5.3`.**

@@ -142,6 +142,17 @@ PATTERNS = {
     # that was the single run where the two disagreed. The A1 cascade defect
     # surfaced here for four days as a swallowed NotNullViolation.
     "decisions_discarded": r"Could not apply",
+    # Stage 19. The audit was blind to a day that discovered nothing: 2026-08-26
+    # analysed 0 fixtures against a card of six real matches and was flagged
+    # only for the API-Football suspension. It surfaced because Niki looked at a
+    # football calendar.
+    #
+    # Keyed on the scraper's OWN warning, which already excludes
+    # `off_season_leagues` — so a genuinely dormant league does not fire it, and
+    # the assertion needs no threshold of its own to get wrong.
+    "fixtures_zero_active": r"returned 0 fixtures for \S+ . expected .1 for active season",
+    "no_fixtures_at_all": r"No fixtures found for \d{4}-\d{2}-\d{2}",
+    "fixtures_scraped": r"Scraped (\d+) fixtures from",
 }
 
 
@@ -153,7 +164,8 @@ def extract(log: str) -> Dict[str, object]:
         if not ms:
             continue
         if key in ("fixtures_created", "reviews", "no_rows",
-                   "decisions_discarded"):
+                   "decisions_discarded", "fixtures_zero_active",
+                   "no_fixtures_at_all"):
             f[key] = len(ms)
         elif key == "injuries_saved":
             f["injuries_saved"] = int(ms[-1][0])
@@ -163,6 +175,10 @@ def extract(log: str) -> Dict[str, object]:
                 f[key] = int(ms[-1] if isinstance(ms[-1], str) else ms[-1][0])
             except (TypeError, ValueError):
                 pass
+    _fx = re.findall(PATTERNS["fixtures_scraped"], log)
+    if _fx:
+        f["fixtures_scraped"] = sum(int(x) for x in _fx)
+        f["fixture_attempts"] = len(_fx)
     f["errors"] = len(re.findall(r"\| ERROR +\|", log))
     f["tracebacks"] = len(re.findall(r"Traceback \(most recent call last\)", log))
     f["account_suspended"] = "account suspended" in log
@@ -228,6 +244,23 @@ def assertions(facts: Dict[str, object],
         hits.append(
             f"{facts['decisions_discarded']} briefing decision(s) DISCARDED — "
             "the review ran and its verdict was thrown away")
+
+    # Stage 19 — discovery. NOT self-calibrating: a fixture scrape that returns
+    # nothing for a league the scraper itself calls in-season is wrong on the
+    # first occurrence. MEASURED 2026-08-26: this had been true on EVERY run
+    # since 2026-05-30 — 88 days, 200+ attempts, zero fixtures — and nothing
+    # reported it, because API-Football was quietly covering for it until its
+    # suspension on 08-19.
+    if facts.get("fixtures_zero_active"):
+        hits.append(
+            f"{facts['fixtures_zero_active']} active-season league(s) returned "
+            "0 fixtures — discovery produced nothing the scraper expected")
+    if facts.get("fixture_attempts") and not facts.get("fixtures_scraped"):
+        hits.append(
+            f"{facts['fixture_attempts']} fixture scrape(s) attempted, "
+            "0 fixtures found in total")
+    if facts.get("no_fixtures_at_all"):
+        hits.append("NO FIXTURES FOUND for the day — nothing was analysed")
 
     if facts.get("tracebacks"):
         hits.append(f"{facts['tracebacks']} traceback(s) in the log")

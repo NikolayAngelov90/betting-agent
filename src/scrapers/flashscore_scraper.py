@@ -112,6 +112,10 @@ class FlashscoreScraper(BaseScraper):
         self._cf_browser = None    # playwright sync Browser (camoufox)
         self._cf_ctx_mgr = None   # camoufox context manager handle
         self._cf_failed = False   # True after an unrecoverable camoufox error
+        # Stage 19: rows refused because their kickoff would not parse. Counted
+        # so a run summary can report it — a silent refusal is only marginally
+        # better than a silent guess.
+        self._unparseable_dates = 0
         self._cf_page = None      # persistent page/tab for camoufox (reused across requests)
         self._cf_warmed = False   # True after homepage warm-up solved CF challenge
 
@@ -900,8 +904,24 @@ class FlashscoreScraper(BaseScraper):
         return home, away
 
     @staticmethod
-    def _parse_match_date(element, default: datetime, is_result: bool = False) -> datetime:
-        """Extract match date/time from a row element, returning *default* on failure.
+    def _parse_match_date(element, default: Optional[datetime] = None,
+                          is_result: bool = False) -> Optional[datetime]:
+        """Extract match date/time from a row element.
+
+        STAGE 19. Returns None when the kickoff cannot be parsed. It used to
+        return `default`, which callers passed as `datetime.now()`, so an
+        unparseable time silently became "kicks off at this instant" and the row
+        entered `matches` asserting a kickoff it never had. MEASURED 2026-08-26:
+        510 such rows, 503 of them inside the training set and all 503 inside
+        the 180-day half-life, carrying MAXIMUM recency weight.
+
+        That is the family this project has now settled three times — a swallowed
+        IntegrityError, a short-circuit that suppressed its own logging, a safety
+        net that masked its mechanism: **a default that makes a failure look like
+        a success.** The answer each time was fail closed and say so.
+
+        `default` is retained only so an explicit caller can opt into a fallback;
+        no caller does, and none should.
 
         TIMEZONE NOTE: the returned datetime is Flashscore's *displayed local time*,
         stored naive and NOT converted to UTC — unlike API-Football and
@@ -945,6 +965,24 @@ class FlashscoreScraper(BaseScraper):
                 continue
         return default
 
+    @staticmethod
+    def _raw_time_text(element) -> str:
+        """The unparsed time text, for the refusal log.
+
+        A refusal that does not quote what it could not parse is a dead end for
+        whoever reads it: the whole point is to make a selector change visible
+        as a selector change rather than as a quiet drop in fixture counts.
+        """
+        for selector, by in [("event__time", By.CLASS_NAME),
+                             (".duelParticipant__startTime", By.CSS_SELECTOR)]:
+            try:
+                els = element.find_elements(by, selector)
+                if els:
+                    return els[0].text.strip()
+            except Exception:
+                continue
+        return "<no time element found>"
+
     def _parse_match_element(self, element) -> Optional[dict]:
         """Parse a completed match row from the listing page."""
         try:
@@ -958,9 +996,15 @@ class FlashscoreScraper(BaseScraper):
             else:
                 return None  # not a completed result (e.g. header row)
 
-            match_date = self._parse_match_date(
-                element, default=datetime.now(), is_result=True
-            )
+            match_date = self._parse_match_date(element, is_result=True)
+            if match_date is None:
+                self._unparseable_dates += 1
+                logger.warning(
+                    f"[Flashscore] REFUSING result row {home_team} vs "
+                    f"{away_team}: kickoff time did not parse "
+                    f"(raw={self._raw_time_text(element)!r}). A guessed date "
+                    "would enter the training set at full recency weight.")
+                return None
 
             # Match detail URL (for fetching extended stats later)
             match_url = None
@@ -986,9 +1030,15 @@ class FlashscoreScraper(BaseScraper):
         try:
             home_team, away_team = self._parse_team_names(element)
 
-            match_date = self._parse_match_date(
-                element, default=datetime.now() + timedelta(days=1)
-            )
+            match_date = self._parse_match_date(element)
+            if match_date is None:
+                self._unparseable_dates += 1
+                logger.warning(
+                    f"[Flashscore] REFUSING fixture row {home_team} vs "
+                    f"{away_team}: kickoff time did not parse "
+                    f"(raw={self._raw_time_text(element)!r}). A fixture with a "
+                    "guessed kickoff is never eligible and hides the failure.")
+                return None
 
             match_url = None
             flashscore_id = None
