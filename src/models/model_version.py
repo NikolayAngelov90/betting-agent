@@ -253,6 +253,24 @@ TRACKED_KEYS: List[str] = [
 #:       status was TRANSIENT and had already resolved. **The discovery floor
 #:       does not move.** This is insurance against a recurrence, not a gain,
 #:       and it is recorded that way so nobody later credits it with fixtures.
+#: ── THE AMEND-OR-BUMP RULE (Stage 19, 2026-08-27) ──────────────────────────
+#:
+#: CODE_REVISION exists to stop picks made under different configurations being
+#: pooled. POOLING CANNOT HAPPEN IN A COHORT WITH NO MEMBERS.
+#:
+#:   While `saved_picks` holds ZERO rows at the current fingerprint, a further
+#:   prediction- or selection-affecting change AMENDS this revision's entry
+#:   instead of bumping. If ANY pick carries it, BUMP.
+#:
+#: The guarantee is untouched: no two configurations ever share a cohort that
+#: contains anything.
+#:
+#: VERIFY WITH A QUERY, NOT FROM MEMORY — `python -m scripts.cohort_status`
+#: prints AMEND or BUMP against the live database. That requirement is what
+#: makes this a refinement rather than a loophole, and it is the standard
+#: applied to every other claim here.
+#: ───────────────────────────────────────────────────────────────────────────
+#:
 #: s5.6  Stage 19 (2026-08-27). The fixture-league CIRCULARITY removed, so
 #:       Flashscore is attempted for every configured league rather than only
 #:       for leagues already known to have fixtures.
@@ -272,14 +290,22 @@ TRACKED_KEYS: List[str] = [
 #:       results loop has always relied on — the two paths are symmetric
 #:       instead of one being silently narrower.
 #:
-#:       THIRD EMPTY COHORT IN A DAY, and that is worth saying rather than
-#:       hiding: s5.4, s5.5 and s5.6 each carry ZERO saved picks, because no
-#:       daily-picks run has fired since s5.3. The bump rule is being applied
-#:       literally to changes landing faster than a cohort can gain members.
-#:       Every split so far has been forced (each predecessor was already
-#:       pushed) and every one has been costless. If more pre-run changes land,
-#:       collapsing them into a single declared boundary once discovery is
-#:       PROVEN would carry more information than this sequence does.
+#:       THREE CONSECUTIVE REVISIONS CARRY ZERO PICKS — s5.4, s5.5 and s5.6 —
+#:       because no daily-picks run has fired since s5.3 was stamped. Recorded
+#:       so a future reader sees explained churn rather than thrash.
+#:
+#:       EACH SPLIT WAS FORCED, NOT CHOSEN:
+#:         · s5.4 -> s5.5: ac8bedb was already pushed to the public remote, and
+#:           rewriting a pushed commit is the history rewrite this project has
+#:           refused twice.
+#:         · s5.5 -> s5.6: ccadbfe likewise (verified by `git ls-remote`).
+#:       Each was costless, because each predecessor cohort was empty.
+#:
+#:       THE RULE NOW PERMITS AMENDMENT WHILE EMPTY (see the heading above), so
+#:       this sequence should not recur: a further change today amends s5.6
+#:       rather than opening s5.7. These three are NOT collapsed retroactively —
+#:       they are pushed, and history is not rewritten. Verified at commit time
+#:       via `scripts/cohort_status.py`: 0 picks at `...60caed` of 1,338 total.
 CODE_REVISION = "s5.6"
 
 

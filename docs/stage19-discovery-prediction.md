@@ -219,3 +219,42 @@ thing: the repair failed.** That is the position this stage has been working
 toward, and it is now reached rather than hoped for.
 
 *Precondition checked and fixed before the run, 2026-08-27.*
+
+---
+
+## REGISTERED POST-RUN MEASUREMENT — the circularity's quieter cousin
+
+*Registered before the run so the answer is measured, not argued.*
+
+Removing the `_important` filter replaced a **circular** gate with a **budget**
+one. That is a large improvement and it is not complete, and the residual has the
+same shape as the defect it replaced:
+
+> `_FIXTURES_BUDGET_S = 300` at a measured ~12s/league reaches roughly 25 of 30.
+> The truncation is **deterministic by config order**, so the same trailing
+> leagues are never attempted — every day, forever. **A league that is never
+> scraped produces no fixtures, which never changes its position.**
+
+The arithmetic above (~25 of 30) is an estimate from one day's per-league
+timings. It is **not** the basis for a fix. To be measured from today's run:
+
+1. **Which leagues were actually reached** — count `Scraping fixtures: <league>`
+   lines and list them in order.
+2. **How much budget was left** — elapsed wall time of the fixtures block against
+   the 300s deadline, and whether
+   `Flashscore fixtures: time budget exhausted, skipping remaining leagues`
+   appears at all.
+3. **The trailing set, BY NAME** — configured leagues minus reached leagues.
+4. **Whether that set is stable** across the next few runs, or varies with how
+   long each league takes.
+
+**Decision rule, fixed in advance:** if the trailing set is **non-empty and
+stable**, the fix is rotation (start the loop at a different offset each day) or
+a larger budget — chosen from the measurement, not from the estimate. If it is
+**empty**, the budget is sufficient and nothing is needed. If it **varies**, the
+per-league cost is the thing to attack rather than the ordering.
+
+This is recorded now because a residual that only bites the tail of a list is
+exactly the kind that goes unnoticed for 88 days.
+
+*Registered before the run, 2026-08-27.*
