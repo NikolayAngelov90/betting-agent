@@ -258,3 +258,26 @@ This is recorded now because a residual that only bites the tail of a list is
 exactly the kind that goes unnoticed for 88 days.
 
 *Registered before the run, 2026-08-27.*
+
+
+---
+
+## CORRECTION (2026-08-27, before the verdict)
+
+An earlier ledger entry claimed this file's UCL clause was "independently
+confirmed" because all three sources return 0 for 2026-08-27 → 09-02. **That was
+a misreading of the clause and is retracted.**
+
+The clause withholds judgement — *not scored against the repair, and not rounded
+up into success*. It was rounded up. And the retraction's own reasoning matters
+more than the slip: **agreement across sources is not corroboration when the
+sources may share a blind spot**, which is the failure this whole stage
+documents.
+
+Niki watched four Champions League matches on **2026-08-26**, and
+`COMPETITION_MAP` maps `CL`. A three-source zero on a day with four real
+fixtures is a **finding**, tracked in the ledger as OPEN and deliberately not
+investigated until today's LaLiga verdict is recorded.
+
+**The clause stands exactly as originally written: a UCL zero today is scored
+neither way.**

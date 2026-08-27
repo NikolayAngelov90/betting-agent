@@ -4380,9 +4380,50 @@ stronger starting point than expecting noise. Before a check ships it needs:
 
 Recorded as the baseline to compare against, not as a rule.
 
-## Champions League — an incidental confirmation
+## Champions League — RETRACTED: this is a three-source zero, not a confirmation
 
-`europe/champions-league` returns **0 fixtures from all three sources for every
-day 2026-08-27 → 09-02**. The prediction's clause that "UCL yields 0 and that is
-CORRECT" is therefore confirmed by two sources beyond the one it was written
-from. It is genuinely between rounds, not broken.
+**The paragraph that stood here was wrong and is corrected rather than deleted.**
+It read: *"`europe/champions-league` returns 0 fixtures from all three sources
+… the prediction's clause that a UCL zero is CORRECT is therefore confirmed …
+It is genuinely between rounds, not broken."*
+
+**Two errors, and the second is the serious one.**
+
+**1. It inverted the clause it claimed to confirm.** The prediction says a UCL
+absence *"must NOT be scored against the selector repair, and **must NOT be
+rounded up into success either**."* That withholds judgement. It was rounded up
+into success — the precise move the clause was written to forbid.
+
+**2. It used cross-source agreement as corroboration.** Agreement between
+sources is evidence only if the sources can fail independently. **A shared blind
+spot produces identical agreement**, and that is the failure mode this entire
+stage documents: a fallback that substitutes silently makes the primary's
+failure invisible. `disc[fs=N fdo=N af=N]` was built this same day *because*
+aggregates conceal exactly this — and then agreement was used as proof.
+
+### What is actually known
+
+- **Niki watched four Champions League matches on 2026-08-26.** Those fixtures
+  existed.
+- **`COMPETITION_MAP` contains `"CL": "europe/champions-league"`**, so
+  football-data.org maps the competition and should have returned them.
+- The 2026-08-26 run scraped `europe/champions-league` and logged
+  `Flashscore returned 0 fixtures for europe/champions-league`.
+- Loaded directly under camoufox, the UCL fixtures page yields **0 rows of any
+  kind**, against 110–120 rows for every domestic league — a structurally
+  different result, not merely an empty date.
+
+> **`disc[fs=0 fdo=0 af=0]` on a day with four real fixtures is a FINDING, not a
+> quiet day.** Three sources returned nothing for a competition that was
+> playing, and one of them demonstrably maps it.
+
+### Status: OPEN, and deliberately not investigated yet
+
+The 2026-08-27 LaLiga test comes first and must not be disturbed. This is
+recorded now, before the verdict, because **"independently confirmed" and
+"unexplained three-source zero" read very differently to whoever picks it up** —
+and the wrong one was on the record.
+
+Whether the 08-27 → 09-02 window is legitimately empty (between rounds) is a
+separate question from why 08-26 returned zero, and neither has been
+established. **Nothing about UCL is confirmed.**
