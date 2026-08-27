@@ -4427,3 +4427,253 @@ and the wrong one was on the record.
 Whether the 08-27 → 09-02 window is legitimately empty (between rounds) is a
 separate question from why 08-26 returned zero, and neither has been
 established. **Nothing about UCL is confirmed.**
+
+---
+
+# RUN 33075828280 — THE STAGE 19 VERDICT
+
+`Daily Betting Picks`, **`workflow_dispatch`** 2026-08-27T13:14:48Z,
+`conclusion: success`. Audited 2026-08-27. **The 09:37 scheduled run never
+fired** — this is the manual trigger only.
+
+*The prediction was re-read in full before any log line was opened.*
+
+## What was registered, restated before the evidence
+
+| # | registered claim |
+| --- | --- |
+| 1 | **Exactly 2 fixtures**, both `spain/laliga`: Celta v Osasuna, Barcelona v Ath Bilbao — strictly, *"exactly 2 within the sampled set and within football-data.org's nine competitions"* |
+| 2 | Kickoffs near **18:30Z / 19:00Z**, `EXTRACT(SECOND FROM match_date) = 0` on both |
+| 3 | UCL zero **scored NEITHER way** (per the correction of 2026-08-27) |
+| 4 | Per-source assertion silent for producing sources, fires for a source that produced within 7 runs and now returns zero |
+| 5 | `model_version = stage5_baseline_20260807.b16ec7` (`s5.5`) |
+
+**Outcome definitions:** RESTORED requires **Flashscore's own count for
+`spain/laliga` to be non-zero** — not the total, not "the fixtures arrived".
+PARTIAL–fdo if fixtures arrive without Flashscore. REGRESSION on any sub-minute
+kickoff. **Precondition: `spain/laliga` attempted unconditionally**, which was
+supposed to make UNTESTED impossible.
+
+## VERDICT: DISCOVERY RESTORED
+
+All three registered conditions met, literally:
+
+```
+Scraping fixtures: spain/laliga          13:20:59
+Scraped 2 fixtures from spain/laliga     13:21:15
+```
+
+| condition | evidence |
+| --- | --- |
+| **Flashscore's own count for `spain/laliga` non-zero** | **`Scraped 2 fixtures from spain/laliga`** — verbatim |
+| both fixtures present | id 50140 Celta v Osasuna 18:30, id 50141 Barcelona v Ath Bilbao 19:00 |
+| whole-minute kickoffs | `EXTRACT(SECOND)=0` → **True** on both |
+| precondition held | `Scraping fixtures: spain/laliga` present — **attempted, confirmed from the log, not inferred** |
+
+**NOT a regression:** **105 matches were created today and ZERO carry a
+sub-minute kickoff.** The phantom defect did not return, tested against 105
+opportunities rather than 2.
+
+### Who created what — the distinction the definition was built to survive
+
+Row `created_at` is **13:20:57.2 / 13:20:57.9**; football-data.org logged
+`added 2 new fixtures to DB` at **13:20:58**; Flashscore scraped at
+**13:20:59 → 13:21:15** and both rows carry `flashscore_id`.
+
+**football-data.org CREATED both. Flashscore INDEPENDENTLY FOUND both and
+matched them.**
+
+This is why the definition keyed on *Flashscore's own count* rather than on row
+provenance: had it keyed on creation, the answer would have been
+PARTIAL–fdo-only and the working parser would have been scored as a failure.
+**Flashscore parsed 2 fixtures from the page — the repair works in CI, under
+Chrome, not merely under camoufox.**
+
+## Per source, verbatim
+
+**`disc[fs=2 fdo=2 af=39]`**
+
+| league | Flashscore | notes |
+| --- | --- | --- |
+| **spain/laliga** | **2** | the two predicted fixtures |
+| 21 other leagues attempted | 0 each | no fixtures inside the 1-day cutoff |
+| **europe/champions-league** | **no result line at all** | `Fixtures page failed (TimeoutException)` → retry → `retry also failed` |
+
+## Prediction accuracy — the headline was overtaken, the strict claim held
+
+**36 fixtures exist for 2026-08-27, not 2**: the 2 LaLiga plus **34 Europa
+League / Conference League**, all created by API-Football between 13:26:15 and
+13:27:42.
+
+- The **strict** claim — *"exactly 2 within the sampled set and within
+  football-data.org's nine competitions"* — **HOLDS**. UEL and UECL are in
+  neither `COMPETITION_MAP` nor the eight leagues sampled.
+- The **headline** — "exactly 2 fixtures discovered" — **does not**. It was
+  written while API-Football was suspended; a restored account found 34 more.
+
+Recorded both ways rather than resolved in the flattering direction.
+
+**Item 5 is stale, not failed:** picks carry
+`stage5_baseline_20260807.60caed` (`s5.6`). The prediction registered `b16ec7`
+(`s5.5`) and the s5.6 bump was made *after* it was written. Bookkeeping
+consequence of the bump sequence, not a discrepancy in the run.
+
+## UCL — evidence for the OPEN entry, NOT investigated
+
+`europe/champions-league`: **`disc[fs=-]`** — attempted, timed out twice,
+produced no count line. It consumed **13:21:25 → 13:22:55 = 90 seconds, 30% of
+the entire fixtures budget**, and returned nothing.
+
+**And UEFA fixtures plainly existed today: API-Football created 34 of them.**
+That is direct evidence for the open three-source-zero question, since Flashscore
+and football-data.org returned none of the 34. **Deliberately not investigated —
+the entry stays OPEN, now with this run attached to it.**
+
+## Registered post-run measurements
+
+### Trailing-league set — non-empty, and it bit on day one
+
+Fixtures block: **13:20:59 → 13:26:00 = 301s**, and
+`Flashscore fixtures: time budget exhausted, skipping remaining leagues`
+**fired**. Budget remaining: **zero**.
+
+**23 of 30 configured leagues attempted. Never attempted:**
+
+```
+england/league-two   spain/laliga2      germany/2-bundesliga   italy/serie-b
+france/ligue-2       europe/europa-league   europe/europa-conference-league
+```
+
+> **The trailing set contains `europe/europa-league` and
+> `europe/europa-conference-league` — the two competitions carrying 34 of
+> today's 36 fixtures.** The residual predicted in advance bit immediately, on
+> exactly the competitions that mattered.
+
+**Decision rule, applied as registered:** the set is **non-empty**. Stability
+needs a second run and cannot be claimed from one. But the run already names the
+dominant cost: **UCL alone consumed 90s of 300s producing nothing**, which points
+at *per-league cost* rather than ordering — the registered rule's "varying →
+attack the per-league cost" branch. **Rotation would move which leagues are
+starved, not how much budget a 90-second timeout wastes.**
+
+### The new API-Football account, as the run saw it
+
+`API-Football update complete (51 requests used, 3 fixture(s) SKIPPED on
+team-identity mismatch)`. **51 of 100 requests. Zero `errors.access`, zero
+`errors.plan`, zero suspension messages.** The replacement account authenticated
+and worked.
+
+### §7 IS NO LONGER UNTESTABLE
+
+Three `ERROR` lines, all the Stage 13 identity gate:
+`TEAM IDENTITY MISMATCH — refusing to resolve` (API-Football ids 604, 3502, 531).
+**The gate ran, fired, and failed closed on 3 fixtures.** A gate that never ran
+is not a gate that passed — it has now run.
+
+### The per-source assertion
+
+**Silent**, correctly: all three sources produced (`fs=2 fdo=2 af=39`).
+
+**But the run exposes a defect in the OTHER check I shipped.** The
+`fixtures_zero_active` assertion fired **21 times**, and all 21 are false
+positives: those leagues genuinely had no fixtures inside `max_days_ahead=1`.
+The scraper's own `expected ≥1 for active season` warning does not account for
+the 1-day cutoff, and my assertion inherited that. **On a normal day this check
+will fire ~21 times, which is how a check gets ignored.** Recorded, not fixed.
+
+### Fail-closed date parsing — working, and loudly
+
+**139 `REFUSING fixture row … kickoff time did not parse` warnings**, all with
+`raw='<no time element found>'`, concentrated in five leagues:
+
+```
+austria/bundesliga 36   bulgaria/efbet-league 35   denmark/superliga 30
+switzerland/super-league 24   greece/super-league 14
+```
+
+**Those are precisely the leagues that manufactured phantoms on 2026-08-26.**
+The rows that used to enter the database with a `now()` kickoff are now refused
+and named. **Zero phantoms among 105 matches created confirms it end to end.**
+
+Two caveats recorded rather than resolved: `_raw_time_text` reports
+`<no time element found>` because it still looks only for the retired
+`.event__time`, so the refusal message cannot show what it failed to parse; and
+whether any refused row was an in-window fixture is **not established** — no
+in-window fixture is known to have been lost, but that is absence of evidence.
+
+### Substrate accumulation, and the Stage 18 trigger
+
+| | 2026-08-26 | now |
+| --- | --- | --- |
+| `odds_snapshots` rows | 85 | **2,713** |
+| distinct matches | 1 | **35** |
+| **keys with ≥3 observations** | 0 | **0** |
+| `injury_observations` | 0 | **4** |
+| `odds.first_seen_at` populated | 0 | **2,628** |
+
+**The substrate is alive** — 2,628 rows and 2,628 first-seen stamps in one run,
+against a total of 85 before it.
+
+**The trigger has NOT fired: zero keys carry three observations.** A run gives
+each key its *first* sight; the second and third come from `closing-lines`
+refreshes before kickoff.
+
+**Trigger dates are NOT re-issued as calendar dates.** One run is not a rate, and
+the last three attempts to put a date on this were withdrawn within a day. The
+trigger remains the query:
+
+```sql
+SELECT match_id, bookmaker, selection, count(*) FROM odds_snapshots
+GROUP BY 1,2,3 HAVING count(*) >= 3;
+```
+
+What *can* be said: 34 picks exist across 34 fixtures, so those leagues are now
+`_pending` and will be refreshed by tonight's `closing-lines` runs. **The first
+honest measurement of the rate is available after those run** — not before.
+
+## Pipeline counts, checked against what each step should produce
+
+| | |
+| --- | --- |
+| picks saved | **34**, across **34 fixtures** — 1:1, the `max_picks_per_match` cap holding |
+| `pick_observations` | **68** = 2 × 34 exactly |
+| review coverage | **34 of 34** — no unreviewed picks |
+| discarded review decisions | **0** |
+| `PICK_REJECTED` | 5, all `reason=same_fixture_limit` — the cap, working |
+| Telegram | 3 sent, **0 failed** |
+| tracebacks | **0** |
+| settlement | 2 warnings: `stale date(s) but only N API requests left — skipping stale-result fetch to preserve odds` |
+
+## Trigger independence — what holds for a scheduled run and what does not
+
+**Holds regardless of trigger:**
+
+- **The verdict.** `Scraped 2 fixtures from spain/laliga` is a statement about
+  the parser and the page, not about the hour. The selector and date-shape
+  repairs are trigger-independent.
+- Zero phantoms across 105 matches.
+- The identity gate firing 3 times.
+- The new account authenticating with no access/plan errors.
+- The 21 false-positive warnings — a property of the check, not the clock.
+
+**Depends on the trigger, and is NOT generalised:**
+
+- **The trailing set.** `_FIXTURES_BUDGET_S` truncation depends on per-league
+  latency on the day. The *names* may differ on another run; that the set is
+  non-empty is what this run establishes.
+- **Which fixtures were in-window.** `max_days_ahead=1` was computed from 13:14,
+  giving a window to 13:14 on 08-28 — which excludes the 08-28 evening kickoffs
+  that a 09:37 run would also have excluded. So the 21 zero-fixture leagues are
+  **not** an artefact of the manual hour, but a run at, say, 20:00 would include
+  them and the count would differ.
+- **Odds imminence and pending picks.** A 13:14 run makes a different set of
+  fixtures imminent than 09:37, which affects the closing-lines interaction and
+  the 51 API-Football requests — not compared against a scheduled baseline here.
+- **The missed 09:37 schedule itself** is unexplained and is not this run's
+  evidence to give.
+
+### Ledger row
+
+| run_id | workflow | started (UTC) | conclusion | steps failed | audited on | verdict | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 33075828280 | daily-picks | 2026-08-27 13:14 | success | — | 2026-08-27 | **DEGRADED** | `disc[fs=2 fdo=2 af=39]`. **STAGE 19 = DISCOVERY RESTORED**: `Scraped 2 fixtures from spain/laliga`, both whole-minute. 34 picks / 34 fixtures / 68 obs / 34 reviewed. 105 matches created, **0 sub-minute**. DEGRADED for: 21 false-positive `active-season` warnings (the check ignores `max_days_ahead=1`); UCL double timeout consuming 90s of 300s; budget exhausted with **7 leagues never attempted incl. europa-league + conference-league**, which carried 34 of today's 36 fixtures. Identity gate fired 3× (§7 no longer UNTESTABLE). AF 51/100 requests, no access/plan errors. 139 fail-closed date refusals in the 5 phantom-producing leagues. |
