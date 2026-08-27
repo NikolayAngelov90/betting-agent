@@ -4886,3 +4886,121 @@ To be reported from the next run, and not asserted now:
 2. **the trailing set by name**, and whether it is stable
 3. **the identity gate's refusal count**, each classified
 4. **how many times `fixtures_zero_active` fires** — predicted ~1, was 21
+
+---
+
+# GUARD DESIGN — THE HABIT, INVERTED
+
+**The Stage 20 Part A finding, promoted to its own heading because five
+instances of the familiar shape did not predict it.**
+
+`TEAM_NAME_ALIASES["Athletic Club"] = "Ath Bilbao"` existed. It was correct,
+canonical, curated, and in the right module. It never fired, because
+`_get_or_create_team_id` decides at **step 0** — match on
+`apifootball_team_id`, verify, refuse — while the alias table is consulted at
+**step 2**, reached only when step 0 finds nothing.
+
+**The five recorded instances were two definitions drifting apart.** This is one
+definition placed where the deciding caller never looks. **Same root — knowledge
+in the wrong place — opposite symptom.** Nothing drifted; nothing was
+duplicated; a grep for the alias would have found it and concluded the case was
+handled.
+
+> ## A lookup table is only as good as the earliest decision point that consults it.
+>
+> **Any decision taken before the canonical source is read is made in ignorance
+> by construction** — not by oversight, not by drift, and not visibly. The table
+> can be complete and correct and still be irrelevant to the caller that
+> matters.
+
+**Why the familiar guard would not have caught it.** The HABIT tests ask "does
+this knowledge exist more than once?" Here it existed exactly once. The question
+that catches this one is different: **"is it read before, or after, the first
+decision that needs it?"** — a control-flow question, not a duplication question.
+
+**How it surfaced, which is worth keeping.** Not by analysis. The first Stage 20
+fix added the alias to the *other* table, and the HABIT guard written alongside
+it failed on the duplicate — which is the only reason anyone looked at why the
+existing entry had never fired. **A guard written for one failure mode found its
+inverse by refusing a wrong fix.**
+
+## Recorded and NOT opened: are there other early-exit paths?
+
+`_get_or_create_team_id` decides at step 0 before reading the alias table. **The
+question this raises is whether other paths do the same** — decide, return, or
+refuse before consulting canonical knowledge that sits further down.
+
+Candidate shape to look for: any `return` or `continue` that precedes a lookup
+into `TEAM_NAME_ALIASES`, `NAME_ALIASES`, `MARKET_SPECS`, `COMPETITION_MAP`,
+`LEAGUE_TO_THEODDS_SPORT` or `off_season_leagues`.
+
+**This is the same audit shape as MASK-1 and the 23 sites, and it is not this
+stage's work.** Recorded so it is a known question rather than a future
+surprise.
+
+---
+
+# STAGE 20 — REGISTERED MEASUREMENTS, extended
+
+Two additions to the four already registered, both falsifiable, both before the
+run rather than after.
+
+## 5. The timeout risk — a prediction, not a hope
+
+**`FIXTURES_WAIT_S = 20` was derived from the wrong distribution.** The 7.2–16.0s
+range is measured on leagues that **succeeded**. The failures it cuts took 45s
+*because they were timeouts*, so they carry **no information about the tail of
+the success distribution**. A league that would have succeeded at 25s is
+invisible in that evidence.
+
+So 20s can convert **slow successes into fast failures**.
+
+> **PREDICTION: every league that produced a non-zero fixture count on
+> 2026-08-27 must produce a non-zero count again.**
+>
+> Baseline, from run 33075828280: **`spain/laliga` = 2. It was the only
+> non-zero league**, so that is the whole of the direct check — stated plainly
+> rather than dressed up as broader coverage than it has.
+>
+> **If it drops to zero while fixtures exist for it, the timeout is too tight,
+> and the correct response is to RAISE it — not to conclude the league went
+> quiet.**
+
+**The symptom is NOT indistinguishable, and Part C is why — accidentally.**
+Verified in the code rather than assumed: `_last_page_rows` is assigned *after*
+the `WebDriverWait`, so a `TimeoutException` raises before it is ever set, and
+it was reset to `None` before the league began.
+
+| outcome | log signature |
+| --- | --- |
+| **timeout** | `Fixtures page failed (TimeoutException)` **and** a WARNING (page rows unknown → fails closed) |
+| **genuinely quiet** | INFO `no fixtures within the requested window (N row(s) on the page, none in range)` |
+
+**A zero with a row count is a quiet league. A zero without one is a timeout.**
+That discriminator was not designed — it fell out of Part C's fail-closed
+unknown case, and it is what makes prediction 5 checkable at all.
+
+**Also to record:** per-league wall time for every league. **Any league
+completing in 16–20s sits in the band the evidence never covered**, and its zero
+must be checked against an independent source before being accepted.
+
+## 6. The redirect must land on the competition that was asked for
+
+`europe/europa-conference-league` **redirects** to
+`/football/europe/conference-league/`. It returns HTTP 200 and 10 rows, so it
+resolves — but it was recorded as incidental, and that is too generous given
+UEL and UECL carried **34 of 36 fixtures** and were never attempted.
+
+**A redirect that resolves to the right competition is fine. One that resolves
+to a different competition, or to a season index, would produce rows that PARSE
+AND ARE WRONG — which is worse than zero, and would not announce itself.**
+
+> **CHECK, on the next run in which these leagues are reached:** for
+> `europe/europa-league` and `europe/europa-conference-league`, confirm the
+> fixtures actually created belong to the competition requested — by team
+> names against the public calendar, not by the count alone. A plausible count
+> of the wrong competition's fixtures is exactly the failure this check exists
+> for.
+
+The same question applies to any other configured key whose URL redirects; that
+has not been enumerated and is not claimed to be enumerated.
