@@ -4677,3 +4677,212 @@ honest measurement of the rate is available after those run** — not before.
 | run_id | workflow | started (UTC) | conclusion | steps failed | audited on | verdict | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 33075828280 | daily-picks | 2026-08-27 13:14 | success | — | 2026-08-27 | **DEGRADED** | `disc[fs=2 fdo=2 af=39]`. **STAGE 19 = DISCOVERY RESTORED**: `Scraped 2 fixtures from spain/laliga`, both whole-minute. 34 picks / 34 fixtures / 68 obs / 34 reviewed. 105 matches created, **0 sub-minute**. DEGRADED for: 21 false-positive `active-season` warnings (the check ignores `max_days_ahead=1`); UCL double timeout consuming 90s of 300s; budget exhausted with **7 leagues never attempted incl. europa-league + conference-league**, which carried 34 of today's 36 fixtures. Identity gate fired 3× (§7 no longer UNTESTABLE). AF 51/100 requests, no access/plan errors. 139 fail-closed date refusals in the 5 phantom-producing leagues. |
+
+---
+
+# STAGE 20 — THE LOOP'S THREE DEFECTS
+
+`cohort_status.py` reported **BUMP** (s5.6 carries 34 picks), so Parts A and B —
+both selection-affecting — land in **one** bump to `s5.7`. Part C changes only
+logging and an audit pattern and is selection-neutral.
+
+## PART A — the three identity-gate refusals
+
+### A1. Each refusal, verified against the provider rather than recalled
+
+All three fired the **lexical anchor** check (`:1523`), none the country check.
+Classified by querying `GET /teams?id=` — the same standard the gate itself uses,
+the payload in hand:
+
+| AF id | provider says | stored row | check | verdict |
+| --- | --- | --- | --- | --- |
+| **604** | Maccabi Tel Aviv, **Israel**, Tel Aviv, founded 1906 | 124 `Telstar`, Netherlands, eredivisie | anchor | **CORRECT REFUSAL** |
+| **531** | Athletic Club, **Spain**, **Bilbao**, 1898, code `BIL`, San Mamés | 58 `Ath Bilbao`, Spain, spain/laliga | anchor | **FALSE POSITIVE** |
+| **3502** | FC Iberia 1999, **Georgia**, **Tbilisi**, founded **1999** | 1218 `Saburtalo`, a Tbilisi club founded 1999 | anchor | **FALSE POSITIVE** |
+
+**The Athletic false positive cost a predicted fixture.** Barcelona vs Ath Bilbao
+is one of the two fixtures Stage 19 registered; its row carries
+`apifootball_id = NULL` because the gate refused it. **It exists only because
+Flashscore found it independently** — the redundancy that Stage 19 proved was
+working is the only reason the loss is invisible in the fixture count.
+
+Independent corroboration for 531, from this project's own measurements taken
+before the run: **football-data.org named the fixture `FC Barcelona vs Athletic
+Club` while Flashscore named it `Barcelona | Ath Bilbao`.** Two sources, two
+names, one fixture.
+
+### A2. THE KNOWLEDGE FOR THE ATHLETIC CASE ALREADY EXISTED
+
+The first attempt added `"athletic club"` to `team_names.NAME_ALIASES` — and the
+HABIT guard written alongside it **failed immediately**, because:
+
+```
+TEAM_NAME_ALIASES["Athletic Club"] = "Ath Bilbao"     # already present
+```
+
+It never fired. `_get_or_create_team_id` matches by `apifootball_team_id` at
+**step 0** and refuses there; the alias table is consulted at **step 2**, which
+is only reached when step 0 finds nothing. **The alias was present and
+unreachable from the gate that needed it.**
+
+So the fix is not a new alias but a **reachability** change: canonicalise through
+`TEAM_NAME_ALIASES` *before* the anchor test. **Only ONE alias was genuinely
+missing** — `FC Iberia 1999 → Saburtalo`.
+
+**The anchor rule itself is untouched.** No ratio, no threshold, no widened
+country band. `team_names._tok_match` carries a `SequenceMatcher` ratio ≥ 0.75
+and was deliberately **not** imported for that reason.
+
+**THE HABIT, sixth instance, found and not extended.** Two alias tables already
+exist — `TEAM_NAME_ALIASES` (177 entries, "API-Football name → historical name")
+and `team_names.NAME_ALIASES` (22), already overlapping on `psg` and
+`olympiakos piraeus`. The Stage 20 entry went into **one**, and
+`test_the_alias_knowledge_lives_in_exactly_one_table` fails if it is duplicated.
+`_ALIAS_LOWER` is *derived* from the table rather than maintained beside it, so
+the index cannot drift from what it indexes.
+
+### A3. The size of the problem — one day, not a rate
+
+**Every identity-gate refusal since the gate shipped:**
+
+```
+2026-08-27 : 3       (all other days: none)
+distinct pairs : 3   recurrence : none
+```
+
+That is the gate's **complete live history**. API-Football was suspended from
+2026-08-19 until the replacement account went live on 08-27, so the gate had no
+traffic to refuse. **Three refusals on one day is not a rate and no clustering or
+recurrence can be claimed from it** — the honest statement is that the population
+is one day deep. If the next runs produce recurring pairs, those aliases belong
+in the table whether or not they appeared here.
+
+### A4. Replayed to the standard the gate was held to
+
+14 tests. Both false positives now resolve; **the Telstar/Maccabi impostor is
+still refused**; `Pau FC` / `St. Pauli` still refused; `Rapid Vienna` /
+`Rapid Bucuresti` still shares an anchor **by design** and is pinned as such, with
+a separate test confirming the **country** check is what separates them. Missing
+country information (`Europe`, `World`, `Other`, empty) still falls through
+rather than refusing — which matters, because `Saburtalo` is stored as `Europe`.
+
+## PART B — 95% of the budget bought nothing
+
+### B1. Measured before touching the budget
+
+Per-league durations from run 33075828280:
+
+| | |
+| --- | --- |
+| total | **301.7s** of a 300s budget |
+| **spent on leagues returning ZERO fixtures** | **285.7s — 95%** |
+| leagues reached | 23 of 30 |
+| mean per league | 13.1s |
+| **mean excluding champions-league** | **9.6s** |
+| **champions-league alone** | **90.2s — a 9.4× outlier** |
+| fastest (fast-fail already possible) | finland/veikkausliiga, **1.2s** |
+
+The 90.2s is two `WebDriverWait(driver, 45)` calls timing out back to back —
+initial attempt and retry.
+
+**Raising the budget treats the symptom.** Freeing 75s of the 90 reaches ~8 more
+leagues at the 9.6s mean, which covers the 7 that were never attempted.
+
+**Fixed:** `FIXTURES_WAIT_S = 20`, one definition, used by both call sites. Every
+league that returned rows completed in **7.2–16.0s end to end**, so 20s leaves
+margin over the slowest observed success. Expected recovery **50–70s per run**.
+Whether that is sufficient is **not asserted** — it is the next run's
+measurement, and the registered decision rule stands.
+
+### B2. The page inspection — and it CORRECTS my own earlier finding
+
+I recorded that the UCL fixtures page "returns zero rows of any kind, against
+110–120 for every domestic league — an empty date still renders a table, so zero
+rows means the page is not the shape the parser expects."
+
+**That does not reproduce.** Loaded directly today:
+
+| page | HTTP | `.event__match` rows |
+| --- | --- | --- |
+| `champions-league/fixtures/` | 200 | **144** |
+| `europa-league/fixtures/` | 200 | 5 |
+| `europa-conference-league/fixtures/` | 200, **redirects to `/conference-league/`** | 10 |
+
+**The page is fine and the selectors are fine.** 144 rows found with the current
+selector, 2,146 `wcl-*` classes, correct title. **No selector work is warranted,
+and the discipline that found the `--static` rename is what prevented it here
+too — the page was inspected first and the fix it would have justified turned out
+to be unnecessary.**
+
+Yesterday's zero was measured in an 8-league loop with a 3.5s settle; today's
+144 came with 5s. So the earlier reading was a load-timing artefact of my own
+harness, not a property of the page. **A single anomalous result was evidence
+about the measurement, and the measurement was mine.**
+
+**What remains unexplained:** a 45s `WebDriverWait` failing in CI where a ~5s
+direct load succeeds. That is not slow rendering, and it is a Chrome/Selenium
+question rather than a page question. Recorded, not pursued.
+
+**Incidental finding:** `europe/europa-conference-league` **redirects** to
+`/football/europe/conference-league/`. It works, and it costs a redirect
+round-trip on every attempt. Recorded, not changed — the configured key is a
+selection-affecting surface and the redirect is harmless.
+
+### B3. Ordering
+
+The trailing set after this change is **not asserted**. It is the next run's
+measurement, and the registered rule requires it by name plus a stability check
+across runs. What this run established is that truncation is real, deterministic
+by config order, and that it starved `europe/europa-league` and
+`europe/europa-conference-league` — **the two competitions carrying 34 of the
+day's 36 fixtures.**
+
+## PART C — a check that fires 21 times a day carries no information
+
+All 21 firings on 2026-08-27 were false positives, and the old pattern fired
+**260 times across the whole cached period**.
+
+**Root cause: the scraper's own warning ignores the window it queried for.**
+`_scrape_fixtures_page(url, max_days_ahead=1)` returns fixtures inside one day; a
+league with none is *quiet*, not broken. The warning said "expected ≥1 for active
+season" regardless, and the audit assertion inherited every false positive.
+
+This is **zero is only an anomaly relative to what was asked for** — a rule this
+project recorded and then broke in the check written after it. It is also DEL-1
+in a third form: **an alert that never arrives and an alert that always fires
+carry the same information, which is none.**
+
+**Fixed at the source, not at the reader.** `_scrape_fixtures_page` now records
+`_last_page_rows` — the rows the PAGE yielded, before the window filter — and the
+warning distinguishes three cases:
+
+| page rows | outcome |
+| --- | --- |
+| **0** — the page gave nothing | **WARNING** (a real anomaly) |
+| **> 0**, none in range | INFO — a quiet league |
+| **unknown** | **WARNING — fails closed** |
+
+The unknown case is deliberate: a check that assumes the benign case when it does
+not know is the failure this project keeps cataloguing. `_last_page_rows` is
+reset before each league so a previous league's count cannot silence this one.
+
+**Replay, with its limit stated.** The new pattern matches **0** cached logs —
+but that is a property of the text change, **not** evidence the check is quiet.
+The honest prediction from measurement: of the 21 leagues that warned, camoufox
+showed 110–120 page rows for the domestic ones and 0 only for UCL, so on a
+comparable day the count should fall from **21 to ~1**. **That is a prediction,
+and the next run tests it.**
+
+---
+
+**STAGE 20 — LOOP REPAIRED**, with the four registered measurements outstanding.
+
+`CODE_REVISION = s5.7`, `model_version = stage5_baseline_20260807.645bac`.
+855 tests pass; 26 experiment invariants pass.
+
+To be reported from the next run, and not asserted now:
+
+1. **fixture count per league**
+2. **the trailing set by name**, and whether it is stable
+3. **the identity gate's refusal count**, each classified
+4. **how many times `fixtures_zero_active` fires** — predicted ~1, was 21

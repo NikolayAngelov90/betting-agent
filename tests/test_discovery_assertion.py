@@ -21,7 +21,9 @@ from scripts.ci_audit import PATTERNS, assertions, extract
 
 ACTIVE_ZERO = ("2026-08-26 10:20:33 | WARNING | src.scrapers.flashscore_scraper:"
                "scrape_league_fixtures:687 - Flashscore returned 0 fixtures for "
-               "spain/laliga \u2014 expected \u22651 for active season")
+               "spain/laliga — the page yielded NO ROWS AT ALL, expected "
+               "≥1 for active season")
+
 NO_FIXTURES = ("2026-08-26 10:22:25 | INFO | __main__:get_daily_picks:1435 - "
                "No fixtures found for 2026-08-26")
 GOOD_DAY = ("2026-05-30 09:31:02 | INFO | src.scrapers.flashscore_scraper:"

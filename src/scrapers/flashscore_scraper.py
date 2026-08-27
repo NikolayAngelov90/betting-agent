@@ -74,6 +74,11 @@ logger = get_logger()
 
 FLASHSCORE_BASE_URL = "https://www.flashscore.com"
 
+#: How long to wait for a fixtures page to render before giving up. One
+#: definition, used by both the initial attempt and the retry. See the comment
+#: at the first call site for the measurement behind the value.
+FIXTURES_WAIT_S = 20
+
 # Statistics that are useful for our betting models, mapped from the
 # Flashscore label (lowercased) to Match model column names.
 STAT_MAP = {
@@ -677,6 +682,9 @@ class FlashscoreScraper(BaseScraper):
         url = f"{FLASHSCORE_BASE_URL}/football/{league}/fixtures/"
         logger.info(f"Scraping fixtures: {league}")
 
+        # Reset before the call: a stale count from the previous league would
+        # silence this league's alarm using another league's evidence.
+        self._last_page_rows = None
         loop = asyncio.get_event_loop()
         matches = await loop.run_in_executor(None, self._scrape_fixtures_page, url)
 
@@ -685,12 +693,34 @@ class FlashscoreScraper(BaseScraper):
             for match_data in matches:
                 self._save_match(session, match_data, league, is_fixture=True)
 
-        if not matches:
+        # STAGE 20 Part C. ZERO IS ONLY AN ANOMALY RELATIVE TO WHAT WAS ASKED
+        # FOR — a rule this project recorded and then broke in the very check
+        # written after it. The scrape asks for fixtures within
+        # `max_days_ahead` days; a league with none inside that window is a
+        # quiet league, not a broken one. On 2026-08-27 this warning fired for
+        # 21 leagues that were all simply quiet, and the audit assertion built
+        # on it inherited every false positive.
+        #
+        # An alert that never arrives and an alert that always fires carry the
+        # same amount of information: none.
+        # UNKNOWN row count FAILS CLOSED. `page_rows is None` means the page
+        # count was never recorded, so we cannot claim the league is merely
+        # quiet — and a check that assumes the benign case when it does not
+        # know is the whole failure this project keeps cataloguing. Only a
+        # POSITIVE, KNOWN row count suppresses the warning.
+        page_rows = getattr(self, "_last_page_rows", None)
+        if not matches and not page_rows:
             off_season = set(self.config.get("scraping.off_season_leagues", []))
             if league not in off_season:
                 logger.warning(
-                    f"Flashscore returned 0 fixtures for {league} — expected ≥1 for active season"
+                    f"Flashscore returned 0 fixtures for {league} — the page "
+                    f"yielded NO ROWS AT ALL, expected ≥1 for active season"
                 )
+        elif not matches:
+            logger.info(
+                f"Flashscore: {league} has no fixtures within the requested "
+                f"window ({page_rows} row(s) on the page, none in range)"
+            )
         logger.info(f"Scraped {len(matches)} fixtures from {league}")
         return matches
 
@@ -817,7 +847,23 @@ class FlashscoreScraper(BaseScraper):
 
         try:
             driver.get(url)
-            WebDriverWait(driver, 45).until(
+            # STAGE 20 Part B. 45s -> FIXTURES_WAIT_S.
+            #
+            # MEASURED on run 33075828280 (2026-08-27): the fixtures loop spent
+            # 285.7s of its 301.7s budget on leagues that returned ZERO fixtures
+            # — 95%. europe/champions-league alone cost 90.2s against a 9.6s
+            # mean for every other league, a 9.4x outlier, because two 45s waits
+            # timed out back to back. Seven leagues were never reached, and two
+            # of them carried 34 of the day's 36 fixtures.
+            #
+            # The page is NOT the problem: loaded directly it returns 144
+            # `.event__match` rows in ~5s. A 45s wait that fails where a 5s load
+            # succeeds is not measuring page speed, so waiting longer buys
+            # nothing — it only spends budget the trailing leagues need.
+            #
+            # Every league that DID return rows completed in 7.2-16.0s end to
+            # end, so 20s leaves margin over the slowest observed success.
+            WebDriverWait(driver, FIXTURES_WAIT_S).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
             )
             self._click_load_more(driver)
@@ -830,6 +876,12 @@ class FlashscoreScraper(BaseScraper):
                 match_elements = driver.find_elements(By.CLASS_NAME, "event__match")
 
             cutoff = datetime.now() + timedelta(days=max_days_ahead)
+            # STAGE 20 Part C. Rows the PAGE yielded, before the window filter.
+            # "the page gave us nothing" and "the page gave us fixtures, none
+            # inside the window we asked for" are different facts, and the
+            # warning below used to report them identically — 21 times on a
+            # normal day, every one a false positive.
+            self._last_page_rows = len(match_elements)
             for el in match_elements:
                 try:
                     match_data = self._parse_fixture_element(el)
@@ -847,7 +899,7 @@ class FlashscoreScraper(BaseScraper):
                 driver2 = self._get_driver()
                 if driver2:
                     driver2.get(url)
-                    WebDriverWait(driver2, 45).until(
+                    WebDriverWait(driver2, FIXTURES_WAIT_S).until(
                         EC.presence_of_element_located((By.CLASS_NAME, "event__match"))
                     )
                     cutoff = datetime.now() + timedelta(days=max_days_ahead)

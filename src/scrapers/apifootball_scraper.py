@@ -36,6 +36,19 @@ API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 # Map API-Football team names to our historical database names.
 # API-Football often uses full official names while football-data.co.uk uses short names.
 TEAM_NAME_ALIASES: Dict[str, str] = {
+    # ── Stage 20 Part A. The ONLY alias that was genuinely missing.
+    # VERIFIED against the provider (GET /teams?id=3502), not recalled:
+    # "FC Iberia 1999" is Georgia, Tbilisi, founded 1999; the stored row
+    # "Saburtalo" is a Tbilisi club founded 1999 and the provider kept the same
+    # team id across the rename. Same club, zero shared tokens — the residual
+    # class no lexical test can reach, which is why this table exists.
+    "FC Iberia 1999": "Saburtalo",
+    "Iberia 1999": "Saburtalo",
+    # NOT added, deliberately: "Maccabi Tel Aviv" -> "Telstar". Provider id 604
+    # is Maccabi Tel Aviv, Israel, founded 1906; the stored row is a Dutch
+    # Eredivisie club. Two different clubs, and that refusal was CORRECT.
+    # An alias that admits an impostor is worse than the false positive it fixes.
+
     # England
     "Bayer Leverkusen": "Leverkusen",
     "Borussia Dortmund": "Dortmund",
@@ -415,6 +428,12 @@ BET_TYPE_MAP = {
 _NOT_A_COUNTRY = {None, "", "world", "europe", "other", "international"}
 
 
+#: Case-insensitive index of TEAM_NAME_ALIASES, built once. Kept beside the
+#: table it indexes so a new entry cannot be added to one and missed by the
+#: other — the failure this project has now catalogued seven times.
+_ALIAS_LOWER = {k.strip().lower(): v for k, v in TEAM_NAME_ALIASES.items()}
+
+
 def is_a_real_country(value) -> bool:
     return bool(value) and str(value).strip().lower() not in _NOT_A_COUNTRY
 
@@ -467,7 +486,22 @@ def names_share_an_anchor(a: str, b: str) -> bool:
     field, which the fixture payload carries but this call site does not yet
     receive.
     """
-    return bool(_name_anchors(a) & _name_anchors(b))
+    # Stage 20 Part A. Canonicalise through the CURATED alias table before
+    # computing anchors. This adds KNOWLEDGE, not tolerance: the rule below is
+    # untouched — still "refuse only when two names share no lexical anchor at
+    # all" — with no ratio, no threshold and no widened band. What changes is
+    # that a name the project has explicitly recorded as an alias of another is
+    # compared under its recorded form.
+    #
+    # The residual class this closes is a legitimate pair with ZERO shared
+    # tokens, which no lexical test can reach by construction. "Athletic Club"
+    # / "Ath Bilbao" and "FC Iberia 1999" / "Saburtalo" were both live false
+    # positives on 2026-08-27; "Maccabi Tel Aviv" / "Telstar" has no alias and
+    # therefore still fails, which is the point.
+    def _aliased(n: str) -> str:
+        return _ALIAS_LOWER.get(str(n).strip().lower(), n)
+
+    return bool(_name_anchors(_aliased(a)) & _name_anchors(_aliased(b)))
 
 
 class APIFootballScraper(BaseScraper):

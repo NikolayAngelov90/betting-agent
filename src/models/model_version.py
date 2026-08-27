@@ -306,7 +306,49 @@ TRACKED_KEYS: List[str] = [
 #:       rather than opening s5.7. These three are NOT collapsed retroactively —
 #:       they are pushed, and history is not rewritten. Verified at commit time
 #:       via `scripts/cohort_status.py`: 0 picks at `...60caed` of 1,338 total.
-CODE_REVISION = "s5.6"
+#: s5.7  Stage 20 (2026-08-27). ONE bump covering both selection-affecting
+#:       changes, per the amend-or-bump rule: `cohort_status.py` reported
+#:       s5.6 carrying 34 picks, so BUMP rather than amend.
+#:
+#:       1. IDENTITY GATE — one alias added, and it was the ONLY one missing.
+#:          The gate fired 3 times on its first day with a working
+#:          API-Football account. Classified against the provider
+#:          (GET /teams?id=), not from recollection:
+#:            · 604  Maccabi Tel Aviv (Israel, 1906) vs stored "Telstar"
+#:              (Netherlands) — CORRECT refusal, left refused.
+#:            · 531  Athletic Club (Spain, Bilbao, code BIL) vs "Ath Bilbao"
+#:              — FALSE POSITIVE. It cost Barcelona vs Ath Bilbao, one of the
+#:              two fixtures Stage 19 predicted; it survived only because
+#:              Flashscore found it independently.
+#:            · 3502 FC Iberia 1999 (Georgia, Tbilisi, 1999) vs "Saburtalo"
+#:              (Tbilisi, 1999) — FALSE POSITIVE, a rename.
+#:
+#:          THE KNOWLEDGE FOR THE ATHLETIC CASE ALREADY EXISTED.
+#:          `TEAM_NAME_ALIASES["Athletic Club"] = "Ath Bilbao"` was already in
+#:          the tree and simply unreachable: it is consulted at step 2 of
+#:          `_get_or_create_team_id`, while the gate refuses at step 0. So the
+#:          fix is to canonicalise through that table BEFORE the anchor test,
+#:          and only "FC Iberia 1999" was genuinely new.
+#:
+#:          The anchor rule itself is UNCHANGED — no ratio, no threshold, no
+#:          widened country band. Knowledge, not tolerance.
+#:
+#:       2. FIXTURES WAIT 45s -> 20s (`FIXTURES_WAIT_S`), both call sites.
+#:          MEASURED on run 33075828280: 285.7s of a 301.7s budget — 95% —
+#:          went to leagues returning ZERO fixtures, and champions-league alone
+#:          cost 90.2s against a 9.6s mean, from two 45s waits timing out. The
+#:          page is not at fault: loaded directly it returns 144 rows in ~5s.
+#:
+#:       MEASURED EFFECT ON THE DISCOVERED-FIXTURE POPULATION, stated so a
+#:       later reader does not attribute a cohort difference to guesswork:
+#:         · the alias admits fixtures that were previously skipped whenever
+#:           API-Football names Athletic Club or FC Iberia 1999 — 2 of 36
+#:           fixtures on 2026-08-27 (5.6%), both otherwise recoverable only if
+#:           another source happened to see them.
+#:         · the timeout frees ~50-70s per run, reaching ~5-7 more leagues of
+#:           the 7 that were never attempted. Whether that is sufficient is
+#:           NOT asserted — it is the next run's measurement.
+CODE_REVISION = "s5.7"
 
 
 def _stable(value: Any) -> Any:

@@ -150,7 +150,12 @@ PATTERNS = {
     # Keyed on the scraper's OWN warning, which already excludes
     # `off_season_leagues` — so a genuinely dormant league does not fire it, and
     # the assertion needs no threshold of its own to get wrong.
-    "fixtures_zero_active": r"returned 0 fixtures for \S+ . expected .1 for active season",
+    # STAGE 20 Part C. Anchored on "NO ROWS AT ALL", which the scraper now
+    # emits only when the PAGE yielded nothing — not when a league simply has
+    # no fixtures inside the window it was queried for. The old pattern fired
+    # 21 times on 2026-08-27, all false positives, which is how a check gets
+    # ignored.
+    "fixtures_zero_active": r"returned 0 fixtures for \S+ . the page yielded NO ROWS AT ALL, expected .1 for active season",
     "no_fixtures_at_all": r"No fixtures found for \d{4}-\d{2}-\d{2}",
     "fixtures_scraped": r"Scraped (\d+) fixtures from",
     # PER-SOURCE discovery. The aggregate assertion shipped earlier in Stage 19
