@@ -439,7 +439,11 @@ class FootballBettingAgent:
             )
 
         _RESULTS_BUDGET_S = 1500  # 25 minutes for results (~60s/league, covers all 27 leagues)
-        _FIXTURES_BUDGET_S = 300  # 5 minutes for fixtures (only leagues with today's matches)
+        # 5 minutes for fixtures. Stage 19 removed the `_important` filter, so
+        # this deadline is now the ONLY bound on the loop — priority leagues run
+        # first and the rest are cut off here. Measured 2026-08-26: ~12s/league,
+        # so ~25 of 30 are reached; `spain/laliga` is 2nd in config order.
+        _FIXTURES_BUDGET_S = 300
 
         # Skip leagues that were already scraped by settle_predictions() within
         # this CI run. Uses _scraped_leagues (set explicitly during settle) +
@@ -540,10 +544,26 @@ class FootballBettingAgent:
             self.config.get("scraping.flashscore_skip_fixtures_leagues", [])
         )
         _fs_skip_fixtures = _fs_skip | _fs_skip_fixtures_only
+        # STAGE 19. This used to read `if l in _important`, which is CIRCULAR:
+        # `_important` is `_today_leagues | _pending_leagues`, and
+        # `_today_leagues` can only be populated by a fixture scrape. A league
+        # therefore qualified for fixture scraping only if it was ALREADY known
+        # to have fixtures — so once discovery stopped, the set could only
+        # shrink, and it did: 12 leagues on 2026-08-10, 3 on 2026-08-26.
+        #
+        # MEASURED 2026-08-27: `_today_leagues` was EMPTY and `_important` held
+        # exactly {europe/champions-league, portugal/primeira-liga} — both from
+        # unsettled picks. `spain/laliga` was NOT in it, on a day it has two
+        # fixtures, so it would not have been attempted at all.
+        #
+        # `_ordered_leagues` is already `_priority + _rest`, so the important
+        # leagues are still scraped FIRST. The `_FIXTURES_BUDGET_S` deadline
+        # below already bounds the work — the same guard the results loop
+        # relies on, which has always iterated every league. This makes the two
+        # paths symmetric instead of one silently narrower than the other.
         _fixture_leagues = [
             l for l in _ordered_leagues
-            if l in _important  # has today's fixtures or pending picks
-            and l not in _fs_skip_fixtures
+            if l not in _fs_skip_fixtures
         ]
         _skipped_fixture_leagues = len(_ordered_leagues) - len(_fixture_leagues)
         if _fs_skip_fixtures:

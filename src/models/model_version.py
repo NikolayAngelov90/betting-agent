@@ -253,7 +253,34 @@ TRACKED_KEYS: List[str] = [
 #:       status was TRANSIENT and had already resolved. **The discovery floor
 #:       does not move.** This is insurance against a recurrence, not a gain,
 #:       and it is recorded that way so nobody later credits it with fixtures.
-CODE_REVISION = "s5.5"
+#: s5.6  Stage 19 (2026-08-27). The fixture-league CIRCULARITY removed, so
+#:       Flashscore is attempted for every configured league rather than only
+#:       for leagues already known to have fixtures.
+#:
+#:       WHY THIS COULD NOT WAIT FOR THE RUN. MEASURED 2026-08-27, against
+#:       production state rather than in principle: `_today_leagues` was EMPTY
+#:       and `_important` held exactly {europe/champions-league,
+#:       portugal/primeira-liga}, both from unsettled picks. `spain/laliga` was
+#:       in NEITHER — on a day it has two fixtures. The pre-registered test
+#:       would have returned UNTESTED: the instrument would not have run.
+#:
+#:       The set could only shrink, because membership required a fixture that
+#:       only a fixture scrape could create: 12 leagues on 2026-08-10, 3 on
+#:       2026-08-26, and spain/laliga absent by 08-27.
+#:
+#:       `_FIXTURES_BUDGET_S = 300` is now the only bound, which is what the
+#:       results loop has always relied on — the two paths are symmetric
+#:       instead of one being silently narrower.
+#:
+#:       THIRD EMPTY COHORT IN A DAY, and that is worth saying rather than
+#:       hiding: s5.4, s5.5 and s5.6 each carry ZERO saved picks, because no
+#:       daily-picks run has fired since s5.3. The bump rule is being applied
+#:       literally to changes landing faster than a cohort can gain members.
+#:       Every split so far has been forced (each predecessor was already
+#:       pushed) and every one has been costless. If more pre-run changes land,
+#:       collapsing them into a single declared boundary once discovery is
+#:       PROVEN would carry more information than this sequence does.
+CODE_REVISION = "s5.6"
 
 
 def _stable(value: Any) -> Any:

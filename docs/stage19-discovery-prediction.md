@@ -155,3 +155,67 @@ the repair failed, and the outcomes above should be read with that settled:
   and remains the one result that would prove nothing either way.
 
 *Addendum committed before the run, 2026-08-27.*
+
+---
+
+## PRECONDITION CHECKED — and it was failing, so it was fixed
+
+*Checked before the run rather than registered as a risk. It was not remote: it
+was the actual state.*
+
+### What `_important` is, exactly
+
+```python
+_today_leagues  = leagues with Match.is_fixture == True AND match_date within TODAY
+_pending_leagues = leagues with any SavedPick whose result IS NULL
+_important      = _today_leagues | _pending_leagues
+```
+
+`_today_leagues` has a **one-day window** and can only be filled by a fixture
+scrape. `_pending_leagues` has **no window** but drains as picks settle.
+
+### Evaluated against production, 2026-08-27
+
+| | |
+| --- | --- |
+| `_today_leagues` | **0 leagues** — no `is_fixture=True` row exists for today |
+| `_pending_leagues` | **2** — `europe/champions-league`, `portugal/primeira-liga` |
+| **`spain/laliga` in `_important`** | **NO**, by neither path |
+
+**The prediction's outcome would have been `UNTESTED`.** Flashscore would have
+been asked for two leagues — one that returns zero rows even under camoufox, and
+one with no fixtures today — and never for the league carrying the two fixtures
+the whole test rests on.
+
+### What would have put it back, and why that was not good enough
+
+`sync_fixtures` (`betting_agent.py:418`) runs **before** `_important` is computed
+(`:458–492`), and `_ensure_fixture` creates rows with `is_fixture=True`
+(`footballdataorg_scraper.py:705`). So football-data.org adding the two LaLiga
+fixtures **would** have pulled `spain/laliga` into `_today_leagues` in time.
+
+**That is a rescue, not a guarantee, and it depends on the exact source that
+failed yesterday.** An instrument whose availability is conditional on the thing
+it is measuring is not an instrument.
+
+### Fixed: the circularity is removed (`s5.6`)
+
+`_fixture_leagues` no longer filters on `_important`. Every configured league is
+attempted, priority leagues first, bounded by the existing
+`_FIXTURES_BUDGET_S = 300` — the same guard the **results** loop has always used
+while iterating all 30 leagues. The two paths are now symmetric instead of one
+being silently narrower than the other.
+
+`spain/laliga` is **2nd in config order**, so at the measured ~12s/league it is
+reached within the first minute.
+
+### The precondition now reads
+
+> **`spain/laliga` WILL be attempted for fixtures, unconditionally, regardless of
+> what football-data.org does.**
+
+Which means `UNTESTED` is off the table, and **tomorrow's zero means exactly one
+thing: the repair failed.** That is the position this stage has been working
+toward, and it is now reached rather than hoped for.
+
+*Precondition checked and fixed before the run, 2026-08-27.*
