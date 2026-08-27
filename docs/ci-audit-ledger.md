@@ -4170,3 +4170,73 @@ against the real card, and the next scheduled run has not happened. **The honest
 status is DISCOVERY REPAIRED, PENDING PROOF**, and the proof is tomorrow's run:
 if `spain/laliga` and the other 29 leagues return non-zero fixture counts and the
 per-source assertion stays silent, it is restored.
+
+---
+
+# STAGE 19 ITEM 2a — the silent drop removed, and s5.5 forced not chosen
+
+## The cohort split was forced
+
+`ac8bedb` was **already pushed** to the public remote when this landed
+(`git ls-remote origin HEAD` = `ac8bedb…`), and rewriting a pushed commit is the
+history rewrite this project has refused twice. So `s5.5`, not a second entry in
+`s5.4`.
+
+**It is materially costless, and that is measurable rather than asserted:** no
+prediction was ever stamped `s5.4`. `saved_picks.model_version` holds
+`…098437` (18 picks, s5.3), `…485823` (246), and NULL (1,074) — **zero rows
+carry `…0976b8`**. The split separates an empty cohort from an empty one.
+
+## The fix
+
+`status` no longer answers "has this been played". `utcDate` does, because it is
+verifiable rather than guessed. `status` stays authoritative only for what a
+date cannot express — `POSTPONED`, `CANCELLED`, `SUSPENDED`, `AWARDED`.
+
+- unrecognised status + **future** kickoff → **ADMIT**, log a warning naming the
+  raw status
+- unrecognised status + past kickoff → skip (ordinary, already played)
+- unrecognised status + **unparseable** `utcDate` → **REFUSE**, log — when
+  neither field can answer, nothing is assumed
+- **never a bare `continue`**
+
+Counters `_status_refusals` / `_status_recovered` so a run summary can report it:
+a silent recovery is only marginally better than a silent drop.
+
+## MEASURED EFFECT — and it is zero, which is the honest headline
+
+Sampled 11 days (3 back, 7 ahead) on 2026-08-27, mapped competitions only:
+
+```
+102 matches   statuses: {FINISHED: 8, TIMED: 94}
+admitted by the OLD filter : 94
+admitted by the NEW filter : 94
+recovered                  : 0
+```
+
+**The malformed status was TRANSIENT and had already resolved.** The repaired
+filter admits exactly the same fixtures. **The discovery floor does not move.**
+
+Recorded that way deliberately: this change is *insurance against a recurrence*,
+not a gain, and a later reader must not credit it with fixtures it did not find.
+What it removes is the **silence** — the next occurrence will be a logged
+warning instead of a fixture that was never mentioned.
+
+## A blocker asserted from a failed lookup is a claim about the lookup
+
+Added to the guard-design notes beside the stale docstring.
+
+I reported Part C blocked because `FOOTBALL_DATA_ORG_KEY` was "absent locally".
+It was in `.env` at line 12. I had searched for `FOOTBALL_DATA_API_KEY` and
+`FOOTBALLDATA_API_KEY` — neither of which is the name the code reads, which is
+visible in `footballdataorg_scraper.py:290`.
+
+**Both of this stage's "blockers" were my own setup gaps**: the key was there
+under a name I did not search for, and camoufox was in `requirements.txt` at
+line 13 and installs in one command. Two of the highest-value threads in the
+stage were parked on claims about my own lookups.
+
+> **The rule: "X is not available" is a finding about the search, not about the
+> world, until the search itself has been checked.** It belongs with the stale
+> docstring, which was the same error in the other direction — trusting a
+> lookup that returned something wrong, rather than one that returned nothing.

@@ -227,7 +227,33 @@ TRACKED_KEYS: List[str] = [
 #:       fixture discovery on 2026-05-30 also made every results row's kickoff
 #:       unparseable, which is what manufactured the phantoms. Two symptoms,
 #:       88 days apart in visibility, one cause.
-CODE_REVISION = "s5.4"
+#: s5.5  Stage 19 item 2a (2026-08-27). ONE change, and the split from s5.4 was
+#:       FORCED, not chosen: ac8bedb was already pushed to the public remote
+#:       when this landed, and rewriting a pushed commit is the history rewrite
+#:       this project has refused twice. It is materially costless — NO
+#:       prediction was ever stamped s5.4 (`...0976b8` has zero rows in
+#:       saved_picks), so the split separates an empty cohort from an empty one.
+#:
+#:       football-data.org's fixture filter no longer reads `status` to answer
+#:       "has this been played". MEASURED 2026-08-26: a real LaLiga fixture
+#:       arrived with status='2026-08-26 19:00:00Z' — a timestamp where an enum
+#:       belongs — while a call minutes earlier returned 'TIMED'. The field
+#:       FLAPS, and a bare `continue` removed the fixture with no log line.
+#:
+#:       `utcDate` now decides scheduled-versus-played, because it is
+#:       verifiable rather than guessed. `status` stays authoritative only for
+#:       what a date cannot express — POSTPONED, CANCELLED, SUSPENDED, AWARDED.
+#:       An unrecognised status on a future kickoff ADMITS the fixture and logs
+#:       a warning; when neither field can answer, it REFUSES and logs. Never a
+#:       silent continue.
+#:
+#:       MEASURED EFFECT: over 11 days sampled 2026-08-27 (3 back, 7 ahead),
+#:       102 matches in mapped competitions returned {FINISHED: 8, TIMED: 94}
+#:       and the repaired filter admits exactly the same 94. The malformed
+#:       status was TRANSIENT and had already resolved. **The discovery floor
+#:       does not move.** This is insurance against a recurrence, not a gain,
+#:       and it is recorded that way so nobody later credits it with fixtures.
+CODE_REVISION = "s5.5"
 
 
 def _stable(value: Any) -> Any:

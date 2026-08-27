@@ -30,6 +30,31 @@ logger = get_logger()
 BASE_URL = "https://api.football-data.org/v4"
 
 # football-data.org competition code → our internal league key
+#: Statuses that mean "will not be played as listed". Only `status` can express
+#: these — a kickoff time cannot — so it stays authoritative for exactly this.
+_STATUS_NOT_PLAYABLE = frozenset({"POSTPONED", "CANCELLED", "SUSPENDED", "AWARDED"})
+#: Statuses that mean "not yet played". Anything outside both sets is decided by
+#: `utcDate`, never by guessing what the status meant.
+_STATUS_UPCOMING = frozenset({"SCHEDULED", "TIMED"})
+
+
+def _kickoff_in_future(utc_str: str):
+    """True/False if `utcDate` parses, None if it does not.
+
+    None is a real answer here: when neither the status nor the date can say
+    whether a match has been played, the fixture is REFUSED and logged rather
+    than assumed either way.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        dt = _dt.fromisoformat((utc_str or "").replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    return dt > _dt.now(_tz.utc)
+
+
 COMPETITION_MAP: Dict[str, str] = {
     "PL":  "england/premier-league",
     "ELC": "england/championship",
@@ -291,6 +316,10 @@ class FootballDataOrgScraper:
             or (config or {}).get("data_sources", {}).get("footballdataorg_key", "")
         )
         self.enabled = bool(self.api_key)
+        # Stage 19: counted so a run summary can report them. A silent recovery
+        # is only marginally better than a silent drop.
+        self._status_refusals = 0
+        self._status_recovered = 0
         self.db = get_db()
         self._last_call_at = 0.0
 
@@ -522,10 +551,53 @@ class FootballDataOrgScraper:
             target = date.today() + timedelta(days=i)
             matches = await self.fetch_matches(target)
             for m in matches:
-                if m.get("status") not in ("SCHEDULED", "TIMED"):
-                    continue
                 comp_code = m.get("competition", {}).get("code", "")
                 league = COMPETITION_MAP.get(comp_code)
+                status = m.get("status")
+                _utc = m.get("utcDate", "")
+
+                # STAGE 19 item 2a. `status` used to answer "has this match
+                # happened yet", and the provider does not reliably supply it:
+                # MEASURED 2026-08-26, a LaLiga fixture arrived with
+                # status='2026-08-26 19:00:00Z' — a timestamp where an enum
+                # belongs — and a call minutes earlier returned 'TIMED'. The
+                # field FLAPS. A bare `continue` then removed a real fixture
+                # with no log line at all: a silent drop that makes a failure
+                # look like an empty result.
+                #
+                # `utcDate` answers scheduled-versus-played and is VERIFIABLE
+                # rather than guessed, so it decides. `status` stays advisory
+                # for the distinctions only it can make.
+                if status in _STATUS_NOT_PLAYABLE:
+                    if league:
+                        logger.info(
+                            f"football-data.org: skipping {league} fixture "
+                            f"{(m.get('homeTeam') or {}).get('name')} vs "
+                            f"{(m.get('awayTeam') or {}).get('name')} — "
+                            f"status={status!r}")
+                    continue
+
+                if status not in _STATUS_UPCOMING:
+                    _future = _kickoff_in_future(_utc)
+                    if _future is None:
+                        self._status_refusals += 1
+                        logger.warning(
+                            f"football-data.org: REFUSING {comp_code} fixture — "
+                            f"status={status!r} is unrecognised AND utcDate="
+                            f"{_utc!r} will not parse, so neither field can say "
+                            "whether it has been played")
+                        continue
+                    if not _future:
+                        continue          # already played; ordinary, not a defect
+                    # Kickoff is in the future: the date says unplayed, so the
+                    # fixture is admitted despite the unusable status.
+                    self._status_recovered += 1
+                    logger.warning(
+                        f"football-data.org: ADMITTING {comp_code} fixture on "
+                        f"utcDate={_utc!r} despite status={status!r} — the "
+                        "status field is unusable and the kickoff is in the "
+                        "future. Provider data defect, not ours.")
+
                 if not league:
                     continue
                 home_raw = (m.get("homeTeam") or {}).get("name") or ""
