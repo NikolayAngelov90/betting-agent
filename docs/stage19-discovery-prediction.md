@@ -87,3 +87,71 @@ thing to fix.
 ---
 
 *Committed before the run. Stage 19, 2026-08-27.*
+
+---
+
+## ADDENDUM — the measurement instrument, identified before the run
+
+*A registered prediction whose instrument is unidentified is only half
+registered. This resolves it, and it INVERTS the risk registered above.*
+
+### Which browser fetches `/fixtures/`
+
+**Chrome/Selenium under Xvfb. Not camoufox.**
+
+`_scrape_fixtures_page` (flashscore_scraper.py:813) calls `self._get_driver()`,
+which is the Selenium path (`:122`), and the 2026-08-26 log carries its own
+signature: `_get_driver:163 - Xvfb detected — running Chrome in headed mode
+(Cloudflare bypass)`. Camoufox (`_cf_browser`, `:290`) serves other paths.
+
+So my reproduction used a **different browser** from CI, exactly as feared.
+
+### But the log settles what the reproduction could not — and in the good direction
+
+`_scrape_fixtures_page` wraps its fetch in `try/except`, and on any failure logs
+`Fixtures page failed (<Type>) for <url> — retrying once`.
+
+**That warning appears ZERO times in the 2026-08-26 log.** No exception was
+raised, so the `WebDriverWait(driver, 45)` for `.event__match` **was satisfied**
+— and `spain/laliga` took **13.0s**, nowhere near a 45s timeout.
+
+> **CI's Chrome fetched and rendered the fixtures page successfully.
+> Bot detection is RULED OUT for the domestic leagues.**
+
+### Which means the zero has a complete, different explanation
+
+```python
+cutoff = datetime.now() + timedelta(days=1)        # computed BEFORE the loop
+...
+if match_data["match_date"] > cutoff: continue     # "skip far-future fixtures"
+```
+
+The old fixtures-path default was `datetime.now() + timedelta(days=1)`,
+evaluated **inside** the loop — microseconds later than `cutoff`. So
+`default > cutoff` is **True** (demonstrated: it is), and **every fixture whose
+kickoff failed to parse was silently skipped as "far-future".**
+
+**This corrects the Part B framing twice over:**
+
+1. The selector rename **alone would not have zeroed fixtures** — the
+   `.event__match` fallback at `:830` already existed and would have found the
+   rows. It took *both* halves of the 2026 redesign.
+2. The binding cause of `Scraped 0 fixtures` was **the date default colliding
+   with the far-future cutoff**, not the selector. The same broken parser
+   produced *phantoms* on the results path (default `now()`, no cutoff) and
+   *zeros* on the fixtures path (default `now()+1d`, cutoff). **One cause, two
+   opposite symptoms, which is why they never looked related.**
+
+### Consequence for tomorrow's declaration
+
+**The registered risk is withdrawn.** A zero tomorrow is **not** bot detection
+and **not** "unproven" — Chrome demonstrably reaches the page. A zero would mean
+the repair failed, and the outcomes above should be read with that settled:
+
+- `PARTIAL — football-data.org only` now carries a **stronger** implication than
+  written above: Flashscore reaching the page but still returning zero would
+  mean the parse or cutoff logic is still wrong, which is directly testable.
+- The `UNTESTED` outcome (spain/laliga never entering `_important`) is unchanged
+  and remains the one result that would prove nothing either way.
+
+*Addendum committed before the run, 2026-08-27.*
