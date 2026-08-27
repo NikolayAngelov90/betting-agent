@@ -5004,3 +5004,66 @@ AND ARE WRONG — which is worse than zero, and would not announce itself.**
 
 The same question applies to any other configured key whose URL redirects; that
 has not been enumerated and is not claimed to be enumerated.
+
+---
+
+# OPS-3 — SCHEDULED FIRINGS MISSED (open, watching)
+
+Recorded against the open entry from the Stage 19 verdict, where the missed
+09:37 `daily-picks` schedule was noted as unexplained.
+
+## 2026-08-27 — measured, not reported
+
+Both manual triggers are confirmed: `daily-picks` ran `workflow_dispatch` at
+13:14 and `paper-trading-report` at 17:50; neither has a `schedule` run today.
+
+**But the count is larger than two, and the "not repository-wide" reading does
+not survive the check.** Due-by-17:51 UTC against actual `schedule` runs:
+
+| workflow | cron(s) due today | due | fired | missed |
+| --- | --- | --- | --- | --- |
+| Daily Betting Picks | 09:37 | 1 | **0** | **1** |
+| Paper Trading Report | 10:47 | 1 | **0** | **1** |
+| **Closing Line Capture** | 10:47, 11:17, 13:17, 15:17, 17:17 | **5** | **1** | **4** |
+
+**6 of 7 due firings missed, across all three workflows.**
+
+**The one closing-lines run does not rescue it.** It fired at **04:30**, which
+matches **no closing-lines cron** — the schedule is `47 10` and `17 11,13,15,17,
+19,21,23`. The nearest preceding cron is **23:17 on 2026-08-26**, making it a
+firing **5h13m late**, inside the 0.5–5.7h GitHub scheduler delay already
+documented for this repository.
+
+> **On 2026-08-27, no cron has fired at its own hour for any workflow.** The
+> last scheduled firing that landed near its slot was **2026-08-26 22:11** (the
+> 21:17 cron, 54 minutes late).
+
+**So the pattern is repository-wide, not confined to two workflows.** It reads
+as one scheduler affecting every workflow in the repository rather than
+something specific to `daily-picks` and `paper-trading-report` — which is a
+different hypothesis, and a broader one.
+
+## Why it is being watched rather than investigated
+
+One miss is GitHub's queue. **Six on one day, across three workflows and seven
+distinct clock hours, is a pattern** — but this repository has a *documented*
+0.5–5.7h delay distribution, and every one of today's misses is still inside a
+window where a very late firing could arrive. **A missed cron and a cron delayed
+past the next audit are indistinguishable at the moment of looking**, which is
+exactly why this is a watch and not yet a finding.
+
+**Escalation criterion, fixed now so it is not adjusted later:**
+
+> **If 2026-08-28 also produces no on-time scheduled firing for any workflow, it
+> stops being load and becomes something to investigate.** Two consecutive days
+> of repository-wide silence is outside anything this repository has recorded.
+
+**What to check when that happens, recorded so the investigation starts from a
+list rather than from scratch:** GitHub's own incident history for Actions; the
+60-day inactivity auto-disable for scheduled workflows (the repository has been
+pushed to repeatedly today, so this is unlikely but is cheap to exclude);
+whether the crons still parse after the Stage 20 edits — `closing-lines.yml`
+gained the `47 10` entry in Stage 15 and the file has been edited since; and
+whether the default branch is what the schedules run from.
+
+**Not investigated today. Recorded with the count corrected.**
