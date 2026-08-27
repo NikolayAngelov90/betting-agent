@@ -4240,3 +4240,149 @@ stage were parked on claims about my own lookups.
 > world, until the search itself has been checked.** It belongs with the stale
 > docstring, which was the same error in the other direction — trusting a
 > lookup that returned something wrong, rather than one that returned nothing.
+
+---
+
+# API-FOOTBALL REPLACEMENT ACCOUNT, and the four checks it made urgent
+
+**A working API-Football account changes what has to be proven.** With three
+sources alive, a non-zero fixture total proves nothing about any one of them —
+it reproduces exactly the condition that hid Flashscore's death for 88 days.
+Every check below is therefore **per source**, and the aggregate is treated as
+the number that lied.
+
+## OPS-2 — REPLACEMENT account, not a restoration
+
+**OPS-1 does not close.** The original account's suspension on 2026-08-19
+10:10:28 UTC remains true, is unappealed, and stays open in the record. What
+exists now is a **different account**, and the distinction matters because the
+cohort boundary and the provider's terms both attach to it.
+
+| | |
+| --- | --- |
+| new key SHA-256 (SEC-5 — value never recorded) | `d10280aa8a78c292b73bd8be0b6924275719929a4d952f08b9cd49181f318ad7` |
+| key length | 32 chars |
+| **previous** key SHA-256 (suspended, now commented out in `.env`) | `fc9d3c031298b88c…` (56 chars) |
+| **different credential** | **yes** — different fingerprint AND different length/format |
+| account created | **2026-08-27** (derived: `/status` reports `subscription.end = 2027-08-27`, a one-year free term) |
+| plan / state | `Free`, `active=true`, **0 / 100 requests used** |
+| deployed to CI | GitHub secret `API_FOOTBALL_KEY` updated **2026-08-27T11:24:39Z** |
+| local | `.env.local` (gitignored, `.gitignore:50`) — **not** `.env`, whose `API_FOOTBALL_KEY` line is commented out and holds the OLD key |
+
+**ANTICIPATED, NOT MYSTERIOUS.** API-Football's published terms allow **one free
+account per user**. This is a second free account on the same project after the
+first was suspended. If it is swept, that is the rule being applied, **not a new
+incident** — recorded now so the event reads as anticipated. The 56→32 character
+format change also suggests a different registration route from the original,
+which is worth knowing if the sweep ever needs explaining.
+
+## Data-minimisation review — one real finding, removed
+
+Enumerated every header, parameter and body this codebase sends to the three
+providers.
+
+| provider | transport | credential | other headers | parameters |
+| --- | --- | --- | --- | --- |
+| API-Football | aiohttp via `BaseScraper.fetch_json` | `x-apisports-key` header | **was: a spoofed `Chrome/120.0.0.0 Windows NT 10.0` User-Agent** | endpoint-specific only (`date`, `league`, `season`, `fixture`) |
+| football-data.org | httpx, direct | `X-Auth-Token` header | httpx defaults only (`accept`, `accept-encoding`, `connection`, `user-agent: python-httpx/x.y`) | `date` only |
+| The Odds API | aiohttp via `_get_session` | `apiKey` **query parameter** (provider's documented design, not our choice) | same spoofed UA | `regions=eu`, `markets=h2h,totals`, `oddsFormat=decimal`, `dateFormat=iso` |
+
+**The expected finding was NOT confirmed, and that is why it was checked.**
+API-Football did not receive "one header and nothing else": `_get_session()` set
+a session-level **spoofed Chrome User-Agent** that aiohttp merged into every
+request.
+
+Its only two consumers are API-Football and The Odds API — **both JSON APIs that
+authenticate by key**. Flashscore uses Selenium/camoufox and never this session,
+so the browser string served **no anti-blocking purpose**. It was a fabricated
+client identity transmitted where none is needed or asked for. **Removed**;
+aiohttp's own default now stands, which names the library and nothing about the
+machine, the account or the repository.
+
+**Second finding, smaller and exactly the named case:** `weather_service.py` sent
+`User-Agent: betting-agent/1.0` to Open-Meteo at two sites — **a repository name
+in a User-Agent**. Removed.
+
+**Nothing else leaves the system.** No email, no hostname, no machine
+identifier, no account data, no debug field, in any header, parameter or body to
+any of the three providers. Recorded plainly so the question does not need
+asking again.
+
+## Per-source counts are now structural
+
+`scripts/ci_audit.py` prints `disc[fs=N fdo=N af=N]` on **every** row of a
+workflow that attempts discovery — verdict or not — and it belongs in the ledger
+note. Verified on a real row:
+
+```
+32835286636 daily-picks 2026-08-25 DEGRADED  disc[fs=0 fdo=1 af=0]  5 active-season league(s) returned 0 fixtures…
+```
+
+That one string says what three months of aggregates did not: **Flashscore and
+API-Football produced nothing while football-data.org produced one.**
+
+`-` and `0` are deliberately different: a source that did not report is not a
+source that reported nothing, and a `closing-lines` run shows no `disc[…]` at
+all rather than a misleading `fs=0`.
+
+## The per-source assertion, re-proven with a source restored
+
+It was proven by replay against 2026-05-31, when a source was dead. **All three
+may now be alive, which is the condition under which it must not go back to
+sleep** — so the condition was *injected* rather than waited for.
+
+| case | result |
+| --- | --- |
+| all three producing normal counts | **silent** |
+| Flashscore forced to 0, other two healthy | **fires, naming Flashscore** |
+| football-data.org forced to 0, other two healthy | **fires, naming football-data.org** |
+| API-Football forced to 0, other two healthy | **fires, naming API-Football** |
+| in each case, the two healthy sources | **not named** |
+
+The second row is the 2026-05-30 failure exactly, and a restored API-Football is
+precisely when it stops being hypothetical. **13 tests.**
+
+## Cross-source agreement — measured, NO threshold shipped
+
+Zero is the last symptom, not the first. A source quietly returning half its
+fixtures would be caught by nothing today.
+
+**Two-source baseline** (Flashscore vs football-data.org, 7 leagues × 7 days,
+2026-08-27 → 09-02):
+
+```
+league-days where either source saw a fixture : 26
+exact agreement                               : 26 / 26
+both non-zero but different                   : 0
+```
+
+**Three-source baseline** (adding API-Football, 2 days, 2 requests of 100):
+
+| league | date | FS | FDO | AF |
+| --- | --- | --- | --- | --- |
+| spain/laliga | 08-27 | 2 | 2 | 2 |
+| spain/laliga | 08-28 | 2 | 2 | 2 |
+| PL, SA, BL1, FL1, PPL, DED | 08-28 | 1 | 1 | 1 |
+
+**8 / 8 exact, three-way.**
+
+**No threshold is being shipped, and that is deliberate.** One week of one season
+is not a basis for one — the same discipline that made the settled-pick segment
+thresholds a finding rather than a feature. What the baseline establishes is that
+**exact agreement is the normal state on overlapping coverage**, which is a much
+stronger starting point than expecting noise. Before a check ships it needs:
+
+- **per-league, per-source-pair** treatment — coverage genuinely differs
+  (`europe/champions-league` is absent from *all three* this week, correctly)
+- enough days to see whether disagreement is ever legitimate (kickoff-date
+  boundaries near midnight UTC are the obvious candidate)
+- a decision on what a *single* day's disagreement means versus a sustained one
+
+Recorded as the baseline to compare against, not as a rule.
+
+## Champions League — an incidental confirmation
+
+`europe/champions-league` returns **0 fixtures from all three sources for every
+day 2026-08-27 → 09-02**. The prediction's clause that "UCL yields 0 and that is
+CORRECT" is therefore confirmed by two sources beyond the one it was written
+from. It is genuinely between rounds, not broken.

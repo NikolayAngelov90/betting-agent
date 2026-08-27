@@ -87,14 +87,18 @@ class BaseScraper(ABC):
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                )
-            }
-            self._session = aiohttp.ClientSession(headers=headers)
+            # STAGE 19 data-minimisation review. This session used to send a
+            # spoofed Chrome/120 Windows User-Agent. Its ONLY consumers are two
+            # JSON APIs that authenticate by key — API-Football (via
+            # fetch_json) and The Odds API (theodds_scraper:416). Flashscore
+            # uses Selenium/camoufox and never this session, so the browser
+            # string served no anti-blocking purpose: it was a fabricated
+            # client identity transmitted where none is needed or asked for.
+            #
+            # Sending no custom header leaves aiohttp's own default, which
+            # states the library and nothing about the machine, the account or
+            # the repository.
+            self._session = aiohttp.ClientSession()
         return self._session
 
     async def _rate_limit(self):

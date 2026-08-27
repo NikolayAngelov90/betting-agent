@@ -189,13 +189,19 @@ def extract(log: str) -> Dict[str, object]:
                 pass
     # Per-source: sum every occurrence (Flashscore logs one line per league),
     # count occurrences for API-Football (one line per fixture created).
-    f["src_flashscore_fixtures"] = sum(
-        int(x) for x in re.findall(PATTERNS["src_flashscore_fixtures"], log))
+    # Only set when the run ACTUALLY attempted fixture discovery. A
+    # closing-lines run does not scrape fixtures, and reporting `fs=0` there
+    # would conflate "did not report" with "reported nothing" — the exact
+    # distinction this summary exists to preserve.
+    if "Scraping fixtures:" in log or "fixtures from" in log:
+        f["src_flashscore_fixtures"] = sum(
+            int(x) for x in re.findall(PATTERNS["src_flashscore_fixtures"], log))
     _fdo = re.findall(PATTERNS["src_footballdataorg_fixtures"], log)
     if _fdo:
         f["src_footballdataorg_fixtures"] = sum(int(x) for x in _fdo)
-    f["src_apifootball_fixtures"] = len(
-        re.findall(PATTERNS["src_apifootball_fixtures"], log))
+    if "API-Football" in log:
+        f["src_apifootball_fixtures"] = len(
+            re.findall(PATTERNS["src_apifootball_fixtures"], log))
 
     _fx = re.findall(PATTERNS["fixtures_scraped"], log)
     if _fx:
@@ -314,6 +320,24 @@ def assertions(facts: Dict[str, object],
     return hits
 
 
+def discovery_summary(facts: Dict[str, object]) -> str:
+    """`disc[fs=N fdo=N af=N]` — per source, never an aggregate.
+
+    Printed on every daily-picks row and carried into the ledger note. The
+    total is the number that hid Flashscore's death from 2026-05-30 to
+    2026-08-26; only the per-source split makes a silent substitution visible.
+    Absent (rather than 0) is shown as `-`, because "did not report" and
+    "reported nothing" are different facts.
+    """
+    keys = (("fs", "src_flashscore_fixtures"),
+            ("fdo", "src_footballdataorg_fixtures"),
+            ("af", "src_apifootball_fixtures"))
+    if not any(k in facts for _, k in keys):
+        return ""
+    parts = [f"{label}={facts[k] if k in facts else '-'}" for label, k in keys]
+    return "disc[" + " ".join(parts) + "]"
+
+
 def verdict(facts: Dict[str, object], hits: List[str]) -> str:
     if facts.get("steps_failed") or facts.get("tracebacks"):
         return "BROKEN"
@@ -362,8 +386,14 @@ def main() -> int:
         hits = assertions(facts, by_wf[r["workflow"]])
         by_wf[r["workflow"]].append(facts)
         v = verdict(facts, hits)
+        # STAGE 19 item 2: per-source discovery figures are printed on EVERY
+        # daily-picks row, verdict or not, and belong in the ledger note.
+        # The AGGREGATE is the number that lied for three months: a healthy
+        # total hid a dead source for 88 days. A reader must not have to
+        # reconstruct which source produced what.
+        disc = discovery_summary(facts)
         print(f"{rid:<12} {r['workflow']:<14} {(r.get('startedAt') or '')[:16]:<17} "
-              f"{v:<10} {('; '.join(hits))[:60]}")
+              f"{v:<10} {((disc + '  ') if disc else '') + '; '.join(hits)}"[:170])
         for h in hits[1:]:
             print(f"{'':<56} {h[:60]}")
     return 0

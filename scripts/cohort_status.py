@@ -28,6 +28,20 @@ import sys
 
 
 def main() -> int:
+    # Loaded INSIDE main, never at import. A module-level load_dotenv() undoes
+    # conftest's DATABASE_URL strip and has previously let a test suite reach
+    # production — see tests/test_db_isolation.py and the ledger entry.
+    import os
+    import re
+    for path in (".env", ".env.local"):
+        try:
+            for line in open(path, encoding="utf-8"):
+                m = re.match(r"\s*([A-Z0-9_]+)\s*=\s*(.*)", line)
+                if m and not os.environ.get(m.group(1)):
+                    os.environ[m.group(1)] = m.group(2).strip().strip('"').strip("'")
+        except FileNotFoundError:
+            continue
+
     from src.data.database import get_db
     from src.data.models import SavedPick
     from src.models.model_version import CODE_REVISION, model_version

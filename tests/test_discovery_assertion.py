@@ -15,6 +15,7 @@ fires on nothing, so both directions are pinned here.
 """
 
 import re
+import pytest
 
 from scripts.ci_audit import PATTERNS, assertions, extract
 
@@ -125,3 +126,72 @@ def test_no_history_says_nothing():
     facts = extract(FLASHSCORE_DEAD_AF_ALIVE)
     facts["is_first_run_of_day"] = True
     assert not any("fixtures = 0" in h for h in assertions(facts, []))
+
+
+# Stage 19 item 3: with API-Football restored, ALL THREE sources may be alive.
+# That is precisely the condition under which the watch must not go back to
+# sleep -- it is the 2026-05-30 condition, when two healthy sources hid a third
+# that had died. Each source is forced to zero in turn, by injection, rather
+# than by waiting for it to happen.
+
+HEALTHY = {
+    "src_flashscore_fixtures": 11,
+    "src_footballdataorg_fixtures": 4,
+    "src_apifootball_fixtures": 6,
+}
+LINES = {
+    "src_flashscore_fixtures": "Scraped {n} fixtures from spain/laliga",
+    "src_footballdataorg_fixtures":
+        "football-data.org: 3 scores updated, {n} new fixtures added",
+    "src_apifootball_fixtures": "API-Football: creating new fixture A vs B",
+}
+LABELS = {
+    "src_flashscore_fixtures": "Flashscore fixtures",
+    "src_footballdataorg_fixtures": "football-data.org fixtures",
+    "src_apifootball_fixtures": "API-Football fixtures",
+}
+
+
+def _log_with(counts):
+    """Build a log in which each source reports the given count."""
+    out = []
+    for key, n in counts.items():
+        if key == "src_apifootball_fixtures":
+            out.extend([LINES[key].format(n=n)] * n)
+            if n == 0:
+                out.append("API-Football update complete (1 requests used)")
+        else:
+            out.append(LINES[key].format(n=n))
+    return chr(10).join(out)
+
+
+def test_all_three_alive_is_silent():
+    """The everyday case. Firing here would train people to ignore it."""
+    facts = extract(_log_with(HEALTHY))
+    facts["is_first_run_of_day"] = True
+    hits = assertions(facts, [dict(HEALTHY) for _ in range(3)])
+    assert not any("fixtures = 0" in h for h in hits), hits
+
+
+@pytest.mark.parametrize("dead", sorted(HEALTHY))
+def test_each_source_forced_to_zero_fires_while_the_others_are_healthy(dead):
+    """THE 88-DAY FAILURE, injected once per source.
+
+    On 2026-05-30 Flashscore died while API-Football and football-data.org
+    carried on. The aggregate stayed healthy and nothing alarmed for 88 days.
+    With API-Football restored, that exact configuration is live again.
+    """
+    counts = dict(HEALTHY)
+    counts[dead] = 0
+    facts = extract(_log_with(counts))
+    facts["is_first_run_of_day"] = True
+    hits = assertions(facts, [dict(HEALTHY) for _ in range(3)])
+
+    assert any(LABELS[dead] in h and "= 0" in h for h in hits), (
+        f"{LABELS[dead]} produced nothing while the other two produced "
+        f"normally, and the audit said nothing. That is the 88-day blindness.\n"
+        f"hits={hits}")
+    for other in HEALTHY:
+        if other != dead:
+            assert not any(LABELS[other] in h and "= 0" in h for h in hits), (
+                f"fired for {LABELS[other]}, which produced {counts[other]}")

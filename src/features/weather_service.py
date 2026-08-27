@@ -52,7 +52,7 @@ def _geocode(city: str, country_code: Optional[str] = None) -> Optional[Tuple[fl
         count = 3 if country_code else 1
         params = urllib.parse.urlencode({"name": city, "count": count, "format": "json"})
         url = f"{_GEOCODING_URL}?{params}"
-        req = urllib.request.Request(url, headers={"User-Agent": "betting-agent/1.0"})
+        req = urllib.request.Request(url, headers={})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
         results = data.get("results", [])
@@ -98,7 +98,7 @@ def _fetch_daily_weather(lat: float, lon: float, match_date: date) -> Dict:
             "format": "json",
         })
         url = f"{_FORECAST_URL}?{params}"
-        req = urllib.request.Request(url, headers={"User-Agent": "betting-agent/1.0"})
+        req = urllib.request.Request(url, headers={})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
 
