@@ -5067,3 +5067,146 @@ gained the `47 10` entry in Stage 15 and the file has been edited since; and
 whether the default branch is what the schedules run from.
 
 **Not investigated today. Recorded with the count corrected.**
+
+---
+
+# OPS-3 — CORRECTED. Nothing was missed; everything was ~10 hours late.
+
+**Read-only verification, 2026-08-28. No cron, concurrency setting or workflow
+was changed.**
+
+## The correction, first
+
+The OPS-3 entry above recorded **"6 of 7 due firings missed"** on 2026-08-27,
+assessed at 17:51 UTC that day. **Every one of them subsequently fired.**
+
+| workflow | cron | fired (schedule) | late by |
+| --- | --- | --- | --- |
+| Daily Betting Picks | 09:37 | **19:58** | **10h 21m** |
+| Paper Trading Report | 10:47 | **20:45** | **9h 58m** |
+| Closing Line Capture | 10:47 | **20:47** | **10h 00m** |
+
+**Nothing was missed. The delay envelope is ~10h21m — nearly double the 0.5–5.7h
+previously documented for this repository.**
+
+**The entry warned about exactly this failure and then committed it anyway.** It
+said: *"a missed cron and a cron delayed past the next audit are
+indistinguishable at the moment of looking, which is exactly why this is a watch
+and not yet a finding"* — and then tabulated a count of "missed". The word was
+wrong at the moment it was written, and the table read as evidence.
+
+## The three causes, separated
+
+### 1. Scheduler delay — CONFIRMED, and it is the only cause with evidence
+
+The envelope must be restated: **~10h21m observed**, against 5.7h previously
+recorded. Every 08-27 firing arrived; none was lost to this cause.
+
+### 2. Concurrency queueing behind a manual run — NOT SUPPORTED
+
+**The three workflows are in DIFFERENT concurrency groups** — `daily-picks`,
+`closing-lines`, `paper-trading-report`, each `cancel-in-progress: false`. **A
+manual run of one workflow cannot queue a scheduled run of another.** Cross-
+workflow queueing is impossible by construction, so the hypothesis can only
+apply within a workflow.
+
+Within a workflow it does not hold either:
+
+- **Only 4 manual runs exist in the last 120** — 2026-08-27 at 13:14
+  (daily-picks), 17:50 (paper-report), 17:55 (closing-lines), and 2026-08-23 at
+  14:46 (daily-picks). **None on 08-24, 08-25 or 08-26.** The premise that
+  manual triggering has been going on for two days is not supported by the run
+  history.
+- **Every 08-27 manual run came AFTER its own workflow's due slot** (13:14 vs a
+  09:37 cron; 17:50 vs 10:47; 17:55 vs 10:47). A run that starts later cannot
+  have blocked one that was due earlier.
+- **`closing-lines` missed the most and had no manual run until 17:55**, after
+  four of its five due slots had already passed.
+- `daily-picks`' manual run finished around 13:40; the scheduled run fired at
+  **19:58**, six hours later. It was not waiting on the group.
+
+**Concurrency queueing explains none of the observed lateness.**
+
+### 3. Pending-run displacement — PLAUSIBLE for `closing-lines`, and NOT self-inflicted
+
+**Zero cancelled runs across the last 120** (all 120 conclude `success`). That is
+weak evidence on its own, because a displaced pending run may leave no record at
+all — which is precisely what makes this hypothesis hard to falsify.
+
+But the counts point somewhere:
+
+| workflow | due 2026-08-27 | scheduled firings delivered |
+| --- | --- | --- |
+| Daily Betting Picks | 1 | 1 |
+| Paper Trading Report | 1 | 1 |
+| **Closing Line Capture** | **8** (10:47 + 17-past seven odd hours) | **~3** (20:47, 21:00, and 05:21 on 08-28) |
+
+**The two single-cron workflows lost nothing. The eight-cron workflow delivered
+about three.** That is consistent with GitHub holding at most one pending run
+per workflow: while one firing sits pending for ten hours, later crons come due
+and coalesce rather than accumulate.
+
+**If that is what happened, the cause is the DELAY, not manual triggering.** The
+only manual `closing-lines` run was at 17:55, after most of the day's slots. **So
+this is not self-inflicted and would not be fixed by triggering less** — a
+correction to the framing that prompted this check.
+
+## The escalation criterion was wrong, and is replaced
+
+The criterion recorded yesterday: *"If 2026-08-28 also produces no on-time
+scheduled firing for any workflow, it stops being load."*
+
+**It is unfalsifiable too early.** Assessed now (2026-08-28 13:38 UTC), today has
+produced one `closing-lines` run at 05:21 and nothing else — which *looks* like a
+repeat. But 08-27 established that firings arrive up to **10h21m** late, so a
+09:37 cron cannot be judged before ~20:00. **Checking four hours in and calling
+it a miss is the same error the correction above is about.**
+
+> **REPLACEMENT CRITERION.** A firing counts as MISSED only if it has not arrived
+> **12 hours** after its cron — a margin above the largest delay yet observed
+> (10h21m). Assessment for a given day therefore happens no earlier than
+> **12h after the last cron due that day**, not during it.
+>
+> Escalate only when a firing is missed under that definition. **Lateness, however
+> extreme, is cause 1 and is GitHub's queue.**
+
+## What is genuinely open
+
+- **The delay envelope has roughly doubled** (5.7h → 10h21m). That is the finding
+  from these two days, and it is about GitHub, not this repository.
+- **Whether `closing-lines` loses firings to coalescing** when a pending run sits
+  for hours. Its 8-due/~3-delivered ratio on 08-27 is the only evidence, it is
+  one day, and displacement leaves no record — so it is recorded as plausible and
+  unproven.
+
+**Neither is investigated here, and nothing was changed.**
+
+## A separate, real defect found while checking the crons
+
+`paper-trading-report.yml`'s header documents the schedule as:
+
+```
+#   11:17 UTC  closing-lines — first capture slot of the day
+#   10:47 UTC  THIS JOB      — after settlement, before the first capture
+```
+
+and its cron comment claims *"~30 min before the first capture"*.
+
+**Both are false.** `closing-lines.yml` now carries `47 10 * * *` as its **first**
+cron, so the first capture slot is **10:47** and the two jobs are **simultaneous**,
+not 30 minutes apart.
+
+**I introduced this.** The `47 10` entry is the Stage 19 L4 early window, added
+to `closing-lines.yml` without checking what depended on the 11:17 slot.
+
+**It matters beyond documentation, exactly as suspected.** The header states the
+design intent plainly — *"Running between the daily pipeline and the first
+capture means the report always describes a settled, quiet state rather than one
+mid-write."* Running simultaneously with the first capture means the report can
+read **mid-capture**: some picks with closing observations written, others not,
+producing coverage figures for a state that never settled.
+
+**Not changed** — this is a read-only check, and both the cron and the comment
+are decisions rather than typos. **Recorded as a live defect, not as
+documentation drift**, and it is the second time a Stage 19/20 schedule edit has
+had an unexamined downstream reader.
