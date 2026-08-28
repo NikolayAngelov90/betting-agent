@@ -5210,3 +5210,81 @@ producing coverage figures for a state that never settled.
 are decisions rather than typos. **Recorded as a live defect, not as
 documentation drift**, and it is the second time a Stage 19/20 schedule edit has
 had an unexamined downstream reader.
+
+---
+
+## OPS-3 addendum — the ordering was never enforced, and the gap never guaranteed it
+
+**The stale header is the symptom. The design assumption underneath is the
+defect, and it predates the collision.**
+
+The `paper-trading-report` header states the requirement plainly: the report must
+describe *"a settled, quiet state rather than one mid-write"*. What was supposed
+to guarantee that was a **30-minute clock gap** — report at 10:47, first capture
+at 11:17.
+
+**Against a measured delay envelope of 10h 21m, a 30-minute gap guarantees
+nothing.** The scheduler's variance exceeded the margin by a factor of ~20, and
+it did so long before the L4 window collided with it.
+
+**MEASURED, 2026-08-27, both firing ~10h late:**
+
+| | |
+| --- | --- |
+| Paper Trading Report (schedule) | **20:45:50 → 20:46:16** |
+| Closing Line Capture (schedule) | **20:47:08 → 20:47:43** |
+| nominal cron gap | 1,800s |
+| **actual separation** | **52s** |
+| compression | **97%** |
+
+**The ordering held, and it held by 52 seconds of luck.** Two firings whose
+crons are half an hour apart landed within a minute of each other. Nothing
+enforced the sequence; the margin simply happened not to be consumed.
+
+**So there were never two states — nominal-and-safe, then collided-and-unsafe.
+There was one: an ordering that was hoped for.** The L4 window turned a nominal
+ordering into a simultaneous one, and neither was ever real.
+
+> **"Restore the 30-minute gap" is the fix that looks obvious and restores
+> nothing.** It would return the schedule to a margin already demonstrated to be
+> 20× too small, while reading as though the problem were solved.
+
+**The actual requirement, recorded so the next person does not move a cron and
+believe it is fixed:** if the report must observe a settled state, it needs a
+**dependency** — `workflow_run` on the capture completing, a state check that
+refuses to report while a capture is in flight, or a claim on the same
+concurrency group — **not a time gap**. That is a design change and it is not
+this stage's work.
+
+## PROPOSAL (not built — this stage is read-only): pin the schedule contract
+
+**A schedule is an interface.** Changing a cron changes a contract other
+components depend on — and unlike code there is **no compiler, no import graph,
+and nothing to grep**. The dependents are expressed in prose comments and in
+implicit ordering assumptions that no test asserts. That is why this has now
+happened twice.
+
+**The guard:** parse the crons from the three workflow files and assert the
+ordering invariants the comments claim. Concretely, the claims currently made in
+prose:
+
+- `daily-picks` runs before `paper-trading-report` (settlement before reporting)
+- `paper-trading-report` runs before the **first** `closing-lines` slot
+- the first `closing-lines` slot is the earliest of its crons
+
+**It would have failed the moment `47 10` was added to `closing-lines.yml`** —
+the edit that created this defect — and it fails again on the next edit that
+contradicts a documented sequence.
+
+**Its limitation, stated rather than discovered later: it cannot enforce the
+ordering at runtime.** The scheduler defeats that, as the 52-second measurement
+above proves. **It pins the CLAIM, not the behaviour** — so a change to the
+claim becomes deliberate rather than accidental, and the comment cannot drift
+away from the crons.
+
+That is the same shape as the exemption-count pin and the `filter_generation`
+digest: **the guarantee is unenforceable, so pin the claim and make changing it
+an explicit act.** A guard that made the runtime ordering true would be a
+different and much larger thing, and it is the dependency described above.
+
+**Recorded as a proposal. Not built here.**
