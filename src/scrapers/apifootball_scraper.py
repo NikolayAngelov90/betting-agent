@@ -498,10 +498,32 @@ def names_share_an_anchor(a: str, b: str) -> bool:
     # / "Ath Bilbao" and "FC Iberia 1999" / "Saburtalo" were both live false
     # positives on 2026-08-27; "Maccabi Tel Aviv" / "Telstar" has no alias and
     # therefore still fails, which is the point.
-    def _aliased(n: str) -> str:
-        return _ALIAS_LOWER.get(str(n).strip().lower(), n)
+    # STAGE 21 Part A. UNION, never replace.
+    #
+    # Stage 20 REPLACED each name with its canonical form before computing
+    # anchors, and that created a false positive it did not have before:
+    #
+    #   TEAM_NAME_ALIASES["Standard Liege"] = "Standard"   (pre-existing)
+    #   "Standard Liege" -> "Standard"  anchors {stan, standard}
+    #   "St. Liege"      -> (no alias)  anchors {lieg, liege}
+    #   intersection EMPTY -> refused, though the raw names share "liege"
+    #
+    # THE RULE: a one-directional map — many provider forms to ONE canonical
+    # form — applied to BOTH SIDES of a SYMMETRIC comparison can delete the very
+    # token the comparison depends on. Canonicalisation is not symmetric-safe.
+    #
+    # Unioning the raw and aliased anchors can only ever ADD anchors, so it
+    # cannot refuse anything the pre-Stage-20 gate accepted, while still
+    # resolving the zero-shared-token pairs the alias table exists for.
+    def _anchors(n: str) -> set:
+        raw = str(n)
+        alias = _ALIAS_LOWER.get(raw.strip().lower())
+        out = _name_anchors(raw)
+        if alias:
+            out = out | _name_anchors(alias)
+        return out
 
-    return bool(_name_anchors(_aliased(a)) & _name_anchors(_aliased(b)))
+    return bool(_anchors(a) & _anchors(b))
 
 
 class APIFootballScraper(BaseScraper):

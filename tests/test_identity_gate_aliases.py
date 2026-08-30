@@ -122,3 +122,65 @@ def test_the_lowercase_index_covers_the_whole_table():
     """The index and the table cannot drift: it is derived, not maintained."""
     from src.scrapers.apifootball_scraper import _ALIAS_LOWER, TEAM_NAME_ALIASES
     assert len(_ALIAS_LOWER) == len({k.strip().lower() for k in TEAM_NAME_ALIASES})
+
+
+# ── Stage 21 Part A: the regression Stage 20 created, and the rule behind it ──
+#
+# Stage 20 REPLACED each name with its canonical form before computing anchors.
+# TEAM_NAME_ALIASES["Standard Liege"] = "Standard" is a PRE-EXISTING entry, so:
+#     "Standard Liege" -> "Standard"   anchors {stan, standard}
+#     "St. Liege"      -> (no alias)   anchors {lieg, liege}
+#     intersection EMPTY -> refused, though the RAW names share "liege"
+#
+# THE RULE: a one-directional map (many provider forms -> ONE canonical form)
+# applied to BOTH SIDES of a comparison can delete the very token the comparison
+# depends on.
+#
+# The sharper form, from the Stage 21 audit of `_norm`:
+#   * canonicalising both sides is SAFE for an EQUALITY test — it can only
+#     increase agreement (this is why `same_team_strict` is unaffected);
+#   * canonicalising both sides is UNSAFE for an OVERLAP test — it can remove
+#     the overlapping token (this gate, and `team_names_similar`'s ratio).
+#
+# The fix is to UNION raw and aliased anchors, which can only ADD anchors and so
+# can never refuse a pair the pre-Stage-20 gate accepted.
+
+PREVIOUSLY_PASSING = [
+    ("Standard Liege", "St. Liege"),          # the Stage 20 regression itself
+    ("Union St. Gilloise", "St. Gilloise"),
+    ("NEC Nijmegen", "Nijmegen"),
+    ("Heart Of Midlothian", "Hearts"),
+    ("Red Bull Salzburg", "Salzburg"),
+    ("CFR 1907 Cluj", "CFR Cluj"),
+    ("Universitatea Craiova", "Univ. Craiova"),
+    ("Ferencvarosi TC", "Ferencvaros"),
+]
+
+
+@pytest.mark.parametrize("incoming,stored", PREVIOUSLY_PASSING)
+def test_every_previously_passing_pair_still_passes(incoming, stored):
+    """Union can only ADD anchors, so this set can never shrink."""
+    assert names_share_an_anchor(incoming, stored), (
+        f"{incoming!r} vs {stored!r} is refused. Stage 20 introduced exactly "
+        "this failure by REPLACING names with their canonical form; if it has "
+        "returned, canonicalisation is being applied instead of unioned.")
+
+
+def test_the_standard_liege_regression_specifically():
+    """Named because it reached production and skipped a real fixture."""
+    assert names_share_an_anchor("Standard Liege", "St. Liege")
+
+
+@pytest.mark.parametrize("incoming,stored", [
+    ("Maccabi Tel Aviv", "Telstar"),
+    ("Pau FC", "St. Pauli"),
+    ("Cracovia Krakow", "Rakow"),
+])
+def test_impostors_are_still_refused_after_the_union_fix(incoming, stored):
+    """A fix that admits an impostor is worse than the false positive it removes.
+
+    Cracovia/Rakow is the fifth confirmed identity corruption: stored row 411
+    ("Rakow") carries API-Football id 350, which is Cracovia's. The gate found
+    it by refusing a real fixture. Recorded, NOT repaired.
+    """
+    assert not names_share_an_anchor(incoming, stored)

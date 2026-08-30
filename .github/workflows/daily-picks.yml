@@ -8,7 +8,34 @@ on:
     # run finishes even when the scheduler is late — so a single run has ample
     # buffer and the backup cron was removed (2026-07-22). Off-hour minute
     # dodges top-of-hour congestion. Manual re-runs available via dispatch.
-    - cron: '37 9 * * *'   # 09:37 UTC (12:37 Sofia)
+    # STAGE 21. 09:37 -> 03:00 UTC (06:00 Sofia).
+    #
+    # 09:37 was already near-optimal for a ZERO-delay world: the earliest
+    # kickoff in the active league set is 10:04 UTC (Sunday p05 = 10:06), and a
+    # ~20-minute run starting at 09:37 finishes before it. The problem was never
+    # the hour — it was that GitHub's scheduler has delivered 0.5h to 11h21m of
+    # delay, and a late start cannot be recovered.
+    #
+    # MEASURED 2026-08-30, three constraints, all binding on different sides:
+    #
+    #   earliest kickoff  run must START by ~09:45 UTC, so a cron at 09:45-D
+    #                     tolerates D of delay.
+    #   settlement        latest kickoff 19:30 UTC, so football ends ~21:30.
+    #                     A cron before ~23:30 the previous day settles matches
+    #                     whose results are not yet published.
+    #   odds availability measured DIRECTLY against the provider rather than
+    #                     from our own first_seen_at (which records when this
+    #                     pipeline looked, not when the market opened, and is
+    #                     therefore confounded with the delay): 9 of 10 fixtures
+    #                     are priced >=24h before kickoff, so odds do not bind.
+    #
+    # 03:00 tolerates 6h45m of delay -- the whole historical 0.5-5.7h envelope
+    # with an hour to spare -- and leaves 5h30m of settlement margin.
+    #
+    # WHAT IT DOES NOT FIX: a cron at 03:00 delayed 11h lands at 14:00 and still
+    # misses a Saturday afternoon card. This buys margin against the TYPICAL
+    # delay, not the observed maximum. OPS-3 stays open.
+    - cron: '0 3 * * *'    # 03:00 UTC (06:00 Sofia)
   workflow_dispatch: # Allow manual trigger
 
 # Serialize runs so a manual dispatch can never write to the DB at the same

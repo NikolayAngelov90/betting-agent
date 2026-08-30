@@ -348,7 +348,43 @@ TRACKED_KEYS: List[str] = [
 #:         · the timeout frees ~50-70s per run, reaching ~5-7 more leagues of
 #:           the 7 that were never attempted. Whether that is sufficient is
 #:           NOT asserted — it is the next run's measurement.
-CODE_REVISION = "s5.7"
+#: s5.8  Stage 21 (2026-08-30). ONE bump covering both parts.
+#:       `cohort_status.py` reported s5.7 carrying 35 picks -> BUMP.
+#:
+#:       1. IDENTITY GATE — the Stage 20 regression removed. Canonicalisation
+#:          now UNIONS raw and aliased anchors instead of REPLACING the name.
+#:          Stage 20 replaced, and `TEAM_NAME_ALIASES["Standard Liege"] =
+#:          "Standard"` then left {stan, standard} against {lieg, liege},
+#:          refusing a pair whose RAW forms share "liege". Union can only ADD
+#:          anchors, so no previously-passing pair can be refused.
+#:
+#:          Selection-affecting: it admits fixtures the gate was skipping.
+#:          MEASURED — 4 refusals over 08-27..08-29, of which ONE was this
+#:          false positive (a Jupiler Pro League fixture), so ~25% of the
+#:          gate's refusals were wrong.
+#:
+#:       2. CRON 09:37 -> 03:00 UTC. Selection-affecting twice over: it changes
+#:          WHEN prices are taken and WHICH fixtures are inside the window.
+#:
+#:          MEASURED EFFECT ON PICK LEAD TIME, recorded so no later reader
+#:          attributes a cohort difference to the clock:
+#:            · on-time runs 2026-08-14..08-25 : 4.4 - 8.8h mean lead
+#:            · late run 2026-08-29            : 2.1h median (lateness
+#:              COMPRESSES lead — it does not extend it)
+#:            · projected at 03:00             : 7.1h at the p10 kickoff,
+#:              10.7h at the median, 15.4h at p90
+#:
+#:          MEASURED EFFECT ON THE DISCOVERED-FIXTURE POPULATION: at ZERO delay
+#:          the two crons see nearly the same card, because the earliest
+#:          kickoff is 10:04 UTC and both start before it. The change is
+#:          almost entirely in DELAY TOLERANCE — 0h at 09:37, 6h45m at 03:00 —
+#:          and in the longer lead above. A reader comparing cohorts should
+#:          expect lead-time distributions to differ and fixture COUNTS on
+#:          undelayed days to be similar.
+#:
+#:       WHAT NEITHER FIXES: GitHub's scheduler. A 03:00 cron delayed 11h lands
+#:       at 14:00 and still misses a Saturday afternoon card. OPS-3 stays open.
+CODE_REVISION = "s5.8"
 
 
 def _stable(value: Any) -> Any:

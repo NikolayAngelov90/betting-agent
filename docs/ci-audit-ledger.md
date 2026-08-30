@@ -5538,3 +5538,227 @@ than a new baseline.** That assumption is what the trigger tests.
 irrecoverable damage is larger than measured. **One capture from 69 picks is
 already severe**, and if the next two days repeat it, the small-sample argument
 stops outweighing a permanent loss of the experiment's only instrument.
+
+---
+
+# STAGE 21 — CLOCK MOVED
+
+`cohort_status.py`: s5.7 carried 35 picks → **BUMP**. One bump, `s5.8`,
+`stage5_baseline_20260807.dfe302`. 867 tests pass; 26 invariants pass.
+
+## PART A — the regression removed, and the rule it belongs to
+
+**Fixed by UNION, not replacement.** `names_share_an_anchor` now compares
+`anchors(raw) ∪ anchors(aliased)` per side. Unioning can only ever ADD anchors,
+so **no pair the pre-Stage-20 gate accepted can now be refused** — which is the
+property that makes the fix safe rather than merely correct on the one case.
+
+**Verified to the standard the gate was verified to:** 10 previously-passing
+pairs all pass (`Standard Liege`/`St. Liege`, `Union St. Gilloise`/`St. Gilloise`,
+`NEC Nijmegen`/`Nijmegen`, `Heart Of Midlothian`/`Hearts`, `Red Bull Salzburg`/
+`Salzburg`, `CFR 1907 Cluj`/`CFR Cluj`, `Universitatea Craiova`/`Univ. Craiova`,
+`Ferencvarosi TC`/`Ferencvaros`, plus the two Stage 20 fixes). All three
+impostors still refused: `Maccabi Tel Aviv`/`Telstar`, `Pau FC`/`St. Pauli`,
+`Cracovia Krakow`/`Rakow`. `Rapid Vienna`/`Rapid Bucuresti` still shares an
+anchor by design — the country check separates it, as pinned.
+
+### THE RULE — canonicalisation is not symmetric-safe
+
+> **A one-directional map — many provider forms to ONE canonical form — applied
+> to BOTH SIDES of a comparison can delete the very token the comparison depends
+> on.**
+
+**And the sharper form, which the audit below produced:**
+
+| test shape | canonicalising both sides |
+| --- | --- |
+| **equality** (`set(ta) == set(tb)`) | **SAFE** — can only increase agreement |
+| **overlap** (intersection non-empty, or a ratio) | **UNSAFE** — can remove the overlapping token |
+
+That distinction is why `same_team_strict` was never affected and the anchor gate
+was: one asks whether two names are *the same*, the other whether they *share
+anything*.
+
+### The symmetric-normalisation audit
+
+Every map applied inside a comparison, checked:
+
+| site | shape | verdict |
+| --- | --- | --- |
+| `apifootball.names_share_an_anchor` | overlap, alias applied to both sides | **was the bug; fixed** |
+| `team_names._norm` → `same_team_strict` | **equality**, `NAME_ALIASES` both sides | safe by shape |
+| `team_names._norm` → `team_names_similar` | **overlap ratio ≥0.7**, `NAME_ALIASES` both sides | **same hazard, currently benign** |
+| `COMPETITION_MAP.get` | one-directional, applied once to incoming data | safe |
+| `LEAGUE_TO_THEODDS_SPORT.get` | one-directional, logging only | safe |
+| `TEAM_NAME_ALIASES.get` (step 2) | applied to the incoming name only | safe |
+| `market_spec.extract_legs` | per-leg aliases, incoming dict only | safe |
+
+**`team_names_similar` carries the identical hazard and does not currently
+bite.** Scanned every alias whose canonical form deletes a token (20 of 22 do),
+against every counterpart sharing a deleted token. In each case either both sides
+alias to the same canonical (`olympiakos piraeus`/`olympiakos` → still similar) or
+the pair is genuinely different (`korea republic`/`czech republic` → correctly
+dissimilar). **It is benign by the accident of the table's contents, not by
+construction.** Reported, not fixed — the instruction was to fix only the one.
+
+### Fifth identity corruption, recorded not repaired
+
+**Row 411 (`Rakow`) carries API-Football id 350, which is Cracovia's.** The gate
+found it by refusing a real fixture — correctly, since Cracovia Kraków and Raków
+Częstochowa are different clubs. **The refusal is right AND the stored row is
+wrong.** The population of such rows is still unestablished and a repair pass is
+its own decision.
+
+## PART B — the clock
+
+### B1. The weekend asymmetry, quantified
+
+**Card size and shape by day** (MEASURED 2026-08-01 → 08-30):
+
+| day | fixtures/day | median KO | % KO ≤ 14:00 |
+| --- | --- | --- | --- |
+| Mon | 46.2 | 13:13 | 80% |
+| Tue | 15.8 | 12:52 | 56% |
+| **Wed** | 29.8 | **10:28** | 84% |
+| Thu | 29.8 | 17:00 | 7% |
+| Fri | 18.2 | 18:30 | 3% |
+| **Sat** | **58.6** | 14:00 | 51% |
+| **Sun** | **55.2** | 14:00 | 50% |
+
+**Fraction of the card already kicked off, by delay from a 09:37 cron:**
+
+| day | +1h | +3h | +5h | +8h | +11h |
+| --- | --- | --- | --- | --- | --- |
+| Mon | 5% | 20% | **80%** | 90% | 100% |
+| Tue | 38% | 43% | 56% | 76% | 100% |
+| **Wed** | **60%** | **84%** | 84% | 89% | 100% |
+| Thu | 3% | 7% | 7% | 59% | 100% |
+| Fri | 3% | 3% | 3% | 32% | 100% |
+| **Sat** | 0% | 20% | **54%** | 77% | 100% |
+| Sun | 23% | 39% | 56% | 92% | 100% |
+
+**Saturday's 54% at +5h independently reproduces the 55% measured on 2026-08-29**
+— the same number from a different method.
+
+**And a finding the weekend framing would have missed: Wednesday is worse than
+Saturday.** Its median kickoff is **10:28 UTC — 51 minutes after the cron** — so
+**60% of Wednesday's card is gone at just one hour of delay**, and 84% at three.
+Thursday and Friday, by contrast, tolerate five hours at a cost of 7% and 3%.
+**The binding days are Wed, Mon, Sun, Sat. Weekday-evening cards are not the
+problem; early cards are, and one of them is midweek.**
+
+### B2. How early can it run? NOT answerable from `first_seen_at`
+
+The registered method was to read `first_seen_at`. **It cannot answer this, and
+the reason matters.**
+
+Measured: the maximum lead across **every** market is **5.4h**, and **zero**
+fixtures carry a priced market 6h before kickoff. Bookmakers demonstrably price
+days ahead, so that is not market behaviour.
+
+> **`first_seen_at` records when THIS PIPELINE LOOKED, not when the market
+> opened.** Every recent run was late (14:40, 19:58, 20:58), so first sight is
+> late by construction.
+
+**Using it would have been circular**: the runs were late → first-sight is late →
+"odds are not available early" → do not move the cron earlier, on evidence
+produced by the cron being late. **A single anomalous result was evidence about
+the measurement, and the measurement was the one the stage prescribed.**
+
+**Measured directly against the provider instead** (MEASURED 2026-08-30, threshold
+**≥80% declared before looking**):
+
+| lead | fixtures priced |
+| --- | --- |
+| **≥24h** | **9/10 = 90%** — **PASS** |
+| ≥18h | 9/10 = 90% |
+| ≥12h | 9/10 = 90% |
+| ≥9h | 10/10 = 100% |
+
+**Sample: n=10, one bookmaker (Bet365), one date** — the free plan restricts odds
+to a 3-day window. Small, and stated as small. **Odds availability does not
+bind** at any hour the other constraints allow.
+
+### B3. The choice, with the arithmetic
+
+**Three constraints, each binding from a different side:**
+
+| constraint | measured | implication |
+| --- | --- | --- |
+| earliest kickoff | **10:04 UTC** (Sunday p05 10:06) | a ~20-min run must START by **09:45** |
+| settlement | latest KO **19:30** → football ends **~21:30** | cron must not precede results publication |
+| odds | 90% priced at ≥24h | does not bind |
+
+**Therefore a cron at `09:45 − D` tolerates D of delay:**
+
+| cron | delay tolerance | settlement margin | verdict |
+| --- | --- | --- | --- |
+| 04:45 | 5h00m | 7h15m | misses the 5.7h historical max by 42m |
+| **03:00** | **6h45m** | **5h30m** | **covers the historical envelope with margin** |
+| 01:45 | 8h00m | 4h15m | more tolerance, thinner settlement |
+| 23:30 (prev) | 10h15m | **2h00m** | **REJECTED — settles before results publish** |
+
+**CHOSEN: `0 3 * * *` — 03:00 UTC, 06:00 Sofia.**
+
+**Projected pick lead at 03:00** (picks written ~03:20):
+
+| | lead |
+| --- | --- |
+| p10 kickoff (10:23 UTC) | **7.1h** |
+| median kickoff (14:00) | **10.7h** |
+| p90 kickoff (18:45) | **15.4h** |
+| *current on-time baseline* | *4.4 – 8.8h* |
+| *measured late run 08-29* | *2.1h median* |
+
+**Lead roughly doubles**, and Part B of the previous audit established that this
+is the one effect that *helps* the MODEL series rather than merely protecting it:
+a longer lead leaves more room for the price to move before the close, which is
+exactly what CLV measures.
+
+### B5. What this does not fix — stated plainly
+
+> **Moving the cron buys margin. It does not remove the dependency.** GitHub's
+> scheduler has produced 0.5h to 11h21m of delay and nothing here changes that.
+> **A 03:00 cron delayed 11h lands at 14:00 UTC and still misses a Saturday
+> afternoon card** — 54% of it, by the B1 table.
+
+**The schedule is now robust to the TYPICAL delay and not to the OBSERVED
+MAXIMUM.** OPS-3 stays open with its 12-hour escalation criterion.
+
+## PART C — the severity framing, corrected
+
+The previous entry called the capture collapse *"permanent loss of the
+experiment's only instrument"* — 1 capture from 69 picks against 61 from ~116.
+
+**That states the severity against a question Stage 16 already closed.** 500 was
+over-specified **~29×**; seventeen observations suffice to exclude a
+decision-relevant effect; and at n=46 the one-sided upper bound was **+0.107%
+against a +1.85% threshold**. **Lost captures buy precision on an axis that is
+already resolved** — the same finding Stage 15 reached about the seven months to
+March 2027.
+
+**The correct framing:** the CLV instrument retains **forward** value. If a model
+with a plausible edge is ever built, this is how it would be tested. **That is a
+reason to keep it working, not a reason to treat each lost observation as
+urgent.**
+
+**And it strengthens the previous recommendation rather than weakening it.** The
+argument for not panicking was one part small-sample; it is now two parts —
+**the loss is also cheap.**
+
+---
+
+**STAGE 21 — CLOCK MOVED.**
+
+**Cron:** `37 9 * * *` → **`0 3 * * *`** (03:00 UTC / 06:00 Sofia).
+
+**Three constraints satisfied simultaneously:** earliest kickoff 10:04 UTC gives
+6h45m of delay tolerance; settlement has 5h30m of margin after football ends at
+~21:30; odds are priced at ≥24h for 90% of fixtures, so availability does not
+bind.
+
+**Measured lead-time change:** 4.4–8.8h → **7.1–15.4h (median 10.7h)**.
+
+**The day-of-week table that justified it is above**, and its unexpected half is
+that **Wednesday, not Saturday, is the least delay-tolerant day** — 60% of its
+card gone at one hour.
