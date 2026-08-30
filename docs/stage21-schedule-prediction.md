@@ -100,3 +100,85 @@ the first such day rather than against tomorrow alone.
 ---
 
 *Committed before the first firing of the new cron. Stage 21, 2026-08-30.*
+
+---
+
+# SECOND CHECKPOINT — registered 2026-08-30, before either day arrives
+
+## Monday's result must not be cited as evidence about the margin
+
+**This sentence is the reason this section exists now rather than after a pass
+makes the question feel settled.**
+
+Monday 2026-08-31 tests **that the cron fires** and that picks stamp `s5.8`. It
+**cannot** test the margin: tomorrow's earliest known kickoff is **16:30 UTC**, so
+every delay up to ~13 hours is harmless. A `WITHIN TOLERANCE` result there would
+be **true and uninformative** about the thing the choice was computed against.
+
+> **A `WITHIN TOLERANCE` result on 2026-08-31 is not evidence that 6h45m of
+> margin is sufficient, and must not be recorded as such.**
+
+## The day that does test it
+
+**Kickoff profiles under the new 03:00 cron** (MEASURED 2026-08-30, August 2026):
+
+| day | n | earliest | p05 | median | lost @09:45 | lost @12:00 | lost @14:00 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Wed** | 119 | 10:15 | 10:15 | **10:28** | 0% | **84%** | 84% |
+| Sat | 293 | 10:15 | 10:45 | 14:00 | 0% | 20.5% | 50.5% |
+| Sun | 325 | **10:04** | 10:07 | 15:00 | 0% | 29.8% | 42.8% |
+
+**The two days fail in different shapes, and that is why both are registered:**
+
+* **Wednesday is a CLIFF.** Its card is concentrated in a ~15-minute band around
+  10:15–10:30, so the loss goes **0% → 84% between a 7h15m and a 9h delay**.
+  There is no partial failure — the day is either intact or mostly gone.
+* **Saturday is a GRADIENT.** Losses accumulate: 20.5% at +9h, 50.5% at +11h.
+
+### PRIMARY — first Wednesday: **2026-09-02**
+
+### SECONDARY — first weekend day: **Saturday 2026-09-05**
+
+## Outcomes, fixed in advance — defined on the CARD, not the start time
+
+**The start time is only a proxy. The card is what the change was for**, so each
+outcome is defined on the fraction of that day's fixtures already kicked off when
+the run actually began.
+
+| outcome | condition |
+| --- | --- |
+| **MARGIN HELD** | **0%** of the day's card had kicked off at the actual start |
+| **MARGIN CONSUMED** | **>0% and ≤20%** lost — the change helped and was nearly exhausted |
+| **MARGIN INSUFFICIENT** | **>20%** lost — 6h45m was not enough; B5's residual is realised |
+
+## The measurement to take on each day
+
+Not the start time alone. All four, from the run and the database:
+
+1. **actual start time**, and the delay from 03:00
+2. **fixtures inside `max_days_ahead` at the moment the run executed**
+3. **how many of those had already kicked off** — the unpickable remainder
+4. **the fraction of that day's whole card lost**, which decides the outcome above
+
+Plus, for continuity with the Stage 21 arithmetic: the **pick lead-time
+distribution**, projected at 7.1h (p10 kickoff) / 10.7h (median) / 15.4h (p90)
+against a measured on-time baseline of 4.4–8.8h and 2.1h on the late run.
+
+## What each result would mean
+
+* **Wednesday MARGIN HELD** — the strongest single result available. The cliff
+  day survived, so the margin covered the delay on the day least able to absorb
+  it.
+* **Wednesday MARGIN INSUFFICIENT** — expect ~84%, not a small number, because of
+  the cliff. That is B5 realised and the answer is not a further cron shift: at
+  84% the pipeline needs splitting, not moving.
+* **Saturday differing from Wednesday** — informative rather than contradictory.
+  A gradient day losing 20% while the cliff day loses 0% is the delay landing
+  between the two thresholds, and that is a *measurement of the delay*, not a
+  failure of the change.
+
+**If the first Wednesday's card is unusually late — as Monday's is — the same
+caveat applies and the checkpoint moves to the next Wednesday.** Check the card
+before reading the result, not after.
+
+*Registered before either day, 2026-08-30.*
