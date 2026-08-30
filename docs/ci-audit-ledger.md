@@ -5288,3 +5288,253 @@ an explicit act.** A guard that made the runtime ordering true would be a
 different and much larger thing, and it is the dependency described above.
 
 **Recorded as a proposal. Not built here.**
+
+---
+
+# AUDIT 2026-08-30 — 24 runs, and lateness priced
+
+Read-only. No cron, concurrency setting or workflow changed.
+
+## PART A — the audit
+
+24 runs, 2026-08-26 → 2026-08-30: **20 CLEAN, 4 DEGRADED, 0 BROKEN.** All
+`conclusion: success`, which remains no evidence of anything.
+
+| run | workflow | started | verdict | notes |
+| --- | --- | --- | --- | --- |
+| 33100876420 | closing-lines | 08-27 17:55 | **DEGRADED** | 2 league requests returned `no_rows` — credits spent, empty event list |
+| 33111032974 | daily-picks | 08-27 19:58 | **DEGRADED** | `disc[fs=19 fdo=0 af=1]`; **NO FIXTURES FOUND** — nothing analysed |
+| 33210509071 | daily-picks | 08-28 20:58 | **DEGRADED** | `disc[fs=91 fdo=0 af=10]`; **NO FIXTURES FOUND** — nothing analysed |
+| 33258220733 | daily-picks | 08-29 14:40 | CLEAN | `disc[fs=71 fdo=0 af=11]` |
+| 33260734153 | closing-lines | 08-29 15:36 | **DEGRADED** | 2 credits claimed, 0 closing lines captured |
+| 19 others | closing-lines / paper-report | — | CLEAN | |
+
+**`fdo=0` on all three daily-picks runs.** football-data.org added no fixtures on
+any of the three days. Recorded, not pursued.
+
+### Stage 20's four registered measurements
+
+**1. Fixture count per league** — Flashscore now returns fixtures broadly, which
+it had not done since 2026-05-30:
+
+| run | non-zero leagues | total fixtures |
+| --- | --- | --- |
+| 08-27 19:58 | 15 | 19 |
+| 08-28 20:58 | 20 | 91 |
+| 08-29 14:40 | 21 | 71 |
+
+**The Stage 20 prediction holds: `spain/laliga` produced non-zero on every run**
+(2, 3, 3). The timeout reduction did not convert a slow success into a fast
+failure — the specific risk registered against `FIXTURES_WAIT_S = 20`.
+
+**2. The trailing set — NOT stable. It varies.**
+
+| run | trailing | names |
+| --- | --- | --- |
+| 08-27 | 6 | league-one, league-two, laliga2, 2-bundesliga, serie-b, ligue-2 |
+| 08-28 | 3 | 2-bundesliga, serie-b, ligue-2 |
+| 08-29 | 4 | serie-b, ligue-2, **europa-league, europa-conference-league** |
+
+Only `italy/serie-b` and `france/ligue-2` trail on all three days. **The budget
+was exhausted on all three runs even after the timeout cut**, and leagues
+attempted rose 23 → 24, 27, 26.
+
+**Registered decision rule applied as written:** the set **varies**, so the rule
+says *attack the per-league cost, not the ordering*. Rotation would not help — it
+would merely rotate which leagues are starved.
+
+**3. Identity gate — 4 refusals over three days, and one is MY REGRESSION**
+
+| date | incoming | stored | verdict |
+| --- | --- | --- | --- |
+| 08-27 | `Maccabi Tel Aviv` | `Telstar` | **CORRECT** — the documented impostor |
+| 08-28 | `Maccabi Tel Aviv` | `Telstar` | **CORRECT** — recurring |
+| 08-29 | `Cracovia Krakow` | `Rakow` | **CORRECT** — two different Polish clubs (Kraków vs Częstochowa) |
+| 08-29 | `Standard Liege` | `St. Liege` | **FALSE POSITIVE — caused by Stage 20** |
+
+**The Cracovia case reveals a second Telstar-shaped corruption:** stored row 411
+named `Rakow` carries **API-Football id 350, which is Cracovia's**. The refusal is
+correct *and* the stored row is wrong. Recorded, not repaired.
+
+### THE REGRESSION I INTRODUCED, and it is live
+
+`Standard Liege` / `St. Liege` **shares an anchor** — `{lieg, liege}` is in both.
+It was refused anyway, because Stage 20's canonicalisation rewrites it first:
+
+```
+TEAM_NAME_ALIASES["Standard Liege"] = "Standard"     # pre-existing entry
+"Standard Liege" -> "Standard"   anchors {stan, standard}
+"St. Liege"      -> (no alias)   anchors {lieg, liege}
+intersection: EMPTY  ->  refused
+```
+
+**I applied a one-directional provider→canonical map to BOTH sides of a
+symmetric comparison, and canonicalising can REMOVE the token that was the shared
+anchor.** Stage 20 fixed two false positives and created a third.
+
+**The fix is to union rather than replace** — compare
+`anchors(raw) ∪ anchors(aliased)` on each side. That can only ever *add* anchors,
+so it cannot refuse anything the pre-Stage-20 gate accepted, while still
+resolving `Athletic Club`/`Ath Bilbao` and `FC Iberia 1999`/`Saburtalo`. Verified
+by hand on all four pairs, including that `Maccabi Tel Aviv`/`Telstar` stays
+refused.
+
+**Not applied — this stage is read-only.** It is a live defect losing a
+Jupiler Pro League fixture per occurrence and should be fixed first thing.
+
+**4. `fixtures_zero_active` — predicted ~1, measured 2, 0, 0.**
+Against **21** on 2026-08-27 pre-fix and **260** across the cached period. The
+Part C fix worked and the prediction was close.
+
+### The redirect check — NOT YET ANSWERABLE
+
+Registered: confirm UEL/UECL fixtures belong to the competition requested, by
+team names. Measured:
+
+```
+europe/europa-conference-league   25 fixtures   via_flashscore=0   via_apifootball=25
+europe/europa-league             24 fixtures   via_flashscore=0   via_apifootball=24
+```
+
+**Flashscore has created ZERO fixtures for either competition**, so there is
+nothing to check the redirect against. Both leagues were in the trailing set on
+08-29 and were never attempted. **The check stays registered and unanswered.**
+
+### The Stage 18 substrate trigger HAS FIRED
+
+| | 08-27 | now |
+| --- | --- | --- |
+| `odds_snapshots` rows | 2,713 | **12,888** |
+| **keys with ≥3 observations** | **0** | **91** |
+| `injury_observations` | 4 | **286** |
+| MODEL observations | 46 | 48 |
+
+**91 keys now carry three observations.** The accumulation query — the trigger
+Stage 18 registered in place of a calendar date — is satisfied. H1 and H4 are
+testable for the first time. **Not this stage's work.**
+
+## PART B — what lateness actually costs
+
+| day | delay | fixtures in window @cron | @actual | **kicked off by start** | picks |
+| --- | --- | --- | --- | --- | --- |
+| 08-27 | **10h 21m** | 36 | 29 | **36 of 36** | **0** |
+| 08-28 | **11h 21m** | 29 | 103 | **29 of 29** | **0** |
+| 08-29 | 5h 03m | 103 | 76 | 57 of 103 | 35 |
+
+**On 08-27 and 08-28 every fixture in the on-time window had already kicked off
+by the time the run started. Both days produced zero picks.** The `NO FIXTURES
+FOUND` finding in the audit is that, exactly.
+
+### The compensating-effect hypothesis is FALSIFIED
+
+The proposition was that a late run picking tomorrow's card at a longer lead is a
+different pipeline, not a broken one. **It is not what happens.**
+
+| | median lead |
+| --- | --- |
+| 08-29 late run (n=35) | **2.1h** (min 0.1h, max 4.1h) |
+| on-time runs 08-14 → 08-25 | **4.4 – 8.8h** |
+
+**A late run takes prices CLOSER to kickoff, not further from it.** The window is
+`max_days_ahead = 1` and the pick generator works the imminent card, so starting
+five hours late does not reach forward — it compresses the lead.
+
+**That is strictly worse for the MODEL series**, which measures movement between
+the taken price and the close: less time to the close means less room to move.
+**Lateness is a pure loss on this evidence, in both directions — fewer picks, and
+worse observations from the picks that survive.**
+
+## The two damages, which OPS-3 conflated
+
+**They are different in kind and only one is recoverable.**
+
+**IRRECOVERABLE — missed closing-lines windows.** The price ceases to exist.
+
+| pick_date | picks | captured | missing | late |
+| --- | --- | --- | --- | --- |
+| 2026-08-27 | 34 | **1** | 16 | 17 |
+| 2026-08-29 | 35 | **0** | 17 | 18 |
+
+**One capture from 69 picks across two days**, against 61 from ~116 in-market
+picks in the 08-14 → 08-22 window. Those observations are gone permanently.
+
+**RECOVERABLE IN PRINCIPLE — late daily-picks.** It shifts or destroys what is
+picked, but a pick not made is an opportunity forgone, not evidence destroyed.
+The fixtures still exist and the day can be re-run — as 2026-08-27 was, manually.
+
+**OPS-3 treats lateness as one thing. It is two, and the closing-lines half is
+the one that cannot be undone.**
+
+## PART C — the options, evaluated
+
+**Stated plainly first: `37 9 * * *` is 09:37 UTC, which is 12:37 Sofia. The cron
+already satisfies "started before 13:00 Sofia".** The delay defeats it, and
+**shifting the cron shifts the delay with it** — the firing times observed
+(19:58, 20:58, 14:40) show no wall-clock attractor, so a delay distribution
+applies from wherever the cron sits.
+
+### Option 1 — move the cron earlier
+
+For a 10:00 UTC worst-case start against the measured 10h21m envelope, the cron
+lands at **≈23:39 UTC the previous day**.
+
+- **Settlement breaks.** The previous day's evening fixtures (19:00–21:00 UTC)
+  finish 2–4 hours before 23:39. Results are frequently not yet available from
+  Flashscore or football-data.org at that lag, so settlement would run against
+  incomplete results — a new defect in exchange for the old one.
+- **Fixture window improves.** `max_days_ahead = 1` from 23:39 covers the whole
+  of the next day's card, which the current 09:37 start does not.
+- **Pick lead time improves substantially** — picks taken at 23:39 for next-day
+  evening fixtures carry a **19–21h lead** against the current 4.4–8.8h. Given
+  Part B, that is the one change that would *help* the MODEL series rather than
+  merely protect it.
+- **It is a cohort event.** Different lead times produce a different CLV
+  distribution; this cannot be done without a `CODE_REVISION` bump.
+
+### Option 2 — redundant crons with an idempotency guard
+
+**The pipeline is only partly idempotent, and the expensive part is not.**
+`--update` spends API-Football credits *before* the per-match cap, briefing
+freeze or dedup key apply. Measured: **51 of the 100/day free tier on 2026-08-27
+in a single run.** A second full run costs another ~51 and **exceeds the free
+tier**; a third is impossible.
+
+So this option requires an `--update`-level "already ran today" guard before it
+is affordable at all. **That guard does not exist and is the real work here**,
+not the extra cron lines.
+
+### Option 3 — external trigger via `repository_dispatch`
+
+Removes the GitHub-scheduler dependency and adds an external one: a host that
+must stay up and a long-lived PAT that must be stored, rotated and never leaked.
+**This project has already had one credential incident and one account
+suspension**; adding a long-lived token with `repo` scope is a real cost and
+should not be priced as free.
+
+### Option 4 — change nothing
+
+**Three days is not a trend, and fitting decisions to small samples is this
+project's cardinal error** — the settled-pick segment thresholds, the fifteen
+data-fitted thresholds, and the trigger dates withdrawn within a day of being
+derived. Note also that **08-29's 5h03m delay is INSIDE the historical 0.5–5.7h
+envelope**, so only **two** of three days exceeded it.
+
+### RECOMMENDATION: Option 4 now, Option 1 when the envelope is established
+
+**Recommended: change nothing yet**, with an explicit revisit trigger, because a
+schedule redesigned around 10h21m becomes wrong in the other direction if the
+envelope reverts — and one of the three observations is already within the old
+bound.
+
+**Assumption stated: that the 10–11h delays of 08-27/08-28 are an episode rather
+than a new baseline.** That assumption is what the trigger tests.
+
+> **REVISIT TRIGGER: if, over the next 7 days, 3 or more `daily-picks` firings
+> arrive more than 6 hours after their cron, adopt Option 1** — move the cron to
+> ≈23:39 UTC **and** split settlement into its own later job, since Option 1
+> breaks settlement as it stands. That is a cohort event and needs a bump.
+
+**What would change this recommendation immediately:** evidence that the
+irrecoverable damage is larger than measured. **One capture from 69 picks is
+already severe**, and if the next two days repeat it, the small-sample argument
+stops outweighing a permanent loss of the experiment's only instrument.
