@@ -5762,3 +5762,64 @@ bind.
 **The day-of-week table that justified it is above**, and its unexpected half is
 that **Wednesday, not Saturday, is the least delay-tolerant day** — 60% of its
 card gone at one hour.
+
+---
+
+## Stage 21 follow-ups — schedule prediction registered, alias hazard pinned
+
+Both cohort-neutral: a prediction document and a test. `CODE_REVISION` stays
+`s5.8`; no config, no model, no workflow touched.
+
+### 1. `docs/stage21-schedule-prediction.md` — committed before the first firing
+
+`0 3 * * *` first fires **2026-08-31, a Monday**. Three outcomes defined before
+looking: **WITHIN TOLERANCE** (start ≤ 08:42 UTC), **LATE BUT COVERING**
+(08:42 → 09:45), **BEYOND TOLERANCE** (> 09:45, margin insufficient).
+
+**And a caveat registered in advance rather than discovered after: tomorrow may
+not test the margin at all.** Tomorrow's known card (football-data.org, its nine
+competitions) starts at **16:30 UTC**, so *any* delay up to ~13h is harmless for
+those eight fixtures — even the observed 11h21m maximum would cost nothing.
+
+| run start | historical Monday (n=185) | tomorrow's known card (n=8) |
+| --- | --- | --- |
+| 03:00 / 08:42 / 09:45 | 0% | 0% |
+| 14:00 (+11h, observed max) | **80%** | **0%** |
+
+**A `WITHIN TOLERANCE` result tomorrow is therefore weak evidence** — it would
+confirm the run fires and stamps `s5.8`, but not that 6h45m of margin suffices,
+because the card would not have demanded it. **The margin is genuinely tested on
+a day whose card starts early — a Wednesday (median KO 10:28) or a weekend
+(p05 ~10:06).** That is the day to read the result on.
+
+### 2. `tests/test_alias_symmetry_hazard.py` — the hazard pinned, not fixed
+
+`team_names_similar` applies `NAME_ALIASES` to **both sides of an overlap ratio**
+— the unsafe half of Stage 21's equality-versus-overlap rule, and the same defect
+that reached production in the identity gate on 2026-08-29.
+
+**Why pin now.** The alias table is *growing*: the identity gate has found five
+corruptions and is still finding them one at a time, and **every false positive it
+produces is repaired by adding an alias.** Each repair is a chance to activate
+this.
+
+**What is pinned is the INVENTORY, not the absence.** Seven hazard pairs exist
+today and all seven are benign, for two distinct reasons — three because both
+sides reach the same canonical (`united states`/`united states of america` → `usa`),
+four because the entities genuinely differ and losing the overlap is *correct*
+(`korea republic`/`czech republic`). A new alias creating an eighth fails at
+commit time, forcing whoever adds it to classify it rather than discover it
+months later as a silent false refusal.
+
+The pair set is **derived** from the table, never maintained beside it, so the
+scan cannot drift from what it scans — and a second test fails if the inventory
+lists a pair that no longer exists, so it cannot accumulate stale entries that
+mask a real one.
+
+**POSITIVE CONTROL RUN, because a guard that never fires is worth nothing:**
+injecting `"standard liege" → "standard"` alongside a `"st. liege"` counterpart —
+exactly the shape that reached production — makes the pin fire and name the pair.
+Removed again; the inventory returns to zero new hazards.
+
+**The site is NOT fixed.** Fixing it symmetrically is a design change and belongs
+with the guard work already deferred. 871 tests pass.
