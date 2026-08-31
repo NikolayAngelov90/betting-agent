@@ -6618,3 +6618,176 @@ the taken price, not to a taken/closing mismatch.
 > somewhere between, and is not established.
 
 *Established 2026-08-31. No repair, no build.*
+
+---
+
+# GUARD DESIGN — POSITION, the second rule
+
+**Filed beside *"a lookup table is only as good as the earliest decision point
+that consults it"*, because they are the same insight from opposite sides.**
+
+`team_names_similar` returns **False** on `"Vitória SC"` vs stored
+`"Guimaraes"`, and **True** on stored `"Guimaraes"` vs stored `"Guimaraes"`.
+Same comparator, same clubs, opposite answers — because team resolution happens
+in between.
+
+> ## A comparison's reliability is a property of its POSITION in the pipeline, not of the comparator.
+>
+> **The same test applied before normalisation and after it is not the same
+> test.** Benchmark a comparator in isolation and you measure something the
+> running system never does.
+
+**The pair, stated together:**
+
+| rule | failure it names |
+| --- | --- |
+| *A lookup table is only as good as the earliest decision point that consults it.* | knowledge exists but the deciding caller never reads it |
+| **A comparison is only as good as the resolution state of its inputs.** | the caller reads it, at a point where its inputs are not yet comparable |
+
+**Between them they explain three defects already in this ledger, which is the
+test of whether a rule is worth keeping:**
+
+* **the alias that never fired** — `TEAM_NAME_ALIASES["Athletic Club"]` was
+  correct and consulted at step 2, while `_get_or_create_team_id` decided at
+  step 0. *(Rule 1.)*
+* **the identity gate's false positives** — the gate compares a provider name
+  against a stored one at ingest, the least-resolved point available. *(Rule 2.)*
+* **the duplicate rows** — same comparison, same position, and it is why five
+  pairs that are trivially recognisable once both rows exist were never merged.
+  *(Rule 2.)*
+
+**And it is why s5.9 is a pick-time check rather than a better matcher.** Not a
+preference: **measured.** All five live duplicate pairs pass
+`team_names_similar` on both sides when the two STORED rows are compared, and
+all five failed at ingest. **The position is doing the work, not the predicate.**
+
+---
+
+# s5.9 — THE CAP KEYS ON FIXTURE IDENTITY
+
+**`src/data/fixture_identity.py`. Built, tested, cohort bumped.**
+
+| | |
+| --- | --- |
+| `CODE_REVISION` | `s5.8` → **`s5.9`** |
+| `model_version` | `stage5_baseline_20260807.dfe302` → **`.694a60`** |
+| cohort | **0 picks stamped** — clean break, nothing to pool |
+| tests | **887 pass** (9 new) |
+
+## The rule, and the unequal evidence behind its branches
+
+> **Two rows are the same fixture if they share a league, a kickoff minute, and
+> at least one club resolved to the same provider id.**
+
+| branch | evidence | measured |
+| --- | --- | --- |
+| **1 — provider id** | **PROVABLE.** A club cannot play two fixtures in one competition at one minute. No tunable part; cannot drift. | 835 pairs |
+| **2 — stored names** | **HEURISTIC, measured not assumed.** | **89 refusals, 0 provably wrong** |
+| **3 — residual** | **DECLARED.** `Vitória SC`/`Guimaraes`, zero shared tokens. | not empty |
+
+### Branch 2's false-positive rate, on the hardest available sample
+
+**The only part shipping on anything but proof, so it was measured before it
+was built.** Run against every same-league same-minute pair in the database,
+and again at a wider ±4h:
+
+| | ±4h | exact minute |
+| --- | --- | --- |
+| pairs | 78,400 | 60,976 |
+| branch 1 fires (excluded — branch 2 only runs where 1 does not) | 858 | 835 |
+| branch 2 eligible | 77,542 | 60,141 |
+| **branch 2 would refuse** | **89** | **89** |
+| **provably different fixtures → FALSE POSITIVE** | **0** | **0** |
+
+**Three independent deciders were applied to those 89, not one:**
+
+| decider | pairs it condemns |
+| --- | --- |
+| both slots resolve on both rows and differ | **0** |
+| both rows carry `matches.apifootball_id` and they differ | **0** |
+| both rows carry `flashscore_id` and they differ | **0** |
+
+> **MEASURED FALSE-POSITIVE RATE: 0 of 89.** The bound is **[0.0%, 40.4%]**
+> only if every pair where *neither* row carries a provider fixture id is also
+> wrong — which inspection contradicts: `Man United v Man City` ‖
+> `Manchester Utd v Manchester City`, `Salernitana v AC Milan` ‖
+> `US Salernitana 1919 v Milan`.
+
+**DECISION: branch 2 REFUSES, it does not merely warn.** Stated before
+building, on that number. **Had it come back high, branch 1 alone still catches
+both confirmed violations** — every one of the four known duplicate pairs
+groups via `branch=provider_id` — and branch 2 would have been demoted to a
+logged warning. It did not, so it refuses.
+
+**This is the difference between a measured heuristic and the fifteen
+data-fitted thresholds the 2026-08-07 audit condemned:** those were fitted to
+the sample they were measured on. This is measured on the *hardest* sample
+available and would have been abandoned had the number gone the other way.
+
+## Refusing on evidence, never on its absence
+
+**60,141 of 60,976 same-league same-minute pairs are genuinely different
+simultaneous fixtures** — the norm on a final matchday. **A rule that failed
+closed on unresolvable pairs would reject the whole card.** The same
+distinction `_parse_match_date` draws: **unknown is not wrong.**
+
+## Verified against production, not only against fixtures
+
+| pair | result | branch |
+| --- | --- | --- |
+| 2026-08-30 Deportivo v Valencia (**the s5.3 violation**) | **GROUPED** | `provider_id` |
+| 2026-08-14 Sporting CP v Guimarães (3 picks) | **GROUPED** | `provider_id` |
+| 2026-08-31 Braga v Guimarães | **GROUPED** | `provider_id` |
+| 2026-08-30 Celta v Ath Bilbao | **GROUPED** | `provider_id` |
+
+**Controls, which matter as much as the catches:**
+
+* today's **20 picked fixtures → 20 groups. Nothing collapsed.**
+* a full matchday, **80 fixtures on 2026-08-30 → 78 groups** — exactly the two
+  known duplicates, nothing else.
+
+## Two implementation details worth the ledger
+
+**The twin is usually not a candidate.** On 08-31 row 50990 carried 78 odds and
+produced no pick. A resolver seeing only candidates would have grouped nothing.
+It loads every row sharing a `(league, kickoff)` with any input — and the saved
+picks' `match_id`s go in too, because **a pick saved earlier today on the twin
+must consume this fixture's slot.** That is the cross-run half of the guarantee.
+
+**A bug the tests caught that production would have hidden.** The `IN :ids`
+bind needs `expanding=True`; without it the driver raises, the defensive
+`except` logs a warning, and the resolver degrades to row identity. **The
+feature would have been a no-op while reporting that it was fine** — the exact
+shape this ledger keeps finding. The fallback behaved correctly; the fallback
+was also what would have concealed it. Pinned by
+`test_a_broken_session_degrades_to_row_identity_and_does_not_raise`.
+
+**And the SQLite/Postgres kickoff type again:** SQLite returns `match_date` as
+text, Postgres as a datetime, and the bucket key is `(league, kickoff)`. Mixed
+types put one fixture's rows in two buckets and group nothing. Normalised at
+the boundary, once — the same trap `coverage_checks` hit two days ago.
+
+## The number that set the deadline
+
+**Not severity — ordering.** Zero of the 48 MODEL observations sit on a
+duplicate row, but that separation is **temporal**: captures ran 08-14 → 08-27,
+the live duplicates are 08-28 onward, and **the credit budget resets tomorrow,
+which is when captures resume.** Every observation taken on a duplicated
+fixture from that point inflates the cluster count that `deff` is computed
+from, and `deff` underwrites every confidence interval in this project.
+
+> **Built before the next capture window rather than after it.**
+
+## Still a floor
+
+**750 duplicate pairs under the strict identical-kickoff test, and the one
+confirmed violation sits OUTSIDE it.** Identical kickoff bought precision and
+lost every pair whose sources disagree on time. A ±26h membership test
+implicates 4,329 rows. **The true population is between, and is not
+established.** `test_a_different_kickoff_minute_is_a_different_bucket` pins the
+limitation rather than papering over it.
+
+**No row repaired.** s5.9 stops the guarantee being violated; it does not merge
+the duplicates already there.
+
+*Built 2026-08-31.*

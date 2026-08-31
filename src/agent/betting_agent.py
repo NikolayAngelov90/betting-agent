@@ -1873,18 +1873,38 @@ class FootballBettingAgent:
             # Pre-populate from already-saved picks for today so re-running --picks
             # doesn't accumulate more than max_picks_per_match across multiple runs.
             existing_counts: dict = Counter()
+            # s5.9 — THE CAP IS ABOUT FIXTURES, AND match_id IDENTIFIES A ROW.
+            #
+            # On 2026-08-30 one real fixture (Deportivo v Valencia) carried two
+            # rows, 50920 from API-Football and 50927 from Flashscore, and
+            # therefore two independent pick slots. Both were used. The cap
+            # could not see it, because it grouped by row.
+            #
+            # `resolve_fixture_groups` maps every row of one fixture onto a
+            # single canonical id, so the grouping below asks the question the
+            # guarantee is actually about. It refuses on identity evidence
+            # (a shared provider club id at a shared kickoff minute, which is
+            # an impossibility argument rather than a threshold), never on the
+            # absence of it. See src/data/fixture_identity.py.
+            from src.data.fixture_identity import resolve_fixture_groups
             with self.db.get_session() as _sess:
                 _existing = _sess.query(SavedPick.match_id).filter(
                     SavedPick.pick_date == target
                 ).all()
-                for (_mid,) in _existing:
-                    existing_counts[_mid] += 1
+                _saved_ids = [_mid for (_mid,) in _existing]
+                # Saved ids go in too: a pick saved earlier today on the TWIN
+                # must consume this fixture's slot, which is the cross-run half
+                # of the guarantee.
+                _fixture_of = resolve_fixture_groups(
+                    _sess, [r.match_id for r in deduped] + _saved_ids)
+                for _mid in _saved_ids:
+                    existing_counts[_fixture_of.get(_mid, _mid)] += 1
 
-            # Group picks by match_id, sort each group by confidence descending,
-            # then keep only the top N (minus already-saved) from each match.
+            # Group picks by FIXTURE, sort each group by the system's own
+            # ranking, then keep only the top N (minus already-saved).
             by_match: dict = defaultdict(list)
             for rec in deduped:
-                by_match[rec.match_id].append(rec)
+                by_match[_fixture_of.get(rec.match_id, rec.match_id)].append(rec)
 
             limited = []
             for match_id, group in by_match.items():

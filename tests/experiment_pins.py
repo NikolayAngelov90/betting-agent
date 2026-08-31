@@ -21,17 +21,23 @@ History:
                     one-pick-per-match with a single ranking definition;
                     also covers a training-data correction, which the
                     fingerprint itself does not cover
+    s5.9  2026-08-31  the per-match cap keys on FIXTURE identity, not ROW
+                    identity. s5.3 established one-pick-per-match; two rows
+                    for one fixture defeated it silently, measured on
+                    2026-08-30 (Deportivo v Valencia, two picks). 835 pairs
+                    match the provable branch; exactly 2 second-picks would
+                    have been refused out of 1,458.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.8"
+CODE_REVISION_PIN = "s5.9"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.dfe302"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.694a60"
 
 #: The previous cohort, kept so a reader can see what moved and when.
-PREVIOUS_CODE_REVISION = "s5.2"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.485823"
+PREVIOUS_CODE_REVISION = "s5.8"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.dfe302"
 
 
 #: How many completed-match queries are exempt from the training-exclusion

@@ -384,7 +384,62 @@ TRACKED_KEYS: List[str] = [
 #:
 #:       WHAT NEITHER FIXES: GitHub's scheduler. A 03:00 cron delayed 11h lands
 #:       at 14:00 and still misses a Saturday afternoon card. OPS-3 stays open.
-CODE_REVISION = "s5.8"
+#:
+#: s5.9  THE PER-MATCH CAP NOW KEYS ON FIXTURE IDENTITY, NOT ROW IDENTITY.
+#:
+#:       `max_picks_per_match` is a guarantee about a FIXTURE; `match_id`
+#:       identifies a ROW. Two rows for one real fixture were two groups and
+#:       therefore two independent pick slots, and the cap could not see it.
+#:
+#:       THE VIOLATION THAT FORCED THIS — measured, not hypothetical:
+#:         2026-08-30  Deportivo La Coruña v Valencia, spain/laliga 17:30
+#:           row 50920 (API-Football) -> Double Chance X2 @1.515, settled loss
+#:           row 50927 (Flashscore)   -> Under 2.5 @1.56, EV -0.1924
+#:         One fixture, two picks, both s5.7. The correlation filter also keys
+#:         on the match, so the positively-correlated pair was never compared —
+#:         the lower-EV member is exactly what it exists to drop.
+#:       A second case, 2026-08-14 Sporting CP v Guimarães, carried THREE picks
+#:       across two rows; it predates `bef66ca` (2026-08-23) when the cap was
+#:       still 2, so only the 08-30 case violates s5.3 proper.
+#:
+#:       NOT A BETTER MATCHER, DELIBERATELY. `Vitória SC` and `Guimaraes` are
+#:       one club sharing zero tokens — a residual already documented as
+#:       unreachable by any lexical test. Aliases close the two known pairs and
+#:       not the next two. This asks whether two rows are the same FIXTURE and
+#:       answers from provider identity, so it holds when the matcher fails.
+#:
+#:       SELECTION-AFFECTING, and here is the size of it. MEASURED against the
+#:       whole database 2026-08-31:
+#:         · 835 pairs match the provable branch (same league + same kickoff
+#:           minute + >=1 club sharing a provider id)
+#:         · of those, exactly 2 would have had a second pick refused, out of
+#:           1,458 saved picks — both are the violations above
+#:         · the heuristic branch (no shared id, both stored name pairs
+#:           similar) fires on 89 pairs, of which ZERO are provably different
+#:           fixtures under any available decider: not team provider id, not
+#:           `matches.apifootball_id`, not `flashscore_id`. Measured
+#:           false-positive rate 0 of 89, bounded [0.0%, 40.4%] only if every
+#:           pair where NEITHER row carries a provider fixture id is also
+#:           wrong, which inspection contradicts.
+#:
+#:       A reader comparing s5.8 to s5.9 should expect NO systematic difference
+#:       in pick volume — 2 refusals in 1,458 is 0.14% — and should not
+#:       attribute any cohort difference to this change.
+#:
+#:       THE POPULATION IS A FLOOR. 750 duplicate pairs under a strict
+#:       identical-kickoff test; the one confirmed violation sits OUTSIDE it,
+#:       in the weak set, because identical-kickoff bought precision and lost
+#:       every pair whose sources disagree on kickoff time. A wider ±26h
+#:       membership test implicates 4,329 rows. The true population is between
+#:       and is NOT established.
+#:
+#:       WHY NOW rather than later: every CLV interval resamples FIXTURES, so
+#:       duplicated rows inflate the cluster count and narrow every interval.
+#:       Zero of the 48 MODEL observations sit on a duplicate row TODAY, but
+#:       that separation is temporal — captures ran 08-14..08-27 and the live
+#:       duplicates are dated 08-28 onward. It does not survive the next
+#:       capture window.
+CODE_REVISION = "s5.9"
 
 
 def _stable(value: Any) -> Any:
