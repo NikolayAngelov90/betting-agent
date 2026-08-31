@@ -6041,3 +6041,201 @@ rather than requiring a one-off sweep whose completeness could not be checked.
 now.**
 
 *Put to Niki, unrepaired, 2026-08-31.*
+
+---
+
+# AUDIT 2026-08-31 — the first run under `0 3 * * *`
+
+**Read-only. Nothing fixed.** Both registered files were read before the logs:
+`docs/stage21-schedule-prediction.md` and the regression count in `f4f5c2d`.
+
+## PART A — the schedule outcome
+
+**Run `33375724727`, started `2026-08-31T09:02:37Z`. Delay against `0 3 * * *`:
+6h 02m 37s.**
+
+| outcome | boundary | today |
+| --- | --- | --- |
+| WITHIN TOLERANCE | start ≤ 08:42 UTC | — |
+| **LATE BUT COVERING** | **08:42 < start ≤ 09:45** | **← 09:02:37** |
+| BEYOND TOLERANCE | start > 09:45 UTC | — |
+
+**Not the predicted outcome.** Prediction 1 said a historical envelope puts the
+start between 03:00 and 08:42; **6h02m exceeds the 5.7h historical maximum by
+20 minutes**, so the run landed in the band the cron change was bought for.
+
+### THE LIMIT, restated verbatim from the registered file
+
+> **A `WITHIN TOLERANCE` result on 2026-08-31 is not evidence that 6h45m of
+> margin is sufficient, and must not be recorded as such.**
+
+**Today produced LATE BUT COVERING, and the same limit applies with more force.**
+Today's earliest kickoff was **16:00 UTC**, so every delay up to ~13h was
+harmless; "covering" was guaranteed by the card, not earned by the margin.
+**Today tests that the cron fires and that picks stamp `s5.8`. Nothing more.**
+
+**PRIMARY CHECKPOINT REMAINS Wednesday 2026-09-02**, and per the registered
+instruction its own card must be checked for lateness *before* the result is
+read.
+
+### The four card measurements
+
+| measurement | value |
+| --- | --- |
+| fixtures in window at execution | **28** |
+| already kicked off at 09:02:37 | **0** |
+| **fraction of the card lost** | **0.0%** |
+| lead time, n=20 | p10 **6.4h** · median **7.9h** · p90 **9.6h** |
+
+Against the registered projection of **7.1 / 10.7 / 15.4h**: **today came in
+below projection at every point.** The projection assumed picks written ~03:20;
+they were written ~09:37. **Today's median of 7.9h sits inside the on-time
+baseline of 4.4–8.8h** — the lead was normal, not improved. The doubling the
+cron change was expected to buy has **not been observed**, because the run has
+not yet started near 03:00.
+
+### A DEFECT IN THE REGISTERED ARITHMETIC, found by measuring it
+
+The 09:45 boundary came from *"a ~20-min run must start by 09:45 UTC"* against a
+10:04 earliest kickoff. **Measured today: the run took 63m37s, and picks were
+written at 09:37 — 34m35s after start**, not ~20.
+
+> **The true boundary is 10:04 − 0:35 = ~09:29, not 09:45. The margin is
+> 6h29m, not 6h45m** — about 16 minutes thinner than registered.
+
+Today's 09:02 start is still inside it, so **no outcome changes**; the boundary
+itself was optimistic and is corrected here rather than after it costs a card.
+
+## PART B — the post-`ca3a7f2` baseline: **MET**
+
+**Zero `TEAM IDENTITY MISMATCH` refusals in the entire run.** (315 grep hits were
+test names; the refusal logger emitted nothing.)
+
+| class | required | observed |
+| --- | --- | --- |
+| **false positive** | **must be ZERO** | **0 — baseline met** |
+| correct (Maccabi/Telstar, Cracovia/Rakow) | expected when those clubs play | **0 — neither club played** |
+| a sixth | investigate against `GET /teams?id=` | **0** |
+
+**`Standard Liege` / `St. Liege` did not recur.** The union fix holds on its
+first post-fix run.
+
+**Stated plainly: the correct-refusal half of the baseline was met vacuously.**
+Neither corrupt club had a fixture today, so this run is **not** evidence that
+the two known corruptions still recur — only that no false positive occurred.
+
+**Cross-check with `33317038655` (08-30 14:30, eight minutes pre-fix)** confirms
+`f4f5c2d`'s *before* column verbatim: `Cracovia Krakow`/`Rakow` (correct) and
+`Standard Liege`/`St. Liege` (false positive), `2 fixture(s) SKIPPED`.
+
+## PART C — the unpriced alarm's first live firing
+
+**IT RETURNED A MEASURED RESULT.** Not `None`. **2 ALARM, 1 INFO.** The
+distinction built two days ago was exercised and reported honestly.
+
+| # | fixture | league | KO | peers | median | fs id | af id |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Celta Vigo B vs Castellon | spain/laliga2 | 19:30 | 2 | 75 | ✓ | **✗** |
+| 2 | Sporting Clube de Braga vs Guimaraes | portugal/primeira-liga | 19:15 | 2 | 73 | ✓ | **✗** |
+
+### BOTH ARE A DIFFERENT DEFECT CLASS FROM THE ONE THE ALARM WAS BUILT FOR
+
+**Neither is identity corruption. Both are duplicate match rows:**
+
+| Flashscore row | af id | odds | twin | af id | odds | picked |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50969 Sporting Clube de Braga v Guimaraes | ✗ | 86 | **50990 Braga v Guimaraes** | ✓ | 78 | 50969 |
+| 50976 Celta Vigo B v Castellon | ✗ | **0** | **50991 Celta de Vigo II v Castellón** | ✓ | 81 | 50991 |
+
+Same kickoff, same fixture, two rows each — one from Flashscore, one from
+API-Football, never unified because `Sporting Clube de Braga` ≢ `Braga` and
+`Celta Vigo B` ≢ `Celta de Vigo II`.
+
+**The alarm's message asserts a cause it did not establish:** *"the team was
+never resolved, so the fixture was never priced."* The first half is true; **the
+second is false — the fixture WAS priced, on its twin.**
+
+### ALARM 2 WAS FALSE ELEVEN SECONDS AFTER IT FIRED
+
+| event | time |
+| --- | --- |
+| alarm fires on 50969, "0 odds" | **09:22:51.01** |
+| 86 odds rows written to 50969 | **09:23:01.94** |
+
+**A TIMING DEFECT.** The check sits after `API-Football update complete`, but
+odds keep arriving from later paths. **50969 was priced 10.9s later and picked**
+(pick 1475, 1X2 Home Win). Only 50976 is still unpriced now.
+
+> **First live firing: 2 alarms, 1 false within eleven seconds, 0 of the class
+> it was built to catch.** Recorded as it stands; not fixed.
+
+### Cross-check against Part B, and the repair-decision series
+
+**0 refusals today → 0 fixtures blocked by a correct refusal → today contributes
+NOTHING to the population the deferred repair decision rests on.**
+
+| day | ALARM | from a correct refusal | other class |
+| --- | --- | --- | --- |
+| 2026-08-29 | 3 | 1 (Cracovia) + 1 (the regression) | 1 (Avellino, unclassified) |
+| 2026-08-30 | 0 | 0 | 0 |
+| **2026-08-31** | **2** | **0** | **2 (duplicate rows)** |
+
+**The ALARM class is broader than the corruption class**, which is a finding
+against my own registered design: I stated the split by cause would isolate
+identity corruption, and on live data it surfaced a duplicate-row defect
+instead. **Useful, but not what was claimed.**
+
+## PART D — cohort and substrate
+
+**20 picks today, every one `stage5_baseline_20260807.dfe302` (`s5.8`).** No pick
+dated 2026-08-31 carries an earlier fingerprint. Prior cohorts intact and not
+collapsed: `485823` (246), `098437` (18), `60caed` (34), `645bac` (66).
+
+| substrate | 08-30 | **08-31** |
+| --- | --- | --- |
+| `odds_snapshots` rows | 12,888 | **24,524** |
+| **keys with ≥3 observations** | 91 | **108** |
+| `injury_observations` | 286 | **636** |
+
+**The Stage 18 accumulation trigger remains satisfied and is growing.** H1/H4 are
+the next stage's work.
+
+## PART E — the routine pass
+
+**26 runs listed as unaudited; 10 are genuinely new.** The other 16 were recorded
+in the 2026-08-30 entry as *"19 others"* **without run ids**, so the script
+cannot match them. **A ledger row that names no id is not machine-checkable** —
+recorded as a format defect, not re-audited.
+
+| run | workflow | started | verdict | discovery |
+| --- | --- | --- | --- | --- |
+| 33271591573 | closing-lines | 08-29 19:43 | CLEAN | |
+| 33280580415 | closing-lines | 08-29 23:16 | CLEAN | |
+| 33285273030 | closing-lines | 08-30 01:15 | CLEAN | |
+| 33317038655 | daily-picks | 08-30 14:30 | CLEAN | `disc[fs=48 fdo=13 af=1]` |
+| 33318395344 | paper-report | 08-30 15:00 | CLEAN | |
+| 33318488899 | closing-lines | 08-30 15:02 | CLEAN | |
+| 33319296937 | closing-lines | 08-30 15:19 | CLEAN | |
+| 33331934377 | closing-lines | 08-30 19:49 | CLEAN | |
+| 33341871995 | closing-lines | 08-30 23:27 | CLEAN | |
+| **33375724727** | **daily-picks** | **08-31 09:02** | **DEGRADED** | **`disc[fs=26 fdo=7 af=2]`** |
+
+**`conclusion: success` on all ten remains no evidence** — nine steps carry
+`continue-on-error`.
+
+**Today is DEGRADED on the new unpriced assertion**, which is the assertion
+working; the two alarms are analysed in Part C.
+
+### Three signals recorded, none acted on
+
+* **Flashscore kickoff-parse refusals: 207 today, 192 on 08-30.** Steady, not a
+  regression. The Stage 19 fail-closed parser is refusing a large share of the
+  rows it sees (`<no time element found>`), and **14 leagues produced zero via
+  Flashscore**. Discovery fell `fs=48 → fs=26` day on day.
+* **TheOddsAPI: 21 credits remaining, "~2 days left".** A resource cliff with a
+  date on it.
+* **Today's `closing-lines` and `paper-trading-report` have not fired.** Due
+  10:47 UTC, now 12:53 UTC — **2h 06m late**. Under the OPS-3 12-hour rule this
+  is LATE, **not** MISSED, and is not assessable before 22:47 UTC.
+
+*Read-only audit, 2026-08-31.*
