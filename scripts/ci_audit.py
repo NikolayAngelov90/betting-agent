@@ -142,6 +142,13 @@ PATTERNS = {
     # that was the single run where the two disagreed. The A1 cascade defect
     # surfaced here for four days as a swallowed NotNullViolation.
     "decisions_discarded": r"Could not apply",
+    # Stage 21 follow-up. A fixture with no odds is indistinguishable from one
+    # nobody wanted to bet. Alarms only on the identity class (no API-Football
+    # id); odds-budget coverage is logged at INFO and deliberately not counted
+    # here, because 15 of 18 on 2026-08-29 were budget and would have drowned
+    # the 3 that were not.
+    "unpriced_fixtures": r"UNPRICED FIXTURES: (\d+) fixture",
+    "unpriced_check_dead": r"UNPRICED FIXTURE CHECK DID NOT RUN",
     # Stage 19. The audit was blind to a day that discovered nothing: 2026-08-26
     # analysed 0 fixtures against a card of six real matches and was flagged
     # only for the API-Football suspension. It surfaced because Niki looked at a
@@ -313,6 +320,19 @@ def assertions(facts: Dict[str, object],
             "0 fixtures found in total")
     if facts.get("no_fixtures_at_all"):
         hits.append("NO FIXTURES FOUND for the day — nothing was analysed")
+
+    # NOT self-calibrating: a fixture that could not be priced because a team
+    # would not resolve is wrong on the first occurrence, not relative to
+    # history. It is the shape that hid for three days as "nobody bet that one".
+    if facts.get("unpriced_fixtures"):
+        hits.append(
+            f"{facts['unpriced_fixtures']} fixture(s) UNPRICED because a team "
+            "could not be resolved, while same-league peers were priced")
+
+    # A check that did not run is not a clean check.
+    if facts.get("unpriced_check_dead"):
+        hits.append("the unpriced-fixture check DID NOT RUN — no evidence "
+                    "either way, not a clean result")
 
     if facts.get("tracebacks"):
         hits.append(f"{facts['tracebacks']} traceback(s) in the log")

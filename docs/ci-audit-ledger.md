@@ -5903,3 +5903,141 @@ measured against.
 
 *No post-fix `daily-picks` run had occurred at the time of writing
 (2026-08-31 07:40 UTC); the first will be the run under the new 03:00 cron.*
+
+---
+
+# UNPRICED vs UNWANTED — the assertion, and what the correct refusals cost
+
+**2026-08-31. One new check, one measurement, no repair.**
+
+## PART 1 — the alarm
+
+`src/data/coverage_checks.py`. **A fixture with zero odds is indistinguishable
+from a fixture nobody wanted to bet** — identical in every output the pipeline
+emits. That is how the Stage 20 regression survived three days.
+
+**SELF-CALIBRATING, with no threshold and no maintained league list:** a fixture
+is compared against its OWN same-league, same-day peers. Zero odds where peers
+are priced is an anomaly; zero odds where nobody is priced is a quiet league, an
+off-season, or an uncovered competition — silent by construction, not by
+exclusion.
+
+### The registered proof, replayed
+
+| day | unpriced | **ALARM** | INFO |
+| --- | --- | --- | --- |
+| 2026-08-29 | 18 | **3** | 15 |
+| 2026-08-30 | 10 | **0** | 10 |
+
+```
+ALARM  Avellino vs L.R. Vicenza      italy/serie-b            peers=5  med=91
+ALARM  Leuven vs St. Liege           belgium/jupiler-pro      peers=3  med=79
+ALARM  Radomiak Radom vs Cracovia    poland/ekstraklasa       peers=2  med=72
+```
+
+**It names Leuven vs St. Liege and is silent on all three of its peers** (77, 79,
+175), which was the registered requirement.
+
+### Two deviations from the literal specification, both stated
+
+**1. The trigger is NOT "has a Flashscore id but no API-Football id".** That
+signature describes the Leuven case exactly and **misses the Cracovia rows, which
+carry neither id**. The id columns are *reported* because they name the likely
+cause; they are not the trigger, because the trigger must catch the class rather
+than the instance.
+
+**2. It splits by cause, because unsplit it fires every day.** 18 alarms on a day
+with 3 real problems is the `fixtures_zero_active` failure again — a check that
+fires daily is a check that gets ignored. **No API-Football id → the team was
+never resolved → ALARM. Has one → odds-budget coverage → INFO.**
+
+### Two defects found in the check while building it
+
+**THE SQL WAS POSTGRES-ONLY.** `match_date::date`, `percentile_cont` and `FILTER`
+all raise on the SQLite fallback, where the `except` swallowed them and returned
+an empty list. **The check would have reported "no unpriced fixtures" on exactly
+the database where nobody would look.** The grouping now happens in Python. The
+portable form is also the testable one — the pin runs on SQLite.
+
+**A DEAD CHECK READ AS A CLEAN CHECK.** Run against a stale credential it printed
+`2026-08-29: 0 unpriced` and returned success. Empty now means
+*measured-and-clean*; **`None` means unmeasured, and the caller says so**:
+
+```
+UNPRICED FIXTURE CHECK DID NOT RUN — the query failed, so this run has NO
+evidence either way about unpriced fixtures. Not a clean result.
+```
+
+Both shapes are the one this check exists to catch, reproduced inside it.
+
+`ci_audit.py` greps both. **Not self-calibrating, deliberately:** a fixture that
+could not be priced because a team would not resolve is wrong on its first
+occurrence, not relative to history. `tests/test_unpriced_fixture_alarm.py` pins
+the replay and all three properties. 877 tests pass. **Cohort-neutral** — the
+check only reads and logs.
+
+## PART 2 — what the two unrepaired corruptions cost, and three corrections
+
+**Nothing repaired. The measurement corrects my own earlier statements first.**
+
+| what I said earlier | measured 2026-08-31 |
+| --- | --- |
+| "the blocked clubs are Maccabi and Cracovia" | **Maccabi Tel Aviv has NO team row at all.** The gate refuses it at step 0 every time, so it has never been created. The only `%tel aviv%` row is Hapoel (4501), unrelated. |
+| "12 of 12 August Cracovia fixtures unpriced" | **10 of those 12 are phantoms** — `match_date` equal to `created_at` to the microsecond, the already-documented class. **The real sample is n=2**, both unpriced. |
+| "seven near-duplicate Cracovia vs Wieczysta rows — the corruption generates duplicates" | **Withdrawn. They are the phantom class**, not this corruption. I attributed one known defect's output to another. |
+
+### Cracovia — MEASURED, and the two regimes disagree
+
+| window | Cracovia priced | peers priced | gap |
+| --- | --- | --- | --- |
+| Aug 2026 (phantoms excluded) | **0 of 2 (0%)** | 25 of 33 (**76%**) | 76pp |
+| 2025/2026 season | 8 of 37 (**21.6%**) | 117 of 324 (**36.1%**) | 14.5pp |
+
+**The block is not total historically — Cracovia was priced 8 times in 2025/26.**
+The recent regime is worse because the API-Football id path is now the primary
+odds source. **Both numbers are reported because they disagree**, and the
+resulting range is the honest answer rather than the more alarming half of it.
+
+**Per season, at 34 Ekstraklasa fixtures per club** (306 fixtures / 18 clubs × 2,
+MEASURED from 2024/2025) and **0.543 picks per priced Ekstraklasa fixture**
+(19 picks / 35 priced, MEASURED since 2026-06-01):
+
+| basis | fixtures lost/season | **picks lost/season** |
+| --- | --- | --- |
+| current-regime gap (76pp) | ~26 | **~14** |
+| season-long gap (14.5pp) | ~5 | **~3** |
+
+### Maccabi Tel Aviv — BOUNDED, not measured, and the reason is structural
+
+**`other/israel` is not a configured league**, so this club reaches the system
+only through `europe/*`. **Its fixtures cannot be counted because they were never
+created** — that is the corruption. Observable instead: **2 refusals in the 3 days
+API-Football has been healthy** (08-27, 08-28), which proves it is live in a
+configured competition this season.
+
+**ASSUMED** (stated as an assumption): a European participant plays 6 league-phase
+fixtures plus up to 8 qualifiers → **6–14 fixtures/season**, conditional on
+qualifying, → **~4–9 picks/season** at 0.669 picks per priced fixture (694 picks
+/ 1038 priced, MEASURED since 2026-06-01).
+
+### THE TOTAL, with its uncertainty intact
+
+> **~7 to ~23 picks per season across both corruptions — 0.25% to 0.8% of
+> annual pick volume** (694 picks in 3 months → ~2,800/year, MEASURED).
+
+**The cost is real, recurring, and small.** It is also **not a bug** — every one
+of those refusals is the gate working correctly against a wrong stored integer.
+
+### What this changes about the repair decision
+
+**It removes the urgency and keeps the case.** A repair pass is worth doing on
+its own schedule, not as an emergency, and the population is still
+unestablished — **two known corrupt rows out of an unmeasured number.**
+
+**And the alarm above is what makes the population measurable.** It names
+unresolved fixtures every day, so the population now accumulates as evidence
+rather than requiring a one-off sweep whose completeness could not be checked.
+**That is an argument for waiting a few days before repairing, not for repairing
+now.**
+
+*Put to Niki, unrepaired, 2026-08-31.*

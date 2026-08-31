@@ -632,6 +632,27 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"API-Football update failed: {e}")
 
+        # Stage 21 follow-up — UNPRICED is indistinguishable from UNWANTED.
+        #
+        # A fixture with no odds produces no pick, and so does a fixture nobody
+        # wanted to bet: identical in every output the pipeline emits. Two
+        # measured causes, each one wrong integer — the Stage 20 identity-gate
+        # regression (Leuven vs St. Liege, 0 odds against same-day peers at 77,
+        # 79 and 175) and row 411 holding Cracovia's API-Football id (12 of 12
+        # Cracovia fixtures unpriced in August 2026).
+        #
+        # Self-calibrating against the fixture's OWN same-league same-day peers,
+        # so there is no threshold and no maintained league list. Placed after
+        # the odds paths so it sees the finished state; never raises.
+        try:
+            from src.data.coverage_checks import report_unpriced_fixtures
+            _today = date.today()
+            with self.db.get_session() as _cov_session:
+                report_unpriced_fixtures(
+                    _cov_session, _today, _today + timedelta(days=2))
+        except Exception as _cov_e:
+            logger.debug(f"unpriced-fixture check skipped: {_cov_e}")
+
         if getattr(self.apifootball, "_account_suspended", False):
             try:
                 await self.telegram.send_alert(
