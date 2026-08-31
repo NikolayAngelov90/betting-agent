@@ -6437,3 +6437,184 @@ duplicate rows, the alias/suffix knowledge that would prevent new ones, and
 whether the pick cap should key on something other than `match_id`.
 
 *Established 2026-08-31. Read-only on the data.*
+
+---
+
+# THE THIRD CONSEQUENCE, and the key that does not depend on the matcher
+
+**2026-08-31. Read-only on the data. Nothing repaired, nothing built.**
+
+## PART 1 — the cluster-aware statistics: **CLEAN, and now measured**
+
+Every CLV interval in this project resamples **fixtures**, not picks. Two rows
+for one fixture are counted as two independent clusters, which understates the
+design effect, overstates the effective sample size, and narrows every interval
+derived from it.
+
+**The query, run against a deliberately WIDE duplicate definition (±26h rather
+than the ±0 strict test) because here a false positive is the safe direction:**
+
+| | |
+| --- | --- |
+| MODEL observations with a closing price | **48** (46 at Stage 16) |
+| distinct `match_id` behind them | **48** |
+| duplicate-pair rows in the whole database (±26h) | 2,325 pairs / **4,329 rows** |
+| **MODEL observations sitting on any of those rows** | **0** |
+| **observations on BOTH rows of one pair** | **0** |
+
+> ### VERDICT: CLEAN. `deff = 1.00` was measured on a fixture count containing no duplicates. **Stage 16's +0.107% upper bound stands.** The finding is forward-looking.
+
+**And the mechanism behind the result, so it is not mistaken for luck:** captures
+span **2026-08-14 → 2026-08-27**. Duplicate pairs in that window: the August 2026
+count is **3**, dated 08-28, 08-30 and 08-31 — **all after the last capture.**
+The separation is real but it is *narrow and temporal*, not structural. **The
+next capture window overlaps the live duplicate class directly**, so this result
+does not transfer forward.
+
+## PART 2 — THE FIVE, and what they actually show
+
+| # | date | league | A | B | created apart |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 2026-02-28 15:00 | england/championship | 30997 `QPR v Sheffield United` | 34316 `QPR v Sheffield Utd` | 385s |
+| 2 | 2026-05-03 14:45 | netherlands/eredivisie | 5987 `Sp Rotterdam v Go Ahead Eagles` | 6003 `Sparta Rotterdam v Go Ahead Eagles` | 64s |
+| 3 | 2026-05-17 17:00 | spain/laliga | 41295 `Ath Bilbao v Celta` | 41360 `Ath Bilbao v Celta Vigo` | 400s |
+| 4 | 2026-08-30 19:30 | spain/laliga | 50926 `Celta v Ath Bilbao` | 50962 `Celta Vigo v Ath Bilbao` | 557s |
+| 5 | 2026-08-31 19:15 | portugal/primeira-liga | 50969 `Sporting Clube de Braga v Guimaraes` | 50990 `Braga v Guimaraes` | 406s |
+
+**Source pair: `FS` ‖ `AF` or `none` ‖ `AFFS` in every case. It is the live
+API-Football ↔ Flashscore race, without exception.**
+
+### THE RESULT THAT REFRAMES THE FIX
+
+> **All five pass `team_names_similar` on BOTH sides — `merge=True` for every
+> one — when the two STORED rows are compared to each other.**
+
+The matcher did not fail on these names. **It fails because of WHAT IT COMPARES
+AT INGEST: the provider's raw name against the stored name.** By pick time both
+sides have been through `_get_or_create_team_id`, so both are canonical stored
+names carrying provider ids.
+
+```
+INGEST  (fails):  "Vitória SC"  vs stored "Guimaraes"     -> False
+PICK TIME (works): stored "Guimaraes" vs stored "Guimaraes" -> True
+```
+
+**A pick-time check is not merely a different place to put the same test. It is
+a strictly better-conditioned test, and that is measured on all five, not
+argued.**
+
+## PART 3 — THE FIXTURE-IDENTITY KEY: designed and priced, NOT BUILT
+
+### The rule
+
+> **Two pick candidates are the same fixture if they share a league, a kickoff
+> minute, and AT LEAST ONE club resolved to the same provider id.**
+
+### Why the false-refusal cost is ZERO BY CONSTRUCTION
+
+**A club cannot play two fixtures in one competition at the same minute.** So if
+two rows share a league, a kickoff minute and one resolved club, they *are* one
+fixture — regardless of what the other slot says. **This is not a threshold, a
+ratio or a tuned band; it is an impossibility argument**, and it is the reason
+this key can fail closed without a cost to price.
+
+### Measured against the database
+
+| | |
+| --- | --- |
+| pairs the rule matches | **835** |
+| ...both clubs shared (unambiguous) | 242 — *exactly the 242 provider-id pairs from the strict test, an independent cross-check* |
+| ...exactly one club shared | 593 |
+| **would have refused a second pick, historically** | **2 pairs, out of 1,458 saved picks** |
+| catches the confirmed 08-30 violation | **YES** — Valencia resolves to 532 on both rows |
+
+**It is precisely targeted: 835 pairs matched, 2 picks refused.**
+
+### FAIL-CLOSED BEHAVIOUR, stated plainly as asked
+
+**Three branches, and only the first is provable:**
+
+1. **≥1 shared resolved club id → REFUSE the second pick.** Provable, zero false
+   refusals. Catches all five and both violations.
+2. **No shared provider id, but stored names similar on both sides → REFUSE.**
+   Heuristic. Inherits `team_names_similar`'s unmeasured false-positive rate.
+   **Marked as heuristic, not proof.**
+3. **No shared id, names dissimilar → ALLOW.** The residual.
+
+> **Branch 3 is the `Vitória SC` / `Guimaraes` class — and at pick time it is
+> much smaller than at ingest, because all five of the live cases pass branch 2
+> on stored names even though they failed at ingest. It is not empty, and it is
+> not claimed to be.**
+
+**Blanket fail-closed is NOT recommended.** Refusing every same-league,
+same-minute pair with no shared id would refuse genuinely different simultaneous
+fixtures, which are the norm on a final matchday. **The rule must fail closed on
+identity evidence, not on the absence of it** — the same distinction the
+`_parse_match_date` fix drew.
+
+### Price
+
+* **Selection-affecting** — it changes which picks are persisted. **Requires
+  `s5.9`.** `s5.8` currently carries 20 picks, so this cannot amend.
+* Runtime: a group-by over one day's candidates, ~120 rows. Negligible.
+* Historical cost: **2 refused picks**, both of which are the violations.
+
+**NOT BUILT. Design and price only, as instructed.**
+
+## PART 4 — A SECOND VIOLATION, found by the key while pricing it
+
+**2026-08-14 19:15, `portugal/primeira-liga`, Sporting CP vs Guimarães:**
+
+| row | af id | odds | picks |
+| --- | --- | --- | --- |
+| 49496 `Sporting Clube de Portugal v Guimaraes` | — | 79 | **1** (Over 2.5 @1.55, win) |
+| 49520 `Sporting CP v Guimaraes` | 1575463 | 74 | **2** (Away Over 0.5 @1.90 win; Under 3.5 @1.66 loss) |
+
+**Three picks on one real fixture.**
+
+**The two violations are NOT the same violation, and the distinction is dated:**
+
+| | date | cap then in force | verdict |
+| --- | --- | --- | --- |
+| Sporting CP v Guimarães | 2026-08-14 | **2** (`max_picks_per_match: 1` landed 2026-08-23 in `bef66ca`) | 3 picks — exceeds the cap of 2, same mechanism |
+| Deportivo v Valencia | 2026-08-30 | **1** | **2 picks — the s5.3 violation proper** |
+
+**Only the 08-30 case violates s5.3.** The 08-14 case predates it and is
+recorded as the same defect operating against the older cap.
+
+## PART 5 — the fifty, and the twin-price question
+
+**50 pairs, not 51** — recount. In **all 50 the picked row carries more odds
+rows than its twin**, which is near-tautological: a row with no odds cannot
+produce a pick.
+
+**But odds-row count is book coverage, not price quality, so the real question
+was tested directly** — best available `1X2` Home price on each twin:
+
+| | n |
+| --- | --- |
+| pairs where both twins carry odds | 19 |
+| ...comparable on best home price | **6** |
+| picked twin **better** priced | 3 |
+| picked twin **worse** priced | **2** |
+| identical | 1 |
+
+The two worse cases: `50920` 2.68 vs twin 2.70; `6002` 3.80 vs twin 3.90.
+
+> **No evidence of systematic bias in the taken price, and n=6 with deltas of
+> ≤0.10 is far too small to exclude one.** Recorded as an open question with its
+> sample size attached, not as a clearance.
+
+**The closing capture resolves against the row the pick landed on, so taken and
+closing prices stay internally consistent** — the exposure is to the *level* of
+the taken price, not to a taken/closing mismatch.
+
+## RECALL — the label, kept
+
+> **750 is a FLOOR, not an estimate.** Identical-kickoff bought precision and
+> lost every pair whose sources disagree on kickoff time. **The one confirmed
+> s5.3 violation sits in the WEAK set, outside the strict 750.** The ±26h
+> membership test used in Part 1 implicates 4,329 rows — the true population is
+> somewhere between, and is not established.
+
+*Established 2026-08-31. No repair, no build.*
