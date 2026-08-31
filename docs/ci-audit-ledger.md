@@ -5823,3 +5823,83 @@ Removed again; the inventory returns to zero new hazards.
 
 **The site is NOT fixed.** Fixing it symmetrically is a design change and belongs
 with the guard work already deferred. 871 tests pass.
+
+---
+
+## What the Stage 20 regression cost — counted, not characterised
+
+The `s5.8` entry said Stage 20 "created a third false positive". That was
+unquantified. This is the count.
+
+**Window** — from the commit that introduced it to the commit that removed it:
+
+| | commit | UTC |
+| --- | --- | --- |
+| introduced | `1b29397` | 2026-08-27 **17:42** |
+| removed | `ca3a7f2` | 2026-08-30 **14:38** |
+
+**Four `daily-picks` runs fall inside it**, including the 08-30 14:30 run, which
+started **eight minutes before the fix was pushed** and therefore belongs to the
+*before* column.
+
+### Every refusal in the window, classified under the union rule now in place
+
+| date | incoming | stored | league | verdict |
+| --- | --- | --- | --- | --- |
+| 08-27 | Maccabi Tel Aviv | Telstar | netherlands/eredivisie | correct |
+| 08-28 | Maccabi Tel Aviv | Telstar | netherlands/eredivisie | correct |
+| 08-29 | Cracovia Krakow | Rakow | poland/ekstraklasa | correct |
+| **08-29** | **Standard Liege** | **St. Liege** | **belgium/jupiler-pro-league** | **FALSE POSITIVE** |
+| 08-30 | Cracovia Krakow | Rakow | poland/ekstraklasa | correct |
+| **08-30** | **Standard Liege** | **St. Liege** | **belgium/jupiler-pro-league** | **FALSE POSITIVE** |
+
+**6 refusals: 4 correct, 2 false positives.**
+
+### Two refusals, ONE fixture
+
+The 08-30 refusal is **not a second fixture.** Its log context reads
+`API-Football: 1365 fixtures on 2026-08-29` → refusal →
+`2026-08-29: 0 created, 101 updated`: the run was re-processing the **previous
+day's** card and hit the same pair again.
+
+**So the regression cost one fixture, refused on two consecutive days.**
+
+### The fixture, and what "skipped" actually meant
+
+`id=50291` — **Leuven vs St. Liege**, 2026-08-29 18:45, Jupiler Pro League.
+
+**The row survived**: Flashscore created it (`flashscore_id` present). What was
+lost was the **API-Football path**, and with it the odds. Against its own
+same-day peers:
+
+| fixture | `apifootball_id` | odds rows | picks |
+| --- | --- | --- | --- |
+| RAAL La Louviere v KV Mechelen | ✓ | 77 | 0 |
+| Kortrijk v Charleroi | ✓ | 175 | 1 |
+| **Leuven v St. Liege** | **✗** | **0** | **0** |
+| Cercle Brugge v Lommel SK | ✓ | 79 | 1 |
+
+**Zero odds against a peer median of 79, and no pick where two of three
+comparable fixtures produced one.** Of 9 Belgian fixtures across 08-28 → 09-01,
+**8 carry an API-Football id and 9 carry a Flashscore id** — the single gap is
+this one.
+
+> **THE COST: one Jupiler Pro League fixture rendered unpickable for three days.**
+> Not a missing fixture — an unpriced one, which is quieter, because a fixture
+> with no odds looks identical to a fixture nobody wanted to bet.
+
+### The baseline this sets for the next run
+
+**After `ca3a7f2` the false-positive count must be ZERO.** Any refusal that
+survives is one of exactly two things:
+
+* **a genuine corruption** — `Maccabi Tel Aviv`/`Telstar` (row 124 holds AF id
+  604) or `Cracovia Krakow`/`Rakow` (row 411 holds AF id **350**, Cracovia's),
+  both confirmed and both deliberately unrepaired; or
+* **a sixth corruption to investigate** — a pair not on that list.
+
+**A refusal that is neither is a regression**, and this table is what it would be
+measured against.
+
+*No post-fix `daily-picks` run had occurred at the time of writing
+(2026-08-31 07:40 UTC); the first will be the run under the new 03:00 cron.*
