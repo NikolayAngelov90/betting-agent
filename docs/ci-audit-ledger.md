@@ -6791,3 +6791,156 @@ limitation rather than papering over it.
 the duplicates already there.
 
 *Built 2026-08-31.*
+
+---
+
+# GUARD DESIGN — A FALLBACK MUST RECORD THAT IT FIRED
+
+**The extension of the fail-closed rule, and the family it completes.**
+
+The `IN :ids` bug degraded to row identity, logged, and returned a valid
+mapping. **The feature would have been a no-op in production while reporting
+that it was fine** — and the concealment came from defensive code doing exactly
+what it was written to do.
+
+| instance | what it concealed |
+| --- | --- |
+| `datetime.now()` default | a kickoff that never parsed |
+| swallowed `IntegrityError` | a write that never landed |
+| short-circuit suppressing its own logging | the branch it took |
+| `[]` meaning both measured-and-clean and never-ran | a check that did not execute |
+| **`except` → degrade to row identity** | **a guarantee that was not being enforced** |
+
+**The new element: the previous four were mistakes. This one was correct code.**
+
+> ## Degradation is acceptable. SILENT degradation is the defect.
+>
+> **A fallback that does not announce itself makes the thing it protects
+> unfalsifiable** — every observation looks the same whether the protected
+> mechanism ran or not.
+
+**Corollary, and it is the operational half:** *the log level of a fallback is
+part of its contract, not a stylistic choice.* `DEBUG` on a path that disables
+a guarantee is the same defect as no log at all, because nothing reads DEBUG in
+CI.
+
+## Three live instances found by applying the rule to today's own work
+
+**Written hours ago, by me, while recording the rule that condemns them.**
+
+**1. The outermost catch on the unpriced check.** `daily_update` wrapped the
+call in `except Exception: logger.debug(...)`. `report_unpriced_fixtures`
+announces its own failure — but that line cannot be emitted if the call never
+reaches it. An import error or a failed session landed in the outer handler at
+DEBUG, and **the run would have looked clean while the check had not run.**
+Now WARNING, with the same `CHECK DID NOT RUN` wording so both paths converge.
+
+**2. `ci_audit.extract` silently dropped the detector built to catch exactly
+this.** The `else` branch does `int(ms[-1])` inside
+`except (TypeError, ValueError): pass`. `unpriced_check_dead` has **no numeric
+capture group**, so it matched, failed to convert, and never reached `facts`.
+
+> **The assertion written to detect a dead check had been dead itself since it
+> was added two days ago, and nothing failed.** A pattern that matches but
+> cannot be counted now prints that it was not counted.
+
+**3. The population, sized rather than swept.** `except` handlers whose only
+record is `logger.debug`, across `src/`:
+
+| file | n |
+| --- | --- |
+| `betting_agent.py` | 20 |
+| `match_briefing.py` | 8 |
+| `flashscore_scraper.py` | 5 |
+| `historical_loader.py` | 5 |
+| `injury_scraper.py` | 5 |
+| 13 others | 26 |
+| **total** | **69 across 18 files** |
+
+**Not claimed to be 69 defects.** Many guard genuinely inconsequential things —
+a cache warm, a debug annotation. **The rule sorts them:** a handler that
+degrades a *guarantee, a measurement, or a gate* must log at WARNING; one that
+degrades a convenience need not. **Nobody has sorted these 69, and that is a
+stage, not a paragraph.**
+
+`test_every_way_the_check_can_fail_reaches_the_audit` pins both failure paths
+of the one check that has been sorted.
+
+---
+
+# PROPOSAL — DUAL-ENGINE TESTS FOR IDENTITY-DECIDING QUERIES
+
+**Not built. Recorded with its instances so it can make its own case.**
+
+## The structural problem
+
+`conftest.py` strips `DATABASE_URL` so the suite runs on **SQLite**; production
+runs on **Postgres**. That strip is correct and must stay — it exists because
+DB-backed tests once wrote to the live database.
+
+> **Its consequence is that any behaviour differing between the two engines is
+> invisible to the tests BY CONSTRUCTION.** Not because the tests are weak —
+> because they execute against a different engine than the one that matters.
+
+**Same shape as the audit measuring what the pipeline says about itself: the
+instrument cannot see the thing it is meant to check.**
+
+## Three instances, all real, none hypothetical
+
+| # | defect | what passed anyway |
+| --- | --- | --- |
+| 1 | **missing `PRAGMA foreign_keys=ON`** (`database.py:116`, Stage 13 1c) — SQLite defaults it OFF | **39 tests passing from a state the production schema forbids** |
+| 2 | **`coverage_checks`' Postgres-only SQL** — `match_date::date`, `percentile_cont`, `FILTER` | on SQLite it raised, was swallowed, and returned **"no unpriced fixtures"** — clean-looking, never run |
+| 3 | **`fixture_identity`'s kickoff type** — SQLite returns text, Postgres a datetime, and the bucket key is `(league, kickoff)` | mixed types put one fixture's rows in **two buckets**, grouping nothing — **two days after instance 2** |
+
+**Instances 2 and 3 are both mine, eight days apart in the same subsystem.**
+
+## The proposal, deliberately narrow
+
+> **Any query whose result becomes a KEY, a BUCKET, or a COMPARISON runs
+> against both engines in the test suite, and the results must be identical.**
+
+**Not the whole suite** — that would be expensive and mostly pointless, since
+most queries fetch values rather than decide identity. **Only the queries where
+a type or dialect difference changes an identity decision**, which is short and
+enumerable. **All three instances sit in it**, which is the evidence that the
+scope is drawn in the right place.
+
+**Cost, honestly:** a Postgres instance in CI (a service container, or a
+throwaway schema on the existing one), and a fixture that runs a named query
+twice and diffs. **The `DATABASE_URL` strip must survive it** — the second
+engine has to be a disposable test database, never the production URL, or this
+proposal reintroduces the defect `conftest.py` exists to prevent. **That
+constraint is the risky part and it is why this is a proposal rather than a
+patch.**
+
+## Its own falsification
+
+> **If a fourth instance arrives before this is built, the proposal has made
+> its own case and should stop being a proposal.**
+
+Three instances, three different failure modes — a disabled constraint, a
+swallowed dialect error, and a type mismatch in a key. **Recorded 2026-08-31.**
+
+---
+
+# SEQUENCE, agreed
+
+| when | what |
+| --- | --- |
+| **tomorrow** | credit budget resets, captures resume — **the first CLV observations under `s5.9`**, into a pipeline where the per-fixture guarantee holds |
+| **Wed 2026-09-02** | the schedule margin test, against the **corrected ~09:29 boundary**, and only after checking Wednesday's own card is not itself unusually late |
+| **then** | **H1 / H4** — 24,524 snapshots, 108 keys with ≥3 observations. Price momentum is the last open question that could change this project's answer, and it has been unanswerable since the beginning |
+
+## Deferred, carried forward unchanged
+
+* the duplicate-row **merge** (s5.9 stops new violations; it repairs nothing)
+* the **identity repair** for rows 124 and 411, plus creating Maccabi Tel Aviv
+* **invariants 2 and 3** (known defective; declarations must not cite the count)
+* **MASK-1's** mechanism tests
+* the **alias-site symmetry** fix in `team_names_similar`
+* **OPS-3**
+* **and new today:** sorting the 69 DEBUG-only handlers, and the dual-engine
+  proposal above
+
+*2026-08-31.*

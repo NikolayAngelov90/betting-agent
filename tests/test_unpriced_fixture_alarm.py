@@ -198,3 +198,30 @@ def test_the_check_runs_after_every_odds_path():
             "rows at 09:23:01)")
     assert call < src.index("Daily update cycle complete"), (
         "the check must still be inside daily_update, before it reports done")
+
+
+# ── property 5: the dead-check detector must not itself be dead ────────────
+def test_every_way_the_check_can_fail_reaches_the_audit():
+    """It did not, for two days, and nothing failed.
+
+    `ci_audit.extract` int()s each pattern's last match and swallowed
+    TypeError/ValueError. `unpriced_check_dead` has no numeric capture group,
+    so it matched, failed to convert, and never reached `facts` — the
+    assertion written to catch a dead check was itself dead. Both failure
+    paths are asserted here because they emit from different call sites: the
+    inner one from `report_unpriced_fixtures`, the outer one from
+    `daily_update` when the call raises before reporting.
+    """
+    from scripts.ci_audit import assertions, extract
+
+    inner = ("UNPRICED FIXTURE CHECK DID NOT RUN — the query failed, so this "
+             "run has NO evidence either way about unpriced fixtures.")
+    outer = ("UNPRICED FIXTURE CHECK DID NOT RUN — it raised before reporting "
+             "(ImportError). This run has NO evidence either way.")
+    for label, line in (("inner", inner), ("outer", outer)):
+        assert assertions(extract(line), []), (
+            f"the {label} failure path does not reach the audit — a run where "
+            "the check never executed would be reported CLEAN")
+
+    assert not assertions(extract("a healthy run says nothing"), []), (
+        "silence on a healthy run, or the assertion is noise")

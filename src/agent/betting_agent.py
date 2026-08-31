@@ -871,7 +871,16 @@ class FootballBettingAgent:
                 report_unpriced_fixtures(
                     _cov_session, _today, _today + timedelta(days=2))
         except Exception as _cov_e:
-            logger.debug(f"unpriced-fixture check skipped: {_cov_e}")
+            # WARNING, not DEBUG. `report_unpriced_fixtures` already announces
+            # its own failure ("CHECK DID NOT RUN"), but that line cannot be
+            # emitted if the call never reached it — an import error or a
+            # session failure lands here instead, and at DEBUG the run would
+            # look clean while the check had not executed. A fallback must
+            # record that it fired.
+            logger.warning(
+                f"UNPRICED FIXTURE CHECK DID NOT RUN — it raised before "
+                f"reporting ({_cov_e}). This run has NO evidence either way "
+                f"about unpriced fixtures. Not a clean result.")
 
         logger.info("Daily update cycle complete")
 

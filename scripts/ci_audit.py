@@ -189,7 +189,7 @@ def extract(log: str) -> Dict[str, object]:
             continue
         if key in ("fixtures_created", "reviews", "no_rows",
                    "decisions_discarded", "fixtures_zero_active",
-                   "no_fixtures_at_all"):
+                   "no_fixtures_at_all", "unpriced_check_dead"):
             f[key] = len(ms)
         elif key == "injuries_saved":
             f["injuries_saved"] = int(ms[-1][0])
@@ -198,7 +198,15 @@ def extract(log: str) -> Dict[str, object]:
             try:
                 f[key] = int(ms[-1] if isinstance(ms[-1], str) else ms[-1][0])
             except (TypeError, ValueError):
-                pass
+                # A FALLBACK MUST RECORD THAT IT FIRED. This `pass` silently
+                # dropped `unpriced_check_dead` for two days: the pattern has
+                # no numeric capture group, so int() raised, the key never
+                # reached `facts`, and the assertion built to catch a dead
+                # check was itself dead. A pattern that matches but cannot be
+                # counted is a bug in the pattern, and it now says so.
+                print(f"  ci_audit: pattern {key!r} matched but produced no "
+                      f"number — add it to the count-style keys above, or give "
+                      f"it a numeric capture group. NOT COUNTED.")
     # Per-source: sum every occurrence (Flashscore logs one line per league),
     # count occurrences for API-Football (one line per fixture created).
     # Only set when the run ACTUALLY attempted fixture discovery. A
