@@ -632,26 +632,6 @@ class FootballBettingAgent:
         except Exception as e:
             logger.error(f"API-Football update failed: {e}")
 
-        # Stage 21 follow-up — UNPRICED is indistinguishable from UNWANTED.
-        #
-        # A fixture with no odds produces no pick, and so does a fixture nobody
-        # wanted to bet: identical in every output the pipeline emits. Two
-        # measured causes, each one wrong integer — the Stage 20 identity-gate
-        # regression (Leuven vs St. Liege, 0 odds against same-day peers at 77,
-        # 79 and 175) and row 411 holding Cracovia's API-Football id (12 of 12
-        # Cracovia fixtures unpriced in August 2026).
-        #
-        # Self-calibrating against the fixture's OWN same-league same-day peers,
-        # so there is no threshold and no maintained league list. Placed after
-        # the odds paths so it sees the finished state; never raises.
-        try:
-            from src.data.coverage_checks import report_unpriced_fixtures
-            _today = date.today()
-            with self.db.get_session() as _cov_session:
-                report_unpriced_fixtures(
-                    _cov_session, _today, _today + timedelta(days=2))
-        except Exception as _cov_e:
-            logger.debug(f"unpriced-fixture check skipped: {_cov_e}")
 
         if getattr(self.apifootball, "_account_suspended", False):
             try:
@@ -868,6 +848,30 @@ class FootballBettingAgent:
             self.feature_engineer.clear_league_cache()
         except Exception as _e:
             logger.debug(f"clear_league_cache failed: {_e}")
+
+        # Stage 21 follow-up — UNPRICED is indistinguishable from UNWANTED.
+        #
+        # A fixture with no odds produces no pick, and so does a fixture nobody
+        # wanted to bet: identical in every output the pipeline emits.
+        #
+        # PLACED LAST, AND THAT POSITION WAS EARNED. It first sat immediately
+        # after `API-Football update complete`, which looked like "after the
+        # odds path" and was not: on 2026-08-31 it alarmed on match 50969 at
+        # 09:22:51 and 86 odds rows landed at 09:23:01 — false eleven seconds
+        # later, on a fixture that went on to be picked. Odds arrive from
+        # several paths (API-Football, TheOddsAPI, the low-coverage backfill),
+        # so the only defensible position is after all of them.
+        #
+        # Self-calibrating against the fixture's OWN same-league same-day peers,
+        # so there is no threshold and no maintained league list. Never raises.
+        try:
+            from src.data.coverage_checks import report_unpriced_fixtures
+            _today = date.today()
+            with self.db.get_session() as _cov_session:
+                report_unpriced_fixtures(
+                    _cov_session, _today, _today + timedelta(days=2))
+        except Exception as _cov_e:
+            logger.debug(f"unpriced-fixture check skipped: {_cov_e}")
 
         logger.info("Daily update cycle complete")
 

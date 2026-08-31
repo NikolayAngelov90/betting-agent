@@ -182,3 +182,71 @@ caveat applies and the checkpoint moves to the next Wednesday.** Check the card
 before reading the result, not after.
 
 *Registered before either day, 2026-08-30.*
+
+---
+
+# CORRECTIONS, measured on the first firing (2026-08-31)
+
+**Recorded after the run, and labelled as such. The outcomes above are NOT
+revised — only the arithmetic behind one boundary, and one projection that could
+not have been met.**
+
+## 1. The 09:45 boundary was derived from an ASSUMED run length
+
+> **`09:45` came from *"a ~20-min run must start by 09:45 UTC"* against a 10:04
+> earliest kickoff. The ~20 minutes was assumed and never labelled as an
+> assumption.**
+
+**MEASURED 2026-08-31, run `33375724727`:**
+
+| | |
+| --- | --- |
+| run start → run end | **63m 37s** (09:02:40 → 10:06:17) |
+| run start → **picks written** | **34m 35s** (09:02:37 → 09:37) |
+
+**Picks are what the deadline is about**, so 34m35s is the figure that matters,
+not the full 63m.
+
+> ### CORRECTED BOUNDARY: **~09:29 UTC**, and the margin is **6h 29m**, not 6h45m.
+
+**Wednesday must be read against 09:29.** The three outcome bands keep their
+meaning; only the LATE-BUT-COVERING/BEYOND-TOLERANCE line moves, from 09:45 to
+09:29. Today's 09:02:37 start sits inside the corrected boundary, so **no
+recorded outcome changes.**
+
+**The general point, which is the reusable half:** *a registered boundary derived
+from an assumed value carries that assumption's provenance, and this one was
+never labelled.* Every number in this file that is not marked MEASURED should be
+read as carrying the same risk.
+
+## 2. The lead-time doubling did not occur, and could not have
+
+**Projected: 7.1 / 10.7 / 15.4h. MEASURED (n=20): p10 6.4h · median 7.9h · p90
+9.6h** — below projection at every point.
+
+**This is not a failure of the projection; it is the projection's premise not
+being met.** It assumed picks written at **~03:20**. They were written at
+**09:37**, six hours later, because the run was delayed.
+
+> **The cron change's benefit to the MODEL series is CONTINGENT on the cron
+> firing near its time. At a six-hour delay it buys coverage margin only.**
+
+Today's median of **7.9h sits inside the pre-change on-time baseline of
+4.4–8.8h** — the lead was normal, not improved. The projection stands as
+written, unmet, and is testable only on a day the run starts near 03:00.
+
+## 3. LATE BUT COVERING was earned by the card, not by the margin
+
+Today started 09:02:37 — **6h 02m 37s late, outside the 5.7h historical envelope**
+— and lost **0%** of a 28-fixture card. But the card's earliest kickoff was
+**16:00 UTC**, so any delay under ~13h would have scored the same.
+
+**The limit registered against WITHIN TOLERANCE applies here unchanged:**
+
+> **A `WITHIN TOLERANCE` result on 2026-08-31 is not evidence that 6h45m of
+> margin is sufficient, and must not be recorded as such.**
+
+**Nor is a LATE BUT COVERING result. Wednesday 2026-09-02 remains the test**, and
+its card must be checked for lateness before its result is read.
+
+*Corrections measured and recorded 2026-08-31, after the first firing.*

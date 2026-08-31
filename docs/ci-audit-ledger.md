@@ -6239,3 +6239,201 @@ working; the two alarms are analysed in Part C.
   is LATE, **not** MISSED, and is not assessable before 22:47 UTC.
 
 *Read-only audit, 2026-08-31.*
+
+---
+
+# DUPLICATE MATCH ROWS — the s5.3 guarantee is violated in production
+
+**2026-08-31. Population established. No row repaired.**
+
+**The alarm found this by firing for the wrong reason.** It was built to isolate
+identity corruption; both of its live alarms turned out to be duplicate rows, a
+defect class nobody was looking for and which is worse than the one it was
+built for. **Recorded that way round deliberately** — the check's designed
+purpose did not find this; its false alarm did.
+
+## THE MECHANISM
+
+`finalize_picks` groups candidates by `rec.match_id`; `max_picks_per_match: 1`
+caps each group; `_filter_correlated_picks` also keys on the match.
+
+> **Two rows for one real fixture are two `match_id`s, therefore two groups,
+> therefore two independent pick slots. The cap cannot see it, and the
+> correlation filter cannot see it.**
+
+## THE VIOLATION — CONFIRMED, not inferred
+
+**2026-08-30 17:30 UTC, `spain/laliga`, Deportivo La Coruña vs Valencia:**
+
+| row | source | odds | pick | market | EV | result |
+| --- | --- | --- | --- | --- | --- | --- |
+| **50920** `RC Deportivo La Coruña v Valencia` | API-Football `1570356` | 74 | **1445** | Double Chance X2 @1.515 | −0.0271 | **loss** |
+| **50927** `Dep. A Coruna v Valencia` | Flashscore | 91 | **1456** | Under 2.5 @1.56 | −0.1924 | *unsettled* |
+
+**One real fixture. Two picks. Both `s5.7` (`645bac`).** Valencia cannot play
+two fixtures in one competition at 17:30, so these rows are one match by
+construction, not by name similarity.
+
+**Two consequences, not one:**
+
+1. **`max_picks_per_match: 1` was defeated** — the policy Stage 13 broke a
+   cohort to establish.
+2. **The correlation filter never saw the pair.** Double Chance X2 and Under 2.5
+   on one fixture are positively correlated; the filter that exists to drop the
+   lower-EV member of such a pair was keyed on `match_id` and saw two matches.
+   **The lower-EV pick (−0.1924) is exactly what it would have dropped.**
+
+**Today only one twin was priced, so only one pick was made. That is luck, not a
+mechanism** — and 2026-08-30 is the day the luck ran out.
+
+## HOW THEY ARE IDENTIFIED, AND WITH WHAT PRECISION
+
+**Test:** two rows, **same league**, **identical kickoff minute**, whose home
+teams and away teams each resolve to the same club — by **`apifootball_team_id`
+equality** where both rows carry one, falling back to `team_names_similar`.
+
+| set | count |
+| --- | --- |
+| candidate pairs (same league, identical kickoff) | 60,976 |
+| **STRICT — both sides resolve to the same club** | **750** |
+| ...of which **both sides by provider-id equality** | **242** |
+| WEAK — one side resolves + complementary sources | 2 |
+
+> **Precision is 1.0 by construction on the 242.** A club cannot play two
+> fixtures in one competition at the same minute, so if both clubs match by
+> provider id at an identical kickoff, the two rows ARE one fixture. **The
+> remaining 508 lean on `team_names_similar` for at least one side and inherit
+> that comparator's false-positive rate, which is unmeasured.**
+
+**RECALL IS THE WEAKER HALF, and it is stated because it matters:** the one
+confirmed violation is in the **WEAK** set, not the STRICT one. **The
+high-precision test missed the only case that has actually cost anything.**
+Identical-kickoff was chosen as the precision lever; sources that disagree on
+kickoff time are invisible to it. **750 is a floor, not an estimate.**
+
+An earlier, looser test (same league, ±4h) returned **1,873 pairs** and was
+almost entirely false — simultaneous but different fixtures. Discarded.
+
+## WHERE THEY COME FROM
+
+**Two sub-populations, and only one is dangerous.**
+
+| | total | with odds or picks |
+| --- | --- | --- |
+| STRICT pairs | 750 | **176 active**, 574 inert |
+| created **>24h apart** | 709 | 170 |
+| created **in the same run** | 28 | **5** |
+
+**The bulk is historical backfill duplicating a live row** — an old row with
+zero odds beside a priced one (`Bayer Leverkusen` 614, o=0 ‖ `Leverkusen` 30995,
+o=221). Inert: no odds, no picks, no exposure.
+
+**The dangerous class is the 5 same-run races**, and both of today's alarms are
+in it. **Source pair for the active set:**
+
+| pair | n |
+| --- | --- |
+| `AF+FS` (both live sources, same run) | 4 |
+| `AFFS + none` | 107 |
+| `AF + none` | 40 |
+| `none + none` | 21 |
+| `FS + none` | 4 |
+
+**`none` rows carry neither provider id** — the historical backfill. **The live
+race is API-Football ↔ Flashscore.**
+
+**51 further pairs had one row picked and the twin not.** Not violations, but
+the pick attaches to an arbitrary twin, which decides which odds row backs it.
+
+## AT CREATION — and THE HABIT is NOT the cause
+
+**Both comparators ARE consulted at the fixture-matching step.** This was checked
+rather than assumed, because the fifth data-layer instance of THE HABIT had
+exactly this shape:
+
+| site | comparator | reached? |
+| --- | --- | --- |
+| `flashscore_scraper` fuzzy merge (±4h) | `team_names_similar` | **yes** |
+| `apifootball_scraper._find_match_by_date_league` (±26h) | `team_names_similar` | **yes**, called at line 963 after `_find_match_id` |
+
+> **This is not knowledge in the wrong place. The canonical comparator is read
+> by the deciding caller, and it returns the wrong answer.**
+
+**Measured on today's two, with the exact strings the provider sent:**
+
+```
+API-Football sent:  "SC Braga" vs "Vitória SC"
+stored (Flashscore): "Sporting Clube de Braga" vs "Guimaraes"
+    similar("SC Braga", "Sporting Clube de Braga")  -> True
+    similar("Vitória SC", "Guimaraes")              -> False     <-- AND fails
+
+API-Football sent:  "Celta de Vigo II" vs "Castellón"
+stored (Flashscore): "Celta Vigo B" vs "Castellon"
+    similar("Celta de Vigo II", "Celta Vigo B")     -> False     <-- AND fails
+    similar("Castellón", "Castellon")               -> True
+```
+
+**Exactly one half of each AND gate failed, and the two halves fail for
+different reasons:**
+
+* **`Vitória SC` / `Guimaraes` share ZERO tokens.** Vitória Sport Clube plays in
+  Guimarães; the two names have no lexical overlap at all. **This is the
+  residual class already named in `test_identity_gate_aliases.py`** — *"a
+  legitimate pair with ZERO shared tokens, which no lexical test can reach by
+  construction, and that is precisely why a curated table exists."* It was
+  documented as the identity gate's residual; it is also the fixture matcher's.
+* **`Celta Vigo B` / `Celta de Vigo II` is a reserve-team suffix collision** —
+  `B` and `II` denote the same thing and neither normaliser knows it.
+
+**Zero fuzzy links succeeded in the whole run** (`0` occurrences of
+`fuzzy-linked` / `Fuzzy-merged`), against 2 duplicate creations.
+
+## WHAT IS NOT CLAIMED
+
+**Settlement is NOT broken.** The twin 50927 carries no result and its pick is
+unsettled, which looked like a second failure mode. **Measured: 0 of 1,372 picks
+on fixtures more than two days old are unsettled.** The 08-30 twin is ~19h old
+and inside the normal window. **Recorded as a risk to watch, not a finding.**
+
+**And a limit of the alarm itself: it sees a duplicate only when one twin is
+unpriced.** On 2026-08-30 `Celta v Ath Bilbao` (50926, o=91 ‖ 50962, o=75) both
+twins were priced, so nothing alarmed. **The alarm is not a duplicate detector
+and must not be treated as one.**
+
+## THE ALARM'S TWO CORRECTIONS
+
+**1. Moved to the end of `daily_update`, after every odds path.** It sat after
+`API-Football update complete`, which looked like "after the odds path" and was
+not — odds also arrive from TheOddsAPI and the low-coverage backfill.
+
+**Replayed from the new position:**
+
+| day | before | **after** |
+| --- | --- | --- |
+| 2026-08-29 | 3 | 3 |
+| 2026-08-30 | 0 | 0 |
+| **2026-08-31** | **2** | **1** |
+
+**The count drops exactly where predicted.** 50969 no longer alarms because its
+odds arrived; 50976 survives because it genuinely still has none.
+`test_the_check_runs_after_every_odds_path` pins the ordering structurally,
+because no unit test could see this.
+
+**2. The message no longer asserts a cause it did not establish.** It read *"the
+team was never resolved, so the fixture was never priced"* — **false in both
+live alarms, because the fixture WAS priced, on its twin.** It now says only
+what is measured: *this row carries no odds while same-league peers do*, and
+names both candidate causes without choosing.
+
+**878 tests pass. Cohort-neutral** — logging, docs and tests only; no
+prediction- or selection-affecting change, so `s5.8` is not bumped despite now
+carrying 20 picks.
+
+## WHAT IS NOT DONE
+
+**No row repaired, no matcher changed.** The population is established; the
+repair is its own stage and needs a decision on all three of: merging existing
+duplicate rows, the alias/suffix knowledge that would prevent new ones, and
+whether the pick cap should key on something other than `match_id`.
+
+*Established 2026-08-31. Read-only on the data.*

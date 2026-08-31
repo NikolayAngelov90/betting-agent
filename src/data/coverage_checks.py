@@ -130,6 +130,15 @@ def report_unpriced_fixtures(session, day_from, day_to) -> int:
 
     The `fs_id` column is reported, not filtered on: requiring it would have
     matched Leuven and MISSED 11 of the 12 known Cracovia fixtures.
+
+    THE MESSAGE SAYS ONLY WHAT THE CHECK MEASURES, and the first version did
+    not. It read "the team was never resolved, so the fixture was never
+    priced" — an assertion about cause. On 2026-08-31 both live alarms were
+    duplicate match rows whose TWIN carried odds and a pick, so the fixture
+    was priced and the claim was false in both. A message that asserts more
+    than the check establishes is how a true alarm gets dismissed as noise.
+    What is measured is exactly this: THIS ROW has no odds while same-league
+    same-day peers do.
     """
     found = find_unpriced_fixtures(session, day_from, day_to)
     if found is None:
@@ -144,15 +153,17 @@ def report_unpriced_fixtures(session, day_from, day_to) -> int:
     for (mid, league, ko, home, away, has_af, has_fs, priced, med) in unresolved:
         logger.warning(
             f"{ALARM_PREFIX} {home} vs {away} ({league}, "
-            f"{ko:%Y-%m-%d %H:%M}) has 0 odds while {priced} same-day peer(s) "
-            f"in the same league carry a median of {int(med or 0)}, and it has "
-            f"NO API-FOOTBALL ID — the team was never resolved, so the fixture "
-            f"was never priced [match_id={mid} fs_id={has_fs}]")
+            f"{ko:%Y-%m-%d %H:%M}) — THIS ROW carries 0 odds while {priced} "
+            f"same-day peer(s) in the same league carry a median of "
+            f"{int(med or 0)}, and it has no API-Football id "
+            f"[match_id={mid} fs_id={has_fs}]")
     if unresolved:
         logger.warning(
-            f"{ALARM_PREFIX}S: {len(unresolved)} fixture(s) unpriced because a "
-            "team could not be resolved. An unpriced fixture is indistinguishable "
-            "from one nobody wanted to bet — that is why this alarms.")
+            f"{ALARM_PREFIX}S: {len(unresolved)} row(s) carry no odds while "
+            "same-league peers do. A row with no odds produces no pick and is "
+            "indistinguishable from a fixture nobody wanted to bet — that is why "
+            "this alarms. The CAUSE is not established here: an unresolved team "
+            "and a duplicate row holding the same fixture both present this way.")
     if covered:
         logger.info(
             f"Unpriced but resolved: {len(covered)} fixture(s) have an "

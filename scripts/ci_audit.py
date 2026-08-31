@@ -147,7 +147,7 @@ PATTERNS = {
     # id); odds-budget coverage is logged at INFO and deliberately not counted
     # here, because 15 of 18 on 2026-08-29 were budget and would have drowned
     # the 3 that were not.
-    "unpriced_fixtures": r"UNPRICED FIXTURES: (\d+) fixture",
+    "unpriced_fixtures": r"UNPRICED FIXTURES: (\d+) row",
     "unpriced_check_dead": r"UNPRICED FIXTURE CHECK DID NOT RUN",
     # Stage 19. The audit was blind to a day that discovered nothing: 2026-08-26
     # analysed 0 fixtures against a card of six real matches and was flagged
@@ -326,8 +326,9 @@ def assertions(facts: Dict[str, object],
     # history. It is the shape that hid for three days as "nobody bet that one".
     if facts.get("unpriced_fixtures"):
         hits.append(
-            f"{facts['unpriced_fixtures']} fixture(s) UNPRICED because a team "
-            "could not be resolved, while same-league peers were priced")
+            f"{facts['unpriced_fixtures']} row(s) carry NO ODDS while "
+            "same-league peers do (cause not established: unresolved team, "
+            "or a duplicate row holding the same fixture)")
 
     # A check that did not run is not a clean check.
     if facts.get("unpriced_check_dead"):

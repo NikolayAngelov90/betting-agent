@@ -29,6 +29,12 @@ THREE PROPERTIES ARE PINNED, and each one is a way the check could rot:
   3. A DEAD CHECK IS NOT A CLEAN CHECK. Run against a bad credential the first
      version printed "0 unpriced" and returned success. Empty means
      measured-and-clean; None means unmeasured.
+  4. IT RUNS AFTER EVERY ODDS PATH. Its first live firing (2026-08-31) sat
+     right after `API-Football update complete`, alarmed on match 50969 at
+     09:22:51, and 86 odds rows landed at 09:23:01 — false eleven seconds
+     later, on a fixture that was then picked. Replayed from the end of the
+     run, that day's alarms drop 2 -> 1, and the survivor (50976) genuinely
+     still carries no odds.
 """
 
 from datetime import datetime
@@ -166,3 +172,29 @@ def test_a_failed_query_returns_None_not_empty(session):
         "this exact failure printed '2026-08-29: 0 unpriced' against a dead "
         "credential on 2026-08-31")
     assert report_unpriced_fixtures(Dead(), DAY, NEXT) == 0
+
+
+# ── property 4: placement, so the eleven-second window cannot come back ─────
+def test_the_check_runs_after_every_odds_path():
+    """A structural pin, because the timing bug was invisible to every unit test.
+
+    The check reads finished state. Placed mid-pipeline it reports on a
+    half-written table and calls a fixture unpriced that is about to be
+    priced. Ordering is the whole correctness argument, so ordering is what
+    this asserts.
+    """
+    import inspect
+    from src.agent.betting_agent import FootballBettingAgent
+
+    src = inspect.getsource(FootballBettingAgent.daily_update)
+    call = src.index("report_unpriced_fixtures")
+    for earlier in ("API-Football update complete",
+                    "The Odds API update complete",
+                    "Low-coverage backfill failed"):
+        assert src.index(earlier) < call, (
+            f"the unpriced check now runs BEFORE {earlier!r} — it would report "
+            "on odds that have not been written yet, which is exactly the "
+            "false alarm of 2026-08-31 (50969: alarm at 09:22:51, 86 odds "
+            "rows at 09:23:01)")
+    assert call < src.index("Daily update cycle complete"), (
+        "the check must still be inside daily_update, before it reports done")
