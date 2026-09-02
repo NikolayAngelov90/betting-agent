@@ -435,10 +435,34 @@ TRACKED_KEYS: List[str] = [
 #:
 #:       WHY NOW rather than later: every CLV interval resamples FIXTURES, so
 #:       duplicated rows inflate the cluster count and narrow every interval.
-#:       Zero of the 48 MODEL observations sit on a duplicate row TODAY, but
-#:       that separation is temporal — captures ran 08-14..08-27 and the live
-#:       duplicates are dated 08-28 onward. It does not survive the next
-#:       capture window.
+#:       That separation was temporal — captures ran 08-14..08-27 and the live
+#:       duplicates are dated 08-28 onward — so it would not have survived the
+#:       next capture window unaided.
+#:
+#:       AND THE VERDICT IS NOW STABLE IN BOTH DIRECTIONS, which is the
+#:       strongest argument for having shipped before the window rather than
+#:       after it:
+#:
+#:       RETROSPECTIVELY. Re-measured 2026-09-02 under the predicate this
+#:       revision actually ships (>=1 shared provider club id, or both stored
+#:       name pairs similar), ONE of the 48 MODEL observations sits on a
+#:       duplicate-pair row: obs 173 on match 49496, the 2026-08-14
+#:       Sporting CP v Guimarães fixture. Its twin 49520 carries 2 observations
+#:       and ZERO captures, and that fixture's closing window has passed — so
+#:       those observations can never be captured. The cluster count is
+#:       therefore fixed at 48 observations over 48 distinct fixtures, and
+#:       `deff = 1.00` cannot move retrospectively.
+#:       (An earlier check reported 0 rather than 1; it required BOTH sides to
+#:       match, which is narrower than the shipped rule. The conclusion held,
+#:       the instrument did not.)
+#:
+#:       PROSPECTIVELY. A duplicated fixture now yields ONE pick, so it yields
+#:       one observation. The second pick is refused before it can become a
+#:       second cluster member.
+#:
+#:       So the guarantee protecting the per-match cap is the same guarantee
+#:       protecting every confidence interval in this project. They are not two
+#:       benefits; they are one mechanism read from two ends.
 CODE_REVISION = "s5.9"
 
 

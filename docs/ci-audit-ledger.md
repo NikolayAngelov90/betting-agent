@@ -7234,3 +7234,250 @@ the transition is clean:
 **A further prediction- or selection-affecting change now requires `s5.10`.**
 
 *Read-only audit, 2026-09-02, of the 2026-09-01 run.*
+
+---
+
+# THE PHANTOM AUDIT — every schedule figure re-derived
+
+**2026-09-02. Read-only. The `0 3 * * *` decision is NOT reversed; its basis is
+narrowed and restated.**
+
+## 1a. The day-of-week table that chose 03:00
+
+**August 2026. Left: as it was computed. Right: phantom-free.**
+
+| day | n | /day | earliest | median | %≤14:00 | | **n** | **/day** | **earliest** | **median** | **%≤14:00** |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Mon | 213 | 42.6 | 10:34 | 13:13 | 69% | → | **65** | **13.0** | **15:00** | **17:30** | **0%** |
+| Tue | 63 | 15.8 | 10:13 | 12:52 | 56% | → | **28** | **7.0** | **15:00** | **18:00** | **0%** |
+| Wed | 119 | 29.8 | 10:15 | 10:28 | 84% | → | **19** | **4.8** | **16:00** | **19:00** | **0%** |
+| Thu | 119 | 29.8 | 10:25 | 17:00 | 7% | → | 111 | 27.8 | 15:00 | 17:00 | **0%** |
+| Fri | 73 | 18.2 | 10:25 | 18:30 | 3% | → | 71 | 17.8 | 15:00 | 18:30 | **0%** |
+| **Sat** | 294 | 58.8 | **10:15** | 14:00 | 50% | → | **267** | **53.4** | **10:15** | 15:00 | **45%** |
+| **Sun** | 325 | 65.0 | 10:04 | 15:00 | 43% | → | **226** | **45.2** | **10:15** | 15:00 | **34%** |
+
+> ### EVERY WEEKDAY'S EARLY-KICKOFF CLAIM COLLAPSES TO ZERO. Only Saturday and Sunday survive.
+
+**Mon/Tue/Wed lost 60–84% of their rows and their medians moved by four to nine
+hours.** Thu and Fri kept their rows but their `%≤14:00` still fell to 0 —
+because the few phantoms they had were the *only* pre-14:00 entries.
+
+**Saturday is the most robust row in the table** (294→267, earliest unchanged at
+10:15), which is why the contamination was invisible: the day the decision most
+depended on was the day least affected.
+
+## 1b. The earliest kickoff that set the boundary — **it was itself a phantom**
+
+| | earliest | p05 | n |
+| --- | --- | --- | --- |
+| as computed | `10:04:29.761924` | `10:13:51.680390` | 1,206 |
+| **PHANTOM-FREE** | **10:15:00** | **11:30:00** | **787** |
+
+**`10:04:29.761924` carries microseconds.** The figure that anchored the whole
+tolerance calculation was a phantom row, and p05 moves by **76 minutes**.
+
+### The boundary, recomputed — and my own correction overshot
+
+Picks are written **34m35s** after start (MEASURED 2026-08-31).
+
+| basis | boundary | margin from 03:00 |
+| --- | --- | --- |
+| 10:04 − ~19m (original, assumed run length) | 09:45 | 6h45m |
+| 10:04 − 34m35s (my correction, phantom earliest) | **09:29** | 6h29m |
+| **10:15 − 34m35s (REAL earliest)** | **09:40:25** | **6h 40m 25s** |
+
+> **The true boundary is 09:40. The original 09:45 was five minutes too late;
+> my correction to 09:29 was eleven minutes too early.** Two errors — an
+> assumed run length and a phantom kickoff — pushed in opposite directions, and
+> the original was closer by accident. **Correcting one of two compensating
+> errors moved the number further from the truth**, which is the case for
+> re-deriving both rather than patching either.
+
+## 1c. The 2026-08-29 figure — **UNCHANGED**
+
+| | kicked off by 14:40 |
+| --- | --- |
+| as reported | 57 of 104 (55%) |
+| **PHANTOM-FREE** | **57 of 104 (55%)** |
+
+**2026-08-29 contains zero phantom rows, so the figure that priced lateness
+survives intact.** (Reported as 103 at the time; 104 on re-query — a one-row
+difference, not material.)
+
+**The days that were mostly phantom are the ones already flagged:**
+
+| date | rows | phantom | real |
+| --- | --- | --- | --- |
+| 2026-08-23 | 111 | **97 (87%)** | 14 |
+| 2026-08-25 | 24 | **23 (96%)** | 1 |
+| 2026-08-27 | 36 | 0 | 36 |
+| 2026-08-28 | 29 | 0 | 29 |
+
+**The phantom class is concentrated, not spread** — which is why one clean day
+(08-29) carried a valid measurement while the day-of-week aggregate did not.
+
+## 1d. Card lost by delay, phantom-free — **the justification narrows to weekends**
+
+| day | +1h | +3h | +5h | +8h | +11h |
+| --- | --- | --- | --- | --- | --- |
+| Mon–Fri | **0%** | **0%** | **0%** | **0%** | **0%** |
+| **Sat** | 0% | 0% | 0% | **4%** | **45%** |
+| **Sun** | 0% | 0% | 0% | **2%** | **34%** |
+
+> ### THE DECISION SURVIVES, AND ITS BASIS NARROWS TO SATURDAY AND SUNDAY.
+>
+> **On a weekday, an eleven-hour delay from 03:00 costs nothing.** The entire
+> delay-tolerance case for moving the cron rests on two days a week — the two
+> days that also carry the most fixtures (53.4 and 45.2 per day against 4.8 to
+> 27.8).
+
+**03:00 remains correct.** Real weekend cards start at **10:15**, picks land
+34m35s after start, so the boundary is **09:40** and 03:00 buys **6h40m**. The
+settlement constraint (football ends ~21:30) is unaffected by phantoms because
+it was derived from latest kickoffs, which phantoms do not extend.
+
+**What is withdrawn: the claim that the change protects the weekday card.** It
+does not, because the weekday card was never at risk.
+
+---
+
+# 3. SATURDAY 2026-09-05 — thresholds re-derived BEFORE the day
+
+**Registered here on 2026-09-02, three days ahead, from phantom-free data.**
+
+| start | Sat (registered, contaminated) | **Sat PHANTOM-FREE** | **Sun PHANTOM-FREE** |
+| --- | --- | --- | --- |
+| 09:40 (the boundary) | — | **0.0%** | **0.0%** |
+| 09:45 | 0% | **0.0%** | **0.0%** |
+| 11:00 | 9.2% | **4.1%** | **1.8%** |
+| 12:00 | **20.5%** | **12.4%** | **15.5%** |
+| 13:00 | — | **16.1%** | **26.1%** |
+| 14:00 | **50.5%** | **45.3%** | **34.1%** |
+| 15:00 | — | 51.3% | 55.3% |
+
+**n = 267 (Sat), 226 (Sun).**
+
+**The registered gradient was overstated at every point** — 20.5%→**12.4%** at
+12:00, 50.5%→**45.3%** at 14:00.
+
+### The outcome bands, applied to the corrected curve
+
+Bands unchanged as registered — **MARGIN HELD** 0%, **MARGIN CONSUMED** >0–20%,
+**MARGIN INSUFFICIENT** >20%. What moves is *where the run start has to land*:
+
+| outcome | start time (contaminated) | **start time (CORRECTED)** |
+| --- | --- | --- |
+| MARGIN HELD | ≤ ~09:45 | **≤ ~09:40** |
+| MARGIN CONSUMED | ~09:45 → ~12:00 | **~09:40 → ~13:20** |
+| MARGIN INSUFFICIENT | beyond ~12:00 | **beyond ~13:20** |
+
+> **The 20% crossing moves roughly 80 minutes later, from ~12:00 to ~13:20.**
+> A run starting at 12:30 would have been scored MARGIN INSUFFICIENT on the old
+> table and is **MARGIN CONSUMED** on the corrected one.
+
+**Saturday is now the PRIMARY checkpoint. Sunday 2026-09-06 is the secondary**,
+and it is a genuine second test rather than a repeat: it crosses 20% earlier
+(between 12:00 and 13:00) despite a later median, because its losses accumulate
+more evenly.
+
+**Registered 2026-09-02, three days before the day it governs.** *The previous
+entry was committed four minutes after its run began; this one is not.*
+
+---
+
+# 2. THE THREE RULES ARE ONE RULE
+
+**Filed together, because separately they read as three lessons and they are
+not.**
+
+| | rule | how the caller fails |
+| --- | --- | --- |
+| 1 | **A lookup table is only as good as the earliest decision point that consults it.** | decides **too early** — before the knowledge is read |
+| 2 | **A comparison is only as good as the resolution state of its inputs.** | compares **too early** — before the inputs are comparable |
+| 3 | **An exclusion is only as good as the queries that apply it.** | writes a **new query** that does not know the knowledge exists |
+
+> ## THE KNOWLEDGE EXISTS AND THE CALLER DOES NOT USE IT.
+>
+> Not because it is missing, not because it is wrong, and not because anyone
+> forgot — but because **correctness is a property of the call site, and the
+> call site cannot see what it does not consult.** Curating the knowledge
+> better does nothing for any of the three.
+
+**Five defects, all accounted for by the same sentence:**
+
+| defect | rule |
+| --- | --- |
+| `TEAM_NAME_ALIASES["Athletic Club"]` — correct, curated, never fired | **1** |
+| the identity gate's false positives — provider text vs stored name at ingest | **2** |
+| duplicate match rows — the same comparison at the same position | **2** |
+| the `deff` predicate — verified with a narrower rule than the one shipped | **3** |
+| **the phantom-contaminated schedule analysis** | **3** |
+
+**And the diagnostic that distinguishes them, since the remedy differs:** ask
+*where* the failure sits relative to the knowledge. **Before it** → rule 1, move
+the read earlier. **Beside it, on unresolved inputs** → rule 2, move the
+comparison later. **Outside it, in new code** → rule 3, and there is no
+"earlier" or "later" to move to — **rule 3 is the one that recurs forever**,
+because every future query inherits the contamination by default.
+
+---
+
+# 4. THE ODDS API GATE — a monthly near-miss, WITH A DEADLINE
+
+**`theodds_scraper.py:626`:**
+
+```python
+_persisted = _load_persisted_credits()
+if _persisted is not None and _persisted <= _CREDITS_GATE_THRESHOLD:   # 10
+    ... hard skip
+```
+
+The persisted object is `{"remaining": N, "updated": "YYYY-MM-DD"}`. **The gate
+reads `remaining` and never reads `updated`.**
+
+**MEASURED 2026-09-01: August closed at 15 against a gate of 10. It passed by
+five credits**, then the live call reported ~490.
+
+> **A persisted figure whose `updated` date is not the current period is not a
+> LOW reading. It is NO reading — and the response to no reading is to PROBE,
+> not to skip.** Exactly the `[]` versus `None` distinction already drawn in
+> `coverage_checks`: empty means measured-and-clean, absent means unmeasured.
+
+**`GET /v4/sports` is free**, so the probe costs nothing.
+
+> ## DEADLINE: end of September 2026 — before the 2026-10-01 boundary.
+>
+> **Recorded with a date, not on the undated list.** It recurs on the first of
+> every month and its blast radius is a full month of odds coverage skipped on
+> a number describing a month that had ended.
+
+---
+
+# 6. PROPOSAL — A GUARD THAT CAN SILENTLY DO NOTHING MUST SAY IT RAN
+
+**`resolve_fixture_groups` emits no unconditional line. Written one day after
+recording the rule that condemns exactly that.**
+
+> **That is the evidence the rule cannot be applied by intention alone.** I
+> recorded it, agreed with it, and violated it inside 24 hours in the code I
+> wrote to satisfy it.
+
+**The structural form:**
+
+1. **every guard that can silently do nothing emits a count** — `N in → M out`,
+   unconditionally, at INFO;
+2. **a test asserts the line exists**, so the silence is a test failure rather
+   than a reading-comprehension failure.
+
+**Same stage as sorting the 69 DEBUG-only handlers, and it is one problem seen
+from both ends:**
+
+| | |
+| --- | --- |
+| handlers | say **too little when something fails** |
+| guards | say **nothing when nothing does** |
+
+**Both make a run unfalsifiable from its own log**, which is the property this
+ledger exists to prevent. **Not built.**
+
+*Recorded 2026-09-02.*
