@@ -7481,3 +7481,150 @@ from both ends:**
 ledger exists to prevent. **Not built.**
 
 *Recorded 2026-09-02.*
+
+---
+
+# GUARD DESIGN — COMPENSATING ERRORS, and why a plausible number invites no audit
+
+**Filed beside the three rules, because it is about how they stay hidden.**
+
+The 09:45 boundary had **two** wrong inputs: an assumed ~19-minute run length,
+and a kickoff of `10:04:29.761924` that was a phantom row. I measured the run
+length, corrected it to 34m35s, and moved the boundary to 09:29.
+
+| | boundary | error |
+| --- | --- | --- |
+| original (assumed run, phantom kickoff) | 09:45 | **5 min too late** |
+| my correction (measured run, phantom kickoff) | 09:29 | **11 min too early** |
+| **both inputs correct** | **09:40** | — |
+
+> ## When a derived number has several inputs, correcting one and not the others can move it further from the truth than correcting none.
+>
+> **A number's inputs must be audited together, not one at a time as each is
+> discovered.** Partial correction is not partial progress; on compensating
+> errors it is regression, and it arrives wearing the authority of a
+> measurement.
+
+**And the second half, which explains the survival:** the two errors pointed in
+opposite directions, so **09:45 was closer to right than it deserved to be.**
+A number that looks reasonable is not audited. **The same family as every defect
+in this ledger — the failure that presents as a plausible value**, alongside the
+missing kickoff that became `now()`, the swallowed write, the `[]` that meant
+both clean and never-ran, and the fallback that degraded silently.
+
+**Operational form:** when correcting one input to a derived figure, enumerate
+**every** input and state which have been verified and which have not. A
+correction that does not name its unverified inputs is not a correction; it is a
+new number with an unstated provenance.
+
+---
+
+# PROPOSAL — THE PHANTOM EXCLUSION MUST BE THE DEFAULT, NOT A THING EACH QUERY REMEMBERS
+
+**Not built. Read-only pass. Proposed with its instances and its sizing.**
+
+## Why this one cannot be fixed by moving a call
+
+Rules 1 and 2 are **positional**: the alias is read too early, the comparison
+runs before resolution. Both are fixed by moving the call site.
+
+> **Rule 3 has no position to move to.** The defect is in what the data layer
+> hands out. **Every query written from now on starts contaminated unless its
+> author remembers — and authors do not remember. I did not, one file after
+> quantifying the class.**
+
+## The sizing, measured 2026-09-02
+
+| | |
+| --- | --- |
+| sites in `src/` reading `match_date` | **269** |
+| ...that exclude the phantom class | **0** |
+| phantom rows | **510** of 40,473 (**1.26%**) |
+
+**The contamination is concentrated, which is what makes it dangerous rather
+than negligible:**
+
+| month | phantom | real | % phantom |
+| --- | --- | --- | --- |
+| 2026-06 | 1 | 103 | 1.0% |
+| 2026-07 | 28 | 370 | 7.0% |
+| **2026-08** | **419** | **787** | **34.7%** |
+| 2026-09 (to date) | **0** | 51 | **0.0%** |
+
+**A 1.26% table-wide rate became 34.7% in the exact window the schedule
+analysis used.** An aggregate contamination figure is not a bound on any
+particular query.
+
+**The class appears to have STOPPED ACCRUING** — zero in September, consistent
+with the Stage 19/20 fail-closed `_parse_match_date` change that refuses a row
+rather than defaulting its kickoff. **Two days is not proof**, and it does not
+reduce the need: **510 rows are permanently present and every future query
+inherits them.**
+
+## The five instances
+
+| # | analysis | effect |
+| --- | --- | --- |
+| 1 | **Wednesday profile** (n, earliest, median) | 119→19 rows; earliest 10:15→16:00; **the cliff did not exist** |
+| 2 | **day-of-week table** that chose `0 3 * * *` | every weekday's early-kickoff claim → **0%** |
+| 3 | **earliest-kickoff anchor** for the boundary | `10:04:29.761924` was a phantom; real 10:15 |
+| 4 | **Saturday gradient** | overstated at every point (20.5%→12.4%, 50.5%→45.3%) |
+| 5 | **`fixtures_zero_active` / card-loss tables** | denominators including 87–96% phantom days (08-23, 08-25) |
+
+**All five were written after the class was quantified.** Knowing about it
+protected none of them.
+
+## The proposal, in the form this project already uses twice
+
+**`pick_filters.py` solved the rules-1-and-2-shaped problem by defining
+`live_only()` and `valid_evidence()` once and importing them.** The row-set
+equivalent:
+
+1. **An accessor or view that excludes phantoms by construction** — the default
+   way to reach match rows, so a new query is correct without its author
+   knowing the class exists.
+2. **Raw `matches` reserved for the queries that must see everything** —
+   settlement, the phantom audit itself, migrations.
+3. **Those queries declare themselves with a named marker**, in the same form
+   the training-exclusion exemptions already use: a marker comment in `src/`
+   naming exactly one category.
+4. **A count pinned in `tests/experiment_pins.py`** with a test that greps
+   `src/` and fails when the count changes — so a sixth exemption is a
+   deliberate edit a reviewer sees, not an unobserved paste.
+
+> **This is the THIRD guard of the same family: one definition, imported, with a
+> test that fails when a second appears.** `TRAINING_EXCLUSION_EXEMPTIONS = 6`
+> and `EVIDENCE_GATE_EXEMPTIONS = 4` are the existing two, and the mechanism is
+> proven — it is the shape that caught the drift both previous times.
+
+**The known cost, stated:** 269 call sites is a large migration, and a
+mechanical sweep is exactly the kind of change that introduces a defect while
+fixing one. **It should be staged — the accessor first, then the analytical
+queries that feed decisions, and the remaining incidental reads last or never.**
+The 269 are not equally important; the ones that produced these five instances
+are.
+
+**Not built. This is a read-only pass.**
+
+---
+
+# ONE ADDITION TO THE SCHEDULE RECORD — the choice is now MORE conservative than its justification requires
+
+**So the next reader does not mistake it for tight.**
+
+| | as believed | **as measured** |
+| --- | --- | --- |
+| boundary | 09:29 | **09:40** |
+| margin from 03:00 | 6h29m | **6h 40m** |
+| Saturday 20% crossing | ~12:00 | **~13:20** |
+
+**Every correction moved in the same direction: there is MORE margin than the
+registered figures claimed, not less.** The card is later than the phantoms
+made it look, so the delay a 03:00 cron can absorb is larger.
+
+> **`0 3 * * *` is more conservative than its own justification now requires.**
+> That is a reason to leave it alone, not to move it later — the cost of the
+> extra margin is zero, and the settlement constraint (football ends ~21:30) is
+> the binding one on the other side.
+
+*Recorded 2026-09-02.*
