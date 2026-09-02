@@ -250,3 +250,172 @@ Today started 09:02:37 — **6h 02m 37s late, outside the 5.7h historical envelo
 its card must be checked for lateness before its result is read.
 
 *Corrections measured and recorded 2026-08-31, after the first firing.*
+
+---
+
+# WEDNESDAY 2026-09-02 — THE PRIMARY CHECKPOINT IS VOID, AND THE REASON IS A PHANTOM ARTIFACT
+
+## Timing of this entry, stated exactly rather than implied
+
+| event | UTC |
+| --- | --- |
+| external card established (public calendar) | ~07:26 |
+| August Wednesday profile recomputed | ~07:20 |
+| **run `33603479759` started** | **07:25:16** |
+| this entry committed | ~07:30 |
+
+> **THIS IS NOT A PRE-REGISTRATION AND MUST NOT BE READ AS ONE.** The run began
+> while the card was being established. What follows is derived **only** from
+> sources independent of the run — a public fixture calendar and August history
+> — and **no output of run `33603479759` has been read**. But the wall clock is
+> the wall clock, and the entry lands four minutes after the run started.
+
+## 1. TODAY'S EARLIEST KICKOFF, from outside this system
+
+**The registered pre-check could not be answered internally**: there were zero
+`matches` rows for 2026-09-02 at 07:20 UTC, because those rows are created by
+the run being qualified.
+
+**Two external sources were tried and failed before one worked** — recorded so
+"no data" is not mistaken for "no fixtures":
+
+| source | result |
+| --- | --- |
+| football-data.org `/v4/matches` | **0 matches for 08-31 → 09-05**, but 1 for 09-06. It also returned 0 for 2026-08-31, a day the registered file itself recorded as **8 matches from this same source**. **Self-inconsistent, therefore unusable as evidence** — not treated as "no fixtures". |
+| `soccer-server` MCP | **403 Forbidden** on the server's own key. Unavailable, not empty. |
+| **public fixture calendar (web)** | **usable** |
+
+**TODAY'S CARD (2026-09-02), from the public calendar:**
+
+| competition | fixtures | kickoff (local BST) | **UTC** |
+| --- | --- | --- | --- |
+| EFL Championship | 4 | 19:45–20:00 | **18:45–19:00** |
+| EFL League One | 5 | 19:45–20:00 | **18:45–19:00** |
+| Scottish Premiership | 3 | 19:45 | **18:45** |
+
+> ### EARLIEST KICKOFF TODAY: ~18:45 UTC.
+
+**Limitation stated:** the listing is UK-centric and may miss fixtures in other
+configured leagues. It is corroborated below by August's own real Wednesdays and
+by yesterday's card (17:30–19:00), and early September is an international
+break, which is why the card is small and domestic-lower-league only.
+
+## 2. WHAT TODAY CAN DISCRIMINATE: **NOTHING ABOUT THE MARGIN**
+
+**With an 18:45 UTC earliest kickoff, a run starting any time before ~18:00
+loses nothing.** The corrected boundary is **09:29**. A delay of *fifteen hours*
+would still score 0% lost.
+
+> **Today is UNINFORMATIVE about the margin, for the same reason Monday and
+> Tuesday were. All three registered outcomes are NOT reachable: only MARGIN
+> HELD is.**
+
+**Registered before reading the run's card measurements.**
+
+## 3. WHY WEDNESDAY WAS CHOSEN — AND WHY THAT CHOICE WAS AN ARTIFACT
+
+The second checkpoint registered this profile, and designated Wednesday PRIMARY
+because of it:
+
+| day | n | earliest | p05 | median | lost @09:45 | lost @12:00 |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Wed** | 119 | 10:15 | 10:15 | **10:28** | 0% | **84%** |
+
+**Recomputed today, August 2026, with and without phantom rows:**
+
+| | n | earliest | p05 | median | latest |
+| --- | --- | --- | --- | --- | --- |
+| **WITH phantoms (as registered)** | **119** | `10:15:29.254552` | `10:15:29.6` | `10:28:45.419404` | 19:00 |
+| **WITHOUT phantoms** | **19** | **16:00:00** | 16:00 | **19:00:00** | 19:00 |
+
+**The registered figures carry MICROSECONDS. That is the phantom signature** —
+`match_date` equal to `created_at`, the row stamped with the pipeline's own
+wall-clock time instead of a kickoff.
+
+**And the clock they carry is the old cron's:**
+
+| phantom Wednesday rows, by hour | count |
+| --- | --- |
+| **10:00** | **71** |
+| **11:00** | **29** |
+
+`37 9 * * *` plus run time lands at 10:00–11:00 UTC. **The "Wednesday cliff at
+10:15–10:28" is the previous schedule's execution window, recorded as kickoff
+times.**
+
+> ## THE WEDNESDAY CLIFF DOES NOT EXIST.
+>
+> **100 of the 119 "Wednesday fixtures" were phantoms. The 19 real ones start
+> at 16:00 and have a median of 19:00** — Wednesday is one of the most
+> delay-tolerant days in the week, not the least.
+
+**The specific claims now withdrawn:**
+
+* *"Wednesday is a CLIFF … 0% → 84% between a 7h15m and a 9h delay"* — **the
+  84% was phantoms.**
+* *"Wednesday, not Saturday, is the least delay-tolerant day — 60% of its card
+  gone at one hour"* — recorded as the *unexpected half* of the B1 finding.
+  **It was an artifact, and being unexpected is exactly why it should have been
+  checked harder.**
+* **PRIMARY CHECKPOINT = Wednesday** — chosen on that artifact, so the choice
+  was wrong at the moment it was made.
+
+**Saturday and Sunday largely survive the same test**, which is why this went
+unnoticed: Sat earliest 10:15 with phantoms and 10:15 without (n=294→267); Sun
+10:04 with, 10:15 without (n=325→226). **Wednesday was uniquely corrupted
+because it had few real fixtures (19) and many phantoms (100)** — the smallest
+real denominator in the week.
+
+### The rule this is an instance of
+
+The phantom class was found, quantified (**1.280% by count, 2.817% by decay
+weight**) and excluded from the *model* datasets. **It was never excluded from
+the SCHEDULE analysis**, which was written later, by me, querying `matches`
+directly.
+
+> **An exclusion is a property of a query, not of a dataset.** Establishing that
+> a contaminated class exists does not protect any analysis that does not filter
+> it, and every new analysis re-inherits the contamination by default.
+
+This is the same shape as the `deff` predicate correction recorded yesterday:
+**a measurement is only as good as the filter it applies, and neither the data
+nor the tooling will remind you.**
+
+## 4. WHERE THE CHECKPOINT ACTUALLY GOES
+
+**Recomputed on phantom-free August data:**
+
+| day | n (real) | earliest | median |
+| --- | --- | --- | --- |
+| Wed | 19 | 16:00 | 19:00 |
+| **Sat** | **267** | **10:15** | 15:00 |
+| **Sun** | **226** | **10:15** | 15:00 |
+
+> **The margin is testable on SATURDAY and SUNDAY, and on no other day
+> measured.** Both keep a 10:15 earliest after phantoms are removed, and both
+> have real denominators in the hundreds.
+>
+> ### The checkpoint moves to Saturday 2026-09-05 — which was already registered as SECONDARY, and is now the only candidate.
+
+**The registered Saturday profile survives the phantom test and its outcome
+bands stand as written**: MARGIN HELD at 0% lost, MARGIN CONSUMED >0–20%,
+MARGIN INSUFFICIENT >20%. **Its gradient shape — 20.5% at +9h, 50.5% at +11h —
+should be re-derived phantom-free before Saturday rather than trusted**, since
+it came from the same table.
+
+**The pre-registered meaning of a Wednesday MARGIN INSUFFICIENT — "expect ~84%,
+and at that level the answer is splitting the pipeline, not shifting the cron"
+— is withdrawn with the profile it rested on.** Nothing about today can trigger
+it.
+
+## 5. What today still measures
+
+Today remains worth recording as a **second WITHIN TOLERANCE data point** on the
+delay envelope, and as `s5.9`'s second live day. **It is not a margin test.**
+
+**Run `33603479759` started `2026-09-02T07:25:16Z` — delay 4h 25m 16s, WITHIN
+TOLERANCE (≤08:42), the second consecutive firing inside the historical
+0.5–5.7h envelope.** The four card measurements follow when it completes.
+
+*Recorded 2026-09-02 ~07:30 UTC, four minutes after the run began, from sources
+independent of it.*
