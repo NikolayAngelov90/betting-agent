@@ -419,3 +419,41 @@ TOLERANCE (≤08:42), the second consecutive firing inside the historical
 
 *Recorded 2026-09-02 ~07:30 UTC, four minutes after the run began, from sources
 independent of it.*
+
+---
+
+# SATURDAY 2026-09-05 — CORRECTED THRESHOLDS, registered 2026-09-02
+
+**Three days before the day they govern.** Full derivation in
+`docs/ci-audit-ledger.md`; the operative numbers are repeated here because a
+reader of this file must not have to know the ledger entry exists — **that is
+rule 3, and this pointer is the remedy.**
+
+**Saturday is now the PRIMARY checkpoint** (Wednesday's cliff was phantoms, see
+the entry above). **Sunday 2026-09-06 is secondary.**
+
+**Phantom-free, August 2026 — n=267 (Sat), n=226 (Sun):**
+
+| run start | **Sat lost** | **Sun lost** | *(Sat as registered, contaminated)* |
+| --- | --- | --- | --- |
+| **09:40** — the corrected boundary | **0.0%** | **0.0%** | — |
+| 11:00 | 4.1% | 1.8% | *9.2%* |
+| 12:00 | **12.4%** | **15.5%** | *20.5%* |
+| 13:00 | 16.1% | 26.1% | — |
+| 14:00 | **45.3%** | **34.1%** | *50.5%* |
+
+**Bands unchanged. What moves is where the start has to land:**
+
+| outcome | condition | **start time** |
+| --- | --- | --- |
+| **MARGIN HELD** | 0% lost | **≤ ~09:40** |
+| **MARGIN CONSUMED** | >0% and ≤20% | **~09:40 → ~13:20** |
+| **MARGIN INSUFFICIENT** | >20% | **beyond ~13:20** |
+
+**The 20% crossing moves ~80 minutes later, from ~12:00 to ~13:20.**
+
+**And the boundary itself is 09:40, not 09:29 and not 09:45.** The 10:04
+earliest that anchored both earlier figures was a phantom row; the real earliest
+is 10:15, and picks land 34m35s after start.
+
+*Registered 2026-09-02, before the day.*
