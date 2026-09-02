@@ -6944,3 +6944,293 @@ swallowed dialect error, and a type mismatch in a key. **Recorded 2026-08-31.**
   proposal above
 
 *2026-08-31.*
+
+---
+
+# AUDIT 2026-09-01 — s5.9's first live run, and the budget reset
+
+**Read-only. Nothing fixed.** Registered files read first: the corrected **~09:29**
+boundary in `stage21-schedule-prediction.md`, and the `s5.9` history entry.
+
+## PART 1 — s5.9: IT RAN, AND IT REFUSED NOTHING
+
+**Run `33485294975`. 29 fixtures analysed, 29 picks saved, every one stamped
+`stage5_baseline_20260807.694a60`.** The cohort stamp is what proves the s5.9
+code was live.
+
+| measurement | value |
+| --- | --- |
+| `match_id` rows carrying picks | **29** |
+| fixture-identity groups formed | **29** |
+| collapsed | **none** |
+| whole card (29 rows) | **29 groups, 0 collapsed** |
+| `PICK_REJECTED` of any reason | **0** |
+| refusals on branch `provider_id` / `stored_names` | **0 / 0** |
+
+**No group contained more than one row. The key caught no duplicate, because
+there was none to catch.**
+
+### Did it run, or did it silently not execute?
+
+**IT RAN. Three pieces of evidence, and the third is the only positive one:**
+
+1. picks carry `694a60`, so the s5.9 code was the code that executed;
+2. **no `fixture-identity resolution failed` WARNING** — that is the degrade
+   path, it logs at WARNING, and its absence rules out the `_load` failure;
+3. replaying `resolve_fixture_groups` over the same 29 rows today forms 29
+   groups — consistent with the run's silence.
+
+> ### BUT THE MODULE EMITS NO UNCONDITIONAL "I RAN" SIGNAL, and that is a defect I shipped yesterday.
+>
+> `resolve_fixture_groups` logs **only when it unions a group**. A clean day and
+> a dead call produce byte-identical logs. I could separate them only because
+> the degrade path happens to log at WARNING and because the cohort stamp is an
+> independent witness — **neither of which is the module announcing itself.**
+
+**This is the fifth instance of the family, in code written one day after
+recording the rule that condemns it:** *a fallback must record that it fired* —
+and its sibling, **a check must record that it ran.** A one-line unconditional
+summary (`N rows -> M groups`) would close it. **Not fixed; this is read-only.**
+
+### The guarantee, checked independently of the key
+
+**By `(competition, kickoff minute, resolved teams)`, never by `match_id`:**
+
+| | |
+| --- | --- |
+| duplicate fixture pairs on the day (wide ±4h) | **0** |
+| pairs carrying picks on **both** rows | **0** |
+
+> **THE GUARANTEE HELD. But it held because the day had no duplicates, not
+> because the key refused anything. A clean day is not a demonstration.**
+
+### The control, and it is stronger than yesterday's
+
+Four `(league, kickoff)` buckets carry more than one pick — **all genuinely
+different simultaneous fixtures, none collapsed:**
+
+| league | kickoff | picks | distinct rows |
+| --- | --- | --- | --- |
+| england/championship | 18:45 | 6 | 6 |
+| england/championship | 19:00 | 2 | 2 |
+| england/league-one | 18:45 | 7 | 7 |
+| **england/league-two** | **18:45** | **12** | **12** |
+
+**Twelve simultaneous fixtures in one league, kept apart correctly.** That is
+the false-collapse control at a scale yesterday's 20-fixture check never
+reached.
+
+## PART 2 — the budget reset, and a gate that does not read its own date
+
+**API-Football (`api_budget`, keyed per day per provider):** a fresh row opened
+for 2026-09-01, `used=91 limit=100`. **Nothing carried forward.** Clean.
+
+**TheOddsAPI (monthly, persisted to `data/models/theodds_credits.json`):**
+
+```
+08:0x  ⚠️ TheOddsAPI credits low (from last run): 15 remaining
+09:0x  TheOddsAPI update complete: 2343 odds rows written, 31 games matched,
+       0 unmatched (credits remaining: 490)
+```
+
+**The stale August figure DID carry across the period boundary** and produced a
+false low-credit warning, corrected seconds later by the live call. September
+opened at ~500. **The ledger and the provider now agree; they did not at the
+moment the run started.**
+
+### THE LATENT DEFECT THIS EXPOSES
+
+`theodds_scraper.py:626`:
+
+```python
+_persisted = _load_persisted_credits()
+if _persisted is not None and _persisted <= _CREDITS_GATE_THRESHOLD:   # 10
+    ... hard skip
+```
+
+The persisted object is `{"remaining": N, "updated": "YYYY-MM-DD"}`.
+
+> **The gate reads `remaining` and never reads `updated` — the field in the
+> same object that would tell it the figure belongs to a closed period.**
+>
+> **August ended at 15. The gate is ≤10. It passed by FIVE CREDITS.** Had
+> August ended at ten or fewer, the first day of a fresh ~500-credit month
+> would have been hard-skipped on a number that was already void.
+
+**THE HABIT INVERTED, mild form:** the knowledge is present, in the same object,
+and the deciding branch does not look at it. Recorded, not fixed.
+
+### Captures have resumed
+
+| day | odds rows | fixtures | snapshots |
+| --- | --- | --- | --- |
+| 2026-08-31 | 2,997 | 22 | 3,017 |
+| **2026-09-01** | **4,533** | **29** | **4,643** |
+
+**But no CLV observation has closed yet: 2026-09-01 is 29 `pending`, 0
+`captured`.** So **zero MODEL observations exist under s5.9** — the first ones
+are still ahead.
+
+### A CORRECTION TO YESTERDAY'S deff CHECK
+
+**The MODEL series is still 48, spanning 2026-08-14 → 08-27, unchanged.**
+
+> **Yesterday I reported "0 MODEL observations on duplicate-pair rows". Under
+> the predicate `s5.9` ACTUALLY SHIPS, the answer is 1.**
+
+Yesterday's script required **both** sides to match; the shipped rule needs
+**at least one shared provider id OR both names similar**. The narrower
+predicate missed `49496` — `Sporting Clube de Portugal v Guimaraes`, the 08-14
+pair, which shares `Guimaraes` at provider id 224.
+
+**The conclusion survives, and the margin is one capture:**
+
+| row | picks | MODEL obs | **captured** |
+| --- | --- | --- | --- |
+| 49496 `Sporting Clube de Portugal v Guimaraes` | 1 | 1 | **1** |
+| 49520 `Sporting CP v Guimaraes` | 2 | 2 | **0** |
+
+**48 observations → 48 distinct fixture ids. The cluster count is NOT inflated
+and `deff = 1.00` stands, now measured with the right instrument.**
+
+> **It stands because two observations on the twin were never captured. Had
+> either closed, the cluster count would have been inflated and Stage 16's
+> +0.107% would have needed recomputing.** The separation is one closing line
+> wide, not a margin.
+
+**And the general point, which is the one that matters:** *a verification is
+only as good as the predicate it uses, and mine was not the predicate the
+system runs.* The right answer arrived anyway, which is exactly how a flawed
+instrument survives.
+
+## PART 3 — the schedule: a second point, not a verdict
+
+**Started `2026-09-01T08:05:40Z`. Delay against `0 3 * * *`: 5h 05m 40s.**
+
+| outcome | boundary | Tuesday |
+| --- | --- | --- |
+| **WITHIN TOLERANCE** | **start ≤ 08:42** | **← 08:05:40** |
+| LATE BUT COVERING | 08:42 → ~09:29 (corrected) | — |
+| BEYOND TOLERANCE | beyond ~09:29 | — |
+
+**First firing since the change to land inside the historical 0.5–5.7h
+envelope.**
+
+### Tuesday's earliest kickoff, recorded BEFORE any conclusion
+
+> **17:30 UTC.** The card ran 17:30 → 19:00.
+
+**Tuesday is therefore uninformative about the margin, for exactly the reason
+Monday was.** Any delay under ~9 hours would have scored identically. **Stated
+before drawing the conclusion, not discovered after it.**
+
+| measurement | value |
+| --- | --- |
+| fixtures in window at execution | **29** |
+| already kicked off at 08:05:40 | **0** |
+| **fraction of the card lost** | **0.0%** |
+| lead time (n=29) | min 8.8h · **p10/median/p90 all 10.1h** · max 10.3h |
+
+**Against the projected 7.1 / 10.7 / 15.4h: the median of 10.1h is the closest
+any day has come, and it sits ABOVE the entire on-time baseline of 4.4–8.8h.**
+
+**The first day the lead-time gain is visible — and it is confounded.** The card
+is compressed into a 90-minute evening band, which lifts lead time regardless of
+when the run starts. **This is not yet evidence that the cron change produced
+it.**
+
+### Wednesday cannot be pre-checked, and that is an ordering problem
+
+**The registered instruction is to check Wednesday's card for lateness BEFORE
+reading its result. As of 2026-09-02 07:16 UTC there are ZERO fixtures in the
+database for 2026-09-02** — because the fixtures are created by the very run
+being awaited.
+
+> **The pre-check the checkpoint depends on cannot be performed from this
+> system's own data until the run it is meant to qualify has already happened.**
+
+An independent source (football-data.org's calendar) would be needed to do it
+properly. **Recorded as a limitation of the registered method, not worked
+around.**
+
+**Today's run has not fired at 07:16 UTC — 4h16m past cron, inside the envelope,
+and not MISSED under the OPS-3 12-hour rule (not assessable before 15:00 UTC).**
+
+## PART 4 — the routine pass
+
+**14 runs listed, 12 genuinely new** (two are already in the ledger and are
+re-listed because the tool matches on id).
+
+| run | workflow | started | verdict | discovery |
+| --- | --- | --- | --- | --- |
+| 33421026022 | paper-report | 08-31 17:42 | CLEAN | |
+| **33421027825** | **closing-lines** | **08-31 17:42** | **DEGRADED** | 7 league requests returned `no_rows` — credits spent, empty event lists |
+| 33422515296 | closing-lines | 08-31 17:59 | CLEAN | |
+| 33449620550 | closing-lines | 08-31 23:11 | CLEAN | |
+| 33460156282 | closing-lines | 09-01 01:48 | CLEAN | |
+| **33485294975** | **daily-picks** | **09-01 08:05** | **DEGRADED** | **`disc[fs=17 fdo=8 af=12]`** — 1 active-season league returned 0 fixtures |
+| 33524168975 | paper-report | 09-01 15:11 | CLEAN | |
+| 33524281030 | closing-lines | 09-01 15:12 | CLEAN | |
+| 33525843869 | closing-lines | 09-01 15:27 | CLEAN | |
+| 33552321881 | closing-lines | 09-01 19:55 | CLEAN | |
+| 33570292806 | closing-lines | 09-01 23:16 | CLEAN | |
+| 33577785282 | closing-lines | 09-02 01:02 | CLEAN | |
+
+**`conclusion: success` on all twelve remains no evidence.**
+
+### YESTERDAY'S FIX EARNED ITS KEEP ON DAY ONE
+
+The "pattern matched but produced no number" line added yesterday **fired
+immediately**, on a *different* pattern:
+
+```
+ci_audit: pattern 'src_apifootball_fixtures' matched but produced no number
+          — NOT COUNTED.
+```
+
+> **A second silently-dropped pattern, found within a day of making the drop
+> visible.** `unpriced_check_dead` was not the only one. Recorded, not fixed.
+
+### The three carried items
+
+**Unpriced alarm — MEASURED, not `None`.** The run logged no `UNPRICED` line at
+all, and the replay confirms why: **0 unpriced rows on 09-01 and on 09-02, so
+0 ALARM and 0 INFO.** Silence here is the clean case, and it is corroborated by
+replay rather than assumed.
+
+**Identity gate — 0 refusals. False positives remain 0, and again VACUOUSLY:**
+neither Maccabi Tel Aviv nor Cracovia played. This is the second consecutive
+day where the correct-refusal half of the `f4f5c2d` baseline went untested.
+
+**Substrate:**
+
+| | 08-31 | **09-01** |
+| --- | --- | --- |
+| `odds_snapshots` | 24,524 | **29,167** |
+| keys with ≥3 observations | 108 | **123** |
+| `injury_observations` | 636 | **756** |
+
+**Two further series, steady:** Flashscore kickoff-parse refusals **187**
+(vs 207, 192) — no regression. Flashscore discovery continues to fall,
+`fs=48 → 26 → 17`, while API-Football rises, `af=1 → 2 → 12`.
+
+## PART 5 — the cohort transition, observed for the first time
+
+```
+CODE_REVISION : s5.9
+model_version : stage5_baseline_20260807.694a60
+picks stamped : 29   (of 1487 saved picks)
+VERDICT: BUMP
+```
+
+**The amend-while-empty window closed the moment the first pick landed**, and
+the transition is clean:
+
+* **29 picks dated 2026-09-01 carry `694a60`. ZERO carry an earlier
+  fingerprint.**
+* every prior cohort intact and unmerged — `485823` (246), `098437` (18),
+  `60caed` (34), `645bac` (66), `dfe302` (20).
+
+**A further prediction- or selection-affecting change now requires `s5.10`.**
+
+*Read-only audit, 2026-09-02, of the 2026-09-01 run.*
