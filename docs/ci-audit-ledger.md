@@ -8173,3 +8173,202 @@ goes to zero whenever another source got there first — which is the normal
 steady state, not a fault.
 
 *Recorded 2026-09-03.*
+
+---
+
+# H1's SAMPLE SIZE, DERIVED — and 50 is not it
+
+**2026-09-03. Read-only. No config changed, nothing purchased.**
+
+## THE ORDER I WORKED IN, stated because it is the point
+
+**The effect-size argument was written and saved to disk BEFORE the variance
+query was run.** It is reproduced verbatim below. The variance section that
+follows was measured afterwards and did not feed back into the threshold.
+
+## PART 1 — the effect size, argued from economics (written first)
+
+H1 asks whether pre-kickoff drift predicts further drift. That is only worth
+anything if acting on it yields a **better taken price** than the naive policy
+of taking the price when the pick is made — so the effect is measured in the
+same unit as CLV: **percentage improvement in the taken price, per fixture.**
+
+**An edge is actionable only if it clears the cost of acting, which is the
+overround. Stage 16 already priced that, and momentum must clear the same bar:**
+
+| threshold | meaning |
+| --- | --- |
+| **+1.85%** | best-line break-even — below this nothing is profitable |
+| **+2%** | minimum decision-relevant effect |
+| **+4%** | comfortable |
+
+**These are inherited, not re-derived.** They are properties of the market this
+project bets into.
+
+> **The effect size to power for is +2%.** Below +1.85% the signal cannot pay
+> for itself, so an experiment powered below that would be measuring something
+> unactionable, precisely.
+
+**The test:** one-sided, α = 0.05, power = 80% — Stage 16's convention.
+
+```
+n = (z_a + z_b)^2 * sigma^2 / delta^2  =  6.185 * sigma^2 / delta^2
+```
+
+**Registered before measuring:** *if σ is 3.3% — the value implied by Stage 16's
+own n=17 at δ=2% — then n = 17. Anything materially larger moves the required n
+above 50 and the purchase must be resized or refused.* **And σ must be computed
+at the FIXTURE level**, because ~30 keys share a fixture and are not
+independent.
+
+## PART 2 — the variance, measured afterwards
+
+**Source: the 1,470 keys already carrying two pre-kickoff observations. 1,221
+have their two points ≥30 minutes apart** (median gap **653 minutes** — the
+daily run to the near-kickoff refresh). The rest are the same-run duplicates.
+
+### A wrong turn, recorded because it nearly set the number
+
+**First aggregation gave σ = 1.05% and n = 1.7.** That is not a plausible sample
+size, and a single implausible result is evidence about the measurement first.
+
+**The error: averaging ~30 keys per fixture.** That collapses exactly the
+variance H1 is about — you do not bet the mean of every market and book on a
+fixture, you bet one price. **Key-level σ 7.67% versus fixture-mean σ 1.05% is
+the size of the mistake.**
+
+**Corrected unit: one actionable bet per fixture** — `1X2` Home, median across
+books, so the bet-level scale is preserved while independence stays at the
+fixture.
+
+### Movement by market — volatility is not uniform
+
+| market | selection | n | mean | **sd** |
+| --- | --- | --- | --- | --- |
+| 1X2 | Home | 283 | +3.69% | **9.21%** |
+| 1X2 | Away | 283 | −1.82% | **10.53%** |
+| 1X2 | Draw | 283 | +1.68% | 3.78% |
+| over_under | Over 2.5 | 144 | −0.86% | 4.52% |
+| over_under | Under 2.5 | 144 | +1.83% | 4.76% |
+
+### The fixture-level figure
+
+| | |
+| --- | --- |
+| fixtures | **15** |
+| mean movement | **+3.92%** |
+| **σ (sample)** | **9.39%** |
+| σ, conservative upper bound | **12.59%** |
+
+## PART 3 — the required n, and the comparison
+
+| effect δ | **n at σ = 9.39%** | n at the conservative σ = 12.59% |
+| --- | --- | --- |
+| **+1.85%** (break-even) | **159** | 286 |
+| **+2%** (decision-relevant) | **136** | **245** |
+| +4% (comfortable) | 34 | 61 |
+
+> ## THE ANSWER IS MATERIALLY ABOVE 50.
+>
+> **n = 136 at the decision-relevant effect — 2.7× the target.** 50 fixtures
+> would only suffice to detect a **+4%** effect, and even that only if σ sits at
+> its point estimate rather than its upper bound (61 at the conservative value).
+
+**So 50 was never a power calculation.** It was inherited from Stage 16's CLV
+checkpoint, where σ was ~3.3%; **momentum's σ is nearly three times that**, and
+n scales with σ².
+
+**A 50-fixture purchase would buy an experiment that cannot answer its own
+question at the threshold that makes it actionable.** It would return "no
+significant momentum" at +2% and that result would be uninterpretable.
+
+## PART 4 — THE RECOMMENDATION: tighten σ first, and it is FREE
+
+**σ rests on 15 fixtures.** That is a thin base for a number that n depends on
+quadratically — the conservative bound is 34% higher and moves n from 136 to
+245, which is a different purchase entirely.
+
+> ### The two-point data that estimates σ is produced by the CURRENT policy at no extra cost.
+>
+> **Nothing needs buying to sharpen it.** The existing daily-run + one-refresh
+> pattern generates two-point keys continuously; the 15 fixtures are simply what
+> nine days have accumulated.
+
+**Recommended: wait ~3 weeks, re-derive σ from ~50+ fixtures, then size the
+purchase.** The cost of waiting is zero credits and the cost of not waiting is
+committing 130–260 credits to an n derived from 15 points.
+
+**And a directional observation, recorded not pursued:** mean 1X2 Home movement
+is **+3.92%** — home prices drift out materially between pick time and kickoff.
+That is either a real market effect or selection bias in which homes this system
+picks. **It is not H1's question and n=15 cannot separate the two**, but it is
+the kind of thing H1 would examine.
+
+## PART 5 — the cost, resized
+
+| | fixtures | credits |
+| --- | --- | --- |
+| the 50 target (not adequate) | 50 | ~95 |
+| **n = 136 at δ=2%** | **136** | **~130–260** |
+| n = 245 conservative | 245 | ~250–470 |
+
+**Against ~500/month free and ~19/day observed burn (~570/month projected),
+n=136 is 25–50% of a month's budget and n=245 may not fit at all.**
+
+## PART 6 — IF APPROVED, the bounded experiment
+
+**Not a config change. Left in place, `window 300 / min_interval 120` is the
+permanent +116/month Stage 15 rejected.**
+
+**Three things, all committed together:**
+
+1. **STOP CONDITION, explicit:** collection ends at **the derived n** (to be
+   re-derived from the improved σ) **or at a credit ceiling, whichever comes
+   first.** Written into the runner, not into a comment.
+2. **REVERT PLAN COMMITTED AT THE SAME TIME AS THE CHANGE** — the config values
+   to restore, in the same commit that raises them. *Without a stop condition
+   this silently becomes permanent, which is the class of defect this ledger has
+   found four times.*
+3. **A DAILY CHECK THAT THE COLLECTION IS PRODUCING WHAT IT IS PAYING FOR:**
+
+```sql
+-- fixtures gaining a genuinely separated third point, TODAY
+-- >=3 pre-kickoff observations with >=30 minutes between consecutive points
+```
+
+> **Raw counts are what made this invisible for a week.** 14 fixtures looked
+> like three points and were six-minute pairs from one run. **The check must
+> count separated observations — the corrected trigger definition — or the
+> purchase can burn its whole ceiling producing duplicates and report success.**
+
+## PART 7 — COHORT: neutral in the normal ordering, with a pre-existing exposure
+
+**`refresh_and_capture` runs ONLY in `closing-lines.yml`. It is never invoked by
+`daily-picks.yml`** — verified in both workflows.
+
+| | |
+| --- | --- |
+| picks cron | **`0 3 * * *`** |
+| first refresh cron | **`47 10 * * *`**, then `17 11,13,…,23` |
+
+**Picks are written ~7h45m before the first refresh can fire, so no pick-time
+path reads refreshed odds. The change is COHORT-NEUTRAL and does not need
+s5.10.**
+
+**Two qualifications, stated rather than buried:**
+
+* **The margin is thinner than it looks.** The corrected boundary is **09:40**
+  and the first refresh is **10:47** — about **one hour**. A picks run starting
+  near the boundary may still be writing picks when the first refresh fires.
+* **A delayed picks run already reads refreshed odds today**, independent of
+  this change — on 2026-08-27 and 08-28 the runs started at 19:58 and 20:58,
+  after several refreshes. **The change does not create that exposure**, but a
+  wider window means more fixtures carry a refreshed price by any given hour,
+  so it marginally widens it.
+
+> **Conditional on lateness, this is selection-affecting. Unconditionally, it is
+> not.** The clean way to make it unconditional is a guard that the refresh
+> declines to run before the day's picks run has completed — **recorded as the
+> precondition, not built.**
+
+*Derived 2026-09-03, effect size before variance. Nothing purchased.*
