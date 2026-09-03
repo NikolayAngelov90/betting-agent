@@ -7628,3 +7628,313 @@ made it look, so the delay a 03:00 cron can absorb is larger.
 > the binding one on the other side.
 
 *Recorded 2026-09-02.*
+
+---
+
+# AUDIT 2026-09-02 and 2026-09-03 — two MARGIN HELD results that prove nothing about the margin
+
+**Read-only. Nothing fixed.** Registered files read first: the corrected **09:40**
+boundary, the re-derived Saturday thresholds, and the phantom-free day-of-week
+table.
+
+## 1. THE ROUTINE PASS — 8 new runs
+
+| run | workflow | started | verdict | discovery |
+| --- | --- | --- | --- | --- |
+| **33603479759** | **daily-picks** | **09-02 07:25** | **DEGRADED** | **`disc[fs=22 fdo=4 af=0]`** |
+| 33643768967 | paper-report | 09-02 14:42 | CLEAN | |
+| 33643887421 | closing-lines | 09-02 14:43 | CLEAN | |
+| 33646243925 | closing-lines | 09-02 15:05 | CLEAN | |
+| 33668570075 | closing-lines | 09-02 18:39 | CLEAN | |
+| 33687021054 | closing-lines | 09-02 21:47 | CLEAN | |
+| 33702269433 | closing-lines | 09-03 01:05 | CLEAN | |
+| **33728324296** | **daily-picks** | **09-03 07:29** | **DEGRADED** | **`disc[fs=11 fdo=2 af=0]`** |
+
+**Every step `success` on both daily-picks runs; nine carry `continue-on-error`,
+so that remains no evidence.**
+
+### THE `af=0` ALARM IS A FALSE POSITIVE, and the defect is in my own assertion
+
+Both runs fired *"API-Football fixtures = 0 while other sources still produce"*.
+**API-Football was healthy on both days:**
+
+```
+09-02   API-Football: 206 fixtures on 2026-09-01 -> 0 created, 29 updated
+        API-Football: 325 fixtures on 2026-09-02 -> 0 created, 22 updated
+        API-Football update complete (59 requests used)
+09-03   API-Football: 325 fixtures on 2026-09-02 -> 0 created, 22 updated
+        API-Football: 161 fixtures on 2026-09-03 -> 0 created, 11 updated
+        API-Football update complete (63 requests used)
+```
+
+> **`disc[af=N]` counts rows CREATED, not fixtures discovered.** A source that
+> fetches 325 fixtures and successfully matches every one onto an existing row
+> scores **zero** — indistinguishable from a source that returned nothing.
+
+**Same defect class as everything else in this ledger: a metric that reads
+identically for "healthy" and "dead".** The per-source assertion was built to
+separate one dead source from a quiet day, and it cannot separate a *fully
+matched* source from a dead one. **Recorded, not fixed.**
+
+**The discovery series, with that correction understood:**
+
+| | 08-30 | 08-31 | 09-01 | 09-02 | 09-03 |
+| --- | --- | --- | --- | --- | --- |
+| `fs` | 48 | 26 | 17 | 22 | 11 |
+| `fdo` | 13 | 7 | 8 | 4 | 2 |
+| `af` | 1 | 2 | 12 | **0** | **0** |
+
+**All three sources are declining together**, which is the international break,
+not a defect. Flashscore kickoff-parse refusals steady at **214 / 218**
+(vs 187, 207, 192).
+
+**One new WARNING worth carrying forward** (09-02): *"Calibration drift check
+(last 30d, n=75): avg predicted 63% vs actual 55% (gap −8%) — overconfidence
+returning."* Recorded; not this stage's work.
+
+## 2. CARD MEASUREMENTS — the interpretation stated BEFORE the numbers
+
+> **Phantom-free, every weekday loses 0% of its card at every delay out to +11h.
+> Wednesday and Thursday CANNOT test the margin. Two MARGIN HELD results this
+> week prove the cron fires and nothing about whether 6h40m suffices.**
+
+| | **2026-09-02 (Wed)** | **2026-09-03 (Thu)** |
+| --- | --- | --- |
+| actual start | 07:25:16 | 07:29:02 |
+| **delay against `0 3 * * *`** | **4h 25m 16s** | **4h 29m 02s** |
+| outcome under the 09:40 boundary | **WITHIN TOLERANCE** | **WITHIN TOLERANCE** |
+| fixtures in window at execution | 22 | 11 |
+| earliest kickoff | **16:30** | **16:00** |
+| already kicked off at start | **0** | **0** |
+| **fraction of card lost** | **0.0% — MARGIN HELD** | **0.0% — MARGIN HELD** |
+| lead time | n=22 · 8.5 / **10.8** / 11.0h | n=11 · 7.9 / **10.4** / 10.9h |
+
+**Against the projected 7.1 / 10.7 / 15.4h: the medians of 10.8h and 10.4h sit
+essentially ON the projected median of 10.7h.** Third and fourth consecutive
+days above the pre-change on-time baseline of 4.4–8.8h — **and still confounded
+every time by a late card**, which lifts lead independently of start time.
+
+### The delay series
+
+| date | delay | inside 0.5–5.7h envelope? |
+| --- | --- | --- |
+| 2026-08-27 | 10h 21m | no |
+| 2026-08-28 | 11h 21m | no |
+| 2026-08-29 | 5h 03m | yes |
+| 2026-09-01 | 5h 05m | yes |
+| **2026-09-02** | **4h 25m** | **yes** |
+| **2026-09-03** | **4h 29m** | **yes** |
+
+**Four consecutive firings inside the historical envelope, and the last three
+are tightening (5h05 → 4h25 → 4h29).** That is consistent with the 10–11h
+episode of 08-27/08-28 being over. **Reported as a trend, NOT concluded** —
+OPS-3's 12-hour criterion stays open, and two days of an episode never justified
+a schedule redesign in the first place.
+
+## 3. s5.9 ACROSS THREE LIVE DAYS
+
+| day | picked rows → groups | collapsed | whole card → groups | collapsed |
+| --- | --- | --- | --- | --- |
+| 2026-09-01 | 29 → **29** | 0 | 29 → **29** | 0 |
+| 2026-09-02 | 22 → **22** | 0 | 22 → **22** | 0 |
+| 2026-09-03 | 11 → **11** | 0 | 11 → **11** | 0 |
+
+**No group contained more than one row on any day. No second pick was refused
+on either branch. The control holds: nothing genuinely distinct was collapsed.**
+
+**The guarantee, checked independently by (competition, kickoff minute, resolved
+teams):**
+
+| day | duplicate pairs | pairs with picks on BOTH rows |
+| --- | --- | --- |
+| 2026-09-02 | **0** | **0 — held** |
+| 2026-09-03 | **0** | **0 — held** |
+
+### Did the key announce itself? NO — still inferring
+
+> **Three live days, and `resolve_fixture_groups` has never emitted an
+> unconditional line.** Its only log fires when it unions a group, and it has
+> unioned nothing.
+
+**I am again inferring a clean run from the absence of a degrade warning**, plus
+the `694a60` cohort stamp and a replay. **That is the same inference chain as
+2026-09-01, for the third time.** The fifth instance of the family; the fix is
+**proposed, not built**, and every day it stays unbuilt is another day where
+"ran and found nothing" and "did not execute" are the same log.
+
+## 4. THE FIRST CLV OBSERVATIONS UNDER s5.9 — clean by mechanism, on n=1
+
+| attribution | **total captured** | **under s5.9 (≥09-01)** |
+| --- | --- | --- |
+| **MODEL** | **49** (was 48) | **1** |
+| **FINAL** | **66** | **3** |
+
+**Status mix:** 09-01 is 29 `pending` — its captures have not closed. 09-02
+produced **1 MODEL / 3 FINAL captured, 15 missing, 6 pending**. 09-03 is 11
+`pending`.
+
+### The deff question, now live rather than historical
+
+| | |
+| --- | --- |
+| captured MODEL observations | **49** |
+| distinct `match_id` | **49** |
+| **distinct FIXTURE identities** | **49** |
+| **cluster count inflated** | **NO** |
+
+> **`deff = 1.00` holds, and for the first time one observation is protected by
+> the mechanism rather than by the calendar.**
+
+**But the honest size of that: n = 1.** One observation under s5.9 that happens
+not to sit on a duplicate is *consistent with* the mechanism working and is not
+a demonstration of it. **The retrospective half is the solid one** — the 08-14
+twin's window has passed and its two observations can never be captured, so the
+historical count is fixed at 49 over 49.
+
+**And a result that clears a whole class:**
+
+| | |
+| --- | --- |
+| picks on phantom rows | **0** |
+| observations on phantom rows | **0** |
+| odds rows on phantom rows | 142 of 399,198 (**0.036%**) |
+
+**A phantom row can never carry a pick or an observation**, so every
+pick-based and observation-based figure in this ledger is **phantom-clean by
+construction**, not by luck.
+
+## 5. THE PUBLISHED-NUMBERS EXPOSURE LIST
+
+**Worked backwards from the claims, as instructed, not forwards from 269 call
+sites.**
+
+| stage / figure | source | verdict |
+| --- | --- | --- |
+| Stage 15 — CLV/capture-window figures, `deff = 1.00`, the 09:17 / 0-of-54 analysis, kickoff-hour 11–12 buckets | `pick_observations` ⋈ `saved_picks` | **CLEAN** — no pick or observation can sit on a phantom |
+| Stage 15 — credit/coverage frontier, `odds_refresh_min_interval_minutes` | credit ledger + `odds` | **CLEAN** |
+| Stage 18 — `odds_snapshots` / `injury_observations` substrate counts | those tables | **CLEAN** |
+| **Stage 18 — "53.5% of match rows were created after their own kickoff, mean +14 days"** | **`matches` directly** | **EXPOSED** (below) |
+| **Stage 18 — "274 of 875 August matches … 11.4 matches/day … ~5.5 trajectory-fixtures/day"** | **`matches` count over an August window** | **EXPOSED** (below) |
+| Stage 20 — the loop's three defects, timeout, identity gate, redirect | logs and `teams` | **CLEAN** — no fixture-count or kickoff-time claim in the section |
+| Stage 21 — day-of-week table, kickoff distributions, boundary, Saturday gradient | `matches` | **EXPOSED — already corrected 2026-09-02** |
+| the 2026-08-29 "57 of 103" | `matches` | **CLEAN** — that day has zero phantoms |
+
+### Stage 18's "53.5% created after their own kickoff" — number exposed, conclusion intact
+
+| window | with phantoms | **phantom-free** |
+| --- | --- | --- |
+| all time | 93.3% (n=40,484) | **93.3%** (n=39,974) |
+| **Aug 2026** | **37.5%** (n=1,206) | **4.2%** (n=787) |
+| Jul–Aug 2026 | 30.8% | **4.1%** |
+
+**Phantoms are created ~110 seconds after their own "kickoff", so all 495 of
+them land in the "created after" bucket.** On a recent window that inflates the
+figure **nine-fold**.
+
+**The exact 53.5% is not reproducible without knowing its window** — stated
+rather than guessed. **But the conclusion it supported is unaffected:**
+`matches.created_at` cannot proxy for `odds.first_seen_at`, and the all-time
+figure of **93.3% — phantom-insensitive — carries that on its own**, because
+the historical backfill stamps dominate. **`first_seen_at` was the right call
+for a reason that survives.**
+
+### Stage 18's accumulation rate — EXPOSED, and this one changes the next stage
+
+**Published:** *"~5.5 trajectory-fixtures/day"*, target **50 independent
+fixtures**, deriving **H1's date of 2026-09-08**.
+
+**MEASURED 2026-09-03, over a 9-day snapshot span:**
+
+| observations per key | keys |
+| --- | --- |
+| 1 | **32,512** |
+| 2 | 1,379 |
+| **3** | **123** |
+| **≥4** | **0** |
+
+| | |
+| --- | --- |
+| **distinct FIXTURES with a ≥3-observation key** | **4** |
+| implied rate | **~0.44 fixtures/day**, against 5.5 projected |
+| snapshots landing on a key first seen earlier | **0% on 09-01, 09-02 and 09-03** |
+
+> ### THE SUBSTRATE IS ACCUMULATING BREADTH, NOT DEPTH.
+>
+> **No key has ever exceeded three observations, and every new snapshot lands on
+> a key never seen before.** The ceiling is structural: a key is
+> `(match, book, market, selection)`, so its observations stop at kickoff and
+> are bounded by the same-day capture cadence.
+
+**H1's target is 50 fixtures. There are 4. At the measured rate that is ~114
+days, not the 9 that produced 2026-09-08.**
+
+**The trigger Stage 18 registered — "keys with ≥3 observations" — was the wrong
+unit.** It reads 123 and sounds satisfied; the quantity H1 needs is *fixtures
+with a three-point trajectory*, which is **4**. The count also **stopped moving**
+between 09-01 and 09-03 (123 → 123) while snapshots grew 22%.
+
+**Recorded as a finding about the next stage's premise. Not investigated
+further here.**
+
+## 6. SATURDAY 2026-09-05 READINESS
+
+**Registration confirmed at the point of use:** the corrected thresholds are in
+`docs/stage21-schedule-prediction.md` as well as this ledger — boundary
+**09:40**, MARGIN CONSUMED to **~13:20**, 20% crossing ~80 minutes later than
+the contaminated table said.
+
+**Saturday's own card, taken from an external source today, two days ahead:**
+
+| | |
+| --- | --- |
+| fixtures listed | **29** |
+| **earliest kickoff** | **12:30 BST = 11:30 UTC** |
+| Premier League | 7 (12:30 ×1, 15:00 ×5, 17:30 ×1 BST) |
+| EFL Championship / League One / League Two | 11 / 11 / 10, from 12:30 BST |
+
+**Corroborated across two independent lookups** (a search and a direct fetch of
+the dated page), which agree on the 12:30 earliest.
+
+### What this means for the checkpoint — registered now, before the day
+
+> **Saturday's card is REAL and EARLY, so the margin IS testable — the first day
+> this week of which that is true.**
+
+**But its earliest is 11:30 UTC, 75 minutes later than the 10:15 the August
+profile is built on.** So on *this specific card*:
+
+| | August-derived | **this Saturday** |
+| --- | --- | --- |
+| first loss at a start of | ~10:15 | **~11:30** |
+| MARGIN HELD requires start ≤ | 09:40 (boundary) | **~11:30 on this card** |
+
+**The 09:40 boundary is therefore CONSERVATIVE for Saturday by about 1h50m.** A
+run starting anywhere up to 11:30 will score MARGIN HELD on the card that
+actually exists.
+
+**Stated plainly so it is not over-read afterwards: a MARGIN HELD on Saturday
+demonstrates the margin covers a start up to ~11:30 UTC on a 29-fixture early
+card. It does not demonstrate the 09:40 boundary itself**, which would need a
+start between 09:40 and 11:30 to be tested at all, and a start past 11:30 to be
+falsified.
+
+*Registered 2026-09-03, two days before the day it governs, with hours between
+the measurement and the commit.*
+
+## 7. SUBSTRATE — level and rate
+
+| | 09-01 | **09-03** | change |
+| --- | --- | --- | --- |
+| `odds_snapshots` | 29,167 | **35,639** | **+6,472 (+22%)** |
+| **keys with ≥3 observations** | 123 | **123** | **0** |
+| `injury_observations` | 756 | **884** | +128 |
+
+**Daily snapshot rate:** 4,643 (09-01) · 4,499 (09-02) · 1,973 (09-03, partial).
+**Injury rate ~64/day.**
+
+> **The rate that matters is zero.** `odds_snapshots` grew 22% and the ≥3-key
+> count did not move at all. **Reporting the level alone (123, "the trigger is
+> satisfied") would have concealed that** — which is the whole reason the rate
+> was asked for.
+
+*Read-only audit, 2026-09-03.*

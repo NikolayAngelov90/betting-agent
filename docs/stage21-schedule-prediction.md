@@ -457,3 +457,37 @@ earliest that anchored both earlier figures was a phantom row; the real earliest
 is 10:15, and picks land 34m35s after start.
 
 *Registered 2026-09-02, before the day.*
+
+---
+
+# SATURDAY'S ACTUAL CARD — registered 2026-09-03, two days ahead
+
+**Taken from an external source, corroborated by two independent lookups.**
+
+| | |
+| --- | --- |
+| fixtures listed | **29** |
+| **earliest kickoff** | **12:30 BST = 11:30 UTC** |
+| Premier League | 7 · EFL Championship 11 · League One 11 · League Two 10 |
+
+**Saturday's card is REAL and EARLY — the margin is testable, and this is the
+first day this week of which that is true.** Wednesday (16:30) and Thursday
+(16:00) could not test it, and both returned MARGIN HELD that proves only that
+the cron fires.
+
+**But this card's earliest is 75 minutes later than the 10:15 the August
+profile is built on**, so on the card that actually exists:
+
+| | August-derived | **this Saturday** |
+| --- | --- | --- |
+| first loss at a start of | ~10:15 | **~11:30** |
+| MARGIN HELD requires start ≤ | 09:40 | **~11:30** |
+
+> **The 09:40 boundary is CONSERVATIVE for this Saturday by about 1h50m.**
+>
+> **A MARGIN HELD result on 2026-09-05 demonstrates that the margin covers a
+> start up to ~11:30 UTC on a 29-fixture early card. It does NOT demonstrate
+> the 09:40 boundary**, which needs a start between 09:40 and 11:30 to be
+> tested at all, and a start past 11:30 to be falsified.
+
+*Registered before the day, with hours between measurement and commit.*
