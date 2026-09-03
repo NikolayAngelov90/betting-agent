@@ -4772,6 +4772,23 @@ async def main():
                     leagues=league_filter, force=force_picks
                 )
 
+            # The picks are persisted by now, on both finalising paths (the
+            # --shard path returned above without finalising, deliberately —
+            # a shard writes candidates, not picks).
+            #
+            # THE MARKER MUST BE WRITTEN EVEN WHEN THERE ARE ZERO PICKS. A
+            # legitimate quiet day and a run that never happened both produce
+            # no rows, and that ambiguity is exactly what this marker exists to
+            # remove -- so it is recorded here, before the `if not picks`
+            # branch, rather than inside the success path.
+            try:
+                from src.data.run_marker import mark_picks_complete
+                mark_picks_complete(agent.db)
+            except Exception as _mk_e:
+                logger.warning(
+                    f"picks-run marker failed ({_mk_e}) — the next odds refresh "
+                    "will decline and a day of captures will be lost")
+
             if not picks:
                 print("No value picks found for today.")
             else:

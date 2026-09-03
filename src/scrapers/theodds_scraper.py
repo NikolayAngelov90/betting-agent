@@ -950,6 +950,27 @@ class TheOddsScraper:
             logger.info("TheOddsAPI: ODDS_API_KEY not configured — skipping")
             return plan
 
+        # THE PICKS-RUN GUARD. A refresh rewrites `odds` for fixtures near
+        # kickoff; the picks run READS `odds`. The crons order them (03:00 vs
+        # 10:47) but that is a scheduling coincidence, not a guarantee — the
+        # observed maximum scheduler delay is 11h21m and has occurred twice.
+        # Past ~7h40m of delay the picks run reads refreshed prices and becomes
+        # selection-affecting with no cohort bump and no announcement.
+        #
+        # Declines only on positive evidence that picks are not yet written;
+        # an unanswerable marker proceeds loudly, because the exposure is the
+        # pre-existing status quo and blocking every capture on a database
+        # hiccup costs more than it prevents.
+        try:
+            from src.data.run_marker import refresh_may_run
+            _may, _why = refresh_may_run(self.db)
+        except Exception as _g_e:
+            logger.warning(f"picks-run guard raised ({_g_e}) — proceeding")
+            _may, _why = True, "guard raised"
+        if not _may:
+            plan["skipped"]["*"] = _why
+            return plan
+
         league_fixtures, skips = self._imminent_league_fixtures(
             window_minutes, now=now, require_pending_pick=require_pending_pick)
         plan["skipped"].update(skips)

@@ -8372,3 +8372,109 @@ s5.10.**
 > precondition, not built.**
 
 *Derived 2026-09-03, effect size before variance. Nothing purchased.*
+
+---
+
+# GUARD DESIGN — AGGREGATE AT THE LEVEL OF THE DECISION
+
+**The fourth rule, and it is the most expensive one measured so far.**
+
+Deriving H1's σ, I averaged ~30 keys per fixture and got **σ = 1.05%, n = 1.7**.
+I rejected it because **the number was implausible, not because I saw the
+aggregation** — which is luck, and luck is not a method.
+
+> ## You do not bet the mean of every market and book. You bet one price.
+>
+> **Averaging over units a decision does not combine destroys exactly the
+> variance the decision faces.**
+
+| | σ |
+| --- | --- |
+| key level (the scale a bet is placed at) | **7.67%** |
+| fixture-mean (the scale I aggregated to) | **1.05%** |
+
+**Since n scales with σ², that was a factor of ~50 in the sample size** — 1.7
+against 136. **An error large enough to make a purchase look free.**
+
+**Where it sits beside the others:**
+
+| rule | the caller's mistake |
+| --- | --- |
+| a lookup table is only as good as the earliest decision point that consults it | decides **too early** |
+| a comparison is only as good as the resolution state of its inputs | compares **too early** |
+| an exclusion is only as good as the queries that apply it | writes a query that **does not know** |
+| **aggregate at the level of the decision, not the level of the data** | **combines units the decision keeps separate** |
+
+**The first three are about knowledge not reaching the caller. This one is about
+the caller reshaping the data until the question changes.** Same family — the
+computation is correct and answers something nobody asked.
+
+**Diagnostic:** before aggregating, name the unit a decision is taken on. If the
+aggregation crosses it, the variance is being destroyed, and **a suspiciously
+small n is the symptom** — which is the only reason this one was caught.
+
+---
+
+# BUILT — THE PICKS-RUN GUARD
+
+**`src/data/run_marker.py`. 901 tests pass. Fingerprint unchanged at `694a60`;
+cohort-neutral, no `s5.10`.**
+
+## The path it closes
+
+`refresh_and_capture` rewrites `odds` near kickoff; the picks run **reads**
+`odds`. The crons order them — picks `0 3 * * *`, first refresh `47 10 * * *` —
+so under normal delay they never interact.
+
+> **That ordering is a scheduling coincidence, not a guarantee.** The observed
+> maximum delay is **11h21m and has occurred twice**. Past ~7h40m the picks run
+> reads refreshed prices and becomes **selection-affecting with no cohort bump
+> and no announcement.**
+
+## Why a written marker, not an inference
+
+**The obvious signal — "does a `saved_picks` row exist for today" — does not
+work.** A legitimate quiet day and a run that never happened both produce zero
+rows.
+
+> **The completion of a run is not derivable from its output. The run has to
+> record it.** Fifth instance of that ambiguity: `[]` meaning both
+> measured-and-clean and never-ran, the silently-degrading fallback, the guard
+> that logs only when it acts, `af=N` counting creations, and now this.
+
+`api_budget` is reused rather than adding a table — already keyed
+`(day, provider)`, already migrated, and `closing-lines` never writes an
+api-football row, so a reserved provider key cannot collide.
+
+## Three paths, and only one blocks
+
+| marker | decision | reasoning |
+| --- | --- | --- |
+| present | **RUN** | picks are written; a refresh cannot reach back and change the price they were taken at |
+| absent | **DECLINE** | a refresh now rewrites odds the picks run is about to read |
+| **unanswerable** | **RUN, loudly** | **`None` is not `False`** — declining every capture on a database hiccup costs more than the exposure it prevents, and that exposure is the pre-existing status quo, not something this guard introduced |
+
+**It logs on all three paths, including the quiet one.** `resolve_fixture_groups`
+is the counter-example: it logs only when it unions a group, so three clean days
+were indistinguishable from three dead calls.
+
+## The cost, stated
+
+**If the picks run fails before writing the marker, every refresh that day
+declines and a day of closing-line captures is lost.** That is the safe
+direction and it is not free. The marker is written **before** the
+`if not picks:` branch, so a legitimate zero-pick day still records completion.
+
+## Cohort
+
+**Neutral.** Under normal ordering the marker is present long before the first
+refresh, so nothing changes — and all 62 of `s5.9`'s picks were taken under that
+ordering. In the delayed case it **prevents** a contamination rather than
+creating one. Fingerprint verified unchanged.
+
+**A precondition, now explicit:** `refresh_imminent` declines unless the day's
+picks run has recorded completion. `tests/test_odds_quota_and_refresh.py` sets
+it in its shared helper — labelled a precondition rather than decoration — and
+the guard's own three paths are pinned separately.
+
+*Built 2026-09-03.*

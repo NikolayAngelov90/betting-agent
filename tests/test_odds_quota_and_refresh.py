@@ -166,10 +166,17 @@ def test_describe_reports_the_free_tier_and_margin(tmp_path):
 
 def _scraper(mgr, monkeypatch):
     from src.scrapers.theodds_scraper import TheOddsScraper
+    from src.data.run_marker import mark_picks_complete
 
     s = TheOddsScraper.__new__(TheOddsScraper)
     s.db = mgr
     s.api_key = "test-key"
+    # PRECONDITION, not decoration. `refresh_imminent` now declines unless the
+    # day's picks run has recorded completion, because a refresh that beats the
+    # picks run rewrites the prices those picks are taken at. Every test below
+    # exercises refresh behaviour GIVEN that precondition; the guard's own
+    # three paths are tested in tests/test_picks_run_guard.py.
+    mark_picks_complete(mgr)
     return s
 
 
