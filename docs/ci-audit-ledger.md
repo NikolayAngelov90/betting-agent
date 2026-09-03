@@ -7938,3 +7938,238 @@ the measurement and the commit.*
 > was asked for.
 
 *Read-only audit, 2026-09-03.*
+
+---
+
+# H1 IS BLOCKED BY A POLICY — the mechanism, the price, and the trade
+
+**2026-09-03. Read-only. No config changed.**
+
+## 1. THE MECHANISM — confirmed, and tighter than the hypothesis
+
+**`betting.odds_refresh_window_minutes: 120` against
+`betting.odds_refresh_min_interval_minutes: 180`.**
+
+`TheOddsScraper.refresh_imminent` selects candidates via
+`_imminent_league_fixtures(window_minutes)` — a fixture is eligible **only in
+the last 120 minutes before kickoff** — and then drops any league refreshed
+within `min_interval_minutes`.
+
+> **The eligibility window (120) is SHORTER than the dedup interval (180), so a
+> fixture can be refreshed AT MOST ONCE. Confirmed in code and in data.**
+
+### What the data shows, and it is worse than "capped at three"
+
+**Distinct PRE-KICKOFF snapshot times per fixture — the quantity that bounds
+trajectory depth:**
+
+| distinct pre-kickoff times | fixtures |
+| --- | --- |
+| 1 | **85** |
+| 2 | **105** |
+| 3 | **14** |
+| **≥4** | **0** |
+
+**And the 14 that reached three are not three points.** Their actual minutes
+before kickoff:
+
+```
+match 51144  [664, 658, 4]      match 51152  [664, 658, 3]
+match 51145  [664, 658, 4]      match 51156  [679, 673, 18]
+match 51146  [679, 673, 19]     match 51158  [664, 658, 5]
+match 51147  [529, 523, 106]    match 50140  [296, 293, 34]
+```
+
+> ### The first two points are SIX MINUTES apart, eleven hours before kickoff.
+>
+> They are the API-Football pass and the TheOddsAPI pass **inside the same daily
+> run** — one observation written twice, not two points in a trajectory.
+
+**So the real depth is TWO genuinely separated points: one at pick time, one
+near kickoff (3–20 min). ZERO fixtures anywhere in the table have three
+genuinely separated pre-kickoff observations.**
+
+**Not 123 keys. Not 32 keys. Not 4 fixtures. Zero.**
+
+**A further 6,686 keys carry ZERO pre-kickoff observations at all** — snapshots
+taken entirely after kickoff, 19% of the substrate, useless for any pre-kickoff
+question. Those are the 08-27/08-28 late runs.
+
+### The shape is explained exactly
+
+| observed | explained by |
+| --- | --- |
+| 32,512 keys at 1 observation | pick-time write only; no refresh reached them |
+| 1,379 keys at 2 | pick-time + the single permitted refresh |
+| 123 keys at 3 | the duplicated same-run write, or a post-kickoff row |
+| **0 keys at ≥4** | **the policy forbids a second refresh** |
+| **0% of new snapshots deepen an existing key** | **a key's observations end at kickoff** |
+
+**H1 is not waiting for time to pass. The distribution is capped, and it will
+read the same in 114 days.**
+
+## 2. THE LEVER IS NOT L6b ALONE — a correction to the framing
+
+**L6b was `min_interval` 180 → 120. That alone does NOT buy a third point.**
+
+Within a **120-minute** eligibility window, two refreshes 120 minutes apart do
+not both fit. **To get two refreshes inside the window requires
+`window ≥ 2 × min_interval`.**
+
+> **The binding constraint is the WINDOW, not the interval.** L6b was priced as
+> a coverage lever, and as a coverage lever the interval is what mattered. As
+> H1's precondition, the window is what matters and it was never on the board
+> at all.
+
+**The minimal change that yields three genuinely separated points:**
+
+| | now | needed |
+| --- | --- | --- |
+| `odds_refresh_window_minutes` | 120 | **~300** |
+| `odds_refresh_min_interval_minutes` | 180 | **~120** |
+
+That permits pick-time (~11h out) + one at ~4h + one at ~1h. **Three points with
+real separation, which is what a momentum test needs.**
+
+## 3. THE PRICE, measured
+
+**Credits are charged PER LEAGUE REQUEST, not per fixture** — `credits_for()`
+multiplies requests by `CREDITS_PER_REQUEST`, and one request covers every
+fixture in that league. **This is what makes the re-pricing different.**
+
+**One extra refresh pass, measured against real cards:**
+
+| date | leagues | fixtures | **cost of one extra pass** |
+| --- | --- | --- | --- |
+| 2026-08-29 | 23 | 104 | **46 credits** |
+| 2026-08-30 | 23 | 80 | 46 |
+| 2026-08-31 | 13 | 28 | 26 |
+| 2026-09-01 | 5 | 29 | **10 credits** |
+| 2026-09-02 | 8 | 22 | 16 |
+| 2026-09-03 | 8 | 11 | 16 |
+
+**A weekend pass costs ~46 credits and covers ~80–104 fixtures. A weekday pass
+costs ~10–16 and covers 11–29.**
+
+### What a three-point trajectory costs
+
+**Target: 50 independent fixtures** (Stage 16's checkpoint, unchanged).
+
+> **Two full weekend passes — 2 × 46 = ~92 credits — cover ~180 fixtures, well
+> past the 50 target.** Spread over weekdays instead: ~6 passes at ~16 = **~96
+> credits for ~100 fixtures.**
+>
+> ### ~90–100 credits buys the entire H1 sample. Not 116/month, and not recurring.
+
+**That is the correction the re-pricing produces.** L6b was priced as a
+**permanent +116 credits/month** for a *continuous* coverage gain. H1 needs a
+**one-off sample of 50 fixtures**, which is a fixed purchase of ~90–100 credits
+and then the window closes again.
+
+### Against the tier
+
+| | |
+| --- | --- |
+| free tier | ~500 credits/month |
+| configured budget / safety margin | 400 / 50 → **350 spendable** |
+| observed burn (break days) | 490 → 476 → 452 = **~19/day ≈ 570/month projected** |
+
+**Current burn already runs at or above the free tier on a full month**, so ~95
+credits is not free headroom — **it displaces roughly five days of closing-line
+capture.**
+
+## 4. THE TRADE, for Niki
+
+**Both series draw on one budget. The question is which one gets ~95 credits.**
+
+| | closing-line capture | **three-point trajectories (H1)** |
+| --- | --- | --- |
+| what it measures | CLV — does the model beat the close | **price momentum — the last open question** |
+| status of the question | **CLOSED by Stage 16**: 500 was over-specified ~29×, 17 observations suffice, and at n=46 the one-sided upper bound was **+0.107% against a +1.85% threshold** | **OPEN — never measured, and unmeasurable until now** |
+| current holding | **49 MODEL / 66 FINAL captured** | **ZERO fixtures with a real trajectory** |
+| marginal value of more | precision on an axis already resolved | the only remaining measurement that could change this project's answer |
+| cost | ~19/day ongoing | **~95 credits, one-off** |
+
+> **Stage 16 closed the question the closing lines answer. H1's question is
+> open. That asymmetry is the whole argument, and it is not this stage's
+> decision to make.**
+
+**Also worth Niki's attention: the ~95 credits need not come from capture.** The
+measured burn includes pick-time pricing (L5: 213 cr/month, disqualified as a
+cut because it *is* the product) and the barren-league exclusion already
+recovered credits for free. **A one-off 95 is roughly five days of capture, or
+one weekend's worth of the existing refresh budget reallocated.**
+
+**Nothing changed. Reported for decision.**
+
+---
+
+# STAGE 18'S TRIGGER, RESTATED IN THE RIGHT UNIT
+
+**`keys with ≥3 observations` was the wrong unit and it read as SATISFIED while
+the real quantity stood at zero.**
+
+| | the trigger as written | **as it should read** |
+| --- | --- | --- |
+| unit | keys with ≥3 observations | **fixtures with ≥3 SEPARATED PRE-KICKOFF observations** |
+| value 2026-08-31 | 91 → "satisfied" | **0** |
+| value 2026-09-03 | 123 → "still satisfied" | **0** |
+
+**Three defects in one metric, and each alone would have been enough:**
+
+1. **`keys`, not fixtures.** One fixture carries ~30 keys, so 123 keys is 4
+   fixtures. H1's target is 50 *fixtures*.
+2. **Post-kickoff rows counted.** 91 of the 123 keys reach three only by
+   including an observation taken *after* kickoff.
+3. **Same-run duplicates counted.** The remaining ones reach three via two
+   writes six minutes apart in one run.
+
+> **Per rule 3's spirit — the unit has to live where the query is.** A trigger
+> stated in one unit and consumed in another is the same failure as an exclusion
+> that lives in a dataset rather than a query: **the reader inherits the wrong
+> quantity by default, and a satisfied-looking number is exactly what stops
+> anyone checking.**
+
+**The corrected trigger, for whoever opens H1:**
+
+```sql
+-- fixtures with >=3 pre-kickoff observations, separated by >=30 minutes
+-- CURRENT VALUE: 0.  Target: 50.
+```
+
+**H1's derived date of 2026-09-08 is unreachable and is withdrawn.** It was
+computed from ~5.5 trajectory-fixtures/day; the measured rate is **0/day**, and
+it is 0 by policy rather than by sample size.
+
+---
+
+# `disc[af=N]` HAS THE 88-DAY BLIND SPOT IT WAS BUILT TO CLOSE
+
+**The assertion exists because Flashscore died for 88 days behind a healthy
+API-Football.** It now cannot see the mirror image.
+
+```
+2026-09-02   API-Football: 325 fixtures fetched -> 0 created, 22 updated   -> disc[af=0]
+2026-09-03   API-Football: 161 fixtures fetched -> 0 created, 11 updated   -> disc[af=0]
+```
+
+> **A source that fetches 325 fixtures and matches every one onto an existing
+> row scores ZERO — identical to a source that returned nothing.**
+
+**The failure it was built for is a source going quiet behind a covering
+source. If the COVERING source is the one that goes quiet, `af=N` reads 0 in
+both the healthy case and the dead one** — and two days of false alarms is the
+mild symptom; the severe one is the alarm being ignored when it is real.
+
+**The fix, recorded not built: split created from matched.**
+
+```
+disc[fs=11 fdo=2 af=0]        ->    disc[fs=11 fdo=2 af=0c/11m]
+```
+
+**A source is alive if `created + matched > 0`; it is DEAD only when both are
+zero.** Creation alone measures novelty, not health, and novelty legitimately
+goes to zero whenever another source got there first — which is the normal
+steady state, not a fault.
+
+*Recorded 2026-09-03.*

@@ -491,3 +491,15 @@ profile is built on**, so on the card that actually exists:
 > tested at all, and a start past 11:30 to be falsified.
 
 *Registered before the day, with hours between measurement and commit.*
+
+## THE LIMITATION, registered alongside the outcomes so a pass cannot be over-read
+
+> **An 11:30 UTC earliest means a MARGIN HELD result demonstrates that the
+> margin covers a start up to 11:30, and says NOTHING about the 09:40 boundary
+> — which needs a start between 09:40 and 11:30 to be tested at all, and a
+> start past 11:30 to be falsified.**
+
+**Third time this week that this distinction has been the difference between a
+result and an illusion:** Monday (16:30 earliest), Wednesday and Thursday
+(16:30, 16:00) each returned MARGIN HELD and tested nothing. Saturday tests
+more than they did and still less than the boundary.
