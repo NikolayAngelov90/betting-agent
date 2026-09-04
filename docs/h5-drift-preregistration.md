@@ -69,6 +69,35 @@ For every pick, measure the movement of **the selection actually taken**.
 | **HOME-SPECIFIC** | 1X2 Home drifts out while at least one other taken selection drifts **in** | a directional market phenomenon |
 | **NEITHER** | taken-selection drift < +1.85% overall | the +3.92% was a fixture-selection artefact of the 15 |
 
+#### Q2 IS NOT ONLY DIAGNOSTIC — it has an operational consequence, and it points the opposite way to a decision already taken
+
+**If every taken selection drifts out in the direction it was taken, then a
+LONGER LEAD IS WORSE**, because more adverse drift accumulates between taking
+the price and the close.
+
+**Stage 21 moved the cron to 03:00 partly on the opposite claim.** Recorded
+there, verbatim:
+
+> *"Lead roughly doubles, and … this is the one effect that HELPS the MODEL
+> series rather than merely protecting it: a longer lead leaves more room for
+> the price to move before the close, which is exactly what CLV measures."*
+
+**"More room for the price to move" is only a benefit if the movement is
+unbiased.** A **PRICING ARTEFACT** outcome on Q2 says it is not — the price
+moves against the taken side systematically — and then a longer lead is a
+larger loss, not a larger opportunity.
+
+| Q2 outcome | consequence for the 03:00 cron |
+| --- | --- |
+| **PRICING ARTEFACT** | **the lead-time rationale REVERSES.** 03:00 still buys delay tolerance, which is measured and real, but its CLV benefit becomes a CLV cost |
+| **HOME-SPECIFIC** | the rationale survives for non-Home selections and is void for Home |
+| **NEITHER** | the rationale is untouched and remains untested |
+
+> **The lead-time benefit has never been measured. It was argued, not
+> demonstrated, and Q2 is the test that would settle it in either direction.**
+> Recorded here before the sample completes so the result cannot be read
+> selectively afterwards.
+
 ### Q3 — Does it hold, or concentrate?
 
 Breakdowns, each reported whether or not it is flattering: **by league**, **by

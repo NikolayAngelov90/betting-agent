@@ -503,3 +503,32 @@ profile is built on**, so on the card that actually exists:
 result and an illusion:** Monday (16:30 earliest), Wednesday and Thursday
 (16:30, 16:00) each returned MARGIN HELD and tested nothing. Saturday tests
 more than they did and still less than the boundary.
+
+
+---
+
+# THE LEAD-TIME BENEFIT IS UNVERIFIED — corrected 2026-09-04
+
+**The choice of `0 3 * * *` rested on two arguments. One is measured; the other
+is not, and it is now marked as such.**
+
+| argument | status |
+| --- | --- |
+| **delay tolerance** — a 03:00 cron absorbs 6h40m before the earliest weekend kickoff | **MEASURED** and re-derived phantom-free. Unaffected. |
+| **lead time helps the MODEL series** — *"a longer lead leaves more room for the price to move before the close"* | **UNVERIFIED. Argued, never demonstrated.** |
+
+**Why it is now in doubt rather than merely unproven.** Measured 2026-09-03,
+1X2 Home drifts **+3.92%** between pick time and kickoff. **"More room for the
+price to move" is a benefit only if that movement is unbiased.** If the price
+moves against the taken side systematically — H5's Q2, PRICING ARTEFACT outcome
+— then **a longer lead is a larger loss, not a larger opportunity, and this
+rationale reverses.**
+
+**It is also consistent with the measured MODEL CLV of −0.587%.**
+
+> **Nothing about the cron changes on this.** The delay-tolerance argument
+> stands on its own and is the reason to keep 03:00. **What changes is that the
+> second argument must stop being cited as a benefit until H5's Q2 reports.**
+
+**Registered in `docs/h5-drift-preregistration.md` before the sample completes,
+so the result cannot be read selectively afterwards.**

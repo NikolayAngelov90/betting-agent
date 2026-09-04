@@ -8478,3 +8478,205 @@ it in its shared helper — labelled a precondition rather than decoration — a
 the guard's own three paths are pinned separately.
 
 *Built 2026-09-03.*
+
+---
+
+# AUDIT 2026-09-04 — the guard's first live day, and it cost more than expected
+
+**Read-only. Nothing fixed.** Two documentation corrections were made under
+explicit instruction and are recorded at the end.
+
+## 1. THE ROUTINE PASS — 7 new runs
+
+| run | workflow | started | verdict | discovery |
+| --- | --- | --- | --- | --- |
+| 33768519808 | paper-report | 09-03 14:43 | CLEAN | |
+| 33768579432 | closing-lines | 09-03 14:43 | CLEAN* | |
+| 33769973925 | closing-lines | 09-03 14:58 | CLEAN* | |
+| 33791482603 | closing-lines | 09-03 18:36 | CLEAN* | |
+| 33809261848 | closing-lines | 09-03 21:41 | CLEAN* | |
+| 33823880780 | closing-lines | 09-04 00:57 | CLEAN* | |
+| **33849086863** | **daily-picks** | **09-04 07:31** | **DEGRADED** | **`disc[fs=26 fdo=8 af=0]`** |
+
+**`af=0` recurs, as expected — the KNOWN FALSE POSITIVE.** The split of created
+from matched was recorded as a fix and not built, so a source that matches
+everything still scores zero and reads as dead. **Not re-diagnosed.** Third
+consecutive day.
+
+### THE ASTERISK: five runs scored CLEAN while captures were stopped all day
+
+> **`ci_audit` has no pattern for `PICKS-RUN GUARD: DECLINING`.** A guard that
+> halts every closing-line capture for a day produces a **CLEAN** verdict.
+
+**Grep count in `scripts/ci_audit.py`: 0.** The guard shipped yesterday with a
+log line the audit cannot see — **rule 3's exact shape, one day after the rule
+was filed.** Recorded, not fixed.
+
+## 2. THE GUARD'S FIRST LIVE DAY
+
+**Three paths exist. Two ran.**
+
+| path | executions | verified from a live log? |
+| --- | --- | --- |
+| **DECLINE** (marker absent) | **5** | **yes** |
+| **MARKER WRITTEN** (picks path) | **1** | **yes** — `PICKS RUN MARKER written for 2026-09-04` |
+| **ALLOW** (marker present, the quiet path) | **0** | **NO — has not yet executed** |
+
+> **The quiet path is the one that mattered and it has not run.** The last
+> closing-lines firing was 00:57, before the 07:31 picks run; the next is due
+> 10:47. **So I cannot yet confirm from production that the guard announces
+> itself when it allows** — only from its test. **That is exactly the inference
+> I said I would not repeat, and it is unresolved rather than resolved.**
+
+### THE COST — visible, as the design required
+
+**A declined refresh does NOT skip the capture.** The capture still runs, on
+stale odds, and the 180-minute validity rule rejects them:
+
+```
+2026-09-03 18:36  capture_closing_lines: 0 captured, 3 missing, 7 LATE, 0 invalid (of 10 pending)
+2026-09-03 14:43  capture_closing_lines: 0 captured, 1 missing, 0 late, 0 invalid (of 1 pending)
+```
+
+**The refresh exists to make odds fresh enough to BE a close. Without it every
+capture is rejected as `late`.** 2026-09-03's eleven picks captured **zero**.
+
+### Two different causes, and only one is a transition artifact
+
+| declines | cause | recurring? |
+| --- | --- | --- |
+| **4** on 09-03 (14:43 → 21:41) | the 07:29 picks run **predated the guard** (`dda4ded`, 09:29 UTC), so no marker was ever written that day | **no — one-off deployment transition** |
+| **1** on 09-04 00:57 | the marker is keyed on `date.today()`, and **no picks run has happened yet at 00:57** | **YES — every night, structurally** |
+
+> ### THE OVERNIGHT DECLINE IS A DESIGN CONSEQUENCE I DID NOT ANTICIPATE.
+>
+> `closing-lines` fires at `17 23` and `~01:00`. **Those runs capture the
+> previous evening's late kickoffs — and they will decline every night**,
+> because the new day's picks run is still seven hours away.
+
+**The ordering held where it was supposed to:** the marker was written at 07:31
+by the picks run, before the first post-picks refresh window at 10:47.
+
+## 3. s5.9's DAILY RECORD — and its first refusal was not its own
+
+| day | picked → groups | collapsed | card → groups | collapsed |
+| --- | --- | --- | --- | --- |
+| 2026-09-02 | 22 → 22 | 0 | 22 → 22 | 0 |
+| 2026-09-03 | 11 → 11 | 0 | 11 → 11 | 0 |
+| **2026-09-04** | **25 → 25** | **0** | **26 → 26** | **0** |
+
+**`PICK_REJECTED` fired for the first time:**
+
+```
+PICK_REJECTED reason=same_fixture_limit match_id=51184 market=Under 3.5 cap=1 already_saved=0
+```
+
+**It was NOT a duplicate catch.** Match 51184 (`Lommel SK v Club Brugge KV`,
+belgium/jupiler-pro-league) resolves to a group of **one row**. Two candidates
+on one match, cap of 1, the lower-ranked dropped — **that is s5.3's cap doing
+its ordinary job, not s5.9's fixture grouping.**
+
+> **s5.9 has still never refused anything on either branch, across four live
+> days.** The `same_fixture_limit` label is shared by both mechanisms, which is
+> how this could have been misread as a first catch.
+
+**The guarantee, checked independently by (competition, kickoff minute, resolved
+teams): 0 duplicate pairs on 2026-09-04, 0 fixtures carrying two picks. Held.**
+
+## 4. CLV AND deff
+
+| | captured | under s5.9 |
+| --- | --- | --- |
+| **MODEL** | **49** | **1** |
+| **FINAL** | **66** | **3** |
+
+**Unchanged from 2026-09-03 — because the captures that would have moved them
+were declined.**
+
+| | |
+| --- | --- |
+| observations | 49 |
+| distinct `match_id` | 49 |
+| **distinct FIXTURE identities** | **49** |
+
+**Still one-to-one. `deff = 1.00` holds, and no observation sits on a
+duplicate-pair row under the shipped predicate.**
+
+## 5. H5's SAMPLE — the rate is the finding, and the guard is why
+
+| | |
+| --- | --- |
+| fixtures with two separated pre-kickoff 1X2 Home points | **16** (was 15) |
+| added since the last audit | **+1** |
+| target | **50** |
+
+**By the day the second point arrived:**
+
+| date | fixtures reaching two points |
+| --- | --- |
+| 2026-08-27 | 2 |
+| 2026-08-29 | 1 |
+| 2026-09-02 | 13 |
+| **2026-09-03** | **0** |
+| **2026-09-04** | **0** |
+
+> ### THE GUARD IS BLOCKING H5's SAMPLE.
+>
+> **The second pre-kickoff point comes from the imminent refresh.** The guard
+> declined every refresh from 09-03 14:43 onward, so **no fixture has gained a
+> second point in two days.**
+
+**This is a real trade-off, not a defect:** the guard protects the cohort from a
+contamination that occurs only when the scheduler misbehaves, and it costs the
+sample for the one open question that could change this project's answer.
+**Both sides are now measured. The decision is Niki's and nothing has been
+changed.**
+
+**At the pre-guard rate (16 in 9 days ≈ 1.8/day) 50 was ~3 weeks away. At the
+post-guard rate of 0/day it is unreachable.**
+
+## Substrate — level and rate
+
+| | 09-03 | **09-04** | change |
+| --- | --- | --- | --- |
+| `odds_snapshots` | 35,639 | **39,796** | +4,157 |
+| `injury_observations` | 884 | **1,068** | +184 |
+| **fixtures with ≥3 separated pre-kickoff observations** | **0** | **0** | **0** |
+
+**The corrected trigger — fixtures, not keys, with consecutive gaps ≥30 minutes
+— remains ZERO.** The 4,157 new snapshots all came from the single daily-picks
+run and are one-point-per-key by construction.
+
+## 6. SATURDAY READINESS — all four confirmed
+
+| item | status |
+| --- | --- |
+| re-derived thresholds at the point of use | **✓** — in `stage21-schedule-prediction.md`, not only the ledger |
+| earliest kickoff 11:30 UTC from two independent lookups | **✓** — a search and a direct fetch of the dated page |
+| the limitation stated alongside the outcomes | **✓** — *"demonstrates the margin covers a start to 11:30 and says NOTHING about the 09:40 boundary"* |
+| corrected gradient 12.4% @12:00, 45.3% @14:00, 20% crossing ~13:20 | **✓** |
+
+**Ready. And one thing to watch tomorrow that is now new:** if the picks run is
+delayed past ~10:47, the guard will keep the refresh out until picks land — so
+**a late Saturday costs captures as well as card coverage.** That interaction
+did not exist when the Saturday checkpoint was registered.
+
+## Two documentation corrections, made under instruction
+
+**1. `docs/h5-drift-preregistration.md`** — Q2's operational consequence was
+**not** registered and now is. If every taken selection drifts out in the
+direction taken, **a longer lead is worse**, which reverses Stage 21's
+lead-time rationale. Registered before the sample completes so the result
+cannot be read selectively.
+
+**2. `docs/stage21-schedule-prediction.md`** — the lead-time benefit is now
+marked **UNVERIFIED** rather than stated as a benefit. The claim was:
+
+> *"a longer lead leaves more room for the price to move before the close,
+> which is exactly what CLV measures."*
+
+**"More room to move" is a benefit only if the movement is unbiased**, and
++3.92% measured drift says it may not be. **The delay-tolerance argument is
+measured and untouched; it is the sole surviving reason to keep 03:00.**
+
+*Read-only audit, 2026-09-04.*
