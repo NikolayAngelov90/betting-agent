@@ -149,6 +149,7 @@ PATTERNS = {
     # the 3 that were not.
     "unpriced_fixtures": r"UNPRICED FIXTURES: (\d+) row",
     "unpriced_check_dead": r"UNPRICED FIXTURE CHECK DID NOT RUN",
+    "report_sent": r"(?:Performance report sent to Telegram|Settlement report sent to Telegram)",
     # s5.9's OWN refusal, distinct from the ordinary per-match cap. Both log
     # `PICK_REJECTED reason=same_fixture_limit`; only the duplicate case says
     # so, and on 2026-09-04 the cap fired and was nearly recorded as s5.9's
@@ -160,6 +161,12 @@ PATTERNS = {
     # with a log line this file had no pattern for, and five closing-lines runs
     # scored CLEAN while captures were stopped all day.
     "picks_run_guard_declined": r"PICKS-RUN GUARD: DECLINING",
+    # The experiment record that replaces the frozen live all-time in the
+    # Telegram reports. Registered BEFORE the code that emits it, deliberately:
+    # the picks-run guard shipped with a log line this file had no pattern for
+    # and five runs scored CLEAN while captures were stopped all day. A report
+    # that silently stops carrying the block must be visible here.
+    "experiment_record_built": r"EXPERIMENT RECORD: n=(\d+)",
     # Stage 19. The audit was blind to a day that discovered nothing: 2026-08-26
     # analysed 0 fixtures against a card of six real matches and was flagged
     # only for the API-Football suspension. It surfaced because Niki looked at a
@@ -201,7 +208,8 @@ def extract(log: str) -> Dict[str, object]:
         if key in ("fixtures_created", "reviews", "no_rows",
                    "decisions_discarded", "fixtures_zero_active",
                    "no_fixtures_at_all", "unpriced_check_dead",
-                   "duplicate_fixture_refusals", "picks_run_guard_declined"):
+                   "duplicate_fixture_refusals", "picks_run_guard_declined",
+                   "report_sent"):
             f[key] = len(ms)
         elif key == "injuries_saved":
             f["injuries_saved"] = int(ms[-1][0])
@@ -363,6 +371,12 @@ def assertions(facts: Dict[str, object],
     if facts.get("picks_run_guard_declined"):
         hits.append("the odds refresh DECLINED — closing-line capture stopped "
                     "for this run; every pending pick will be rejected as late")
+
+    # A report that stops carrying the experiment block is silent otherwise:
+    # the message still sends, it just says less. Absence is the finding.
+    if facts.get("report_sent") and not facts.get("experiment_record_built"):
+        hits.append("a report was sent WITHOUT the experiment record block — "
+                    "the paper series silently stopped being reported")
 
     if facts.get("tracebacks"):
         hits.append(f"{facts['tracebacks']} traceback(s) in the log")
