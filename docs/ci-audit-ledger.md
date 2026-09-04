@@ -8680,3 +8680,126 @@ marked **UNVERIFIED** rather than stated as a benefit. The claim was:
 measured and untouched; it is the sole surviving reason to keep 03:00.**
 
 *Read-only audit, 2026-09-04.*
+
+---
+
+# THE PICKS-RUN GUARD IS REVERTED — the trade was wrong
+
+**2026-09-04. Reverted, not patched.** 888 tests pass; fingerprint unchanged at
+`694a60`; `s5.9` intact.
+
+## The trade, as measured rather than as argued
+
+| | |
+| --- | --- |
+| **cost** | **daily and certain** — 09-03's eleven picks captured **zero**; H5's sample rate fell from **~1.8 fixtures/day to 0**, and H5 is the sample for the only open question in this project |
+| **exposure prevented** | **conditional** on a picks delay beyond ~7h40m — observed **twice**, against a delay trend now at **4–5h and tightening** |
+
+> **A certain daily cost against a conditional exposure whose condition is
+> receding. The guard was the wrong instrument and it was my recommendation.**
+
+**Not patched under time pressure.** Tomorrow is the Saturday checkpoint, and
+the guard introduced an interaction that did not exist when that checkpoint was
+registered. **Reverting removes the interaction; patching would have kept it and
+added an untested change on the day.**
+
+**What was removed:** `src/data/run_marker.py`, its test, the call in
+`refresh_imminent`, the marker write in the picks path, and the precondition
+added to `test_odds_quota_and_refresh.py`. **The ledger reasoning stays** — the
+aggregation rule and the guard-design material are independent of the code.
+
+**One artifact left in place, deliberately:** the `api_budget` row
+`(2026-09-04, __picks_run_complete__, used=1)`. `used()` filters by provider so
+it is inert, and deleting rows to tidy a reverted feature is not a thing this
+project does casually. **Recorded so a future reader does not find an
+unexplained provider.**
+
+## THE REDESIGN — for its own stage, against what the exposure actually is
+
+**The reverted guard asked the wrong question.** It asked *"have today's picks
+run?"* when the question is *"could this refresh change a price that a pending
+picks run will read?"*
+
+> **Those diverge at every hour outside the picks window — which is exactly
+> where the overnight declines came from.** `date.today()` is a calendar fact;
+> the exposure is a causal one.
+
+**Three properties the reverted guard did not have:**
+
+1. **A refresh cannot contaminate a pick already taken.** `taken_odds` is
+   persisted at pick time. Rewriting `odds` afterwards changes nothing about a
+   pick that exists — **so the entire population of already-picked fixtures is
+   outside the exposure**, and the blanket guard blocked refreshes on their
+   behalf for nothing.
+2. **The contamination is to OTHER fixtures in the same league** that a pending
+   picks run might still price. That is the actual mechanism, and it is
+   **per-league**, not per-day.
+3. **It is conditional on unpicked fixtures remaining.** A league whose
+   fixtures have all been priced cannot be contaminated, whatever the hour.
+
+**So the correct predicate is roughly:**
+
+> **decline a refresh for league L only if a picks run is pending AND L still
+> holds fixtures that run would price.**
+
+**Per-league, conditional, and causal.** It permits the overnight captures the
+reverted guard killed, because at 23:17 there is no pending picks run whose
+reads could be affected — and it still closes the 11h21m case, because then
+there *is* one.
+
+**Not built. Its stage owns the design, the announcement, and its audit pattern
+together.**
+
+## RULE — A GUARD AND ITS AUDIT PATTERN MUST SHIP TOGETHER
+
+**The guard shipped with a log line `ci_audit` had no pattern for. Five
+closing-lines runs scored CLEAN while captures were stopped for a full day.**
+
+> ### A guard whose signal the audit cannot read is invisible by construction, and its silence is indistinguishable from health.
+>
+> **Rule 3, one day after rule 3 was filed** — a new query that does not know
+> what exists. Filing the rule did not protect the very next thing I wrote.
+
+**Applied now, both directions:**
+
+* `cause=duplicate_rows_one_fixture` — added, so **s5.9's first real catch is
+  visible when it happens**;
+* `PICKS-RUN GUARD: DECLINING` — added **pre-emptively**, matching nothing
+  today, waiting for the redesign. **Registered before the guard rather than
+  after it**, which is the whole point of the rule.
+
+## THE ANNOUNCEMENT PROBLEM IS NOW UNRESOLVED ON TWO GUARDS
+
+| guard | quiet path | verified in production? |
+| --- | --- | --- |
+| `resolve_fixture_groups` | logs only when it unions a group | **no** — four clean days inferred from the absence of a degrade warning |
+| the picks-run guard (reverted) | logged on allow, in principle | **no** — the allow path never executed before the revert |
+
+> **Both remain verified by test only. Both belong in the stage that makes
+> announcement structural** — every guard that can silently do nothing emits a
+> count, and a test asserts the line exists.
+
+## `same_fixture_limit` NO LONGER HIDES WHICH MECHANISM FIRED
+
+**Two mechanisms logged the same string** — the s5.3 per-match cap and the s5.9
+duplicate-row refusal. **On 2026-09-04 the cap fired and was nearly recorded as
+s5.9's first live catch.**
+
+```
+PICK_REJECTED reason=same_fixture_limit cause=per_match_cap             rows_in_fixture=1 …
+PICK_REJECTED reason=same_fixture_limit cause=duplicate_rows_one_fixture rows_in_fixture=2 …
+```
+
+**`cause` is derived from the number of distinct `match_id`s in the group**, so
+it cannot drift from the thing it describes. `reason=` is unchanged, so nothing
+that greps the old string breaks. **Fixed before the first real catch rather
+than after it was misfiled.**
+
+## Saturday stands
+
+**All four registrations confirmed, and with the guard reverted the new
+interaction disappears.** Tomorrow reports against the registered outcomes and
+the stated limitation: a MARGIN HELD demonstrates the margin covers a start to
+**11:30 UTC** and says nothing about the **09:40** boundary.
+
+*Reverted and recorded 2026-09-04.*

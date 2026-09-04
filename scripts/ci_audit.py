@@ -149,6 +149,17 @@ PATTERNS = {
     # the 3 that were not.
     "unpriced_fixtures": r"UNPRICED FIXTURES: (\d+) row",
     "unpriced_check_dead": r"UNPRICED FIXTURE CHECK DID NOT RUN",
+    # s5.9's OWN refusal, distinct from the ordinary per-match cap. Both log
+    # `PICK_REJECTED reason=same_fixture_limit`; only the duplicate case says
+    # so, and on 2026-09-04 the cap fired and was nearly recorded as s5.9's
+    # first catch.
+    "duplicate_fixture_refusals": r"cause=duplicate_rows_one_fixture",
+    # PRE-REGISTERED AND CURRENTLY MATCHES NOTHING. The picks-run guard was
+    # reverted on 2026-09-04; this pattern waits for its redesign. It is here
+    # BEFORE the guard rather than after because the guard shipped once already
+    # with a log line this file had no pattern for, and five closing-lines runs
+    # scored CLEAN while captures were stopped all day.
+    "picks_run_guard_declined": r"PICKS-RUN GUARD: DECLINING",
     # Stage 19. The audit was blind to a day that discovered nothing: 2026-08-26
     # analysed 0 fixtures against a card of six real matches and was flagged
     # only for the API-Football suspension. It surfaced because Niki looked at a
@@ -189,7 +200,8 @@ def extract(log: str) -> Dict[str, object]:
             continue
         if key in ("fixtures_created", "reviews", "no_rows",
                    "decisions_discarded", "fixtures_zero_active",
-                   "no_fixtures_at_all", "unpriced_check_dead"):
+                   "no_fixtures_at_all", "unpriced_check_dead",
+                   "duplicate_fixture_refusals", "picks_run_guard_declined"):
             f[key] = len(ms)
         elif key == "injuries_saved":
             f["injuries_saved"] = int(ms[-1][0])
@@ -342,6 +354,15 @@ def assertions(facts: Dict[str, object],
     if facts.get("unpriced_check_dead"):
         hits.append("the unpriced-fixture check DID NOT RUN — no evidence "
                     "either way, not a clean result")
+
+    if facts.get("duplicate_fixture_refusals"):
+        hits.append(
+            f"{facts['duplicate_fixture_refusals']} pick(s) refused because two "
+            "ROWS were one FIXTURE — s5.9 acting, not the ordinary per-match cap")
+
+    if facts.get("picks_run_guard_declined"):
+        hits.append("the odds refresh DECLINED — closing-line capture stopped "
+                    "for this run; every pending pick will be rejected as late")
 
     if facts.get("tracebacks"):
         hits.append(f"{facts['tracebacks']} traceback(s) in the log")

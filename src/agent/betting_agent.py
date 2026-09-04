@@ -1932,9 +1932,20 @@ class FootballBettingAgent:
                 slots = max(0, max_picks_per_match - already)
                 if slots < len(group):
                     skipped = group[slots:]
+                    # TWO MECHANISMS SHARE THIS SITE AND THEY ARE NOT THE SAME
+                    # EVENT. The s5.3 cap drops a second candidate on ONE row;
+                    # the s5.9 fixture key drops a candidate because two ROWS
+                    # were found to be one fixture. On 2026-09-04 the first
+                    # fired and was very nearly recorded as the second — s5.9's
+                    # first live catch has not happened yet, and when it does it
+                    # must not be indistinguishable from the ordinary cap.
+                    _rows_in_group = len({r.match_id for r in group})
+                    _reason = ("duplicate_rows_one_fixture" if _rows_in_group > 1
+                               else "per_match_cap")
                     for s in skipped:
                         logger.info(
                             f"PICK_REJECTED reason=same_fixture_limit "
+                            f"cause={_reason} rows_in_fixture={_rows_in_group} "
                             f"match_id={s.match_id} market={s.market} "
                             f"selection={s.selection} conf={s.confidence:.4f} "
                             f"cap={max_picks_per_match} already_saved={already}"
@@ -4772,22 +4783,6 @@ async def main():
                     leagues=league_filter, force=force_picks
                 )
 
-            # The picks are persisted by now, on both finalising paths (the
-            # --shard path returned above without finalising, deliberately —
-            # a shard writes candidates, not picks).
-            #
-            # THE MARKER MUST BE WRITTEN EVEN WHEN THERE ARE ZERO PICKS. A
-            # legitimate quiet day and a run that never happened both produce
-            # no rows, and that ambiguity is exactly what this marker exists to
-            # remove -- so it is recorded here, before the `if not picks`
-            # branch, rather than inside the success path.
-            try:
-                from src.data.run_marker import mark_picks_complete
-                mark_picks_complete(agent.db)
-            except Exception as _mk_e:
-                logger.warning(
-                    f"picks-run marker failed ({_mk_e}) — the next odds refresh "
-                    "will decline and a day of captures will be lost")
 
             if not picks:
                 print("No value picks found for today.")
