@@ -57,6 +57,20 @@ _STRIP = {"fc", "sc", "sk", "afc", "sfc", "cf", "bk", "fk", "ac", "as", "cd", "a
 _ABBREVS = {
     "utd": "united", "united": "united",
     "cty": "city", "city": "city",
+    # NEC Nijmegen. Sources split it into two disjoint halves: API-Football
+    # writes "NEC", Flashscore writes "Nijmegen", and the two share NO token —
+    # the residual class the identity gate declared and no lexical test can
+    # reach. On 2026-09-08 that produced two rows for one fixture and TWO PICKS
+    # ON THE SAME SELECTION (1X2 Home Win at 1.62 and 1.60), the second
+    # confirmed violation of the s5.3 one-pick-per-fixture guarantee.
+    #
+    # BOTH forms map to a canonical carrying BOTH tokens, so this ADDS rather
+    # than DELETES. A one-directional rewrite to "nijmegen" would remove the
+    # "nec" token from one side, which is the symmetric-canonicalisation hazard
+    # that broke Standard Liege / St. Liege in Stage 20. Verified against the
+    # derived hazard inventory, not argued.
+    "nec": "nec nijmegen", "nijmegen": "nec nijmegen",
+    "nec nijmegen": "nec nijmegen",
     "ath": "athletic", "athletic": "athletic",
     "weds": "wednesday", "wednesday": "wednesday",
     "wed": "wednesday",
