@@ -9248,3 +9248,180 @@ accumulating a daily cost are now closed — `af=0` today, the `same_fixture_lim
 ambiguity on 09-04 — **and this is the one that remains.**
 
 *Recorded 2026-09-09.*
+
+---
+
+# NEC / NIJMEGEN — the second s5.3 violation, and the first under s5.9
+
+**2026-09-09. Reported by Niki from the 2026-09-08 run.**
+
+## 1. s5.9 DID NOT CATCH IT, and the fixture carried two picks
+
+| row | teams | `apifootball_id` | fs | odds | **picks** |
+| --- | --- | --- | --- | --- | --- |
+| **51485** | `NEC` v `SBV Excelsior` | — | no | 100 | **1** |
+| **51496** | `Nijmegen` v `Excelsior` | 1552136 | yes | 79 | **1** |
+
+**Same league (`netherlands/eredivisie`), same kickoff minute (16:45).**
+`resolve_fixture_groups` returned `{51485: 51485, 51496: 51496}` — **two
+groups.**
+
+**Checked independently of the key, by (competition, kickoff minute, resolved
+teams): the fixture carried two saved picks.**
+
+```
+pick 1752  match 51496  1X2 Home Win @ 1.62  EV -0.0270  s5.9
+pick 1759  match 51485  1X2 Home Win @ 1.60  EV -0.1274  s5.9
+```
+
+> ### SECOND CONFIRMED VIOLATION of the s5.3 guarantee — and WORSE than the first.
+>
+> The 2026-08-30 Deportivo case was two *different* correlated markets. **This
+> is the SAME SELECTION twice — `1X2 Home Win` at 1.62 and 1.60 — a doubled
+> stake on one outcome**, and the second copy carries EV **−0.1274**.
+>
+> **And it happened under s5.9**, the revision built to prevent exactly this.
+
+## 2. WHICH BRANCH FAILED — tested, not inferred
+
+**BRANCH 1 could not fire.** `_shares_resolved_club` requires **both** ids
+non-None. Row 51485 carries `apifootball_team_id = NULL` on **both** sides
+(teams 574 `NEC`, 571 `SBV Excelsior`), so:
+
+```
+home: None vs 413  -> False
+away: None vs 196  -> False
+```
+
+**The names were irrelevant to branch 1.** Row 51485 has neither an
+`apifootball_id` nor a `flashscore_id` — it came from a third path, and it
+carries no provider identity at all.
+
+**BRANCH 2 requires BOTH sides**, confirmed in the source rather than recalled:
+
+```python
+if team_names_similar(a.home, b.home) and team_names_similar(a.away, b.away):
+```
+
+| pair | similar |
+| --- | --- |
+| `SBV Excelsior` / `Excelsior` | **True** |
+| `NEC` / `Nijmegen` | **False** |
+
+> **One side matching is not enough, and that single design detail decides
+> whether this pair was reachable at all. It was not.**
+
+## 3. IT IS THE DECLARED RESIDUAL, arriving in the fixture matcher
+
+**`test_identity_gate_aliases.py`, verbatim:**
+
+> *"The residual class is a legitimate pair with ZERO shared tokens, which no
+> lexical test can reach by construction, and that is precisely why a curated
+> table exists."*
+
+**And the gate's own docstring lists `NEC Nijmegen / Nijmegen` among the benign
+pairs — because those two SHARE AN ANCHOR.** `NEC` alone against `Nijmegen`
+alone shares nothing. **`TEAM_NAME_ALIASES` already carries
+`"NEC Nijmegen": "Nijmegen"`, and it does not cover the bare form.**
+
+> **This is not a new failure mode. It is the residual behaving exactly as
+> declared, in a component that inherited it without inheriting the table that
+> was built to absorb it.**
+
+**The precedent is in the same file.** `NAME_ALIASES` already carries
+`"united states" -> "usa"`, with this comment:
+
+> *"Without these, token/prefix logic can't equate them … so a second Match row
+> is created for the same fixture and it gets briefed/picked twice (USA vs
+> Bosnia, 2026-07-02)."*
+
+**This is the third instance of that exact failure**, and the remedy was
+documented at the first.
+
+## 4. THE ALIAS — union-safe, and CHECKED against the pin rather than argued
+
+```python
+"nec": "nec nijmegen", "nijmegen": "nec nijmegen",
+"nec nijmegen": "nec nijmegen",
+```
+
+**Both forms map to a canonical carrying BOTH tokens, so this ADDS rather than
+DELETES.** A one-directional rewrite to `"nijmegen"` would strip the `nec`
+token from one side — **the symmetric-canonicalisation hazard that broke
+`Standard Liege` / `St. Liege` in Stage 20.**
+
+> **`test_alias_symmetry_hazard` passes with NO new pair.** The 7-entry
+> `KNOWN_BENIGN_HAZARDS` inventory is derived from the table rather than
+> maintained beside it, so this is a check and not an argument — which is the
+> reason the pin exists.
+
+**Replay:**
+
+| | |
+| --- | --- |
+| `NEC` / `Nijmegen` | now **similar** |
+| the pair | now groups, `branch=stored_names` |
+| `Maccabi Tel Aviv` / `Telstar` | anchor **False** — refused |
+| `Rapid Vienna` / `Rapid Bucuresti` | anchor True, separated by the country check, as pinned |
+| `Pau FC` / `St. Pauli` | anchor **False** — refused |
+| `Cracovia Krakow` / `Rakow` | anchor **False** — refused |
+| `Standard Liege` / `St. Liege` | anchor **True** — still passes, as the union fix intends |
+
+**Control against over-collapse:** 09-05 `113 → 109` and 09-06 `70 → 68` are
+**unchanged**; 09-08 moves `21 → 20` to `21 → 19` — **exactly the one pair
+intended, and nothing else.**
+
+## 5. THE POPULATION — s5.9's own residual, counted for the first time
+
+**61,329 co-scheduled pairs (same league, identical kickoff minute):**
+
+| class | pairs | **carrying picks on BOTH rows** |
+| --- | --- | --- |
+| **branch 1** — ≥1 shared provider club id | 844 | reachable |
+| **branch 2** — BOTH name pairs similar | 89 | reachable |
+| **branch 3a** — exactly ONE side matches | **208** | **2** |
+| **branch 3b** — NEITHER side matches | 60,188 | 827 |
+
+**Branch 3b is not a blind spot** — it is the ordinary matchday. `Boulogne v
+Nancy` beside `Clermont v Reims` shares nothing because they are different
+fixtures, and its 827 double-picked pairs are 827 correct outcomes.
+
+> ### THE ACTIONABLE RESIDUAL IS BRANCH 3a: 208 pairs, and BOTH of its double-picked members are real violations.
+
+## AND A THIRD VIOLATION, surfaced by that count
+
+| | |
+| --- | --- |
+| **2026-08-08 19:30, `portugal/primeira-liga`** | |
+| 49271 | `CF Estrela da Amadora` v `Sporting Clube de Portugal` — **1 pick** |
+| 49308 | `Estrela` v `Sporting CP` — **2 picks** |
+
+**THREE picks on one real fixture.** It predates s5.9 (2026-08-08), so it is not
+a violation of a guarantee that existed at the time — but it is the same
+mechanism, and **it is still not caught today.**
+
+**Its failure is a DIFFERENT one from NEC's, and the distinction matters:**
+
+| pair | shared tokens | why `team_names_similar` says False |
+| --- | --- | --- |
+| `NEC` / `Nijmegen` | **zero** | unreachable by construction — the declared residual |
+| `Sporting Clube de Portugal` / `Sporting CP` | **`sporting`** | overlap ratio **1/2 = 0.5**, below the **0.7** threshold |
+
+> **The second is NOT the residual.** It shares a token and is rejected by a
+> *threshold*, which is a tunable and therefore a different kind of decision.
+> **Loosening 0.7 to admit it is exactly the "fix tolerance, not knowledge"
+> move this project has refused five times** — so it is recorded and NOT fixed
+> here. A curated alias for `Sporting CP` is the same remedy as NEC's and is the
+> defensible option; it is a separate decision and a separate commit.
+
+## What this says about the floor
+
+**750 / 60,976 was published as a floor.** Seven pairs in four days already
+showed it was loose. **Branch 3a now gives that looseness a name:** 208 pairs
+the key cannot see at all, in a class nobody had counted, and two of them are
+confirmed violations.
+
+**s5.9 has its own residual, it is 208 pairs wide, and it was never bounded
+until now.**
+
+*Recorded 2026-09-09. Alias shipped as `e224659`.*
