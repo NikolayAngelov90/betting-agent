@@ -9744,3 +9744,110 @@ predates s5.3 so it violated no guarantee at the time, and **its remedy is the
 `Sporting CP` alias — a separate decision, deliberately not taken here.**
 
 *Recorded 2026-09-09.*
+
+---
+
+# TWO FORMULATIONS, KEPT — and a recursion worth naming
+
+## 1. On tests versus production
+
+> ## A test proves a mechanism behaves as its author expected. Production proves the author expected the right thing.
+
+**The inventory is what earns this rather than the phrasing.** The list of
+never-executed mechanisms came back SHORT — `_apply_decision`'s consolidation
+branch had fired twice, `evidence_status` three times, the training-exclusion
+marking 539 times, s5.9's refusal five times.
+
+> **And the one that was wrong was on the short list.**
+> `experiment_record`'s per-series disposition filter shipped 2026-09-08,
+> passed its tests, and was defective on its first real exercise the next day —
+> because no disposition had ever existed on a paper pick carrying a captured
+> MODEL observation, so the branch had never run.
+
+**That is the whole argument in one instance: the defect was not in the code the
+tests covered. It was in the author's model of which states occur.**
+
+**The operational form, now item 4 of the announcement stage:** enumerate the
+branches that have never executed, and **exercise each deliberately** rather
+than waiting for production to supply the state. A branch that has never run is
+not "low risk" — it is **unmeasured**, and this project has three cases where
+unmeasured and correct turned out to be different.
+
+## 2. On the correction inside the audit
+
+> **"I counted a disposed row as live — the same error as reading a bare count
+> without its gate."**
+
+**That is rule 3 arriving inside the audit that was checking for rule 3.**
+
+**The recursion is real and it is three levels deep, each one finding something
+the level above missed:**
+
+| level | what it was checking | what it missed |
+| --- | --- | --- |
+| **1** | the pipeline | duplicate rows defeating the per-fixture cap |
+| **2** | the audit of the pipeline | `af=0` counting creations, `disc[]` reading identically for healthy and dead |
+| **3** | the audit of the audit | a raw `count(*)` on `saved_picks` read without its `disposition` gate — **by me, while writing up rule 3** |
+
+> ### Every level of checking is itself a query, and inherits the contamination the level below was about.
+>
+> **Rule 3 does not have a fixed point.** "An exclusion is only as good as the
+> queries that apply it" applies to the queries that audit the queries, and to
+> this sentence.
+
+**Which is the argument for the structural remedy rather than the vigilant
+one.** The proposed phantom-excluding accessor was justified on the grounds that
+authors will not remember; **this is the same case made from the other end — I
+did remember, I had written the rule down that week, and I still read a bare
+count.** Discipline does not survive its own application; a default does.
+
+**And it is why the three counts in the disposal script were checked
+before AND after with an abort on mismatch.** That worked. The bare count that
+failed was in the *narrative*, not the script — **the part with no guard on
+it.**
+
+*Recorded 2026-09-09.*
+
+---
+
+# STAGE 22 SPECIFIED — team identity repair
+
+**`docs/stage22-team-identity-repair.md`. Not built. Runs after H5.**
+
+**Four symptoms, one subject, in dependency order:**
+
+1. **44 shared-provider-id groups — PROVABLE merges.** Two rows carrying the
+   same id are the same club by the provider's own assertion; no name
+   comparison is involved. **`Sheffield Wednesday` is a THREE-way split**
+   (564 / 1575 / 1606, all `af=74`), so the merge is over connected components.
+2. **176 unresolved rows merged into resolved twins** — `Sporting Clube de
+   Portugal` → `Sporting CP`, `Celta` → `Celta Vigo`, `SBV Excelsior` →
+   `Excelsior`. **Prioritise the 66 that appear in a fixture since 2026-08-01**;
+   the other 110 are historical-only and **leaving them is cheaper than a wrong
+   merge**.
+3. **Rows 124 and 411 NULLed, not re-assigned** — and they are **not
+   equivalent**: 124 makes Maccabi Tel Aviv **invisible** (no row at all), 411
+   makes Cracovia **unresolvable** (row 420 exists, 3 fixtures since 08-01, 1
+   priced). The record should not flatten the two.
+4. **Maccabi Tel Aviv created — a SECOND operation.** Clearing 124 unblocks
+   creation; it does not perform it, and nothing will until Maccabi next
+   appears in a fetched fixture.
+
+**Payoff, measured:** removes the condition under which s5.9 fails for **187 of
+202** residual pairs; **155 fixtures since 2026-08-01** touch an unresolved
+team; **1,435 in the last 365 days**.
+
+**Cohort: SELECTION-AFFECTING — merging changes which fixtures resolve, so which
+are priced, so which are picked. ONE BUMP, `s5.10`, with the MEASURED
+before/after effect on the discovered-fixture population in the history entry**,
+so a later reader can attribute a cohort difference rather than guess.
+
+**What it does NOT close: 15 pairs are a pure naming residual** needing the
+`Sporting CP` alias — *a threshold is tolerance, an alias is knowledge* — and
+**that decision stays separate and untaken.** Bundling a merge and a threshold
+would make the cohort break unattributable.
+
+**H5 runs first.** Free, sample present (n=127 against a registered n≥50), runs
+once, and Q2 bears on the lead-time claim still marked UNVERIFIED.
+
+*Specified 2026-09-09.*
