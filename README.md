@@ -418,7 +418,27 @@ Reports show genuine CLV **only** when a validated closing line exists. Model-pr
 
 ## Performance Metrics
 
-`--stats` / `--report` (live picks only): win rate and ROI all-time / 7d / 30d / by market / by league, Brier score, log loss, model-agreement tags, drawdown status.
+### The closed pre-paper-trading live record
+
+**1,074 settled picks · 51.676% win rate · −3.836% flat ROI · MEASURED 2026-09-01.**
+
+**This series is CLOSED.** Its last pick is dated **2026-08-10**, when paper
+trading began; it has not moved since and it never will. It was reported daily
+in the Telegram messages as though it were current until **2026-09-04**, when it
+was removed from them. **It lives here, with its measurement date, because the
+convention in this project is that superseded claims stay visible with their
+correction attached — and because a daily operational message is not the place
+for a frozen historical number.**
+
+The Telegram reports now count from the **experiment** instead: the paper record
+with its cohort span named, every rate carrying its `n`, and CLV above the
+record rather than below it.
+
+### Current reporting
+
+`--stats` / `--report` (live picks only): win rate and ROI 7d / 30d / by market /
+by league, Brier score, log loss, model-agreement tags, drawdown status. The
+`all_time` figure is deliberately absent from the Telegram messages — see above.
 
 The **paper-trading report** is the experiment's real instrument and reports separately: MODEL and FINAL CLV with cluster-bootstrapped CIs, effective sample size and design effect, the paired subset (`final − model`, reported as an observed difference, never a causal claim), a `none`/`KEEP`/`CHANGE` breakdown, a coverage cross-tab, and independent MODEL/FINAL checkpoint counters.
 

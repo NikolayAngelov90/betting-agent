@@ -28,6 +28,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from src.data.models import Match, SavedPick
+from src.evaluation.clv import _boot, _effective_n
 from src.evaluation.attribution import (FINAL, MODEL, resolve,
                                         shares_one_observation)
 from src.evaluation.clv import coverage_report
@@ -111,75 +112,6 @@ class _Pick:
         if not self.decided or not self.odds:
             return None
         return (self.odds - 1) if self.result == "win" else -1.0
-
-
-def _boot(values: List[float], clusters: Optional[List] = None,
-          iters: int = 4000, seed: int = 0):
-    """Bootstrap 95% CI for a mean, resampling CLUSTERS when given.
-
-    Stage 8. Picks on the same fixture are not independent observations: both
-    prices respond to the same information flowing into that one match. An
-    i.i.d. bootstrap over picks treats them as if they were, which understates
-    the standard error and produces a confidence interval that is too narrow —
-    the direction that makes a null result look significant.
-
-    Measured on 180 days of production picks: 900 fixtures carried 1,070 picks,
-    and 170 fixtures (18.9%) carried two — **31.8% of all picks share a fixture
-    with another pick**. That is far too much clustering to ignore.
-
-    The fix is a cluster bootstrap: resample fixtures with replacement and take
-    all of each drawn fixture's picks. Every pick keeps contributing its own
-    information (nothing is collapsed or averaged away — Phase 5 warns against
-    discarding genuinely different markets), but the resampling unit becomes the
-    independent one.
-
-    ``clusters`` is a parallel sequence of cluster ids. Passing None keeps the
-    old i.i.d. behaviour, which is correct only when the values are already one
-    per cluster.
-    """
-    if len(values) < 5:
-        return None, None
-    arr = np.asarray(values, dtype=float)
-    rng = np.random.default_rng(seed)
-
-    if clusters is None:
-        means = np.array([rng.choice(arr, len(arr), replace=True).mean()
-                          for _ in range(iters)])
-        return tuple(np.percentile(means, [2.5, 97.5]))
-
-    groups: Dict = defaultdict(list)
-    for v, c in zip(arr, clusters):
-        groups[c].append(v)
-    keys = list(groups.keys())
-    blocks = [np.asarray(groups[k], dtype=float) for k in keys]
-    if len(keys) < 5:
-        return None, None
-
-    idx = rng.integers(0, len(blocks), size=(iters, len(blocks)))
-    means = np.array([
-        np.concatenate([blocks[i] for i in row]).mean() for row in idx
-    ])
-    return tuple(np.percentile(means, [2.5, 97.5]))
-
-
-def _effective_n(clusters: List) -> tuple:
-    """(n_picks, n_fixtures, design_effect, effective_n) for a clustered sample.
-
-    ``design_effect = 1 + (E[m^2]/E[m] - 1) * rho`` is the factor by which the
-    variance of a mean is inflated by clustering. Rho — the intra-fixture
-    correlation — is not identifiable from a handful of observations, so this
-    reports the WORST CASE, rho = 1: two picks on one fixture carry no more
-    information than one. The truth lies between that and the naive count, and
-    quoting the pessimistic bound is the right way round for a stopping rule.
-    """
-    if not clusters:
-        return 0, 0, 1.0, 0.0
-    sizes = Counter(clusters)
-    n = len(clusters)
-    k = len(sizes)
-    m = np.asarray(list(sizes.values()), dtype=float)
-    deff = (m ** 2).sum() / m.sum()          # E[m^2]/E[m] with rho = 1
-    return n, k, float(deff), float(n / deff) if deff else 0.0
 
 
 def _fmt_ci(lo, hi, pct=True):

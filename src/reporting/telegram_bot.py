@@ -114,7 +114,7 @@ class TelegramNotifier:
                 logger.error(f"Failed to initialize Telegram bot: {e}")
         return self._bot
 
-    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None, no_injury_data: bool = False, injury_data_stale: bool = False, injury_budget_exhausted: bool = False, force: bool = False, paper_mode: bool = False):
+    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None, no_injury_data: bool = False, injury_data_stale: bool = False, injury_budget_exhausted: bool = False, force: bool = False, paper_mode: bool = False, experiment=None):
         """Send daily picks summary via Telegram with rich formatting.
 
         ``paper_mode`` prefixes an unmistakable banner. This message IS this
@@ -157,26 +157,23 @@ class TelegramNotifier:
                 "the live record and exist to collect closing-line data.</i>\n\n"
             ) + header
 
-        # Add stats summary if available — always show all-time, add shorter periods
-        # only when they differ (avoids showing the same number three times when the
-        # agent is new and all data fits within a single day).
-        if stats:
-            parts = []
-            all_time = stats.get("all_time", {})
-            at_total = all_time.get("total", 0)
-            if at_total > 0:
-                parts.append(
-                    f"All time ({at_total}): {all_time['wins']}W-{all_time['losses']}L "
-                    f"({all_time['win_rate']:.0%})"
-                )
-            for period, label in [("last_7_days", "7d"), ("yesterday", "Yesterday")]:
-                s = stats.get(period, {})
-                s_total = s.get("total", 0)
-                # Only add if this period has fewer picks than all_time (i.e. adds info)
-                if s_total > 0 and s_total < at_total:
-                    parts.append(f"{label}: {s['wins']}/{s_total} ({s['win_rate']:.0%})")
-            if parts:
-                header += f"\n📊 <i>{' | '.join(parts)}</i>\n"
+        # THE FROZEN LIVE ALL-TIME IS GONE FROM THIS HEADER TOO.
+        #
+        # This message carried the same 1,074-pick figure as the settlement and
+        # performance reports. Removing it from two of three would have left the
+        # number in daily circulation from the third — so all three changed.
+        #
+        # The picks message gets the experiment's HEADLINE only: n, cohort count
+        # and the current cohort's n. The full CLV block belongs in the reports,
+        # not on a message about today's selections.
+        if experiment is not None:
+            _wr = experiment.win_rate
+            if _wr is not None:
+                header += (
+                    f"\n📊 <i>Experiment: {experiment.wins}W-{experiment.losses}L "
+                    f"({_wr:.1%}) over n={experiment.settled} in "
+                    f"{experiment.cohorts} cohorts | current cohort n="
+                    f"{experiment.current_n}</i>\n")
 
         # Group picks by league, then by match
         picks_by_league: Dict[str, List[BetRecommendation]] = {}
@@ -289,6 +286,7 @@ class TelegramNotifier:
         settled_picks: list,
         stats: dict = None,
         pending_picks: list = None,
+        experiment=None,
     ):
         """Send settlement results for yesterday's picks via Telegram.
 
@@ -329,19 +327,16 @@ class TelegramNotifier:
         else:
             # Only pending picks to report — no settled batch header
             header = f"<b>📊 Settlement Report - {label}</b>\n"
-        # Running all-time totals from DB
-        if stats:
-            at = stats.get("all_time", {})
-            at_total = at.get("total", 0)
-            if at_total > 0:
-                at_roi = at.get("roi", 0)
-                at_emoji = "📈" if at_roi >= 0 else "📉"
-                header += (
-                    f"<b>All time ({at_total}): {at['wins']}W-{at['losses']}L "
-                    f"({at['win_rate']:.0%}) {at_emoji} ROI: {at_roi:.1%}</b>\n"
-                )
-
+        # THE FROZEN LIVE ALL-TIME IS GONE FROM THIS MESSAGE.
+        #
+        # `stats["all_time"]` reads `live_only()`, which is the PRE-PAPER-TRADING
+        # live record: 1,074 settled picks at 51.676%, last pick 2026-08-10. It
+        # stopped moving when paper trading began and was reported daily as
+        # though it were current. It now lives in the README with its
+        # measurement date; this message counts from the experiment instead.
         lines = [header]
+        from src.reporting.experiment_record import format_block
+        lines.extend(format_block(experiment))
 
         # Group settled picks by league
         by_league: Dict[str, list] = {}
@@ -370,22 +365,29 @@ class TelegramNotifier:
                     f"      {safe_sel} @ {pick['odds']:.2f} | Stake: {pick['stake']:.1f}%"
                 )
 
-        # Add period breakdown (all-time already shown in header)
+        # Period breakdown — the CLOSED live series, labelled as such.
+        #
+        # These windows read `live_only()`, the same frozen pre-paper-trading
+        # record the header used to headline. They are kept because a shrinking
+        # window over a closed series is still a true statement about it, but
+        # they are named so nobody reads them as current.
+        #
+        # The old `s_total < at_total` suppression is gone with the all-time
+        # figure it compared against: it existed to avoid printing the same
+        # number twice, and there is no longer a first copy.
         if stats:
-            at_total = stats.get("all_time", {}).get("total", 0)
             period_lines = []
             for period, slabel in [("last_30_days", "Last 30 days"), ("last_7_days", "Last 7 days")]:
                 s = stats.get(period, {})
                 s_total = s.get("total", 0)
-                # Only show if period has fewer picks than all-time (adds meaningful info)
-                if s_total > 0 and s_total < at_total:
+                if s_total > 0:
                     roi_emoji = "📈" if s.get("roi", 0) >= 0 else "📉"
                     period_lines.append(
                         f"{slabel}: {s['wins']}W-{s['losses']}L ({s['win_rate']:.0%}) "
                         f"{roi_emoji} ROI: {s['roi']:.1%}"
                     )
             if period_lines:
-                lines.append("\n<b>─── Period Breakdown ───</b>")
+                lines.append("\n<b>─── Closed live series (pre-paper-trading) ───</b>")
                 lines.extend(period_lines)
 
             # Odds source breakdown
@@ -428,7 +430,7 @@ class TelegramNotifier:
         message = "\n".join(lines)
         await self._send_chunked(message)
 
-    async def send_performance_report(self, stats: dict):
+    async def send_performance_report(self, stats: dict, experiment=None):
         """Send a comprehensive performance report via Telegram.
 
         Includes all-time + recent records, ROI, per-market and per-league
@@ -445,9 +447,24 @@ class TelegramNotifier:
 
         lines = [header]
 
-        # ── Overall periods ──────────────────────────────────────────────────
+        # THE EXPERIMENT LEADS, AND CLV LEADS THE EXPERIMENT.
+        #
+        # Stage 16 established that win-rate and ROI segments are all p > 0.15
+        # and that CLV is the instrument this experiment turns on. A message
+        # headlining win rate invites exactly the reasoning four audits have
+        # corrected, so the settled record sits BELOW the CLV series as context.
+        from src.reporting.experiment_record import format_block
+        lines.extend(format_block(experiment))
+
+        # ── The CLOSED live series ───────────────────────────────────────────
+        # `all_time` is deliberately absent: it is the frozen 1,074-pick
+        # pre-paper-trading record and belongs in the README, not in a daily
+        # operational message. The shorter windows read the SAME closed series
+        # and are labelled so, or they would be misread as current too.
+        if any(stats.get(p, {}).get("total", 0) > 0
+               for p in ("last_30_days", "last_7_days", "yesterday")):
+            lines.append("\n<b>─── Closed live series (pre-paper-trading) ───</b>")
         for period, label in [
-            ("all_time", "All Time"),
             ("last_30_days", "Last 30 Days"),
             ("last_7_days", "Last 7 Days"),
             ("yesterday", "Yesterday"),

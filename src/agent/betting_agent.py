@@ -4610,6 +4610,22 @@ def _configure_cli_runtime():
         pass
 
 
+def _experiment_record(agent):
+    """Build the paper record for a Telegram message. Never raises.
+
+    Separate from `get_stats()` on purpose: that reads `live_only()`, which
+    gates the LEARNERS as well as the report, and must not be widened to admit
+    paper picks. Reporting a paper outcome is not learning from one.
+    """
+    try:
+        from src.reporting.experiment_record import build
+        from src.models.model_version import model_version
+        return build(agent.db, model_version(agent.config))
+    except Exception as _e:
+        logger.warning(f"experiment record unavailable for this message: {_e}")
+        return None
+
+
 async def main():
     """CLI entry point."""
     import sys
@@ -4878,6 +4894,7 @@ async def main():
                             # action. In paper mode it must be unmistakable.
                             paper_mode=bool(agent.config.get(
                                 "betting.paper_trading_mode", False)),
+                            experiment=_experiment_record(agent),
                         )
                         print(f"\nPicks sent to Telegram! ({len(new_picks)} new)")
                     else:
@@ -4985,7 +5002,8 @@ async def main():
             # stay visible without the standalone duplicates.
             if settled_picks and agent.telegram.enabled:
                 await agent.telegram.send_settlement_report(
-                    settled_picks, stats, pending_picks=pending_from_yesterday
+                    settled_picks, stats, pending_picks=pending_from_yesterday,
+                    experiment=_experiment_record(agent),
                 )
                 print("Settlement report sent to Telegram!")
 
@@ -5097,7 +5115,8 @@ async def main():
                 await agent.settle_predictions()
             stats = agent.get_stats()
             if agent.telegram.enabled:
-                await agent.telegram.send_performance_report(stats)
+                await agent.telegram.send_performance_report(
+                    stats, experiment=_experiment_record(agent))
                 print("Performance report sent to Telegram!")
             else:
                 print("Telegram not enabled — printing to console:")

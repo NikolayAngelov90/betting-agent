@@ -48,6 +48,9 @@ exactly the bug that corrupted 2,548 matches of 1X2 data.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import numpy as np
+
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Sequence
 
@@ -261,3 +264,82 @@ def coverage_report(picks: Sequence, *, max_lead: timedelta = DEFAULT_MAX_CAPTUR
         cov.valid += 1
         cov.results.append(res)
     return cov
+
+
+# ---------------------------------------------------------------------------
+# Cluster bootstrap and effective n.
+#
+# MOVED HERE 2026-09-04 from scripts/paper_trading_report.py. It now has two
+# callers -- the paper report and the Telegram experiment record -- and a
+# second copy of a bootstrap is exactly the duplication THE HABIT names. It
+# lives beside CLV because every caller resamples CLV observations clustered by
+# fixture, and the clustering fact is a property of CLV data, not of a script.
+# ---------------------------------------------------------------------------
+
+def _boot(values: List[float], clusters: Optional[List] = None,
+          iters: int = 4000, seed: int = 0):
+    """Bootstrap 95% CI for a mean, resampling CLUSTERS when given.
+
+    Stage 8. Picks on the same fixture are not independent observations: both
+    prices respond to the same information flowing into that one match. An
+    i.i.d. bootstrap over picks treats them as if they were, which understates
+    the standard error and produces a confidence interval that is too narrow —
+    the direction that makes a null result look significant.
+
+    Measured on 180 days of production picks: 900 fixtures carried 1,070 picks,
+    and 170 fixtures (18.9%) carried two — **31.8% of all picks share a fixture
+    with another pick**. That is far too much clustering to ignore.
+
+    The fix is a cluster bootstrap: resample fixtures with replacement and take
+    all of each drawn fixture's picks. Every pick keeps contributing its own
+    information (nothing is collapsed or averaged away — Phase 5 warns against
+    discarding genuinely different markets), but the resampling unit becomes the
+    independent one.
+
+    ``clusters`` is a parallel sequence of cluster ids. Passing None keeps the
+    old i.i.d. behaviour, which is correct only when the values are already one
+    per cluster.
+    """
+    if len(values) < 5:
+        return None, None
+    arr = np.asarray(values, dtype=float)
+    rng = np.random.default_rng(seed)
+
+    if clusters is None:
+        means = np.array([rng.choice(arr, len(arr), replace=True).mean()
+                          for _ in range(iters)])
+        return tuple(np.percentile(means, [2.5, 97.5]))
+
+    groups: Dict = defaultdict(list)
+    for v, c in zip(arr, clusters):
+        groups[c].append(v)
+    keys = list(groups.keys())
+    blocks = [np.asarray(groups[k], dtype=float) for k in keys]
+    if len(keys) < 5:
+        return None, None
+
+    idx = rng.integers(0, len(blocks), size=(iters, len(blocks)))
+    means = np.array([
+        np.concatenate([blocks[i] for i in row]).mean() for row in idx
+    ])
+    return tuple(np.percentile(means, [2.5, 97.5]))
+
+
+def _effective_n(clusters: List) -> tuple:
+    """(n_picks, n_fixtures, design_effect, effective_n) for a clustered sample.
+
+    ``design_effect = 1 + (E[m^2]/E[m] - 1) * rho`` is the factor by which the
+    variance of a mean is inflated by clustering. Rho — the intra-fixture
+    correlation — is not identifiable from a handful of observations, so this
+    reports the WORST CASE, rho = 1: two picks on one fixture carry no more
+    information than one. The truth lies between that and the naive count, and
+    quoting the pessimistic bound is the right way round for a stopping rule.
+    """
+    if not clusters:
+        return 0, 0, 1.0, 0.0
+    sizes = Counter(clusters)
+    n = len(clusters)
+    k = len(sizes)
+    m = np.asarray(list(sizes.values()), dtype=float)
+    deff = (m ** 2).sum() / m.sum()          # E[m^2]/E[m] with rho = 1
+    return n, k, float(deff), float(n / deff) if deff else 0.0
