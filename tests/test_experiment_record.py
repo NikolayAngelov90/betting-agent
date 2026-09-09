@@ -259,3 +259,27 @@ def test_clv_is_named_as_the_measurement_and_the_record_as_context():
     assert "THE MEASUREMENT" in out and "context" in out, (
         "the block must say which figure decides anything — Stage 16 found "
         "win-rate AND ROI segments alike at p > 0.15")
+
+
+def test_disposition_is_filtered_PER_SERIES_not_globally():
+    """A consolidated row leaves FINAL and STAYS IN MODEL.
+
+    `paper_trading_report._Pick` states the rule once: "Kept in the MODEL
+    series, excluded from FINAL." A consolidated pick was never a bet, so it
+    is not part of what was actually staked — but it remains the frozen
+    model's own record of the price it took, and that is the one thing
+    deleting the row would destroy.
+
+    Filtering it out of BOTH silently shrank MODEL from 102 to 101 the first
+    time a pick was consolidated (2026-09-09).
+    """
+    import inspect
+    from src.reporting import experiment_record
+
+    src = inspect.getsource(experiment_record.build)
+    assert "sp.disposition IS NULL" not in src.split("pick_observations")[-1], (
+        "the observation query filters disposition in SQL, which applies it to "
+        "both series; it must be filtered per attribution instead")
+    assert 'attribution == "final"' in src, (
+        "the per-series disposition rule is missing — MODEL must keep "
+        "consolidated rows, FINAL must drop them")

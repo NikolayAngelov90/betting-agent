@@ -433,6 +433,32 @@ TRACKED_KEYS: List[str] = [
 #:       membership test implicates 4,329 rows. The true population is between
 #:       and is NOT established.
 #:
+#:       WHAT s5.9 ENFORCES, AND WHAT IT CANNOT REACH — qualified 2026-09-09,
+#:       because this entry was written as though the per-fixture cap were
+#:       enforced outright, and it is not.
+#:
+#:       Of 61,329 co-scheduled pairs (same league, identical kickoff minute):
+#:         · 844 are reachable by BRANCH 1 (a shared resolved provider club id)
+#:         · 89 by BRANCH 2 (both stored name pairs similar)
+#:         · 202 fall in BRANCH 3a — exactly ONE side matches — and s5.9
+#:           CANNOT SEE THEM. Both of that class's double-picked members turned
+#:           out to be real violations.
+#:         · 60,188 match on neither side; that is the ordinary matchday, not a
+#:           blind spot.
+#:
+#:       So the guarantee holds for 933 pairs and has a 202-pair residual that
+#:       was UNBOUNDED until 2026-09-09. 187 of those 202 (92.6%) involve a row
+#:       carrying NO provider identity at all — an identity-COVERAGE gap, not a
+#:       naming one — and only 15 are a pure naming residual.
+#:
+#:       Two violations have occurred: 2026-08-30 Deportivo v Valencia (two
+#:       correlated markets) and 2026-09-08 NEC v Nijmegen (the SAME selection
+#:       twice, 1X2 Home Win at 1.62 and 1.60). The second happened UNDER s5.9.
+#:       Both second picks are now disposition='consolidated'.
+#:
+#:       This is a MECHANISM WITH A STATED BOUND, not a promise — the same
+#:       treatment the identity gate's own residual received.
+#:
 #:       WHY NOW rather than later: every CLV interval resamples FIXTURES, so
 #:       duplicated rows inflate the cluster count and narrow every interval.
 #:       That separation was temporal — captures ran 08-14..08-27 and the live

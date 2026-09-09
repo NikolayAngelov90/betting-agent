@@ -185,18 +185,28 @@ def build(db, current_model_version: str = "") -> Optional[ExperimentRecord]:
             # CLV, per attribution series. Clustered by FIXTURE, because two
             # picks on one match respond to the same information — the design
             # effect Stage 8 measured and Stage 16 confirmed at deff = 1.00.
+            # `disposition` is filtered PER SERIES, not globally. A
+            # 'consolidated' row was never a bet, so it leaves FINAL — but it
+            # remains the frozen model's own record of the price it took, so it
+            # STAYS IN MODEL. That rule is stated once in
+            # `paper_trading_report._Pick`: "Kept in the MODEL series, excluded
+            # from FINAL." Filtering it out of both here silently shrank MODEL
+            # from 102 to 101 the first time a pick was consolidated.
             obs = s.execute(text("""
-                SELECT po.attribution, po.taken_odds, po.closing_odds, sp.match_id
+                SELECT po.attribution, po.taken_odds, po.closing_odds,
+                       sp.match_id, sp.disposition
                 FROM pick_observations po
                 JOIN saved_picks sp ON sp.id = po.pick_id
                 WHERE po.closing_odds IS NOT NULL
                   AND po.taken_odds IS NOT NULL
                   AND po.taken_odds > 1.0 AND po.closing_odds > 1.0
-                  AND sp.is_paper IS TRUE AND sp.disposition IS NULL
+                  AND sp.is_paper IS TRUE
             """)).fetchall()
 
         by: Dict[str, List] = {}
-        for attribution, taken, closing, match_id in obs:
+        for attribution, taken, closing, match_id, disposition in obs:
+            if disposition is not None and attribution == "final":
+                continue
             # Price CLV, the same quantity `clv.compute` returns: how much
             # better the taken price was than the close.
             by.setdefault(attribution, []).append(

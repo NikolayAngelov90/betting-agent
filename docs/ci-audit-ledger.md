@@ -9425,3 +9425,162 @@ confirmed violations.
 until now.**
 
 *Recorded 2026-09-09. Alias shipped as `e224659`.*
+
+---
+
+# THE 202-PAIR RESIDUAL IS AN IDENTITY-COVERAGE GAP, NOT A NAMING ONE
+
+**2026-09-09. Measured before anything was designed — and it corrects the
+remedy that looked obvious.**
+
+## 1. Rows with no provider identity — systematic, and structural
+
+**`footballdataorg_scraper.py` contains ZERO occurrences of `apifootball_id` or
+`flashscore_id`.** It creates `Match` rows with `home_team_id`, `away_team_id`,
+`match_date`, `league` and nothing else.
+
+**And there is no football-data.org id column to set.** `matches` carries
+exactly two provider columns — `apifootball_id` and `flashscore_id`.
+
+> **Every FDO-created row carries no provider identity, by construction.**
+
+### Of the 202-pair residual
+
+| | pairs | share |
+| --- | --- | --- |
+| involving ≥1 row with **NO provider identity** | **187** | **92.6%** |
+| both rows carry some provider id — a **naming** residual | **15** | 7.4% |
+
+**By origin pair:**
+
+| | n |
+| --- | --- |
+| `NO-PROVIDER-ID ‖ NO-PROVIDER-ID` | **161** |
+| `API-Football ‖ NO-PROVIDER-ID` | 23 |
+| `API-Football ‖ API-Football` | 12 |
+| `AF+FS ‖ NO-PROVIDER-ID` | 3 |
+| others | 3 |
+
+**The residual is overwhelmingly an identity-coverage problem. Only 15 pairs are
+a lexical long tail.**
+
+## 2. BUT THE PROPOSED REMEDY RESTS ON A PREMISE THAT DOES NOT HOLD
+
+**The suggestion was to key branch 1 on any shared provider identity rather than
+API-Football's alone, collapsing much of the residual.**
+
+> **Branch 1 does not key on MATCH ids at all. It keys on TEAM ids —
+> `teams.apifootball_team_id`.** A match-level FDO id would never enter the
+> predicate.
+
+**And team-level coverage is already broad:**
+
+| | |
+| --- | --- |
+| teams carrying `apifootball_team_id` | **1,382 of 1,558 (88.7%)** |
+| no-match-id rows with ≥1 team resolved | **29,426 of 30,128 (97.7%)** |
+| rows where BOTH teams also lack a team id | **702** |
+
+> **97.7% of no-match-id rows are ALREADY reachable by branch 1.** Adding an FDO
+> match id would collapse none of the residual, because the match id was never
+> the blocker.
+
+**The real blocker is 176 unresolved TEAM rows** — including `NEC` (574) and
+`SBV Excelsior` (571), which is exactly why that pair fell through. **That is a
+far smaller and more tractable target than a column plus a 30,128-row backfill:
+resolve 176 team rows and the identity-coverage residual largely closes.**
+
+**Recorded, not built.** It is a data-repair pass and belongs with the same
+deferred decision as the two known corrupt team rows.
+
+---
+
+# WHY THE TWO BRANCHES HAVE DIFFERENT ARITY — written down
+
+**Branch 1 needs ONE side. Branch 2 needs BOTH.** Now stated in `same_fixture`'s
+docstring rather than left to be inferred.
+
+| branch | rests on | why that arity |
+| --- | --- | --- |
+| **1** | an **impossibility** — a club cannot play two fixtures in one competition at the same minute | one matching provider id is **proof**; a second is redundant |
+| **2** | a **name comparator** with a measured but non-zero false-positive rate, on a matchday carrying many simultaneous fixtures | one similar name is **not proof** — requiring both sides is the hedge |
+
+> **Relaxing branch 2 to one side is the tolerance move refused five times
+> here.** It would collapse genuinely different simultaneous fixtures that share
+> one club name. The remedy for a pair branch 2 cannot reach is a curated
+> alias — knowledge — not a loosened predicate.
+
+---
+
+# s5.9's HISTORY ENTRY QUALIFIED — a mechanism with a bound, not a promise
+
+**The entry was written as though the per-fixture cap were enforced outright. It
+is enforced for 933 pairs and has a 202-pair residual.** Amended in
+`model_version.py` to state:
+
+* **844 pairs** reachable by branch 1, **89** by branch 2;
+* **202** in branch 3a, **which s5.9 cannot see** — and **both** of that class's
+  double-picked members were real violations;
+* **60,188** matching on neither side, which is the ordinary matchday and not a
+  blind spot;
+* the residual was **unbounded until 2026-09-09**;
+* **two violations** have occurred, and the second happened **under s5.9**.
+
+**The same treatment the identity gate's residual received.** Fingerprint
+verified unchanged at `694a60` — it is a comment.
+
+---
+
+# THE TWO DUPLICATE PICKS ARE CONSOLIDATED, NOT DELETED
+
+**`disposition='consolidated'` on the lower-EV member of each pair** — which is
+what `_rank_key` would have dropped had the rows been recognised as one fixture.
+
+| pick | fixture | EV | keeper |
+| --- | --- | --- | --- |
+| **1759** | 2026-09-08 NEC v Nijmegen | **−0.1274** | 1752 (−0.0270) |
+| **1456** | 2026-08-30 Deportivo v Valencia | **−0.1924** | 1445 (−0.0271) |
+
+**The 08-30 second pick was still live, and had been for ten days.**
+
+**Every count moved exactly as predicted, and the script aborts on any
+mismatch:**
+
+| | before | after |
+| --- | --- | --- |
+| paper undisposed | 678 | **676** |
+| paper settled undisposed | 664 | **662** |
+| `disposition='consolidated'` | 2 | **4** |
+| **live record** | 1,074 | **1,074 — untouched** |
+| **`pick_observations`** | 1,360 | **1,360 — PRESERVED** |
+
+**Guards that ran before any write:** each target must exist, be a paper pick,
+be currently undisposed, and carry the exact EV that was measured — and **the
+KEEPER must still be undisposed**, because consolidating both would erase the
+fixture from the record entirely. The write-once validator permits NULL → value
+and idempotent replay, and the writes went through the ORM so it actually ran.
+
+**Both guarantees restored: each fixture now carries exactly one live pick.**
+
+## AND A DEFECT IN MY OWN BLOCK, CAUGHT BY DOING THIS
+
+**MODEL fell from 102 to 101 the moment a pick was consolidated. It should not
+have.**
+
+`paper_trading_report._Pick` states the rule once: *"Kept in the MODEL series,
+excluded from FINAL."* A consolidated row was never a bet, so it leaves FINAL —
+**but it remains the frozen model's own record of the price it took**, which is
+the one thing deleting the row would have destroyed.
+
+**My `build()` filtered `sp.disposition IS NULL` in SQL, applying it to both
+series.** Fixed to filter per attribution; MODEL is back to **102** with the
+disposed observation intact, FINAL correctly at **120**. Pinned by
+`test_disposition_is_filtered_PER_SERIES_not_globally`.
+
+> **The rule existed, was written down once, and the new consumer did not apply
+> it — rule 3 again, in code I wrote a day earlier.** It surfaced only because
+> the disposal was performed and the counts were read afterwards.
+
+**911 tests pass; fingerprint unchanged at `694a60`.**
+
+*Recorded 2026-09-09.*

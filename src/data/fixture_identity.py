@@ -102,6 +102,27 @@ def same_fixture(a: _Row, b: _Row) -> Optional[str]:
     because of the stored-vs-stored positioning above, but NOT empty and not
     claimed to be.
 
+    WHY THE TWO BRANCHES HAVE DIFFERENT ARITY — a design, not an oversight.
+
+    BRANCH 1 NEEDS ONE SIDE. BRANCH 2 NEEDS BOTH. That asymmetry is load-
+    bearing and it is written down here so the next reader does not "fix" it.
+
+    Branch 1 rests on an IMPOSSIBILITY: a club cannot play two fixtures in one
+    competition at the same minute. One matching provider id is therefore
+    PROOF, and a second is redundant.
+
+    Branch 2 rests on a NAME COMPARATOR with a measured but non-zero
+    false-positive rate, applied on a matchday that routinely carries many
+    simultaneous fixtures in one league. One similar name is NOT proof — it is
+    a coincidence waiting to happen, and requiring both sides is the hedge
+    against exactly that.
+
+    RELAXING BRANCH 2 TO ONE SIDE IS THE TOLERANCE MOVE THIS PROJECT HAS
+    REFUSED FIVE TIMES. It would collapse genuinely different simultaneous
+    fixtures that happen to share one club name, and the remedy for a pair
+    branch 2 cannot reach is a curated alias — knowledge — not a loosened
+    predicate.
+
     NOTE ON FAILING CLOSED. This refuses on identity EVIDENCE, never on its
     absence. Refusing every same-league same-minute pair that cannot be
     resolved would reject genuinely simultaneous fixtures, which are the norm
