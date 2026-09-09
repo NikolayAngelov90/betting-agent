@@ -568,3 +568,31 @@ the same trivial reason.
 > answer.
 
 *Recorded 2026-09-09.*
+
+---
+
+# CHECKPOINT CLOSED — 2026-09-09
+
+**The margin question is answered. The boundary question is withdrawn.**
+
+> **CLOSED: the 6h40m margin is SUFFICIENT under the delay regime observed
+> since 2026-08-28** — eight consecutive firings in a **4h12m–5h05m** band,
+> leaving **1h35m of headroom** against the worst of them.
+
+**The regime is named because the conclusion is conditional on it.**
+
+**The 09:40 boundary was never exercised and does not need to be.** A run
+starting inside 09:40–11:00 would have written picks ~35 minutes later and lost
+whatever kicked off before that — **arithmetic over a known kickoff
+distribution, not an experiment.** The checkpoint's real question was whether
+the delay distribution fits inside the margin, and that is answerable from
+observation, which it now has been.
+
+**OPS-3 STAYS OPEN, for the tail.** 11h21m occurred twice, on 2026-08-27 and
+08-28, and **the margin does not cover it** — such a delay lands at ~14:00 and
+loses a weekend afternoon card. The closure above concerns the body of the
+distribution; the tail is a separate fact and is not closed with it.
+
+**No manual trigger will be staged.**
+
+*Closed 2026-09-09.*

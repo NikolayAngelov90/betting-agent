@@ -9075,3 +9075,176 @@ segments alike at p > 0.15 — **neither settles anything on its own**, which is
 why the record sits under the CLV series rather than above it.
 
 *Audit 2026-09-09. Cohort-neutral; message change only.*
+
+---
+
+# THE SATURDAY CHECKPOINT IS CLOSED — the boundary was the wrong question
+
+**2026-09-09. Closed on measurement, not on a staged trigger.**
+
+## Why a contrived run was refused
+
+**A manually triggered run inside 09:40–11:00 would establish nothing.** A run
+starting at 10:30 writes picks at ~11:05 and loses whatever kicked off before
+then. **The kickoff distribution is known and the loss is computable** — that is
+arithmetic, not an experiment, and it would spend a run to learn a number
+already derivable.
+
+## What the checkpoint was actually asking, and the answer
+
+> **The real question was never "what happens at 09:40". It was whether the
+> DELAY DISTRIBUTION fits inside the margin.** That is answerable from
+> observation, and it has been answered.
+
+| | |
+| --- | --- |
+| margin bought by `0 3 * * *` | **6h 40m** (to the corrected 09:40 boundary) |
+| observed delay, eight consecutive firings since 2026-08-29 | **4h 12m – 5h 05m** |
+| worst observed in that regime | **5h 05m** |
+| **headroom** | **1h 35m** |
+
+**Delays: 5h03, 5h05, 4h25, 4h29, 4h12, 4h24, 4h40, 4h32.**
+
+> ### CLOSED: the margin is SUFFICIENT under the delay regime observed since 2026-08-28.
+>
+> **The regime is named because the conclusion is conditional on it.** It is not
+> a claim about GitHub's scheduler in general — it is a claim about the eight
+> firings measured since the 10–11h episode ended.
+
+**And the boundary itself was never exercised, and does not need to be.** Every
+run in the regime lands hours before it; a boundary that the operating
+distribution never approaches is not a live risk, and testing it would measure
+the arithmetic rather than the system.
+
+## What stays open
+
+**OPS-3 STAYS OPEN, for the TAIL.**
+
+> **11h 21m occurred twice — 2026-08-27 and 08-28 — and the 6h 40m margin does
+> NOT cover it.** A delay in that class lands at ~14:00 and loses a weekend
+> afternoon card. The closure above is about the *body* of the distribution;
+> the tail is a different fact and is not closed by it.
+
+**The 12-hour MISSED criterion stands unchanged.**
+
+## The general shape, worth keeping
+
+**An unreachable test converted into a measured conclusion with its condition
+attached is worth more than a staged trigger.** The staged version would have
+produced a number that looked like evidence and was not; this version produces a
+smaller claim that is true. **Checkpoints registered on a threshold should be
+re-read as questions about a distribution wherever the distribution is the thing
+that actually decides.**
+
+---
+
+# PROMPT-SIDE ERRORS — the third, recorded
+
+**This ledger records my errors in detail. The instructions that produced them
+are part of the same record, and there are now three.**
+
+| # | error | correction |
+| --- | --- | --- |
+| 1 | **the B2 circularity** — the registered method was to read `first_seen_at`, which records when the pipeline looked, not when the market opened. Every run was late, so first sight was late by construction. | the measurement was replaced with a direct provider check |
+| 2 | **the compensating-boundary correction** — instructing a fix to the run-length input while the kickoff input was also wrong moved 09:45 to 09:29 when the truth was 09:40. | both inputs re-derived together |
+| 3 | **the +3.92% elevation** — a footnote on **n=15** was raised to *"the first quantity anyone has measured on the right side of the vig."* On 119 fixtures the mean is **+0.615%**, its interval spans zero, and its upper bound sits below break-even. | **the pre-registration ordered in the same message is what made the falsification clean** |
+
+**The third has a property the first two did not.** The instruction to
+pre-register and the over-claim arrived together — **and the registration
+contained the over-claim's falsification condition.** So the discipline caught
+the enthusiasm in the same document.
+
+> **That is the argument for pre-registration stated more sharply than any of
+> the earlier entries managed: it protects a claim from its own author, and it
+> works even when the author and the reviewer are the same party in the same
+> message.**
+
+**Recorded because a ledger that catalogues only one side's errors is a
+selective record**, and this project's whole method is that a measurement which
+flatters the measurer is the one to check hardest.
+
+---
+
+# `af=0` CLOSED — created split from matched
+
+**Five days of daily false positives, ended.**
+
+## The predicate
+
+> **A source is ALIVE if `created + matched > 0`.** Creation measures **novelty**,
+> and novelty legitimately falls to zero whenever another source reached the
+> fixture first. That is the steady state, not a fault.
+
+`disc[]` now shows both halves — `af=0c/88m` rather than `af=0` — so a future
+reader cannot re-derive the same false alarm from the same bare zero.
+
+## The replay, and both controls
+
+| day | `disc[...]` | dead-source assertion |
+| --- | --- | --- |
+| 09-04 | `fs=26c/-m fdo=8c/1m af=0c/37m` | **SILENT** |
+| 09-05 | `fs=93c/-m fdo=41c/8m af=16c/118m` | **SILENT** |
+| 09-06 | `fs=68c/-m fdo=23c/40m af=2c/173m` | **SILENT** |
+| 09-07 | `fs=21c/-m fdo=5c/23m af=0c/88m` | **SILENT** |
+| 09-08 | `fs=18c/-m fdo=13c/5m af=1c/40m` | **SILENT** |
+
+**All five go silent. And it still fires on a genuine zero:**
+
+```
+POSITIVE CONTROL  af=0c/-m  (both signals stripped)
+  FIRES: API-Football fixtures: 0 created AND 0 matched while other sources
+         still produce — this source produced within the last 7 runs and is
+         now silent on both counts
+
+NEGATIVE CONTROL  af=0c/88m   -> SILENT (correct)
+```
+
+**The first control attempt was invalid** and is recorded because it nearly
+passed as evidence: I called `assertions(facts, [])` with an empty history, so
+`produced_recently()` returned False and the assertion could not fire for a
+reason unrelated to the change. **A control that cannot fail is not a control**
+— the same shape as the guard whose quiet path never executed.
+
+**Four existing tests were adapted rather than deleted.** They injected the
+88-day failure by zeroing *creations*; under the new predicate that is no longer
+death, so they now zero both counts. **The failure they encode is unchanged; the
+way you express it is.**
+
+910 tests pass.
+
+---
+
+# THREE NOTES ON THE REST
+
+## The duplicate population estimate was a floor, and this is why
+
+**Seven duplicate pairs in four days** is a far higher rate than the historical
+**750 / 60,976** suggested. **That figure was labelled a floor when it was
+published**, and the reason is now visible in the arrival rate: the strict test
+required an identical kickoff minute, and it therefore missed every pair whose
+sources disagree on time. **A floor that is 30× below the live rate is still a
+floor — it is not a wrong number, it is a bound doing its job**, and this is the
+first evidence of how loose it was.
+
+## H5's Q2 survives the aggregate null
+
+**The mean being +0.615% does not answer Q2.** Q2 asks about direction
+**conditional on the selection taken** — whether every taken side drifts out —
+and a mean over all 1X2 Home prices cannot distinguish that from no effect.
+
+> **Q2 remains the question that would reverse Stage 21's lead-time claim**,
+> which is still marked UNVERIFIED. The aggregate null makes H5 less interesting
+> as an edge and **not less important as a diagnostic.**
+
+## The announcement stage now has three items and is a week old
+
+1. `resolve_fixture_groups` — five days of clean runs inferred from an absent
+   warning (it emitted seven lines only because it finally had something to say);
+2. the reverted picks-run guard's quiet path, never executed in production;
+3. the 69 `except` handlers that record only at DEBUG.
+
+**Opened 2026-09-02. Still unbuilt.** Two of the three deferred items that were
+accumulating a daily cost are now closed — `af=0` today, the `same_fixture_limit`
+ambiguity on 09-04 — **and this is the one that remains.**
+
+*Recorded 2026-09-09.*

@@ -100,9 +100,11 @@ def test_one_dead_source_fires_even_while_others_produce():
     facts["is_first_run_of_day"] = True
     hits = assertions(facts, _hist(src_flashscore_fixtures=11,
                                    src_apifootball_fixtures=6))
-    assert any("Flashscore fixtures = 0" in h for h in hits), (
+    assert any("Flashscore fixtures: 0 created AND 0 matched" in h
+               for h in hits), (
         "Flashscore produced nothing while API-Football produced 2, and the "
-        "audit stayed silent. That is the 88-day blindness, rebuilt.")
+        "audit stayed silent. That is the 88-day blindness, rebuilt. "
+        f"hits={hits}")
 
 
 def test_all_sources_healthy_is_silent():
@@ -173,6 +175,7 @@ def test_all_three_alive_is_silent():
     facts["is_first_run_of_day"] = True
     hits = assertions(facts, [dict(HEALTHY) for _ in range(3)])
     assert not any("fixtures = 0" in h for h in hits), hits
+    assert not any("0 matched" in h for h in hits), hits
 
 
 @pytest.mark.parametrize("dead", sorted(HEALTHY))
@@ -187,13 +190,80 @@ def test_each_source_forced_to_zero_fires_while_the_others_are_healthy(dead):
     counts[dead] = 0
     facts = extract(_log_with(counts))
     facts["is_first_run_of_day"] = True
+    # DEAD MEANS DEAD ON BOTH COUNTS since 2026-09-09. Zeroing creations alone
+    # no longer constitutes death: a source that matches everything onto rows
+    # another source created is alive and creates nothing, which is the false
+    # positive that fired for five days. To inject the 88-day failure the
+    # source must produce nothing at all.
+    facts[dead.replace("_fixtures", "_matched")] = 0
     hits = assertions(facts, [dict(HEALTHY) for _ in range(3)])
 
-    assert any(LABELS[dead] in h and "= 0" in h for h in hits), (
+    assert any(LABELS[dead] in h and "0 created AND 0 matched" in h
+               for h in hits), (
         f"{LABELS[dead]} produced nothing while the other two produced "
         f"normally, and the audit said nothing. That is the 88-day blindness.\n"
         f"hits={hits}")
     for other in HEALTHY:
         if other != dead:
-            assert not any(LABELS[other] in h and "= 0" in h for h in hits), (
+            assert not any(LABELS[other] in h and "0 created AND 0 matched" in h
+                           for h in hits), (
                 f"fired for {LABELS[other]}, which produced {counts[other]}")
+
+
+# ── created vs matched: closing the five-day false positive ────────────────
+def test_a_source_that_matches_everything_is_ALIVE():
+    """`disc[af=N]` counted CREATIONS, and creation measures novelty.
+
+    A source that fetches 325 fixtures and successfully matches every one onto
+    an existing row creates nothing — and scored zero, identical to a source
+    that returned nothing at all. It fired a false positive on every
+    daily-picks run from 2026-09-03 to 09-08. Five days of crying wolf trains
+    the reader to skip the very line that would catch the 88-day failure this
+    assertion exists for.
+    """
+    from scripts.ci_audit import assertions
+
+    hist = [{"src_apifootball_fixtures": 12, "src_apifootball_matched": 40}]
+    healthy = {"is_first_run_of_day": True,
+               "src_apifootball_fixtures": 0,      # created nothing
+               "src_apifootball_matched": 88}      # matched plenty
+    assert not [h for h in assertions(healthy, hist) if "0 matched" in h], (
+        "a source that matched 88 fixtures is alive; novelty falling to zero "
+        "is the steady state whenever another source got there first")
+
+
+def test_a_source_dead_on_BOTH_counts_still_fires():
+    """The 88-day failure must remain visible. This is the positive control."""
+    from scripts.ci_audit import assertions
+
+    hist = [{"src_apifootball_fixtures": 12, "src_apifootball_matched": 40}]
+    dead = {"is_first_run_of_day": True,
+            "src_apifootball_fixtures": 0,
+            "src_apifootball_matched": 0}
+    hits = [h for h in assertions(dead, hist) if "0 matched" in h]
+    assert hits, "0 created AND 0 matched is a dead source and must fire"
+    assert "0 created AND 0 matched" in hits[0]
+
+
+def test_the_liveness_predicate_is_created_plus_matched():
+    """Either half alone is sufficient evidence of life."""
+    from scripts.ci_audit import assertions
+
+    hist = [{"src_apifootball_fixtures": 12, "src_apifootball_matched": 40}]
+    for created, matched in ((1, 0), (0, 1), (5, 5)):
+        facts = {"is_first_run_of_day": True,
+                 "src_apifootball_fixtures": created,
+                 "src_apifootball_matched": matched}
+        assert not [h for h in assertions(facts, hist) if "0 matched" in h], (
+            f"created={created} matched={matched} is alive")
+
+
+def test_disc_shows_both_halves():
+    """A bare number hid the distinction; the summary must carry it."""
+    from scripts.ci_audit import discovery_summary
+
+    out = discovery_summary({"src_apifootball_fixtures": 0,
+                             "src_apifootball_matched": 88})
+    assert "af=0c/88m" in out, (
+        "the ledger note must show created AND matched, or a future reader "
+        "re-derives the same false alarm from the same bare zero")

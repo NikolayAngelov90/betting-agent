@@ -195,6 +195,17 @@ PATTERNS = {
     "src_flashscore_fixtures": r"Scraped (\d+) fixtures from",
     "src_footballdataorg_fixtures": r"football-data\.org: \d+ scores updated, (\d+) new fixtures added",
     "src_apifootball_fixtures": r"API-Football: creating new fixture",
+    # MATCHED, not created. A source that fetches 325 fixtures and successfully
+    # matches every one onto an existing row CREATES nothing — and scored zero,
+    # identical to a source that returned nothing at all. It fired a false
+    # positive on every daily-picks run from 2026-09-03 to 09-08.
+    #
+    # Creation measures NOVELTY, and novelty legitimately falls to zero
+    # whenever another source got there first. That is the normal steady state,
+    # not a fault. Liveness is `created + matched > 0`.
+    "src_apifootball_matched": r"API-Football fixtures [0-9-]+: \d+ created, (\d+) updated",
+    "src_flashscore_matched": r"Fuzzy-merged|Flashscore: \d+ fixtures? updated",
+    "src_footballdataorg_matched": r"football-data\.org: (\d+) scores updated",
 }
 
 
@@ -242,6 +253,17 @@ def extract(log: str) -> Dict[str, object]:
     if "API-Football" in log:
         f["src_apifootball_fixtures"] = len(
             re.findall(PATTERNS["src_apifootball_fixtures"], log))
+    # The matched counterparts. Summed, because a run reports one line per date
+    # and a source is alive if it matched anything on any of them.
+    _afm = re.findall(PATTERNS["src_apifootball_matched"], log)
+    if _afm:
+        f["src_apifootball_matched"] = sum(int(x) for x in _afm)
+    _fsm = re.findall(PATTERNS["src_flashscore_matched"], log)
+    if _fsm:
+        f["src_flashscore_matched"] = len(_fsm)
+    _fdm = re.findall(PATTERNS["src_footballdataorg_matched"], log)
+    if _fdm:
+        f["src_footballdataorg_matched"] = sum(int(x) for x in _fdm)
 
     _fx = re.findall(PATTERNS["fixtures_scraped"], log)
     if _fx:
@@ -299,13 +321,26 @@ def assertions(facts: Dict[str, object],
     # invisible. Redundancy that is not checked PER COMPONENT is not redundancy
     # — it is one working source and two unverified claims.
     if facts.get("is_first_run_of_day", True):
-        for key, label in (("src_flashscore_fixtures", "Flashscore fixtures"),
-                           ("src_footballdataorg_fixtures", "football-data.org fixtures"),
-                           ("src_apifootball_fixtures", "API-Football fixtures")):
-            if key in facts and (facts.get(key) or 0) == 0 and produced_recently(key):
-                hits.append(
-                    f"{label} = 0 while other sources still produce — this "
-                    f"source produced within the last {LOOKBACK_RUNS} runs")
+        for key, mkey, label in (
+                ("src_flashscore_fixtures", "src_flashscore_matched",
+                 "Flashscore fixtures"),
+                ("src_footballdataorg_fixtures", "src_footballdataorg_matched",
+                 "football-data.org fixtures"),
+                ("src_apifootball_fixtures", "src_apifootball_matched",
+                 "API-Football fixtures")):
+            if key not in facts or not produced_recently(key):
+                continue
+            created = facts.get(key) or 0
+            matched = facts.get(mkey) or 0
+            # ALIVE IF created + matched > 0. Zero creations alone is novelty
+            # falling to zero, which happens whenever another source reached
+            # the fixture first — the steady state, not a fault.
+            if created + matched > 0:
+                continue
+            hits.append(
+                f"{label}: 0 created AND 0 matched while other sources still "
+                f"produce — this source produced within the last "
+                f"{LOOKBACK_RUNS} runs and is now silent on both counts")
 
     picks = facts.get("picks_saved") or facts.get("picks_saved_live") or 0
     obs = facts.get("observations")
@@ -397,13 +432,23 @@ def discovery_summary(facts: Dict[str, object]) -> str:
     2026-08-26; only the per-source split makes a silent substitution visible.
     Absent (rather than 0) is shown as `-`, because "did not report" and
     "reported nothing" are different facts.
+
+    Shown as `created/matched` since 2026-09-09. A bare creation count read
+    identically for a healthy source that matched everything and a dead one
+    that returned nothing — it cried wolf on every daily-picks run for five
+    days, which trains the reader to skip the very line that would catch the
+    88-day failure this assertion exists for.
     """
-    keys = (("fs", "src_flashscore_fixtures"),
-            ("fdo", "src_footballdataorg_fixtures"),
-            ("af", "src_apifootball_fixtures"))
-    if not any(k in facts for _, k in keys):
+    keys = (("fs", "src_flashscore_fixtures", "src_flashscore_matched"),
+            ("fdo", "src_footballdataorg_fixtures", "src_footballdataorg_matched"),
+            ("af", "src_apifootball_fixtures", "src_apifootball_matched"))
+    if not any(k in facts for _, k, _m in keys):
         return ""
-    parts = [f"{label}={facts[k] if k in facts else '-'}" for label, k in keys]
+    parts = []
+    for label, ckey, mkey in keys:
+        c = facts[ckey] if ckey in facts else "-"
+        m = facts[mkey] if mkey in facts else "-"
+        parts.append(f"{label}={c}c/{m}m")
     return "disc[" + " ".join(parts) + "]"
 
 
