@@ -8803,3 +8803,275 @@ the stated limitation: a MARGIN HELD demonstrates the margin covers a start to
 **11:30 UTC** and says nothing about the **09:40** boundary.
 
 *Reverted and recorded 2026-09-04.*
+
+---
+
+# AUDIT 2026-09-05 → 09-08 — the Saturday checkpoint did not test what it was registered to test
+
+**Read-only except the settled-record block, which is a message change.**
+906 tests pass; fingerprint unchanged at `694a60`.
+
+## 1. THE SATURDAY CHECKPOINT — NOT A PASS. NOT TESTED.
+
+**Run `33951882726`, started `2026-09-05T07:11:56Z`. Delay 4h 11m 56s.**
+
+| measurement | value |
+| --- | --- |
+| fixtures in window at execution | **113** |
+| earliest kickoff | **11:00 UTC** |
+| already kicked off at start | **0** |
+| **fraction of the card lost** | **0.0%** |
+| band under the registered outcomes | **MARGIN HELD** |
+| lead time (n=94) | p10 3.7h · median **5.7h** · p90 10.4h |
+
+### Applying the registered limitation without softening it
+
+> **The registered limitation: a MARGIN HELD demonstrates the margin covers a
+> start up to ~11:30 UTC and says NOTHING about the 09:40 boundary, which needs
+> a start between 09:40 and 11:30 to be tested at all.**
+
+**The run started at 07:11:56 — two hours twenty-eight minutes BEFORE 09:40.**
+
+> ### THE CHECKPOINT DID NOT TEST THE BOUNDARY. This is not a pass; it is a day on which the question was not asked.
+>
+> **Another Saturday is needed.** Recording MARGIN HELD as a result would be the
+> third time this month a trivially-satisfied outcome was mistaken for evidence.
+
+**And one correction to my own registration:** I recorded Saturday's earliest as
+**11:30 UTC** from an external source. **The actual earliest was 11:00.** The
+UK-centric listing missed a fixture 30 minutes earlier — exactly the limitation
+stated when it was registered, now realised. The direction is unhelpful: it
+narrows the untested window from 09:40–11:30 to **09:40–11:00**.
+
+### Sunday 2026-09-06 — the registered second test, also not tested
+
+**Run `34019059879`, started `07:24:27Z`. Delay 4h 24m 27s.**
+
+| | |
+| --- | --- |
+| fixtures | **70** |
+| earliest kickoff | **10:15 UTC** |
+| kicked off at start | **0** |
+| **card lost** | **0.0% — MARGIN HELD** |
+| lead (n=62) | p10 3.8h · median **6.3h** · p90 10.1h |
+
+**Sunday's card was BETTER SUITED than Saturday's**: an earliest of **10:15**
+puts the boundary-testing window at **09:40–10:15**, only 35 minutes wide but
+squarely astride the boundary. **The run started 2h 51m too early to use it.**
+
+> **Neither registered checkpoint tested the margin. Both returned MARGIN HELD,
+> and in both cases the result was decided by the delay being small, not by the
+> margin being sufficient.**
+
+**Lead times on both days fell WELL BELOW the projection** (7.1 / 10.7 / 15.4h):
+Saturday's median 5.7h and Sunday's 6.3h are inside the pre-change on-time
+baseline of 4.4–8.8h — because the weekend cards start early, which compresses
+lead exactly as the late-run analysis predicted in the other direction.
+
+## 7. OPS-3 — the delay series held, and tightened further
+
+| date | delay |
+| --- | --- |
+| 2026-08-27 | 10h 21m |
+| 2026-08-28 | 11h 21m |
+| 2026-08-29 | 5h 03m |
+| 2026-09-01 | 5h 05m |
+| 2026-09-02 | 4h 25m |
+| 2026-09-03 | 4h 29m |
+| **2026-09-05** | **4h 12m** |
+| **2026-09-06** | **4h 24m** |
+| **2026-09-07** | **4h 40m** |
+| **2026-09-08** | **4h 32m** |
+
+**Eight consecutive firings inside the historical 0.5–5.7h envelope, the last
+six in a 4h12m–5h05m band.** The 10–11h episode of 08-27/08-28 has not
+recurred in twelve days.
+
+> **RECOMMENDATION: OPS-3 stays OPEN, and the reason is the checkpoint above.**
+> The delay is now so consistently ~4.5h that **the boundary cannot be tested
+> by waiting** — every run lands hours before it. Closing OPS-3 would retire the
+> criterion while the margin it was about remains unmeasured. **The two are
+> linked and neither is resolved.**
+
+## 3. THE ROUTINE PASS — 34 runs
+
+**All three workflows, five days.** Verdicts by exception:
+
+| run | workflow | started | verdict |
+| --- | --- | --- | --- |
+| 33951882726 | daily-picks | 09-05 07:11 | DEGRADED — `disc[fs=? fdo=? af=0]` |
+| 34019059879 | daily-picks | 09-06 07:24 | DEGRADED |
+| 34038229507 | closing-lines | 09-06 14:08 | **DEGRADED — 4 credits claimed, 0 closing lines captured** |
+| 34096598280 | daily-picks | 09-07 07:40 | DEGRADED — `disc[fs=21 fdo=5 af=0]` |
+| 34199783169 | daily-picks | 09-08 07:31 | DEGRADED — `disc[fs=18 fdo=13 af=1]`, 1 UNPRICED row |
+| 29 others | closing-lines / paper-report | — | CLEAN |
+
+### `af=0` is now a finding about the DEFERRED LIST, not about the runs
+
+**The created-versus-matched split was recorded as a fix on 2026-09-03 and has
+not been built.** It has fired a false positive on **every daily-picks run since
+— five days, five false alarms.**
+
+> **A known false positive that fires daily is worse than no assertion**: it
+> trains the reader to skip the line, and the line is the one that would catch a
+> genuinely dead source. **This is the third item on the deferred list to
+> accumulate a daily cost** (the others being the announcement gap and the 69
+> DEBUG-only handlers), and it is the cheapest of the three to close.
+
+**The experiment-record assertion fired on 09-07 and 09-08** — *"a report was
+sent WITHOUT the experiment record block"*. **Expected and correct**: those runs
+predate today's change. It confirms the pattern works end-to-end in production
+and should stop firing from the first run under the new code.
+
+## 4. s5.9 — ITS FIRST REAL CATCHES, AND THE PATTERN MADE THEM VISIBLE
+
+> ### `cause=duplicate_rows_one_fixture` HAS FIRED — five times.
+
+```
+2026-09-05  match 51251  Under 3.5      rows_in_fixture=2
+2026-09-05  match 51247  Away Over 0.5  rows_in_fixture=2
+2026-09-06  match 51448  Under 2.5      rows_in_fixture=2
+```
+
+**Against 4 firings of the ordinary `cause=per_match_cap` in the same window.**
+Without the `cause=` split added on 09-04 these would have been indistinguishable
+from the cap, and **the audit pattern registered before the guard is why they are
+visible at all.** That practice is now five days old and has paid twice.
+
+**And the card genuinely carried duplicates:**
+
+| day | picked → groups | card → groups | duplicate pairs | both-picked |
+| --- | --- | --- | --- | --- |
+| 09-05 | 94 → 94 | **113 → 109** | 4 | **0** |
+| 09-06 | 62 → 62 | **70 → 68** | 2 | **0** |
+| 09-07 | 21 → 21 | 21 → 21 | 0 | 0 |
+| 09-08 | 19 → 19 | **21 → 20** | 1 | **0** |
+
+**Seven duplicate pairs across four days, and the guarantee held on every one.**
+The independent check by `(competition, kickoff minute, resolved teams)` finds
+**zero** fixtures carrying two picks.
+
+### The announcement problem — partially resolved by accident
+
+**`resolve_fixture_groups` emitted 7 `SAME FIXTURE` lines**, because it finally
+had something to say. **It still says nothing on a clean day**, and the
+inference-from-absence now covers **09-01, 09-02, 09-03, 09-04 and 09-07** —
+**five days**, up from three. **The fix remains proposed and unbuilt.**
+
+## 5. H5 AND THE SUBSTRATE — the rate resumed, and the headline did not survive
+
+**The reverted guard's effect is confirmed rather than assumed:**
+
+| day | two-point fixtures completing |
+| --- | --- |
+| 09-02 | 13 |
+| 09-04 | 12 |
+| **09-05** | **53** |
+| **09-06** | **25** |
+| 09-07 | 8 |
+| 09-08 | 13 |
+
+**TOTAL: 127, against 16 on 09-04 and a target of 50.** The ~1.8/day estimate
+was low by an order of magnitude on weekend cards; **the target was passed on
+2026-09-05, the day after the revert.**
+
+### σ RE-DERIVED — and the effect that motivated H5 is gone
+
+| | 2026-09-03 (n=15) | **2026-09-09 (n=119)** |
+| --- | --- | --- |
+| mean 1X2 Home drift | **+3.92%** | **+0.615%** |
+| 95% CI on the mean | — | **[−0.460%, +1.690%]** |
+| σ | 9.39% | **5.984%** |
+
+> ### THE +3.92% DID NOT SURVIVE. The mean is +0.615%, its interval INCLUDES ZERO, and its upper bound sits BELOW the +1.85% break-even.
+>
+> **H5 was registered as "the first quantity measured in this project that sits
+> on the right side of the vig." On 119 fixtures it does not.** The n=15 figure
+> was small-sample noise, which is exactly what the pre-registration existed to
+> protect against — **and it worked: the claim was fixed in advance and is now
+> falsified rather than quietly revised.**
+
+**The required n falls with σ:**
+
+| effect δ | n at σ=9.39% | **n at σ=5.98%** |
+| --- | --- | --- |
+| +1.85% | 159 | **65** |
+| **+2%** | 136 | **55** |
+| +4% | 34 | **14** |
+
+**H1's purchase, if ever made, is now sized at ~55 fixtures rather than 136.**
+
+**H5's formal analysis (Q1/Q2/Q3) is DUE — n=127 against its registered n≥50 —
+and is NOT run here.** The registration says it runs once; it deserves its own
+stage rather than a paragraph in an audit. **What is reported above is σ, which
+was explicitly asked for, and the mean fell out of the same query.**
+
+### Substrate
+
+| | 09-04 | **09-09** |
+| --- | --- | --- |
+| `odds_snapshots` | 39,796 | **77,327** |
+| `injury_observations` | 1,068 | **2,078** |
+| **fixtures with ≥3 SEPARATED pre-kickoff observations** | **0** | **0** |
+
+**The corrected trigger is still zero after 37,531 new snapshots**, exactly as
+predicted: the window/interval policy is unchanged, so depth cannot exceed two.
+
+## 6. CLV AND deff
+
+| series | n | fixtures | mean | 95% CI | deff |
+| --- | --- | --- | --- | --- | --- |
+| **MODEL** | **102** | 102 | **−0.088%** | **[−0.666%, +0.481%]** | 1.00 |
+| **FINAL** | **121** | 121 | +0.026% | [−0.488%, +0.563%] | 1.00 |
+
+> **MODEL has more than doubled from n=46 to n=102, and its interval still
+> EXCLUDES the +1.85% break-even — the upper bound is 1.37 percentage points
+> below it.** FINAL's is 1.29pp below.
+
+**Both intervals now straddle zero**, so neither series shows the model beating
+or losing to the close; what they exclude is a *decision-relevant* edge.
+
+**102 observations map onto 102 distinct `match_id`s and 102 distinct FIXTURE
+identities. deff = 1.00. None sit on duplicate-pair rows.**
+
+## 2. THE SETTLED-RECORD BLOCK NOW CARRIES ITS ECONOMICS
+
+**The replacement dropped what the figure it replaced at least had.** Fixed
+before it was read.
+
+| | n | avg odds | win rate | **flat ROI** | P/L |
+| --- | --- | --- | --- | --- | --- |
+| **LIVE (closed)** | 1,074 | **1.939** | 51.68% | **−3.836%** | −41.2u |
+| **PAPER** | 644 | **1.646** | **58.55%** | **−4.265%** | −26.5u |
+
+> ### THE HIGHER PAPER WIN RATE IS A PRICE-MIX EFFECT, AND THE ROI IS WORSE.
+>
+> **Paper sits at materially shorter prices — 1.646 against 1.939 — so it wins
+> more often and pays less. Flat ROI went from −3.836% to −4.265%.** A reader
+> shown only the win rates would conclude the model improved. It did not.
+
+**The message now prints that caveat itself**, and only when the data warrants
+it: it requires paper's win rate above live's AND an average-odds gap below
+−0.05. Same prices with a win-rate gap produces silence, because then it is not
+a price-mix effect and the message must not claim it is.
+
+**Per cohort, with the economics that make the win rates readable:**
+
+| cohort | n | win | avg odds | flat ROI | P/L |
+| --- | --- | --- | --- | --- | --- |
+| `485823` | 244 | 54.9% | 1.648 | **−10.88%** | −25.4u |
+| `098437` | 18 | 55.6% | 1.671 | −9.31% | −1.7u |
+| `60caed` | 34 | 65.6% | 1.626 | +6.56% | +2.1u |
+| `645bac` | 66 | 56.9% | 1.625 | −8.04% | −5.2u |
+| `dfe302` | 20 | **78.9%** | 1.649 | **+31.00%** | +5.9u |
+| **`694a60`** | **262** | 60.1% | 1.649 | **−0.86%** | −2.2u |
+
+**`dfe302`'s +31% on n=20 is the whole argument for printing n beside every
+rate.** Nothing about that cohort is distinguishable from twenty coin flips.
+
+**And the block now names which figure decides anything:** *CLV above is THE
+MEASUREMENT; the record below is context.* Stage 16 found win-rate **and** ROI
+segments alike at p > 0.15 — **neither settles anything on its own**, which is
+why the record sits under the CLV series rather than above it.
+
+*Audit 2026-09-09. Cohort-neutral; message change only.*

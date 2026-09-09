@@ -77,6 +77,33 @@ class ExperimentRecord:
     current_n: int = 0
     current_wins: int = 0
     current_losses: int = 0
+    # ECONOMICS. A win rate alone is not interpretable: it moves with price.
+    # 60% at 1.55 and 52% at 1.89 can be the same outcome or the reverse, and
+    # the first version of this block gave no way to tell -- the figure it
+    # replaced at least carried its ROI.
+    avg_odds: Optional[float] = None
+    pl_units: Optional[float] = None
+    current_avg_odds: Optional[float] = None
+    current_pl_units: Optional[float] = None
+    live_avg_odds: Optional[float] = None
+    live_win_rate: Optional[float] = None
+
+    @property
+    def flat_roi(self) -> Optional[float]:
+        d = self.wins + self.losses
+        return (self.pl_units / d) if (d and self.pl_units is not None) else None
+
+    @property
+    def current_flat_roi(self) -> Optional[float]:
+        d = self.current_wins + self.current_losses
+        return (self.current_pl_units / d) if (d and self.current_pl_units is not None) else None
+
+    @property
+    def price_mix_gap(self) -> Optional[float]:
+        """Paper avg odds minus live avg odds. Negative = shorter prices."""
+        if self.avg_odds is None or self.live_avg_odds is None:
+            return None
+        return self.avg_odds - self.live_avg_odds
 
     @property
     def win_rate(self) -> Optional[float]:
@@ -107,26 +134,53 @@ def build(db, current_model_version: str = "") -> Optional[ExperimentRecord]:
                        count(*) FILTER (WHERE result = 'win')  w,
                        count(*) FILTER (WHERE result = 'loss') l,
                        count(DISTINCT model_version)           cohorts,
-                       min(pick_date), max(pick_date)
+                       min(pick_date), max(pick_date),
+                       avg(odds) FILTER (WHERE result IS NOT NULL),
+                       sum(CASE WHEN result='win'  THEN odds - 1
+                                WHEN result='loss' THEN -1 ELSE 0 END)
                 FROM saved_picks
                 WHERE is_paper IS TRUE AND disposition IS NULL
             """)).fetchone()
             if not row or not row[0]:
                 return None
             (rec.settled, rec.wins, rec.losses, rec.cohorts,
-             rec.first_date, rec.last_date) = row
+             rec.first_date, rec.last_date, _ao, _pl) = row
+            rec.avg_odds = float(_ao) if _ao is not None else None
+            rec.pl_units = float(_pl) if _pl is not None else None
+
+            # The CLOSED live series, for the price-mix comparison only.
+            # A paper win rate above the live one invites "the model improved";
+            # if the paper series simply sits at shorter prices, it did not.
+            lv = s.execute(text("""
+                SELECT count(*), avg(odds),
+                       count(*) FILTER (WHERE result='win'),
+                       count(*) FILTER (WHERE result='loss')
+                FROM saved_picks
+                WHERE (is_paper IS FALSE OR is_paper IS NULL)
+                  AND disposition IS NULL AND result IS NOT NULL
+            """)).fetchone()
+            if lv and lv[0]:
+                rec.live_avg_odds = float(lv[1]) if lv[1] is not None else None
+                _d = lv[2] + lv[3]
+                rec.live_win_rate = (lv[2] / _d) if _d else None
 
             if current_model_version:
                 cur = s.execute(text("""
                     SELECT count(*) FILTER (WHERE result IS NOT NULL),
                            count(*) FILTER (WHERE result = 'win'),
-                           count(*) FILTER (WHERE result = 'loss')
+                           count(*) FILTER (WHERE result = 'loss'),
+                           avg(odds) FILTER (WHERE result IS NOT NULL),
+                           sum(CASE WHEN result='win'  THEN odds - 1
+                                    WHEN result='loss' THEN -1 ELSE 0 END)
                     FROM saved_picks
                     WHERE is_paper IS TRUE AND disposition IS NULL
                       AND model_version = :mv
                 """), {"mv": current_model_version}).fetchone()
                 if cur:
-                    rec.current_n, rec.current_wins, rec.current_losses = cur
+                    (rec.current_n, rec.current_wins, rec.current_losses,
+                     _cao, _cpl) = cur
+                    rec.current_avg_odds = float(_cao) if _cao is not None else None
+                    rec.current_pl_units = float(_cpl) if _cpl is not None else None
 
             # CLV, per attribution series. Clustered by FIXTURE, because two
             # picks on one match respond to the same information — the design
@@ -198,8 +252,9 @@ def format_block(rec: Optional[ExperimentRecord], html: bool = True) -> List[str
               else "  (CI needs ≥5 fixtures)")
         out.append(f"{b(s.label)}: {s.mean:+.2%} "
                    f"(n={s.n} picks / {s.fixtures} fixtures){ci}")
-    out.append(i("CLV is the instrument this experiment turns on — Stage 16: "
-                 "win-rate and ROI segments are all p &gt; 0.15."))
+    out.append(i("CLV above is THE MEASUREMENT; the record below is context. "
+                 "Stage 16: win-rate AND ROI segments alike come in at "
+                 "p &gt; 0.15, so neither decides anything on its own."))
 
     out.append(f"\n{b('─── Experiment: settled record ───')}")
     if rec.win_rate is None:
@@ -209,15 +264,45 @@ def format_block(rec: Optional[ExperimentRecord], html: bool = True) -> List[str
     span = ""
     if rec.first_date and rec.last_date:
         span = f", {rec.first_date} → {rec.last_date}"
+
+    # A WIN RATE ALONE IS NOT INTERPRETABLE, so it never appears alone.
+    econ = ""
+    if rec.flat_roi is not None:
+        econ = (f" · flat ROI {rec.flat_roi:+.2%} · {rec.pl_units:+.1f}u"
+                f" · avg odds {rec.avg_odds:.2f}")
     out.append(
         f"{rec.wins}W-{rec.losses}L ({rec.win_rate:.1%}) "
-        f"across n={rec.settled} picks in {rec.cohorts} cohorts{span}")
+        f"across n={rec.settled} picks in {rec.cohorts} cohorts{span}{econ}")
     if rec.current_n:
         cwr = (f"{rec.current_win_rate:.1%}" if rec.current_win_rate is not None
                else "n/a")
+        cecon = ""
+        if rec.current_flat_roi is not None:
+            cecon = (f" · flat ROI {rec.current_flat_roi:+.2%} · "
+                     f"{rec.current_pl_units:+.1f}u · avg odds "
+                     f"{rec.current_avg_odds:.2f}")
         out.append(
             f"current cohort {rec.current_cohort[-6:] or '?'}: "
-            f"{rec.current_wins}W-{rec.current_losses}L ({cwr}) n={rec.current_n}")
+            f"{rec.current_wins}W-{rec.current_losses}L ({cwr}) "
+            f"n={rec.current_n}{cecon}")
+
+    # THE PRICE-MIX CAVEAT, printed only when the data warrants it.
+    #
+    # A paper win rate above the closed live one invites "the model improved".
+    # MEASURED 2026-09-09: paper 58.5% at avg odds 1.646 against live 51.7% at
+    # 1.939 — the paper series sits at MATERIALLY SHORTER PRICES, and its flat
+    # ROI (-4.27%) is WORSE than the live series' (-3.84%). The win rate rose
+    # because the prices fell, not because the model got better.
+    if (rec.price_mix_gap is not None and rec.live_win_rate is not None
+            and rec.win_rate is not None
+            and rec.win_rate > rec.live_win_rate
+            and rec.price_mix_gap < -0.05):
+        out.append(i(
+            f"⚠ The higher win rate is a PRICE-MIX effect, not an improvement: "
+            f"paper avg odds {rec.avg_odds:.2f} against the closed live "
+            f"series' {rec.live_avg_odds:.2f} "
+            f"({rec.live_win_rate:.1%} at the longer prices). Shorter prices "
+            f"win more often and pay less. Compare ROI, not win rate."))
     # THE CAVEAT IS DERIVED, NOT ASSERTED.
     #
     # It first read "the current cohort's n is small enough that its rate is

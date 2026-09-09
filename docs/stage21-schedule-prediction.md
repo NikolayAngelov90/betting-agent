@@ -532,3 +532,39 @@ rationale reverses.**
 
 **Registered in `docs/h5-drift-preregistration.md` before the sample completes,
 so the result cannot be read selectively afterwards.**
+
+---
+
+# THE SATURDAY CHECKPOINT WAS NOT TESTED — 2026-09-05, recorded 2026-09-09
+
+**Started 07:11:56 UTC. Delay 4h 11m 56s. 113 fixtures, earliest 11:00 UTC,
+0 kicked off, 0.0% of the card lost — MARGIN HELD under the registered bands.**
+
+> **AND IT TESTED NOTHING.** The registered limitation requires a start between
+> **09:40 and the earliest kickoff** for the boundary to be exercised at all.
+> The run started **2h 28m before 09:40**.
+
+**Sunday 2026-09-06 the same:** started 07:24:27, earliest 10:15 UTC, 0.0% lost.
+Its 09:40–10:15 window was only 35 minutes wide but sat squarely astride the
+boundary — **and the run was 2h 51m too early to use it.**
+
+**One correction to the registration itself:** Saturday's earliest was recorded
+here as **11:30 UTC** from an external UK-centric listing. **It was 11:00.** The
+listing missed an earlier fixture — the limitation stated when it was
+registered, now realised — and it narrows the untestable window rather than
+widening it.
+
+## Why waiting will not fix this
+
+**The delay has stabilised at ~4h 12m to 5h 05m across eight consecutive
+firings.** A 03:00 cron plus a 4.5h delay lands at ~07:30, and **no weekend card
+starts before 10:15**. The boundary is therefore **unreachable by observation
+under the current schedule** — every future Saturday will return MARGIN HELD for
+the same trivial reason.
+
+> **Testing the 09:40 boundary now requires a deliberate act — a manually
+> triggered run inside the 09:40–11:00 window — not another week of waiting.**
+> That is a decision for Niki, and it is the only way this checkpoint gets an
+> answer.
+
+*Recorded 2026-09-09.*

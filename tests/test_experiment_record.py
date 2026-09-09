@@ -201,3 +201,61 @@ def test_the_current_cohort_caveat_is_DERIVED_not_asserted():
         "n=262 is not noise, and saying so would be a false claim printed "
         "daily — the same failure mode as the frozen all-time")
     assert "describes the configuration running now" in fat
+
+
+# ── item 2: a win rate never appears without its economics ─────────────────
+def test_the_settled_record_carries_roi_odds_and_pl():
+    """A win rate alone is not interpretable — it moves with price.
+
+    60% at 1.55 and 52% at 1.89 can be the same outcome or the reverse. The
+    figure this block replaced at least carried its ROI; the first version of
+    the replacement dropped it.
+    """
+    from src.reporting.experiment_record import format_block
+    rec = _rec(settled=644, wins=363, losses=257, cohorts=6,
+               avg_odds=1.646, pl_units=-26.45,
+               current_cohort="x.694a60", current_n=262,
+               current_wins=152, current_losses=101,
+               current_avg_odds=1.649, current_pl_units=-2.19)
+    out = "\n".join(format_block(rec, html=False))
+    for token in ("flat ROI", "avg odds", "u"):
+        assert token in out, f"the record is missing {token!r}"
+    assert "-4.2" in out and "-0.8" in out, (
+        "both the series ROI and the current cohort's ROI must be printed")
+
+
+def test_the_price_mix_caveat_fires_when_paper_wins_more_at_shorter_prices():
+    """MEASURED 2026-09-09: paper 58.5% @1.646 vs live 51.7% @1.939.
+
+    The higher win rate is a price-mix effect and the paper ROI is WORSE. A
+    reader shown only the win rates concludes the model improved.
+    """
+    from src.reporting.experiment_record import format_block
+    rec = _rec(settled=644, wins=363, losses=257, cohorts=6,
+               avg_odds=1.646, pl_units=-26.45,
+               live_avg_odds=1.939, live_win_rate=0.5168)
+    out = "\n".join(format_block(rec, html=False))
+    assert "PRICE-MIX" in out and "Compare ROI, not win rate" in out
+
+
+def test_the_caveat_stays_quiet_when_prices_are_comparable():
+    """It must not fire on a difference it cannot attribute to price."""
+    from src.reporting.experiment_record import format_block
+    rec = _rec(settled=644, wins=363, losses=257, cohorts=6,
+               avg_odds=1.93, pl_units=-26.45,
+               live_avg_odds=1.939, live_win_rate=0.5168)
+    out = "\n".join(format_block(rec, html=False))
+    assert "PRICE-MIX" not in out, (
+        "same prices, so a win-rate gap is NOT a price-mix effect and the "
+        "message must not claim it is")
+
+
+def test_clv_is_named_as_the_measurement_and_the_record_as_context():
+    from src.reporting.experiment_record import Series, format_block
+    rec = _rec(settled=644, wins=363, losses=257, cohorts=6,
+               model=Series("MODEL", n=102, fixtures=102, mean=-0.0009,
+                            lo=-0.0067, hi=0.0048))
+    out = "\n".join(format_block(rec, html=False))
+    assert "THE MEASUREMENT" in out and "context" in out, (
+        "the block must say which figure decides anything — Stage 16 found "
+        "win-rate AND ROI segments alike at p > 0.15")
