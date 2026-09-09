@@ -9584,3 +9584,163 @@ disposed observation intact, FINAL correctly at **120**. Pinned by
 **911 tests pass; fingerprint unchanged at `694a60`.**
 
 *Recorded 2026-09-09.*
+
+---
+
+# PROPOSED STAGE — TEAM IDENTITY IS INCOMPLETELY RESOLVED
+
+**Not cleanup. This is the residual that has produced two of the three known
+guarantee violations, and it is bounded.**
+
+## The subject, and its four symptoms
+
+**One subject: `teams.apifootball_team_id` is incompletely and sometimes
+wrongly populated. Every mechanism keyed on it inherits the gap.**
+
+| # | symptom | count | consequence |
+| --- | --- | --- | --- |
+| **a** | teams carrying **NO** provider id | **176** | branch 1 unreachable for every fixture they touch |
+| **b** | provider ids held by **more than one** team row | **44** | the duplicate-team class, previously merged once |
+| **c** | teams carrying the **WRONG** provider id | **2** (rows 124, 411) | correct refusals that block real clubs |
+| **d** | clubs with **no row at all** | **≥1** (Maccabi Tel Aviv) | blocked from ever being created by (c) |
+
+**These have been carried as four separate deferrals for three weeks. They are
+one repair.**
+
+## The 176 are not obscure clubs — they are DUPLICATES OF RESOLVED ONES
+
+| unresolved row | fixtures since 2026-08-01 |
+| --- | --- |
+| 764 `Sporting Clube de Portugal` | 5 |
+| 490 `Porto` | 5 |
+| 494 `Celta` | 5 |
+| 563 `Wrexham AFC` | 5 |
+| 565 `Charlton Athletic FC` | 5 |
+| 445 `Sheffield United` | 5 |
+| 571 `SBV Excelsior` | 4 |
+| 492 `Sporting Clube de Braga` | 4 |
+| 572 `Sport Lisboa e Benfica` | 4 |
+
+**Every one of these sits beside a resolved row for the same club** — `Sporting
+CP` (228), `Celta Vigo` (53), `Excelsior` (129). **So the work is a team-row
+MERGE, not a lookup**, and the precedent is documented: **50 clubs were merged
+on 2026-07-22** under exactly this description.
+
+## The payoff, measured rather than asserted
+
+| | |
+| --- | --- |
+| fixtures touching an unresolved team, all time | **7,552** |
+| ...in the **last 365 days** | **1,435** |
+| ...since 2026-08-01 | **155** |
+| rows where **BOTH** teams are unresolved (the hard core) | **702**, only **4** since 2026-08-01 |
+| share of the 202-pair s5.9 residual involving a no-provider-id row | **187 (92.6%)** |
+
+> ### RESOLVING THE 176 COLLAPSES MOST OF THE RESIDUAL s5.9 CANNOT SEE — the residual that produced two of the three known violations.
+
+**And it removes the condition under which s5.9 fails**, rather than adding a
+branch or loosening one. **Branch 1 becomes reachable for the fixtures that
+currently fall to branch 2's name comparison and then past it.**
+
+**What it does NOT do:** it does not close branch 3 entirely. **15 of the 202
+are a pure naming residual** where both rows already carry provider ids, and
+those need curated aliases — the `Sporting CP` decision, still open.
+
+## Why the framing matters
+
+**"Clean up old data" is how this has read for three weeks, and it is why it
+stayed deferred.** Stated correctly it is: *close the guarantee's residual,
+restore coverage on ~1,435 fixtures a year, and remove the condition under which
+the per-fixture cap fails.* **Same work, different proposition.**
+
+**Not built. Proposed as one stage with its payoff attached.**
+
+---
+
+# MECHANISMS VERIFIED ONLY BY TEST — the list, measured
+
+**The question the MODEL/FINAL defect raises: which mechanisms shipped with
+passing tests and have never executed in production?** A mechanism verified only
+by test is verified against the author's model of production, and this project
+has now found three cases where those differed.
+
+**Measured, not assumed:**
+
+| mechanism | production evidence | verdict |
+| --- | --- | --- |
+| `_apply_decision` consolidation branch | picks **1156** (08-14) and **1284** (08-17) carry `disposition='consolidated'` with `review_action` NULL | **HAS FIRED — twice** |
+| `evidence_status` gating | **3** rows carry `void_corrupt_features` | **HAS FIRED** |
+| training-exclusion marking | **510** `phantom_kickoff_now_stamp` + **29** `corrupt_team_identity` | **HAS FIRED** |
+| s5.9 duplicate refusal | **5** `cause=duplicate_rows_one_fixture` firings, 09-05/09-06 | **HAS FIRED** |
+| unpriced-fixture alarm | fired 09-04 and 09-08 | **HAS FIRED** |
+| **`void_*` dispositions** (Stage 13 Part B) | **zero rows** — only `consolidated` exists | **NEVER FIRED** |
+| **run-marker guard, ALLOW path** | reverted 09-04 before any closing-lines run followed a picks run | **NEVER FIRED** |
+| **`resolve_fixture_groups` clean-day announcement** | emits nothing by design | **CANNOT FIRE** |
+| **`experiment_record` per-series disposition rule** | wrong from the day it shipped; invisible until a disposition existed on a pick with a captured MODEL observation | **WAS WRONG WHEN FIRST EXERCISED** |
+
+**The list is shorter than feared, and the shape is informative: the mechanisms
+that had never fired are the ones that were wrong.** `experiment_record`'s
+filter shipped 2026-09-08 and was defective on its first real exercise the next
+day.
+
+> **A test proves a mechanism behaves as its author expected. Production proves
+> the author expected the right thing. Three of this project's defects lived in
+> the gap, and the only way to close it is to exercise the path deliberately
+> rather than wait for it.**
+
+**This belongs with the announcement stage — the same problem stated forwards.**
+That stage now has **four** items:
+
+1. `resolve_fixture_groups` — no unconditional line; five days of clean runs
+   inferred from an absent warning;
+2. the reverted guard's quiet path, never executed;
+3. the 69 `except` handlers recording only at DEBUG;
+4. **an inventory of never-executed branches, with a deliberate exercise for
+   each** — which is what would have caught the `experiment_record` filter
+   before a real disposition did.
+
+*Opened 2026-09-02. Four items. Still unbuilt.*
+
+---
+
+# THE DISPOSAL, AND THE DURATION THAT MAKES IT MATTER
+
+**Both duplicate picks are consolidated. The measurement that belongs beside
+that is how long each was live:**
+
+| pick | fixture | picked | disposed | **days live** |
+| --- | --- | --- | --- | --- |
+| **1456** | 2026-08-30 Deportivo v Valencia | 08-30 | 09-09 | **10 days** |
+| **1759** | 2026-09-08 NEC v Nijmegen | 09-08 | 09-09 | **1 day** |
+
+> **For ten days a second stake on one fixture fed `get_stats` and every learner
+> site that reads the live record.** That gap — violation occurring to violation
+> disposed — is the argument that the 202-pair residual is a live exposure and
+> not a theoretical bound.
+
+**The 08-30 case was found only because the 09-08 case was reported.** Nothing in
+the pipeline surfaced it in ten days, and the `cause=duplicate_rows_one_fixture`
+pattern that would now surface it was registered on 09-04 — **five days after
+the violation it would have caught.**
+
+## Two corrections to earlier entries in this ledger
+
+**1. The 2026-08-14 Sporting CP fixture carried TWO live picks, not three.**
+Recorded earlier as *"THREE picks across two rows"*. The raw count is three —
+**but pick 1156 was already `disposition='consolidated'`**, written by
+`_apply_decision` on the day. **I counted a disposed row as live**, which is the
+same error as reading a bare count without its gate.
+
+| | |
+| --- | --- |
+| 49520 | 1156 **consolidated**, 1158 live |
+| 49496 | 1179 live |
+| **live total** | **2** |
+
+**2. The 2026-08-08 Estrela fixture DOES carry three live picks, and still
+does.** 49308 holds 1044 and 1051 (legal under the cap of 2 in force then),
+49271 holds 1053. **The duplicate row's contribution is one extra pick.** It
+predates s5.3 so it violated no guarantee at the time, and **its remedy is the
+`Sporting CP` alias — a separate decision, deliberately not taken here.**
+
+*Recorded 2026-09-09.*
