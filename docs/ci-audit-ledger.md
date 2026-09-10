@@ -10572,3 +10572,218 @@ kept NULL, and two other fixtures' verdicts from the same run persisted
 correctly.
 
 *Recorded 2026-09-10. Read-only throughout.*
+
+---
+
+# URGENT — THE EXHAUSTION PROJECTION, AND WHAT THE GATE WILL DO
+
+**Established 2026-09-10, before any purchase decision. Read-only.**
+
+## The rates
+
+| September 1–10 | credits | rate |
+| --- | --- | --- |
+| **true consumption (provider `x-requests-used`)** | **346** | **34.6/day** |
+| …`daily-picks`, **off-ledger** | 204 | 20.4/day — **59%** |
+| …`closing-lines`, on-ledger | 138 | 13.8/day — 40% |
+
+## The dates
+
+| | date |
+| --- | --- |
+| **provider exhausts the 500 tier** (154 left at 34.6/day) | **2026-09-14** |
+| ledger refuses **if reconciles keep firing** (338 of 450) | **2026-09-13** — 1.2 days early |
+| ledger refuses **if reconciles stop** (13.8/day, its own claims only) | **2026-09-18** |
+| **THE BLIND WINDOW** | **09-14 → 09-18, four days** |
+
+## CORRECTION TO THE PREMISE — the ledger is not two weeks behind, and the reason matters
+
+**The brief assumed the ledger only ever sees its own 13.8/day and would not
+refuse until ~the 25th. It reconciles.** The durable row reads:
+
+```
+api_budget:  day=2026-09-01  provider='theoddsapi'  used=338  limit_=450
+             updated_at = 2026-09-09 18:33
+```
+
+**338 against the provider's 346 — eight credits apart, not two hundred.**
+`quota.reconcile()` adopts the provider's number on every capture run that
+actually spends, so the ledger tracks reality between reconciles and the safety
+margin of 50 currently holds.
+
+> ### The margin holds only while reconciles keep firing — and they stop exactly when they are needed.
+>
+> **`reconcile()` is only reachable through `refresh_imminent`, after a real
+> request, from response headers. And the 429 branch returns BEFORE the headers
+> are read:**
+>
+> ```python
+> if resp.status == 429:
+>     logger.warning("TheOddsAPI: quota exhausted (429)")
+>     return None                      # <- returns here
+> remaining = resp.headers.get("x-requests-remaining")   # <- never reached
+> used = resp.headers.get("x-requests-used")
+> ```
+>
+> **On exhaustion the ledger stops learning the provider's number permanently.**
+> A 1.2-day margin becomes a 4-day blind window at the moment the margin is
+> spent. **The mechanism built to prevent exhaustion goes blind on exhaustion.**
+
+## IS AN OVER-QUOTA RESPONSE DISTINGUISHABLE FROM AN EMPTY ONE?
+
+**Layered, and the answer differs by layer.**
+
+| layer | distinguishable? | evidence |
+| --- | --- | --- |
+| the HTTP call | **YES** | 429 → `return None` + a WARNING; empty → `[]` |
+| per-league outcome classification | **YES, and correctly** | `"error" if games is None else ("no_rows" if not games else "ok")` |
+| the barren-league cache | **YES — the guard works** | `if outcome in ("ok", "no_rows")` excludes `error`, so **a 429 cannot mark a league unpriced.** The comment says so: *"Only a clean empty response counts toward exclusion."* |
+| the `daily-picks` run summary | **NO** | `TheOddsAPI update complete: 0 odds rows written, 0 games matched` reads identically for exhaustion and an empty card |
+| the `daily-picks` attribution log | **NO — it is computed and discarded** | `_last_league_outcomes` is set in `_fetch_and_persist` and read **only** in `refresh_imminent`. On the `update()` path the per-league distinction exists and is never emitted. |
+
+**So the barren cache is safe and the aggregate is not.** The one signal that
+survives on the `daily-picks` path is the per-call WARNING — and that signal is
+already compromised:
+
+## THE 429 ALARM HAS ALREADY BEEN DESENSITISED — six times, and it never meant what it says
+
+**`429` is "Too Many Requests". The handler labels every one "quota exhausted".
+It has fired in six runs and NOT ONE was a quota exhaustion:**
+
+```
+2026-09-05 07:39:39  TheOddsAPI: 23 leagues with today's fixtures
+2026-09-05 07:40:25  WARNING  TheOddsAPI: quota exhausted (429)   x4, same second
+2026-09-05 07:40:50  TheOddsAPI update complete: 7698 odds rows written,
+                     87 games matched, 4 unmatched (credits remaining: 362)
+```
+
+**362 credits remained.** Four parallel league requests were rate-limited in one
+second, four leagues silently got no odds on the month's highest-volume day, and
+the log said *quota exhausted*.
+
+> **When real exhaustion arrives on 09-14 it will emit the identical line that
+> has already appeared six times and been correctly ignored.** The alarm for the
+> event has been pre-spent on a different event. Prior instances: 2026-05-03,
+> 05-09, 05-10, 08-29, 08-30, 09-05 — all `daily-picks`, all with credits in
+> hand.
+
+## THE MINIMAL CORRECTION
+
+```python
+async def update(self) -> int:                       # line 609 — no quota param
+    ...
+    await self._fetch_and_persist(league_fixtures)   # quota defaults to None
+
+async def _fetch_and_persist(self, league_fixtures, quota=None):
+    if quota is not None:
+        granted = quota.claim_requests(len(wanted))  # never reached from update()
+```
+
+**`daily-picks` → `update()` → `_fetch_and_persist(quota=None)`: no claim, no
+per-run ceiling, no refusal, no reconcile.** 59% of consumption goes through a
+path that cannot be told to stop.
+
+> ### Route the `update()` path through `claim_requests()` so ONE account covers both consumers.
+>
+> **This is the same one-definition move already made twice in this data layer**
+> — the shared `live_only()` / `valid_evidence()` predicates, and
+> `OVERROUND_3WAY`/`OVERROUND_2WAY` after Stage 18 found three copies drifting
+> apart. **The ledger's arithmetic is not wrong. A second consumer bypasses it.**
+
+**It is also the only correction that closes the blind window**, because a
+claiming consumer is a refusable one: `daily-picks` would be declined by the
+ceiling before the provider declines it, and its spend would be visible to the
+reconciler without depending on a capture run happening to fire.
+
+---
+
+# THE CAUSE IS STAGE 19, AND THE ARITHMETIC WAS NEVER RE-DERIVED
+
+**Fixture discovery was restored on 2026-08-27. Pick-time odds requests scale
+with the size of the card, and that path was never in the ledger.**
+
+**Measured, `daily-picks` TheOddsAPI consumption:**
+
+| window | rate |
+| --- | --- |
+| 2026-08-13 → 08-28 (discovery degraded) | **10.3 credits/day** |
+| 2026-08-29 → 09-10 (discovery restored) | **22.4 credits/day** |
+| **ratio** | **2.18×** |
+
+**The repair more than doubled consumption on the unmetered path.** August's
+ledger row closed at `used=437, limit_=400` — **it overspent its own budget by
+37 and nobody could see why**, because two-thirds of the spend was invisible.
+
+> ## A fix that changes volume changes every budget derived from the old volume.
+
+**None of Stage 15's frontier arithmetic was re-derived after discovery came
+back.** That stage concluded:
+
+> *"The frontier is nearly FLAT at ~0.32 MODEL observations per credit… Almost
+> every lever prices at the same rate, and the rate is set by the budget, not by
+> the schedule."*
+
+**Every figure in it is a ratio with credits in the denominator, computed while
+discovery was degraded and the card was a fraction of its current size.** The
+observations-per-credit frontier, the L2/L3b/L4 rankings, and the March 2027
+projection all rest on a consumption baseline that no longer exists. **They are
+not wrong by a rounding error; the denominator moved by 2.18× on one of its two
+consumers.**
+
+**Recorded as an open item, not pursued here.** It is the same class as the
+Stage 21 lead-time claim: an argument that was correct when made and was never
+revisited when its inputs changed.
+
+---
+
+# THE THREE-WAY BUDGET COMPETITION IS DEFERRED
+
+**More capture runs (~20/day), H1's ~100 one-off, and H5 Q1's `--any-fixture`
+were all sized against a ledger missing 59% of consumption.**
+
+> **Re-price them after the accounting is whole, not before.** A frontier
+> computed on 13.8/day when the true rate is 34.6/day does not need adjusting;
+> it needs recomputing.
+
+**And the immediate constraint is sharper than any of them: at 34.6/day the tier
+exhausts on 2026-09-14, four days from now, with 154 credits left. None of the
+three purchases fits inside that.**
+
+---
+
+# TWO THINGS KEPT
+
+## 1. The machine-readable evidence line reports success by default
+
+**`result=ok` is a DEFAULT on the line whose own comment says it exists so a CI
+log can become a ledger "without parsing prose".** Four leagues never fetched,
+sixteen reported `ok`.
+
+**And the comment two hundred lines away already describes the same bug in its
+past tense** — *"the attribution log used to derive `result=` from the TOTAL rows
+written across the whole batch, so a batch where one league returned rows and
+three returned nothing emitted four `result=ok` lines. Every no_rows figure ever
+read out of those logs is therefore a LOWER bound on the waste, including
+Stage 15's."*
+
+> **The fix added a per-league outcome map and left the `.get(league, 'ok')`
+> fallback in place, so the defect survives for exactly the leagues the map
+> never hears about — the ceiling-truncated ones.** The repair reached the
+> symptom it was looking at and not the default underneath it.
+
+**That is the family this project has now met a dozen times, arriving inside the
+mechanism built to make the log trustworthy.**
+
+## 2. Measured against the cron, 1 pick. Against the runs that happened, 199.
+
+**An idealised-schedule model would have called the coverage gap solved.**
+
+> ### This is the same distinction as measuring what the pipeline says about itself.
+>
+> A schedule is a *declaration of intent*, exactly as `plan["requested"]` is,
+> and as `review_action` was before the outcome field was proposed. **Reading
+> the declaration instead of the event is one error with three faces, and the
+> ratio here is 199:1.**
+
+*Recorded 2026-09-10. Read-only: no code, schema, workflow or production-data
+changes.*
