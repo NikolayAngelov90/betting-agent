@@ -9851,3 +9851,116 @@ would make the cohort break unattributable.
 once, and Q2 bears on the lead-time claim still marked UNVERIFIED.
 
 *Specified 2026-09-09.*
+
+---
+
+# THE OVER-CAP CLASS — counted before the instance was disposed of
+
+**2026-09-10. The class is ONE fixture. The decision is therefore trivial —
+and the count is what makes it trivial rather than lucky.**
+
+## The predicate is date-dependent
+
+`max_picks_per_match: 1` landed in **`bef66ca`, 2026-08-23 14:13 UTC**. Runs
+fire in the morning, so:
+
+| pick_date | cap in force |
+| --- | --- |
+| ≤ 2026-08-23 | **2** |
+| ≥ 2026-08-24 | **1** |
+
+## MY FIRST MEASUREMENT RETURNED ZERO, AND IT WAS WRONG
+
+**I grouped by `resolve_fixture_groups` — s5.9's own predicate.** It cannot see
+the pairs s5.9 cannot see, including the 08-08 Estrela pair that prompted the
+question.
+
+> ### Measuring a residual with the mechanism that HAS the residual returns no residual.
+>
+> **It reported 0 over-cap fixtures while one was sitting in front of me.** The
+> fourth level of the same recursion: level 3 was a bare count read without its
+> gate, level 4 is a population counted with the blind spot it was counting.
+
+**Regrouped independently** — same league, same kickoff minute, and **any**
+identity evidence (a shared resolved club id **or** one side name-similar),
+which is deliberately wider than s5.9 because for counting a population a false
+positive is the safe direction and every hit is inspected.
+
+## THE CLASS
+
+| | |
+| --- | --- |
+| live picks | **1,750** |
+| match rows carrying them | 1,570 |
+| fixture groups under the wide predicate | 1,568 |
+| **fixtures over their date's cap** | **1** |
+
+**One fixture, 2026-08-08, `portugal/primeira-liga`:**
+
+| pick | row | market / selection | EV | result |
+| --- | --- | --- | --- | --- |
+| 1044 | 49308 | **Over 2.5** | −0.1948 | win |
+| 1051 | 49308 | Under 3.5 | +0.1073 | loss |
+| **1053** | **49271** | **Over 2.5** | **−0.2158** | win |
+
+**Three picks where the cap allowed two, and 1044/1053 are the SAME selection
+on one real fixture — a doubled stake.** Pick 1053 exists only because the
+fixture was split across two rows.
+
+## AND IT INVERTS A SEVERITY CLAIM I MADE
+
+> **I wrote that the 08-30 duplicate "fed `get_stats` and every learner site
+> that reads the live record" for ten days. That is WRONG.**
+
+**`live_only()` excludes paper picks**, and everything from 2026-08-11 onward is
+paper. The 08-30 and 09-08 duplicates were **paper** — they reached the
+experiment record and the paper-trading report, **not** `get_stats` and **not**
+the five learner sites.
+
+**The one that does reach them is this one.** Pick 1053 is `is_paper = False`
+with `review_action = 'CHANGE'` — **a real live Telegram recommendation**, in the
+closed live series, for **32 days**.
+
+**So the case that surfaced by accident is the one that matters — for the
+opposite reason to the one I gave.**
+
+## THE DECISION, taken as a class
+
+> ### CONSOLIDATE POST-s5.3 EXCESS; LEAVE PRE-s5.3 AND DOCUMENT.
+>
+> The two post-s5.3 cases are already consolidated. This one is not, and will
+> not be.
+
+**Three reasons, and the second is decisive:**
+
+1. **Pre-s5.3 there was no per-fixture guarantee to violate.** The cap was 2 per
+   MATCH and per match it was satisfied — 49308 held two, 49271 held one.
+2. **It was emitted as a real live recommendation.**
+   `disposition='consolidated'` means *never placed*. **Marking a pick that went
+   to Telegram as never-placed would misstate what happened.** The paper
+   duplicates carried a DO-NOT-BET banner, so consolidating those stated the
+   truth; consolidating this one would not.
+3. **The class is one, so the cost of leaving it is exact rather than unknown:**
+
+| | n | win rate | flat ROI |
+| --- | --- | --- | --- |
+| as published | 1,074 | 51.676% | −3.836% |
+| **excluding 1053** | **1,073** | **51.631%** | **−3.889%** |
+
+**0.045pp on the win rate, 0.053pp on ROI — both far below any threshold this
+project treats as decision-relevant.**
+
+**The caveat is now attached to the figure in the README**, with both numbers,
+so the record carries its own correction rather than being silently edited.
+
+## Why counting first was the right order
+
+**Had the class been fifty, "consolidate the one that surfaced" would have been
+the wrong call for forty-nine.** It was one — so the decision took an hour and
+is now made once, with the reasoning attached, instead of per case.
+
+**And the count itself found something the instance could not:** that the
+severity claim about the learners was backwards. **Deciding on the instance
+would have preserved that error.**
+
+*Recorded 2026-09-10.*

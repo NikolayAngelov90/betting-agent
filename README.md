@@ -422,6 +422,22 @@ Reports show genuine CLV **only** when a validated closing line exists. Model-pr
 
 **1,074 settled picks · 51.676% win rate · −3.836% flat ROI · MEASURED 2026-09-01.**
 
+**One caveat attached 2026-09-10, and it is small enough to state exactly.** The
+2026-08-08 fixture `Estrela v Sporting CP` was split across two match rows, so it
+carried **three** picks where the cap of the day allowed two — and two of the
+three are the **same selection** (`Over 2.5`, both winners). Pick **1053** exists
+only because of that split.
+
+| | n | win rate | flat ROI |
+| --- | --- | --- | --- |
+| as published | 1,074 | 51.676% | −3.836% |
+| **excluding pick 1053** | **1,073** | **51.631%** | **−3.889%** |
+
+**It is left in, deliberately.** It was emitted as a real live recommendation,
+not a paper one, so marking it `consolidated` — which means *never placed* —
+would misstate what happened. **A measured class of one, with the effect
+quantified, is better recorded than silently edited.**
+
 **This series is CLOSED.** Its last pick is dated **2026-08-10**, when paper
 trading began; it has not moved since and it never will. It was reported daily
 in the Telegram messages as though it were current until **2026-09-04**, when it
