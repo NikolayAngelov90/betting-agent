@@ -572,6 +572,13 @@ benefit**, exactly as ruled on 2026-09-04.
 **The delay-tolerance argument is untouched and remains the reason to keep
 `0 3 * * *`.**
 
+**This is not "not yet enough data" — it is a named verdict.** The lead-time
+claim is filed under **`UNADDRESSABLE BY SELF-OBSERVATION`**, disposition (c):
+open, and **the claim stays uncitable as a benefit until someone pays for the
+variation.** Two other questions here died the same death — H5's Q1 control and
+the Saturday margin boundary — with H1 reclassified into the class.
+See `docs/unaddressable-by-self-observation.md`.
+
 *Recorded 2026-09-10 from `docs/h5-drift-preregistration.md`, run once at n=129.*
 
 

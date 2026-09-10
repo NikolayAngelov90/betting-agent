@@ -2571,7 +2571,7 @@ and it cannot date the first of them.
 
 | | hypothesis | status |
 | --- | --- | --- |
-| **H1** | momentum | **UNTESTABLE** — needs t0→t1 to predict t1→t2; only two observations per key exist |
+| **H1** | momentum | **UNTESTABLE** — needs t0→t1 to predict t1→t2; only two observations per key exist. **RECLASSIFIED 2026-09-10 to `UNADDRESSABLE BY SELF-OBSERVATION`**: the third observation is absent because the refresh policy permits ONE refresh, not because it was never stored. See `docs/unaddressable-by-self-observation.md`. |
 | **H2** | cross-book disagreement | **TESTED** |
 | **H3** | injuries | **UNTESTABLE** — **34 injury rows in the entire database**, 10 teams, all dated 2026-08-17/18: zero in training, and what exists lies inside the sealed window |
 | **H4** | elapsed time | **UNTESTABLE** — no opening timestamp; `matches.created_at` is unusable as a proxy because **53.5% of match rows were created AFTER their own kickoff** (mean +14 days), being backfill stamps |
@@ -10043,5 +10043,90 @@ persuaded by a large mean over a handful of clusters; the design effect on the
 same data is **~11**, meaning the naive interval on the headline row would have
 presented **61 fixtures as 814 independent draws** — the error direction that
 makes a null look significant.
+
+*Recorded 2026-09-10.*
+
+---
+
+# A CLASS NAMED — `UNADDRESSABLE BY SELF-OBSERVATION`
+
+**Three questions in this project died the same death, and the third was still
+being treated as a sample-size problem when it was named.**
+
+> **A system running a single fixed policy produces no variance along the axis
+> that policy sets, so questions about the policy are unanswerable from the
+> policy's own output.**
+
+| # | question | why observation fails |
+| --- | --- | --- |
+| 1 | **Stage 21's lead-time benefit** | 127 of 129 fixtures sit in one 6–12h bucket; a cron at a fixed hour produces a near-constant lead |
+| 2 | **H5's Q1 control** | all 129 qualifying fixtures were picked; `refresh_and_capture.py` re-prices a fixture **because** it carries a pending pick |
+| 3 | **the Saturday margin boundary** | a 03:00 cron plus a 4–5h delay never lands inside 09:40–11:00 |
+| 4 | **H1 momentum** — *reclassified from `UNTESTABLE` (Part B)* | the third observation is missing because the refresh policy permits **one** refresh, not because nobody stored it |
+
+**The distinction from `UNTESTABLE` is the whole value of the name.** H3 (34
+injury rows) and H4 (no opening timestamp) are `UNTESTABLE`: **the quantity was
+never recorded**, and retention would fix them. These four have **abundant data
+carrying no variance where it matters** — and more of it actively misleads, by
+tightening an interval around a single point on a curve nobody can see.
+
+> ### It is the difference between "we need more" and "we need something different."
+
+**The tell, so the next one is caught before the effort is spent:** *if the
+population you are measuring was SELECTED by the policy you are asking about,
+the measurement cannot answer the question.*
+
+**Three dispositions — (a) buy the variation, (b) substitute an answerable
+question, (c) leave it open and stop citing the claim.** Instance 3 is CLOSED
+under (b). Instances 1 and 4 sit at (c) and (a). **Full record, including H1's
+sizing which does NOT transfer from H5's n=55:
+`docs/unaddressable-by-self-observation.md`.**
+
+---
+
+# TWO RULES CONFIRMED BY THE H5 RUN
+
+**Both are method, not findings, and both are recorded because they generalise
+past H5.**
+
+## 1. A correction that may change a verdict needs something it must not change
+
+**Q2's harness was defective and its fix was allowed to alter the outcome. That
+is indistinguishable from a second attempt unless something independent pins it
+down.** Q3 was untouched by both faults, so it had to reproduce the first
+execution exactly — **6/25 strata, identical price and lead-time cells.** It did.
+
+> **This is the positive-control rule applied to a FIX rather than to a GUARD,
+> and that application is new here.** The existing form — "a control that cannot
+> fail is not a control" — was about proving a guard still bites. This is its
+> mirror: **proving a correction moved only what it was supposed to move.**
+
+**Operationally:** before correcting an analysis whose result you have already
+seen, name in advance the part of the output the correction must leave
+identical. If no such part exists, the correction and the re-run cannot be told
+apart, and the result is a second attempt however it is labelled.
+
+## 2. An exemption marker that fits one file fits every file
+
+`test_nothing_reads_the_snapshot_table_yet` failed the preserved H5 harness for
+naming `odds_snapshots` under `scripts/`. **The obvious fix was an exemption
+marker on that one file. It was refused.**
+
+**The guard's intent is that nothing feeding the model reads price history
+without a cohort decision; its predicate is "any file under `src/` or
+`scripts/`".** A read-only study is the sanctioned use — the pin's own words are
+*"Stage 18 stored it so Stage 19 could STUDY it"* — but **the guard cannot tell
+a study from a learner, and neither can a marker.**
+
+> **Exemptions are the mechanism by which a guard loses its teeth one justified
+> case at a time.** `test_valid_evidence_gate` already records the shape in its
+> own docstring: *"The generic form fits everywhere, which is what makes it
+> paste-able past review."*
+
+**So the analysis moved to `analysis/`, outside the guard's blast radius, and
+the guard was left alone.** Verified by positive control: a throwaway file in
+`scripts/` naming `odds_snapshots` still fails the pin, and its removal restores
+the pass. **The guard kept its teeth and the study was still preserved** — which
+is the outcome an exemption would have traded away.
 
 *Recorded 2026-09-10.*

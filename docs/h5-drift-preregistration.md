@@ -341,3 +341,13 @@ it is printed as a description, not as evidence.
 
 *Run 2026-09-10 at n=129. Analysis is closed. Q1 reopens only if an unpicked
 control is deliberately collected.*
+
+---
+
+**Q1 IS FILED UNDER `UNADDRESSABLE BY SELF-OBSERVATION` — named 2026-09-10.**
+It is not an under-powered control; **the policy generates the population, so
+the population cannot control for the policy.** More time yields more *picked*
+fixtures. Disposition (a) — `--any-fixture` — is available at credit cost and
+has not been taken. Third instance of the class, alongside Stage 21's lead-time
+claim and the Saturday margin boundary, with H1 reclassified into it.
+See `docs/unaddressable-by-self-observation.md`.

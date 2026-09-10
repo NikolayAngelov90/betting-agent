@@ -83,3 +83,29 @@ exists to prevent, and H5's Q2 measured the design effect on the same data at
 **~11** — which is what that error would have cost.
 
 *Measured 2026-09-10 during the H5 run. See `docs/h5-drift-preregistration.md`.*
+
+## THE n=55 DOES NOT TRANSFER TO H1's ACTUAL QUESTION — 2026-09-10
+
+**`n = 6.185 · sigma^2 / delta^2` sizes a test that a MEAN differs from zero by
+delta. H1 asks whether t0->t1 PREDICTS t1->t2 — a correlation, not a location
+shift.** The two are sized by different formulae, and H1's is acutely sensitive
+to an effect size this registration has never fixed:
+
+    n ~= ((z_a + z_b) / z_r)^2 + 3,   z_r = 0.5*ln((1+rho)/(1-rho)),  z_a+z_b = 2.487
+
+| rho | required n |
+| --- | --- |
+| 0.30 | **68** |
+| 0.20 | **154** |
+| 0.10 | **618** |
+
+**Shown as sensitivity, NOT as a registration. No rho is adopted here** — it
+must be fixed in advance, exactly as H5 fixed its outcome bands, and before any
+purchase. **Carrying 55 into H1 would import a number derived for a different
+estimator.**
+
+**And the purchase is a deliberate variation, not more data.** Three separated
+observations do not exist because the window/interval policy permits one — H1 is
+filed under **`UNADDRESSABLE BY SELF-OBSERVATION`**, disposition (a), ~100
+credits. It competes with H5 Q1's `--any-fixture` control for the same ceiling.
+See `docs/unaddressable-by-self-observation.md`.
