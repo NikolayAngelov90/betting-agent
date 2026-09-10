@@ -10130,3 +10130,223 @@ the pass. **The guard kept its teeth and the study was still preserved** — whi
 is the outcome an exemption would have traded away.
 
 *Recorded 2026-09-10.*
+
+---
+
+# ROUTINE PASS — 53 runs, audited 2026-09-10
+
+**Every run without a ledger row, across all three workflows, 2026-08-26 →
+2026-09-10.** Counts below are from the cached full logs, not from the
+provisional verdict line.
+
+**Totals: 2 daily-picks, 41 closing-lines, 10 paper-trading-report. Zero
+tracebacks, zero `##[error]`, zero Telegram send failures across all 53.**
+
+## daily-picks
+
+| run_id | workflow | started | conclusion | steps failed | audited on | verdict | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 34325013281 | daily-picks | 09-09 07:40 | success | 0 | 2026-09-10 | **DEGRADED** | `disc[fs=14c/-m fdo=11c/13m af=0c/34m]`. 30 leagues scraped, **14 fixtures** — thin card, not a dead scraper (champions-league 6, the rest 0–1). 13 picks found, **13 saved**, all `is_paper=True`. AF **64 requests** (not the `1 request` dead signature). `EXPERIMENT RECORD` emitted ×2 — the block the 08-31→09-04 runs were DEGRADED for is now present. 6 `PICK_REJECTED`: 5 `cause=per_match_cap`, **1 `cause=duplicate_rows_one_fixture`** (m51546, `europe/champions-league`) — s5.9 acting. Telegram 3 sent / 0 failed. |
+| 34450809949 | daily-picks | 09-10 07:36 | success | 0 | 2026-09-10 | **DEGRADED** | `disc[fs=9c/-m fdo=7c/11m af=0c/23m]`. 30 leagues, **9 fixtures**. 7 picks found, **7 saved**, `is_paper=True`. AF **59 requests**. `EXPERIMENT RECORD` ×3 (n=675→676, cohorts=6, current `694a60`(294→295)). 2 `PICK_REJECTED`: 1 `per_match_cap`, **1 `duplicate_rows_one_fixture`** (m51629). 3 picks saved with **no injury data**. Telegram 3 sent / 0 failed. **Ran under s5.9** — see the s5.10 note below. |
+
+**`af=0c/NNm` is the fixed liveness predicate reading correctly, not the old
+false positive.** Zero created, 34 and 23 matched — alive. The five-day
+`af=0` cry-wolf closed on 2026-09-09 and has stayed closed.
+
+## closing-lines — 41 runs
+
+**26 runs were correct no-ops**: `candidate leagues 0`, `nothing to do
+(window 120 min)`, `no pending picks kick off in the next 120 minutes`,
+`considered 0`, **0 credits claimed**. A capture run at 01:00 or 21:00 UTC has
+nothing to do, and spending nothing is the right behaviour, not a silent skip.
+**CLEAN**, on the counts: 0 candidates → 0 credits → 0 considered.
+
+| run_id | started | cand | considered | captured | missing | late | credits | verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 33884431124 | 09-04 14:33 | 1 | 3 | 1 | 2 | 0 | 2cr/1req | CLEAN |
+| 33905491680 | 09-04 18:22 | 10 | 22 | 5 | 5 | 12 | 20cr/10req | CLEAN |
+| 33969224665 | 09-05 13:33 | 16 | 65 | **20** | 24 | 21 | 24cr/12req | CLEAN |
+| 33980584356 | 09-05 17:19 | 12 | 28 | 7 | 8 | 13 | 24cr/12req | CLEAN |
+| **33992336673** | 09-05 21:12 | 0 | 1 | **0** | 0 | **1** | 0 | **DEGRADED** |
+| 34037221519 | 09-06 13:48 | 16 | 40 | 6 | 14 | 20 | 24cr/12req | CLEAN |
+| 34049105771 | 09-06 17:36 | 7 | 19 | 5 | 2 | 12 | 14cr/7req | CLEAN |
+| 34141574325 | 09-07 16:05 | 5 | 13 | 5 | 5 | 3 | 10cr/5req | CLEAN |
+| **34159830639** | 09-07 20:33 | 0 | **8** | **0** | 0 | **8** | 0 | **DEGRADED** |
+| 34240468105 | 09-08 14:46 | 2 | 9 | 2 | 7 | 0 | 4cr/2req | CLEAN |
+| 34264108073 | 09-08 18:37 | 2 | 10 | 4 | 6 | 0 | 4cr/2req | CLEAN |
+| 34366067205 | 09-09 14:48 | 2 | 3 | 1 | 2 | 0 | 4cr/2req | CLEAN |
+| 34389725221 | 09-09 18:33 | 4 | 10 | 2 | 8 | 0 | 8cr/4req | CLEAN |
+
+**The two DEGRADED runs share one shape and it is worth naming.** Both had
+**closes to capture and no refresh to support them** — `candidate leagues 0`
+while `considered` was 8 and 1. Every considered close came back **`late`**, and
+**nothing was captured.** The refresh gate and the capture gate use different
+windows, so a fixture can be inside the capture's reach and outside the
+refresh's. **8 closing observations were lost on 09-07 for want of a price
+refresh that the same run declined to make.**
+
+**Credits are claimed at exactly 2 per league request in every run that spent
+any** — 1→2, 2→4, 4→8, 5→10, 7→14, 10→20, 12→24. The arithmetic agrees
+everywhere.
+
+**Two runs hit the per-run ceiling** (09-05 13:33 and 09-06 13:48:
+`per-run ceiling limits this execution to 12 of 16 request(s)`). **No league was
+lost to it** — both runs logged 16 `result=ok`, because leagues sharing a sport
+key are served by one request. **The ceiling caps requests, not leagues**, and
+the log line invites the opposite reading.
+
+## paper-trading-report — 10 runs, all CLEAN
+
+Coverage rose monotonically across the window: **valid CLV pairs 62 → 121**,
+coverage **7.3% → 10.8%**. No failures, no missing sends.
+
+## FINDINGS THAT ARE NOT ABOUT ONE RUN
+
+### 1. The credit ledger disagrees with the provider on 7 of 13 spending runs
+
+```
+09-04 14:33  provider  80 vs ledger  34   (46 credits spent outside the pipeline)
+09-05 13:33  provider 162 vs ledger 124   (38)
+09-06 13:48  provider 244 vs ledger 210   (34)
+09-06 17:36  provider 268 vs ledger 266   (2)
+09-07 16:05  provider 300 vs ledger 278   (22)
+09-08 14:46  provider 312 vs ledger 304   (8)
+09-09 14:48  provider 330 vs ledger 320   (10)
+```
+
+**~160 credits over seven runs were spent by something that is not this
+pipeline**, and the reconciler's own words are *"Budget decisions were being
+made against a stale count."* **The reconciler is working** — it adopts the
+provider's number every time — **but the discrepancy recurs, which means the
+outside consumer is still running.** Recorded, not pursued. It bears directly on
+the TheOddsAPI credit gate whose deadline is end of September 2026, and on
+whether H1's ~100-credit purchase and H5 Q1's `--any-fixture` control can both
+be afforded.
+
+### 2. `--unaudited` re-reported six runs that already had ledger rows
+
+`33375724727`, `33421027825`, `33485294975`, `33603479759`, `33728324296`,
+`33849086863` were all returned by `python -m scripts.ci_audit --unaudited`
+**and all six are already in this ledger.** The detection misses rows written in
+the bolded `| **id** | **workflow** |` form. **The audit tool's own coverage
+claim is unreliable in the direction that wastes work, not the one that hides
+it** — but a reader who trusts `--unaudited` as a completeness check is being
+told 59 when the answer is 53. Recorded, not pursued.
+
+### 3. `ci_audit` prints a pattern warning and does not count the pattern
+
+```
+ci_audit: pattern 'src_apifootball_fixtures' matched but produced no number
+          — add it to the count-style keys above. NOT COUNTED.
+```
+
+Fires on every daily-picks run. **The `fs=Nc/-m` in every `disc[]` above carries
+`-` for matched because of it.** Recorded, not pursued.
+
+## s5.10's FIRST LIVE DAY HAS NOT HAPPENED
+
+**Item asked for: the discovered-fixture population before and after in
+production, against the history entry's projection.**
+
+**It cannot be reported as a run comparison, and saying so is the answer.** The
+09-10 daily-picks run started **07:36 UTC**; s5.10 was committed at **12:15
+UTC** — **4h39m later**. The run stamped `stage5_baseline_20260807.694a60`,
+which is **s5.9**. **No pipeline run has executed under s5.10.** The first will
+be 09-11.
+
+**What can be checked, and was: the projection itself, in production.** The
+history entry projects that fixtures whose both participants resolve rise from
+80.05% to 89.25% (since 08-01) and 83.44% to 94.27% (365 days). **Those numbers
+were measured in production, on the live database, during the apply** — they are
+the before/after of the repair, not of a run.
+
+**And the sharpest available test — the two fixtures s5.9 REFUSED on 09-09 and
+09-10 — confirms the mechanism:**
+
+| | before | after |
+| --- | --- | --- |
+| **m51629** `Slavia Praha v Racing Club de Lens` and its twin **m51627** | twin's participants were name-variant rows (`SK Slavia Praha` 841, `Slavia Prague` 734, `Lens` 1624) | **both rows now hold IDENTICAL team ids (604, 576)** — branch 1 reaches the pair trivially |
+| **m51546** `Sporting CP v Galatasaray` and its twin **m51543** | reachable already, via the shared away side (Galatasaray af=645) | unchanged — **row 764 `Sporting Clube de Portugal` is one of the two rows s5.10 REFUSED as ambiguous** and is still unresolved |
+
+> **The second row is the honest half of the result.** s5.10 converted one
+> duplicate from heuristic to provable and left the other exactly where it was,
+> because resolving it needs the Sporting CP alias decision that was
+> deliberately kept out of the stage.
+
+**Fixture resolution on the two runs' own match sets, measured now:**
+**09-09 11/15 = 73.3%**, **09-10 8/10 = 80.0%**. Both below the 89.25%
+population figure, because European ties concentrate the unresolved rows that
+survived — which is what the 94 remaining unresolved rows predict.
+
+*Audited 2026-09-10. 53 runs: 4 DEGRADED, 49 CLEAN, 0 BROKEN.*
+
+---
+
+# TWO MEASUREMENTS ALONGSIDE THE ROUTINE PASS — 2026-09-10
+
+Full record: `docs/claude-review-value.md`. Read-only; nothing built.
+
+## The review's absence is now measurable, and the gap is 142 not 979
+
+**837 of the 979 `review_action IS NULL` picks predate the feature** (first
+review 2026-07-08). The real gap is **142**, of which **139 are paper picks**.
+
+**Every one of the 142 is retrospectively classifiable from cached CI logs**,
+which reach back to 2026-03-01:
+
+| cause | picks |
+| --- | --- |
+| `auth_unavailable` — session limit, then `credit balance is too low` | **121** |
+| `decision_discarded` — a verdict in the log, NULL in the database | **12** |
+| `fixture_reviewed_other_pick` — a sibling pick holds the verdict | **9** |
+| `not_attempted` | **0** |
+
+**Two corrections found while measuring.** The first pass reported 21
+`decision_discarded`; checking pick 1019 (`SJK vs HJK Helsinki`) showed pick
+1018 on the SAME fixture carrying the verdict. **The review is FIXTURE-scoped —
+one decision per fixture — so counting causes per PICK manufactured a defect
+that did not exist.** Nine of the 21 were that. **The remaining 12 are real**,
+verified on `SK Rapid vs Paide` 2026-08-12: the log records
+`action=CHANGE` and both picks on the fixture kept NULL while two other
+fixtures' verdicts persisted in the same run.
+
+**2026-09-09 (13 picks) and 2026-09-10 (7 picks) are 100% NULL** — the
+subscription hit its session limit and the API fallback had no credit. **The
+pipeline failed safe every time.** Those 20 picks are a natural control group —
+FINAL is MODEL by construction — and the database cannot currently tell them
+from a failure. **An explicit outcome field is PROPOSED, not built.**
+
+## Does the review add anything? On every instrument, no
+
+| instrument | result | verdict |
+| --- | --- | --- |
+| MODEL price CLV | +0.256%, cluster CI [−0.306%, +0.862%], n=105 | below +1.85%, crosses 0 |
+| FINAL price CLV | +0.130%, cluster CI [−0.413%, +0.697%], n=123 | below +1.85%, crosses 0 |
+| paired `final − model` | −0.101%, cluster CI [−0.561%, +0.345%], n=96 | crosses 0 |
+| paired, CHANGE only | −0.389%, cluster CI [−2.136%, +1.367%], n=25 | crosses 0 |
+| flat ROI CHANGE − KEEP | **+7.88 pp**, cluster CI [−3.99, +19.92], **p = 0.202** | crosses 0 |
+
+**Settled:** KEEP n=444 ROI **−6.14%** (avg odds 1.619); CHANGE n=312 ROI
+**+1.74%** (avg odds 1.704); none n=132 ROI **−7.10%**. **CHANGE is the only
+positive group and the only one with strongly negative modelled EV (−6.85%)** —
+an inversion that does not survive its own interval.
+
+**CHANGE picks negative-EV at the taken price: 87.0% (n=324).** The README
+records **73% over 90 days** at `README.md:109`; all 324 CHANGE picks fall
+inside 90 days, so the windows agree and **the figure has moved against the
+review**.
+
+> **Against Stage 16: `+1.85%` is not approached by either series, and
+> `p = 0.202` sits on the wrong side of the `p > 0.15` line Stage 16 found for
+> every settled segment including KEEP/CHANGE. This is the same finding, one
+> month later, unmoved.**
+
+**Nothing was built from it.** Whether the review earns its place is a decision
+for Niki and a separate stage.
+
+**Recorded as a constraint on any future design:** training the model on the
+review's decisions would make MODEL and FINAL dependent and destroy the
+comparison that measures the review — **the same class as EXP-1**, and
+invisible in the output, because the number still computes and the interval
+still narrows. A learner may not read `review_action` or the FINAL attribution.
+**Measuring the review and learning from it are mutually exclusive.**
