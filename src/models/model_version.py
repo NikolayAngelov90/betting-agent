@@ -489,7 +489,113 @@ TRACKED_KEYS: List[str] = [
 #:       So the guarantee protecting the per-match cap is the same guarantee
 #:       protecting every confidence interval in this project. They are not two
 #:       benefits; they are one mechanism read from two ends.
-CODE_REVISION = "s5.9"
+#:
+#: s5.10 TEAM IDENTITY REPAIR — the residual removed at its source, not routed
+#:       around. Stage 22, applied 2026-09-10.
+#:
+#:       `teams.apifootball_team_id` was incompletely and sometimes WRONGLY
+#:       populated, and every mechanism keyed on it inherited the gap — s5.9's
+#:       branch 1 above most of all. Four symptoms carried as four separate
+#:       deferrals for three weeks; one subject.
+#:
+#:       THE MEASURED EFFECT ON THE DISCOVERED-FIXTURE POPULATION, which is the
+#:       number a later reader needs to attribute a cohort difference to this
+#:       revision rather than guess at it. Fixtures whose BOTH participants
+#:       resolve to a provider id — the API-Football route, and s5.9 branch 1's
+#:       precondition:
+#:
+#:         since 2026-08-01   1236/1544  80.05%  ->  1378/1544  89.25%  (+142)
+#:         last 365 days      8108/9717  83.44%  ->  9160/9717  94.27%  (+1052)
+#:
+#:       WHAT WAS DONE. 2 wrong provider ids cleared, 45 rows absorbed into
+#:       provable shared-id components, 84 unresolved rows merged into
+#:       evidenced twins. teams 1577 -> 1448; unresolved 178 -> 94; rows
+#:       sharing a provider id: 0. No match, pick or reference row was
+#:       destroyed; every reference was repointed and verified to zero before
+#:       any row was deleted, and zero dangling foreign keys remain.
+#:
+#:       THE VERIFICATION ITSELF HAD TO BE REWRITTEN, and the reason belongs in
+#:       the record. Its first form asserted every table count was UNCHANGED.
+#:       It aborted on the live database — players +31, injuries +50,
+#:       injury_observations +100 — because a scraper was writing CONCURRENTLY
+#:       between the before and after snapshots. The abort was correct; the
+#:       check was not. It asserted the whole database was static, which is a
+#:       property of neither this repair nor production. Replaced with
+#:       invariants about what the operation actually does: every merged row
+#:       gone with zero surviving references, no UNRELATED team row vanished,
+#:       and no count DECREASED. A repoint cannot lose a row; it can only fail
+#:       to move one.
+#:
+#:       WHY THIS IS SELECTION-AFFECTING, and therefore why it is a revision
+#:       rather than a cleanup. Merging changes which fixtures resolve,
+#:       therefore which are priced, therefore which are picked. AND Elo and
+#:       Poisson both key on `team_id` and rebuild from `matches` on every fit,
+#:       so a club whose history was split across two rows now trains as ONE
+#:       club. A reader comparing s5.9 to s5.10 should expect a real difference
+#:       in both the fixture set and the ratings, in the direction of more
+#:       history per club.
+#:
+#:       THE SPEC'S OPERATION ORDER WAS WRONG AND WAS CORRECTED. It ordered the
+#:       merges before the wrong-id clearance. But the twin-finder anchors on
+#:       provider ids, and the clearance exists precisely because two ids are
+#:       wrong — so running merges first let a known-wrong id anchor a merge.
+#:       It did: with row 411 (`Rakow`) still holding af=350, the evidence
+#:       proposed `Cracovia -> Rakow`, two distinct Polish clubs. Reordered to
+#:       clearance-first, that proposal does not arise at all.
+#:
+#:         A repair that consumes the field a later step is about to fix must
+#:         run AFTER that step, not before it.
+#:
+#:       HOW THE MERGES WERE DECIDED, AND THE TWO VETOES THAT WERE REJECTED.
+#:       Evidence is a SHARED FIXTURE — s5.9 branch 1 run in reverse, no name
+#:       consulted — falling back to `same_team_strict` only where that is
+#:       silent. But shared-fixture evidence IS NOT PROOF, because `matches`
+#:       itself carries mis-resolved rows: 14 `france/ligue-2` rows place
+#:       `St. Pauli` in fixtures belonging to `Pau FC`, written by API-Football
+#:       while the genuine rows came from Flashscore, because `_tok_match`'s
+#:       prefix rule makes "pauli".startswith("pau") true. The evidence
+#:       faithfully reported the consequence and proposed fusing two clubs.
+#:       A comparison is only as good as the resolution state of its inputs.
+#:
+#:       Two vetoes were measured and REJECTED. Primary domestic league rejects
+#:       `Wrexham AFC`/`Wrexham` and `Celtic FC`/`Celtic`, whose unresolved rows
+#:       appear only in European ties, and caught 1 of 3 known-bad merges.
+#:       `team_names_similar` MISSES the worst case — it returns True for
+#:       "Pau FC"/"St. Pauli", by the very prefix rule that created the
+#:       corruption — while rejecting nine correct merges. Both reason about
+#:       names. The rule adopted does not:
+#:
+#:         A CLUB CANNOT PLAY TWO DIFFERENT FIXTURES AT THE SAME TIME, AND
+#:         CANNOT PLAY ITSELF.
+#:
+#:       It disqualified 3 of 3 known-bad merges and one further case
+#:       (`Sport Lisboa e Benfica`/`Benfica`, one collision), and rejected
+#:       nothing else. It can only ever REFUSE a merge, never create one.
+#:       Refusing is free; a wrong merge fuses two clubs' histories.
+#:
+#:       WHAT IT DOES NOT CLOSE. 94 rows stay unresolved — no defensible twin,
+#:       and leaving them is cheaper than a wrong merge. Two were refused as
+#:       AMBIGUOUS: `Sporting Clube de Braga` and `Sporting Clube de Portugal`
+#:       each drew two candidates (`Sporting CP` and `Braga`), which is the
+#:       Sporting CP naming residual the spec ruled must stay SEPARATE and
+#:       UNTAKEN — a threshold is tolerance, an alias is knowledge, and the two
+#:       must not be bundled or the cohort break becomes unattributable.
+#:       Branch 3's residual does not go to zero: this removes the CONDITION
+#:       for most of it, and does not prove the class empty.
+#:
+#:       MACCABI TEL AVIV WAS NOT CREATED. Clearing row 124's wrong id unblocks
+#:       creation; it does not perform it. Nothing creates the row until
+#:       Maccabi next appears in a fetched fixture, which depends on European
+#:       participation and is not in this system's control. Stated separately
+#:       so a reader does not assume the clearance completed the creation.
+#:
+#:       A FIFTH SYMPTOM WAS FOUND AND IS NOT FIXED HERE: match rows assigned to
+#:       the wrong team row by name-first matching at ingestion (the Pau/
+#:       St. Pauli class, 14 rows on one club). The merge is guarded against it
+#:       and does not propagate it, but the rows remain mis-assigned and the
+#:       `_tok_match` prefix rule that creates them is unchanged. Recorded as
+#:       its own item rather than folded into this revision.
+CODE_REVISION = "s5.10"
 
 
 def _stable(value: Any) -> Any:

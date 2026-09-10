@@ -27,17 +27,26 @@ History:
                     2026-08-30 (Deportivo v Valencia, two picks). 835 pairs
                     match the provable branch; exactly 2 second-picks would
                     have been refused out of 1,458.
+    s5.10 2026-09-10  Stage 22 team identity repair. 2 wrong provider ids
+                    cleared, 42 rows absorbed into 40 provable components,
+                    86 unresolved rows merged into evidenced twins;
+                    teams 1561 -> 1433. Fixtures whose both participants
+                    resolve: 79.86% -> 89.18% since 2026-08-01, 83.38% ->
+                    94.26% over 365 days. SELECTION-AFFECTING: it changes
+                    which fixtures resolve and therefore which are picked,
+                    and Elo/Poisson key on team_id, so a club whose history
+                    was split now trains as one club.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.9"
+CODE_REVISION_PIN = "s5.10"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.694a60"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.dfd410"
 
 #: The previous cohort, kept so a reader can see what moved and when.
-PREVIOUS_CODE_REVISION = "s5.8"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.dfe302"
+PREVIOUS_CODE_REVISION = "s5.9"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.694a60"
 
 
 #: How many completed-match queries are exempt from the training-exclusion
