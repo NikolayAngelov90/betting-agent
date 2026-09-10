@@ -56,3 +56,30 @@ understate n by the design effect, which is the error Stage 16 exists to
 prevent.
 
 *Written 2026-09-03, before the variance query was run.*
+
+---
+
+# SIGMA MEASURED — 2026-09-10. The required n falls from 137 to 55.
+
+**σ was registered as "NOT looked at yet". It has now been measured as part of
+H5's run, at fixture level as this registration required.**
+
+| σ | source | n = 6.185 · σ² / δ², δ = 2% |
+| --- | --- | --- |
+| 3.3% | Stage 16's implied value, quoted above as the favourable case | 17 |
+| **9.39%** | H5's registration, on **n=15** fixtures | **137** |
+| **5.937%** | **measured 2026-09-10 on n=129 fixtures** | **55** |
+
+**The purchase resizes rather than being refused.** This registration set the
+rule in advance — *"anything materially larger than 3.3% moves the required n
+above 50 and the purchase must be resized or refused."* **55 > 50, so the
+resize condition holds**, but the figure H1 has been carrying (137) was inflated
+by a σ taken from fifteen fixtures.
+
+**The clustering requirement was honoured**: σ is the standard deviation of the
+**fixture-level** median move (one value per fixture), not per key. Key-level
+spread across ~30 keys per fixture is the understatement this registration
+exists to prevent, and H5's Q2 measured the design effect on the same data at
+**~11** — which is what that error would have cost.
+
+*Measured 2026-09-10 during the H5 run. See `docs/h5-drift-preregistration.md`.*

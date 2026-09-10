@@ -9964,3 +9964,84 @@ severity claim about the learners was backwards. **Deciding on the instance
 would have preserved that error.**
 
 *Recorded 2026-09-10.*
+
+---
+
+# H5 REPORTED — and a registered premise that was never checked
+
+**Run once, 2026-09-10, at n=129 against a registered minimum of 50. Full
+record in `docs/h5-drift-preregistration.md`.**
+
+| question | outcome |
+| --- | --- |
+| headline: fixture-level 1X2 Home drift | **+0.488%**, 95% CI [−0.536%, +1.513%] — **upper bound below the +1.85% break-even**. The **+3.92%** on n=15 is retired. |
+| **Q1** — real, or selection bias? | **NOT EVALUABLE** — the control population is **empty**, not small |
+| **Q2** — Home-specific, or a pricing artefact? | **NEITHER** — taken selections drift **−0.607%**, cluster 95% CI [−1.296%, +0.135%] |
+| **Q3** — broad, or concentrated? | **NOT BROAD** — 6/25 strata above break-even |
+| σ, re-derived as registered | **5.937%**, not 9.39% → **H1's required n falls from 137 to 55** |
+
+## The fourth error, and it is mine
+
+**The prompt-side ledger above records three. This one belongs to me, in the
+registration I wrote.** H5's Q1 rested on a stated fact about the pipeline:
+
+> *"Snapshots are written for every fixture in a refreshed league, not only
+> picked ones, so the control exists without new spend."*
+
+**It is false in the only sense that matters.** `refresh_and_capture.py` — the
+sole writer of a **second** pre-kickoff observation — defaults to
+`require_pending_pick=True`, so **a fixture is re-priced because it carries a
+pending pick.** Measured: of 129 fixtures holding the two-point observation H5
+requires, **129 were picked**; of the 33 never-picked fixtures holding any
+snapshot, **30 hold exactly one.**
+
+> ### The registration asserted the existence of its own control group and never queried for it.
+>
+> A pre-registration is supposed to be the document that cannot flatter the
+> measurer. **This one still contained an unchecked convenience** — and the
+> convenience was precisely the thing that made Q1 look free.
+
+**It is the same shape as the guard-design rules already recorded here, and it
+extends them.** Rule 1 says a lookup table is only as good as its earliest
+decision point; rule 3 says an exclusion is only as good as the queries applying
+it. The new instance:
+
+> **A registered control is only as good as the collection policy that would
+> have to produce it — and that policy is a line of code, not an assumption.**
+
+**Q1 does not reopen by waiting.** More time yields more *picked* fixtures.
+`--any-fixture` already exists and would build the control deliberately, at
+credit cost, competing with H1's purchase under the same gate.
+
+## What went right, recorded beside it
+
+**The harness itself was defective on first execution and the defect was caught
+by its own output rather than shipped as a result.** Q2's membership test
+compared `odds_snapshots.market_type/selection` against `saved_picks.market/selection`
+— **different vocabularies** (`'Home'` vs `'Home Win'`, `'Over 2.5'` vs
+`'Over 2.5 Goals'`), so the intersection was **empty by construction** and Q2
+reported n=0.
+
+**n=0 was treated as evidence about the measurement, not as a null result** —
+the standing rule — and the fix used the alias declarations that **already
+existed** (`market_spec.MARKET_SPECS.legs`, `capture_closing_lines.SELECTION_SPEC`)
+rather than adding a third mapping table. **A third copy of a mapping is how the
+first two came to disagree**, which is THE HABIT this ledger has now recorded
+five times in the data layer.
+
+**And the correction carried a control.** Q3 was untouched by both faults, so it
+had to reproduce the first execution exactly — **it did**, 6/25 strata and
+identical price and lead-time cells. **A correction permitted to change a
+verdict needs something it must not change.**
+
+## The Away row: the guard refusing, visibly
+
+**Taken 1X2 Away came out at −4.597% on 86 observations — across four
+fixtures.** `_boot` declines below five clusters and returned nothing, so the
+number is printed **and refused in the same line**. This project has twice been
+persuaded by a large mean over a handful of clusters; the design effect on the
+same data is **~11**, meaning the naive interval on the headline row would have
+presented **61 fixtures as 814 independent draws** — the error direction that
+makes a null look significant.
+
+*Recorded 2026-09-10.*

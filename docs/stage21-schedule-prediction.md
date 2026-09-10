@@ -533,6 +533,48 @@ rationale reverses.**
 **Registered in `docs/h5-drift-preregistration.md` before the sample completes,
 so the result cannot be read selectively afterwards.**
 
+## H5 REPORTED — 2026-09-10. The claim stays UNVERIFIED, for a harder reason.
+
+**Q2 came out `NEITHER`** — taken selections drift **−0.607%** (cluster 95% CI
+[−1.296%, +0.135%] over 61 fixtures, deff ~11.5), not out by >+1.85%. The
+registration's consequence table assigned that outcome in advance: **"the
+rationale is untouched and remains untested."**
+
+**So the reversal did not happen.** The PRICING ARTEFACT branch above — *"a
+longer lead is a larger loss"* — **did not fire**, and the paragraph that
+raised it stands as a hypothesis that was tested and not supported. The
+**+3.92%** figure it cites is itself now retired: at n=129 the fixture-level 1X2
+Home drift is **+0.488%**, 95% CI [−0.536%, +1.513%], upper bound **below** the
++1.85% break-even.
+
+> ### But UNVERIFIED does not upgrade to VERIFIED, and the reason is worth more than the result.
+>
+> **This data cannot test lead time at all.** H5's Q3 lead-time strata:
+>
+> | bucket | observations | **fixtures** |
+> | --- | --- | --- |
+> | <6h | 42 | **2** |
+> | 6–12h | 2,573 | **127** |
+> | >12h | 0 | **0** |
+>
+> **127 of 129 fixtures sit in a single bucket.** A cron that fires at a fixed
+> hour produces a near-constant lead, so *"a longer lead leaves more room for
+> the price to move"* **has no contrast to be measured against.** The claim is
+> not under-powered — **it is unaddressable by observation of a schedule that
+> never varies.**
+
+**What that changes:** the status stays **UNVERIFIED**, and the route to
+resolving it is no longer "wait for H5" — H5 has reported. It is **deliberately
+varying when prices are taken**, which is a policy change with a credit cost,
+not an accumulation. **Until then the second argument remains uncitable as a
+benefit**, exactly as ruled on 2026-09-04.
+
+**The delay-tolerance argument is untouched and remains the reason to keep
+`0 3 * * *`.**
+
+*Recorded 2026-09-10 from `docs/h5-drift-preregistration.md`, run once at n=129.*
+
+
 ---
 
 # THE SATURDAY CHECKPOINT WAS NOT TESTED — 2026-09-05, recorded 2026-09-09
