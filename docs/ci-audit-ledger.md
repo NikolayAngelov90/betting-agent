@@ -10787,3 +10787,57 @@ mechanism built to make the log trustworthy.**
 
 *Recorded 2026-09-10. Read-only: no code, schema, workflow or production-data
 changes.*
+
+---
+
+# OPEN ITEM — STAGE 15's FRONTIER RESTS ON A DENOMINATOR THAT MOVED
+
+**Not to be re-derived now. The accounting has to be whole first, and it will
+not be until the 2026-09-10 change has run for a full period.** Recorded with
+the framing attached so the next reader does not treat it as a rounding
+correction.
+
+## August closed at `used=437` against `limit_=400`
+
+**The ledger overspent its own budget by 37 and nobody could see why**, because
+59% of consumption was on a path that never claimed. That is the budget
+**Stage 15 treated as the binding constraint on the entire experiment**, and the
+budget **a decision was sized against on 2026-08-24**.
+
+## Every credit-denominated figure in Stage 15 has credits in the denominator
+
+| figure | status |
+| --- | --- |
+| **~0.32 MODEL observations per credit** — "the frontier is nearly FLAT" | computed on a consumption baseline that no longer exists |
+| the **L2 / L3b / L4** ranking, and "only L2 beats the frontier" | same denominator |
+| the **March 2027** projection | same denominator |
+
+**All were computed while fixture discovery was DEGRADED and while 59% of spend
+was invisible.** Discovery was restored 2026-08-27 and the unmetered path went
+from **10.3 to 22.4 credits/day — 2.18×**.
+
+> ### This is not a small correction. It is the same class as the phantom-contaminated schedule table.
+>
+> **A table is not wrong by a little when its rows were built from a
+> contaminated population — it is answering a different question.** Stage 15's
+> frontier is answering "what does a credit buy" for a pipeline that consumed a
+> third of what this one does.
+
+**And the stakes are on the record: the frontier was the basis for declining a
+paid plan.** A flat frontier says no purchase improves the rate, so the free
+tier is sufficient. **That conclusion inherits the denominator.**
+
+**What has to happen before it is re-derived:**
+
+1. the 2026-09-10 change runs for a **full monthly period**, so one account
+   covers both consumers and the ledger's number is the provider's;
+2. the true consumption rate is measured on that period rather than
+   reconstructed from response headers;
+3. **only then** are the observations-per-credit ratios recomputed — and
+   recomputed, not adjusted.
+
+**Same class as the Stage 21 lead-time claim: an argument that was correct when
+made and was never revisited when its inputs changed.** The difference is that
+this one has a purchase decision hanging off it.
+
+*Recorded 2026-09-10.*

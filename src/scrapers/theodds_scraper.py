@@ -103,6 +103,56 @@ BOOKMAKER_PREFIX = "TheOddsAPI"
 
 BASE_URL = "https://api.the-odds-api.com/v4"
 
+#: Per-league outcomes for a request the provider DECLINED. They are not
+#: "no odds exist" and they are not a transport error, and the difference has
+#: to survive all the way to the log or the run reads as a quiet day.
+REFUSED_EXHAUSTED = "refused_exhausted"
+REFUSED_RATE_LIMITED = "refused_rate_limited"
+
+
+class Refusal:
+    """The provider declined this request. NOT an empty catalogue.
+
+    `[]` means "this league has no priced games"; `None` means "the call
+    failed"; this means "the provider would not serve it, and here is why".
+    Three states that a two-state return type kept collapsing — the same shape
+    as `result=ok` defaulting to success, and the third instance of it inside
+    this one file.
+
+    Deliberately NOT falsy: `not games` must not quietly sort a refusal into
+    the empty bucket. Every consumer has to name it.
+    """
+
+    __slots__ = ("reason", "sport_key")
+
+    def __init__(self, reason: str, sport_key: str = ""):
+        self.reason = reason
+        self.sport_key = sport_key
+
+    @property
+    def exhausted(self) -> bool:
+        return self.reason == REFUSED_EXHAUSTED
+
+    def __repr__(self) -> str:
+        return f"<Refusal {self.reason} {self.sport_key}>"
+
+
+def _outcome_of(games) -> str:
+    """Per-league outcome. FOUR states, because there are four.
+
+    A refusal is checked FIRST and by type, not by truthiness: `Refusal` is not
+    falsy precisely so that a `not games` test cannot sort it into `no_rows`
+    and mark a league the provider never served as one the provider has nothing
+    for. `barren.record()` only accepts `ok`/`no_rows`, so a refusal still
+    cannot poison the barren-league cache — that guard already worked and is
+    preserved by construction rather than by a second check.
+    """
+    if isinstance(games, Refusal):
+        return games.reason
+    if games is None:
+        return "error"
+    return "no_rows" if not games else "ok"
+
 
 def _normalise(name: str) -> str:
     """Lowercase + strip for fast pre-filter before fuzzy matching."""
@@ -394,11 +444,53 @@ class TheOddsScraper:
                     })
         return fixtures
 
-    async def _fetch_league_odds(self, sport_key: str) -> Optional[List[Dict]]:
+    def _absorb_quota_headers(self, resp) -> None:
+        """Record the provider's own credit counters from ANY response.
+
+        Called BEFORE the status branches, and that ordering is the whole
+        point. The 429 branch used to `return` before this ran, so on the one
+        response that says "you are out of credits" the pipeline learned
+        nothing — `_used_requests` kept its last value and `quota.reconcile()`
+        was never handed the truth. The ledger went permanently blind at
+        exactly the moment its number mattered.
+
+        The counters live on error responses too; only a transport failure
+        carries none.
+        """
+        remaining = resp.headers.get("x-requests-remaining")
+        used = resp.headers.get("x-requests-used")
+        if remaining is not None:
+            try:
+                self._remaining_requests = int(remaining)
+            except (TypeError, ValueError):
+                return
+            _persist_credits(self._remaining_requests)
+            _r = self._remaining_requests
+            if _r <= _CREDITS_TIER_CRITICAL:
+                logger.critical(
+                    f"TheOddsAPI CRITICAL: only {_r} credits remaining "
+                    f"— suspend non-essential league calls or add credits"
+                )
+            elif _r <= _CREDITS_TIER_WARNING:
+                logger.warning(
+                    f"TheOddsAPI WARNING: {_r} credits remaining (~2 days left)"
+                )
+            elif _r <= _CREDITS_TIER_INFO:
+                logger.info(
+                    f"TheOddsAPI: {_r} credits remaining (~3 days left)"
+                )
+        if used is not None:
+            try:
+                self._used_requests = int(used)
+            except (TypeError, ValueError):
+                pass
+
+    async def _fetch_league_odds(self, sport_key: str):
         """Call The Odds API for a single sport key.
 
-        Returns the raw list of game objects or None on error.
-        Tracks remaining credits from response headers.
+        Returns the raw list of game objects, a :class:`Refusal` when the
+        provider declined, or None on error. Tracks credits from the response
+        headers of EVERY response, including the ones that declined.
         """
         if not self.api_key:
             logger.warning("TheOddsAPI: ODDS_API_KEY not set — skipping")
@@ -416,6 +508,10 @@ class TheOddsScraper:
         session = await self._get_session()
         try:
             async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                # Headers FIRST — see _absorb_quota_headers. A declined
+                # response is the most informative one about the budget.
+                self._absorb_quota_headers(resp)
+
                 if resp.status == 401:
                     logger.error("TheOddsAPI: invalid API key (401)")
                     return None
@@ -423,32 +519,28 @@ class TheOddsScraper:
                     logger.debug(f"TheOddsAPI: sport key '{sport_key}' not found (422)")
                     return None
                 if resp.status == 429:
-                    logger.warning("TheOddsAPI: quota exhausted (429)")
-                    return None
-                resp.raise_for_status()
-
-                # Track quota from response headers
-                remaining = resp.headers.get("x-requests-remaining")
-                used = resp.headers.get("x-requests-used")
-                if remaining is not None:
-                    self._remaining_requests = int(remaining)
-                    _persist_credits(self._remaining_requests)
-                    _r = self._remaining_requests
-                    if _r <= _CREDITS_TIER_CRITICAL:
+                    # 429 is "Too Many Requests", not "out of credits". Every
+                    # one of the six 429s in this project's history was the
+                    # former — 2026-09-05 logged four in a single second with
+                    # 362 credits remaining — and all six were reported as
+                    # "quota exhausted". An alarm that has cried wolf six times
+                    # cannot announce the real thing, so the two are separated
+                    # here by the only evidence that distinguishes them.
+                    rem = self._remaining_requests
+                    if rem is not None and rem <= 0:
                         logger.critical(
-                            f"TheOddsAPI CRITICAL: only {_r} credits remaining "
-                            f"— suspend non-essential league calls or add credits"
+                            f"TheOddsAPI: QUOTA EXHAUSTED — 429 with "
+                            f"x-requests-remaining={rem}. No further request "
+                            f"can succeed until the monthly reset."
                         )
-                    elif _r <= _CREDITS_TIER_WARNING:
-                        logger.warning(
-                            f"TheOddsAPI WARNING: {_r} credits remaining (~2 days left)"
-                        )
-                    elif _r <= _CREDITS_TIER_INFO:
-                        logger.info(
-                            f"TheOddsAPI: {_r} credits remaining (~3 days left)"
-                        )
-                if used is not None:
-                    self._used_requests = int(used)
+                        return Refusal(REFUSED_EXHAUSTED, sport_key)
+                    logger.warning(
+                        f"TheOddsAPI: RATE LIMITED (429) on '{sport_key}' — "
+                        f"{rem if rem is not None else 'unknown'} credits still "
+                        f"remaining, so this is request pacing, not the budget."
+                    )
+                    return Refusal(REFUSED_RATE_LIMITED, sport_key)
+                resp.raise_for_status()
 
                 data = await resp.json()
                 logger.debug(
@@ -649,7 +741,46 @@ class TheOddsScraper:
         if not league_fixtures:
             return 0
 
-        return await self._fetch_and_persist(league_fixtures)
+        # ONE ACCOUNT FOR BOTH CONSUMERS. Until 2026-09-10 this call passed no
+        # quota, so it claimed nothing, could not be declined, and never
+        # reconciled. Measured over 2026-09-01..09-10 it was 204 of the 346
+        # credits the provider actually charged — 59% of consumption invisible
+        # to the mechanism built to bound it, and the reason the ledger and the
+        # provider diverged on 7 of 13 spending runs.
+        #
+        # The ledger's arithmetic was never wrong. A second consumer bypassed
+        # it. Same one-definition move as the shared live_only()/
+        # valid_evidence() predicates and OVERROUND_3WAY after Stage 18 found
+        # three copies drifting apart.
+        #
+        # max_credits_per_run=0 DISABLES the per-run ceiling on purpose. The
+        # 24-credit default is sized for the imminent-refresh job; applying it
+        # here would decline roughly half of every day's leagues (this path
+        # routinely wants 20-23 = 40-46 credits) and that is a volume change,
+        # not an accounting fix. The monthly budget still gates it, which is
+        # the boundary this change exists to make visible.
+        quota = None
+        try:
+            from src.data.odds_quota import OddsApiQuota
+            quota = OddsApiQuota(
+                self.db,
+                monthly_budget=int(self.config.get(
+                    "odds_api.monthly_credit_budget", 400)),
+                safety_margin=int(self.config.get(
+                    "odds_api.safety_margin_credits", 50)),
+                max_credits_per_run=0,
+            )
+        except Exception as e:
+            # Fail OPEN, matching claim_requests' own behaviour when the
+            # api_budget table is unavailable: a broken ledger must not stop
+            # the pipeline pricing today's card. It is logged loudly because a
+            # silent fall-back here restores exactly the blind spot this
+            # change closes.
+            logger.error(
+                f"TheOddsAPI: could not build the credit ledger ({e}) — "
+                f"proceeding UNMETERED, which is the pre-2026-09-10 behaviour")
+
+        return await self._fetch_and_persist(league_fixtures, quota=quota)
 
     async def _fetch_and_persist(self, league_fixtures: Dict[str, List[Dict]],
                                  quota=None) -> int:
@@ -706,9 +837,50 @@ class TheOddsScraper:
         # lines. Every no_rows figure ever read out of those logs is therefore a
         # LOWER bound on the waste, including Stage 15's.
         self._last_league_outcomes = {
-            lg: ("error" if games is None else ("no_rows" if not games else "ok"))
-            for lg, games in league_games.items()
+            lg: _outcome_of(games) for lg, games in league_games.items()
         }
+
+        # A refusal is not an absence of odds. Surface it HERE, on the path
+        # `update()` uses, because `_last_league_outcomes` is otherwise read
+        # only by `refresh_imminent` — so on the daily-picks path the
+        # distinction between "no odds exist" and "we were refused" was
+        # computed and thrown away, and the summary read `0 odds rows written`
+        # either way.
+        _refused = {lg: o for lg, o in self._last_league_outcomes.items()
+                    if o.startswith("refused_")}
+        if _refused:
+            _exh = [lg for lg, o in _refused.items() if o == REFUSED_EXHAUSTED]
+            if _exh:
+                logger.critical(
+                    f"TheOddsAPI: {len(_exh)} league(s) REFUSED FOR QUOTA "
+                    f"EXHAUSTION and produced no odds: {sorted(_exh)}. "
+                    f"Any pick priced from these leagues used stale or missing "
+                    f"odds."
+                )
+            _rl = [lg for lg, o in _refused.items() if o == REFUSED_RATE_LIMITED]
+            if _rl:
+                logger.warning(
+                    f"TheOddsAPI: {len(_rl)} league(s) RATE LIMITED and produced "
+                    f"no odds this run: {sorted(_rl)}. Credits remain; this is "
+                    f"pacing."
+                )
+        # Leagues that returned a clean empty list, stated separately so a zero
+        # is never read as a refusal or the reverse.
+        _empty = [lg for lg, o in self._last_league_outcomes.items()
+                  if o == "no_rows"]
+        if _empty:
+            logger.info(
+                f"TheOddsAPI: {len(_empty)} league(s) returned an empty event "
+                f"list (priced nothing): {sorted(_empty)}")
+
+        # Reconcile HERE rather than only in refresh_imminent, so both
+        # consumers correct the ledger against the provider's own counter.
+        # `reconcile` only ever raises and returns early when the provider's
+        # number is not higher, so refresh_imminent's later call on the same
+        # figure is a no-op. Reachable on the exhaustion path now that the 429
+        # branch absorbs headers before returning.
+        if quota is not None and self._used_requests is not None:
+            quota.reconcile(self._used_requests)
 
         total_written = 0
         matched_games = 0
@@ -732,7 +904,10 @@ class TheOddsScraper:
             window_end = window_start + timedelta(days=1)
 
         for league, games in league_games.items():
-            if not games:
+            # Named explicitly rather than relying on falsiness. `Refusal` is
+            # deliberately truthy so this line cannot silently absorb it the
+            # way `not games` absorbs `[]` and `None`.
+            if isinstance(games, Refusal) or not games:
                 continue
 
             db_fixtures = league_fixtures[league]
@@ -1033,7 +1208,14 @@ class TheOddsScraper:
                 f"ODDS_REFRESH date={now:%Y-%m-%d} time={now:%H:%M} "
                 f"league={league} sport_key={LEAGUE_TO_THEODDS_SPORT.get(league)} "
                 f"requests=1 est_credits={CREDITS_PER_REQUEST} "
-                f"result={outcomes.get(league, 'ok' if written else 'no_rows')} "
+                # `outcomes` covers the leagues actually FETCHED. A league in
+                # `plan["requested"]` but absent from it was never requested —
+                # the budget truncated `league_fixtures` inside
+                # _fetch_and_persist without touching this list. It used to
+                # default to `ok`, so on 2026-09-05 and 09-06 four leagues that
+                # were never called each reported success on the very line
+                # whose purpose is to be trusted without parsing prose.
+                f"result={outcomes.get(league, 'not_requested')} "
                 f"reason=imminent_pending_pick")
         for league, why in plan["skipped"].items():
             logger.info(

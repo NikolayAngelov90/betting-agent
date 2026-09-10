@@ -595,6 +595,51 @@ TRACKED_KEYS: List[str] = [
 #:       and does not propagate it, but the rows remain mis-assigned and the
 #:       `_tok_match` prefix rule that creates them is unchanged. Recorded as
 #:       its own item rather than folded into this revision.
+#:
+#:       AMENDED 2026-09-10 (cohort empty, 0 picks stamped — amend-while-empty,
+#:       not a bump). THE PICK-TIME ODDS PATH NOW CLAIMS FROM THE CREDIT LEDGER.
+#:
+#:       `TheOddsScraper.update()` — the path daily-picks uses to price the
+#:       card — passed no quota, so it claimed nothing, could not be declined,
+#:       and never reconciled. Measured 2026-09-01..09-10 it spent 204 of the
+#:       346 credits the provider actually charged: 59% of consumption was
+#:       invisible to the mechanism built to bound it, and the ledger diverged
+#:       from the provider on 7 of 13 spending runs.
+#:
+#:       WHY IT IS PREDICTION-AFFECTING AT ALL: the ledger can now decline a
+#:       pick-time odds request, and a declined league is priced from stale or
+#:       missing odds, which changes what the bookmaker blend reads. The window
+#:       where that bites is the 50-credit safety margin — the ledger refuses at
+#:       450 while the provider would still serve to 500.
+#:
+#:       MEASURED EFFECT OVER THE LAST TEN DAYS: ZERO. Replaying both consumers
+#:       against the 450 limit, peak ledger usage was 342. No request was
+#:       declined, and none that the provider would have honoured. The change is
+#:       behaviour-neutral on the observed window and only acts at the boundary
+#:       it exists to defend.
+#:
+#:       The per-run ceiling is DISABLED on this path (max_credits_per_run=0).
+#:       The 24-credit default is sized for the imminent-refresh job; inheriting
+#:       it here would decline roughly half of every day's leagues, because this
+#:       path routinely wants 20-23 (40-46 credits). That would be a volume
+#:       change wearing an accounting fix's clothes.
+#:
+#:       ALSO IN THIS AMENDMENT, because one edit closes both: the 429 branch
+#:       now reads the response headers BEFORE returning. It used to return
+#:       first, so on the one response that says "you are out of credits" the
+#:       pipeline learned nothing and `reconcile()` went permanently blind at
+#:       the moment its number mattered. And 429 is now split by
+#:       `x-requests-remaining`: 0 is EXHAUSTION (logged CRITICAL), above zero
+#:       is RATE LIMITING (logged WARNING). All six 429s in this project's
+#:       history had credits in hand — 402, 306, 276, 67, 31, 362 — and all six
+#:       were reported as "quota exhausted". The alarm for the real event had
+#:       been spent on a different one.
+#:
+#:       Neither sub-change alters a prediction on its own; both alter what the
+#:       pipeline KNOWS about its own budget, and the first can alter which
+#:       odds exist when a pick is priced. Recorded here rather than in a
+#:       separate revision because the cohort was empty and the two are one
+#:       edit.
 CODE_REVISION = "s5.10"
 
 
