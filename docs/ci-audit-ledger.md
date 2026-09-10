@@ -10167,15 +10167,20 @@ nothing to do, and spending nothing is the right behaviour, not a silent skip.
 | 33905491680 | 09-04 18:22 | 10 | 22 | 5 | 5 | 12 | 20cr/10req | CLEAN |
 | 33969224665 | 09-05 13:33 | 16 | 65 | **20** | 24 | 21 | 24cr/12req | CLEAN |
 | 33980584356 | 09-05 17:19 | 12 | 28 | 7 | 8 | 13 | 24cr/12req | CLEAN |
-| **33992336673** | 09-05 21:12 | 0 | 1 | **0** | 0 | **1** | 0 | **DEGRADED** |
+| ~~33992336673~~ | 09-05 21:12 | 0 | 1 | 0 | 0 | 1 | 0 | **CLEAN — CORRECTED, see below** |
 | 34037221519 | 09-06 13:48 | 16 | 40 | 6 | 14 | 20 | 24cr/12req | CLEAN |
 | 34049105771 | 09-06 17:36 | 7 | 19 | 5 | 2 | 12 | 14cr/7req | CLEAN |
 | 34141574325 | 09-07 16:05 | 5 | 13 | 5 | 5 | 3 | 10cr/5req | CLEAN |
-| **34159830639** | 09-07 20:33 | 0 | **8** | **0** | 0 | **8** | 0 | **DEGRADED** |
+| ~~34159830639~~ | 09-07 20:33 | 0 | 8 | 0 | 0 | 8 | 0 | **CLEAN — CORRECTED, see below** |
 | 34240468105 | 09-08 14:46 | 2 | 9 | 2 | 7 | 0 | 4cr/2req | CLEAN |
 | 34264108073 | 09-08 18:37 | 2 | 10 | 4 | 6 | 0 | 4cr/2req | CLEAN |
 | 34366067205 | 09-09 14:48 | 2 | 3 | 1 | 2 | 0 | 4cr/2req | CLEAN |
 | 34389725221 | 09-09 18:33 | 4 | 10 | 2 | 8 | 0 | 8cr/4req | CLEAN |
+
+**CORRECTED 2026-09-10 — both verdicts are WRONG; see "CORRECTION 2" below.
+`late` means kickoff had ALREADY PASSED, and both windows are 120 minutes, so
+no refresh could have helped. Both runs are CLEAN. The original reasoning is
+kept verbatim rather than deleted:**
 
 **The two DEGRADED runs share one shape and it is worth naming.** Both had
 **closes to capture and no refresh to support them** — `candidate leagues 0`
@@ -10190,10 +10195,12 @@ any** — 1→2, 2→4, 4→8, 5→10, 7→14, 10→20, 12→24. The arithmetic 
 everywhere.
 
 **Two runs hit the per-run ceiling** (09-05 13:33 and 09-06 13:48:
-`per-run ceiling limits this execution to 12 of 16 request(s)`). **No league was
-lost to it** — both runs logged 16 `result=ok`, because leagues sharing a sport
-key are served by one request. **The ceiling caps requests, not leagues**, and
-the log line invites the opposite reading.
+`per-run ceiling limits this execution to 12 of 16 request(s)`).
+~~**No league was lost to it** — both runs logged 16 `result=ok`, because
+leagues sharing a sport key are served by one request.~~ **CORRECTED
+2026-09-10: WRONG. The provider's counter says 12 requests, not 16 — 4 leagues
+were never fetched and all 16 reported `ok`, because `result=ok` is a DEFAULT
+for any league with no recorded outcome. See "CORRECTION 1" below.**
 
 ## paper-trading-report — 10 runs, all CLEAN
 
@@ -10350,3 +10357,218 @@ comparison that measures the review — **the same class as EXP-1**, and
 invisible in the output, because the number still computes and the interval
 still narrows. A learner may not read `review_action` or the FINAL attribution.
 **Measuring the review and learning from it are mutually exclusive.**
+
+---
+
+# THE CREDIT DIVERGENCE — PURSUED, AND CLOSED
+
+**Recorded 2026-09-10 and left unpursued. Pursued now, because the budget is the
+binding constraint on the only research purchase left on the table.**
+
+## Nothing else is consuming the key. It is this pipeline, spending off-ledger.
+
+**22 reconciliation events across August and September. Every one is
+`provider > ledger`. Strictly one-directional — the ledger never over-reports.**
+
+**`daily-picks` calls TheOddsAPI and never tells the quota ledger.** Verbatim,
+2026-09-09:
+
+```
+TheOddsAPI: 5 leagues with today's fixtures (skipping 1 unsupported: finland/veikkausliiga)
+TheOddsAPI update complete: 959 odds rows written, 11 games matched, 2 unmatched (credits remaining: 176)
+```
+
+**No `CREDITS_CLAIMED` line. That path does not go through
+`odds_quota.claim_requests()` at all**, so the closing-lines workflow's ledger
+cannot see it, and the reconciler correctly reports a gap.
+
+### The arithmetic closes to 1.2%
+
+| September 1–10 | credits |
+| --- | --- |
+| `daily-picks` TheOddsAPI update — **not in the ledger** | **204** |
+| `closing-lines` `CREDITS_CLAIMED` — in the ledger | 138 |
+| **total accounted** | **342** |
+| provider `x-requests-used` after the 09-10 run (500 − 154) | **346** |
+| **unaccounted** | **4** (1.2%) |
+
+**Per-day, the reconcile gap tracks that morning's `daily-picks` league count
+almost exactly:**
+
+| date | `daily-picks` leagues × 2 | reconcile gap | diff |
+| --- | --- | --- | --- |
+| 09-04 | 30 | 46 | +16 |
+| 09-05 | 46 | 38 | −8 |
+| 09-06 | 40 | 34 | −6 |
+| 09-07 | 24 | 22 | −2 |
+| 09-08 | 6 | 8 | +2 |
+| **09-09** | **10** | **10** | **0** |
+
+The residuals sum to **+2 over six days** and are timing: the reconcile reads
+the provider counter at the *capture* run's start, and capture runs also spend
+in between.
+
+> ### The key rotation of 2026-08-23 is irrelevant.
+> **The divergence has the identical shape either side of it**, and the
+> arithmetic closes without invoking any external consumer. **A leaked key would
+> have to account for 4 credits in ten days.**
+
+**The reconciler's wording is what made this look sinister.** *"N credit(s) were
+spent outside this pipeline"* means **outside this workflow's ledger account**.
+It is the same pipeline, and the message invites exactly the reading it got.
+
+## Does it correlate with the ceiling-capped runs? No — and I can now say why
+
+**Both ceiling-capped runs, checked against the provider's own counter:**
+
+| run | provider before | provider after | delta | ledger claimed |
+| --- | --- | --- | --- | --- |
+| 33969224665 (09-05 13:33) | 138 | 162 | **24 = 12 requests** | **24 / 12 req** |
+| 34037221519 (09-06 13:48) | 226 | 250 | **24 = 12 requests** | **24 / 12 req** |
+
+**Exact. The ceiling is not a source of unrecorded spend.** The apparent
+correlation is a **common cause**: a busy fixture day gives `daily-picks` many
+leagues *and* pushes the capture run into its ceiling. Neither causes the other.
+
+---
+
+# CORRECTION 1 — the ceiling DOES silently drop leagues. My ledger row said it did not.
+
+**I wrote: *"No league was lost to it — both runs logged 16 `result=ok`, because
+leagues sharing a sport key are served by one request."* That is wrong, and the
+provider counter says so: 12 requests, not 16.**
+
+**The mechanism, read rather than inferred:**
+
+* `plan["requested"] = list(league_fixtures)` is assigned **before**
+  `_fetch_and_persist`, and `claim_requests()` truncates `n_requests` **without
+  touching `league_fixtures` or `plan["requested"]`**.
+* The per-league attribution line iterates `plan["requested"]` — the
+  **pre-ceiling** list — and emits
+  `result={outcomes.get(league, 'ok' if written else 'no_rows')}`.
+
+> ### `ok` is a DEFAULT, not an observation.
+> A league that was never requested is logged `result=ok` **as long as the run
+> as a whole wrote any rows.** On both capped runs, **4 leagues were never
+> fetched and all 16 reported `ok`.**
+
+**The comment above that code says it exists so "a CI log can be grepped into a
+ledger without parsing prose". It is the line a reader is most likely to trust,
+and it reports success for work not done.** Fourth instance of the rule: **a log
+line is only as good as the state it reports** — `plan["requested"]` is the
+intent, not the outcome.
+
+---
+
+# CORRECTION 2 — there is no refresh/capture window mismatch. I diagnosed one that does not exist.
+
+**I recorded two runs DEGRADED for "closes to capture and no refresh to support
+them", and named a window mismatch as the mechanism. Both windows are the
+same.**
+
+```python
+cap_window = max(window, 30)          # refresh_and_capture.py:122
+stats = capture(within_minutes=cap_window, dry_run=False)
+```
+
+**With `window = 120`, the capture window is `max(120, 30) = 120`. Identical.**
+
+**And `late` does not mean "stale price":**
+
+```python
+is_late = r.match_date is not None and now >= r.match_date    # capture_closing_lines.py:350
+```
+
+> **`late` means KICKOFF HAS ALREADY PASSED.** Those 8 observations were not
+> lost for want of a refresh — **no refresh could have helped, because the
+> refresh only considers fixtures kicking off in the NEXT 120 minutes and these
+> had already started.** They were unrecoverable before the run began.
+
+**The two DEGRADED verdicts assigned on that basis were wrong.** The runs
+behaved correctly. Corrected here rather than left standing.
+
+---
+
+# WHAT IS ACTUALLY COSTING OBSERVATIONS: the cron does not fire
+
+**Chasing the wrong mechanism produced the right question. Measured over the
+421 live picks since captures resumed (2026-08-26):**
+
+| | picks | share |
+| --- | --- | --- |
+| **captured** | **69** | **16.4%** |
+| a run occurred in the 120-min pre-kickoff window, still no capture | 153 | 36.3% |
+| **NO run occurred in that window at all** | **199** | **47.3%** |
+
+**The schedule declares 8 runs a day** — `47 10 * * *` and
+`17 11,13,15,17,19,21,23 * * *`. **Typically 4 to 6 fire**, and those that do
+arrive **10 minutes to 1h40 late**:
+
+```
+2026-09-04  00:57 14:33 14:55 18:22 21:26
+2026-09-07  00:59 16:05 16:26 20:33 23:28
+2026-09-08  14:46 15:04 18:37 21:49
+2026-09-10  01:02
+```
+
+> ### Measured against the CRON, the coverage gap is 1 pick. Measured against the RUNS THAT HAPPENED, it is 199.
+>
+> **An idealised-schedule model would have reported this as solved.** The
+> project already holds `GitHub cron 0.5-5.7h late` as an operational fact; this
+> is the first time its cost in observations has been counted.
+
+**Neither league mapping nor the schedule design explains the misses**: of 352
+picks without a captured close, **335 are in leagues that ARE mapped** to a
+TheOddsAPI sport key, and only 17 are structurally unreachable.
+
+## Does closing it cost credits, or merely change which fixtures qualify?
+
+**It costs credits, and roughly doubles current consumption.**
+
+| | |
+| --- | --- |
+| picks with no run in window | 199 |
+| …in a refreshable league | 192 |
+| distinct **(league, kickoff-hour)** slots — one request each | **119** |
+| at 2 credits per request | **238 credits** |
+| over the 12 days measured | **≈ 20 credits/day** |
+
+**For scale: `daily-picks` already consumes ~20 credits/day off-ledger, the free
+tier is 500/month, 346 were used by 09-10, and H1's purchase needs ~100.**
+
+> **Adding ~20/day doubles consumption and would exhaust the tier before month
+> end.** A run with no candidates spends nothing, so **more runs are free until
+> they find work** — the cost is entirely in the leagues they would newly
+> refresh. **This is a budget decision, not a configuration change**, and it
+> competes with H1 and with H5 Q1's `--any-fixture` control for the same
+> ceiling.
+
+**Not pursued further. Three facts are now on the table for that decision:
+the ledger is honest, `daily-picks` spends ~204/month off-ledger, and 47% of
+kickoffs have no run in their window.**
+
+---
+
+# THE REVIEW FIELD — the property that made the miscount possible
+
+**Recorded against `docs/claude-review-value.md`, whose proposal already names
+it, because it is the half that generalises.**
+
+**Counting causes per PICK when the review is FIXTURE-scoped manufactured nine
+defects that do not exist.** An enum alone would not have prevented it: every
+one of the six proposed values could have been written correctly against the
+wrong subject.
+
+> ### The field must record WHICH PICK a decision attached to, not merely what the decision was.
+>
+> **A per-fixture mechanism logged per pick will report a verdict for a pick
+> that never had one, and an absence for a pick that was never asked.** The
+> outcome value answers *what happened*; it cannot answer *to whom*, and the
+> miscount lived entirely in the second question.
+
+**The twelve that remain are real** — verified on `SK Rapid vs Paide`,
+2026-08-12, where the log records `action=CHANGE`, both picks on the fixture
+kept NULL, and two other fixtures' verdicts from the same run persisted
+correctly.
+
+*Recorded 2026-09-10. Read-only throughout.*
