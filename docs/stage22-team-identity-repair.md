@@ -285,3 +285,35 @@ condition would be removed for 187 of them.** After: **28**.
 > already destroyed the state needed to re-run the first. **The direction and
 > rough magnitude are established; the exact delta is not**, and this project
 > does not quote a difference between two instruments as though it came from one.
+
+---
+
+## THE FIFTH SYMPTOM HAS A RATE — 20% of this stage undone in one day
+
+**Measured 2026-09-11, the day after the merge.** Of 27 new unresolved team rows
+created since, **26 are EXACT-NAME resurrections of rows this stage merged away**.
+129 rows merged; 26 back within ~24 hours; **the whole merge undone in about five
+days at that rate**.
+
+**The mechanism is this stage's own survivor-selection rule.** OP1 kept the
+LOWEST ID, which is frequently not the name the scraper writes — `1624 Lens` was
+merged into `576 Racing Club de Lens`, and Flashscore goes on writing "Lens".
+`same_team_strict` correctly refuses to equate them, so a new row is created.
+**The merge removed the row and left the reason it existed.**
+
+Six of eight sampled names are explained by that; `PSG`/`Paris SG` and
+`Metz`/`FC Metz` return True from `same_team_strict` and were re-created anyway,
+so **at least one other creation path exists — flagged, not diagnosed.**
+
+> **A repair that deletes rows without changing what creates them has a
+> half-life.** This one's is roughly two and a half days.
+
+**The successor item is not "ingestion sometimes mis-assigns".** It is: attach
+the source's names to the merge survivors as curated aliases, so the write path
+matches instead of twinning. *A threshold is tolerance; an alias is knowledge.*
+Same class as the NEC alias, and it is the thing that would make this stage
+durable rather than momentary.
+
+*Recorded 2026-09-11 with the rate attached, per the ruling that "ingestion
+sometimes mis-assigns" and "the merge undoes itself at 20%/day" are not the same
+item.*

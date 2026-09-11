@@ -11330,3 +11330,175 @@ by a duplicated row.
 
 *Audited 2026-09-11. Read-only except the caplog enumeration, which is test-only
 and cohort-neutral. 949 tests pass.*
+
+---
+
+# THE FIFTH SYMPTOM, AS A MEASURED RATE — 20% of s5.10 was undone in one day
+
+**Filed at the end of Stage 22 as a loose end: "match rows assigned to the wrong
+team row by name-first matching at ingestion". Measured 2026-09-11, it is not a
+loose end. It is the rate at which the repair undoes itself.**
+
+## The number
+
+**s5.10 merged 129 team rows on 2026-09-10. By 2026-09-11, 26 of them were back.**
+
+| | |
+| --- | --- |
+| new unresolved team rows created since the merge | **27** |
+| of those, **EXACT-NAME resurrections of rows s5.10 merged away** | **26** |
+| genuinely new clubs | 1 |
+| **share of the merge undone in ~24 hours** | **20%** |
+
+```
+1797 Elche          1803 FC Koln        1809 Lille          1815 Oviedo
+1798 Real Sociedad  1804 Lecce          1810 Genclerbirligi 1816 Celta Vigo B
+1799 Levante        1805 Parma          1811 Amedspor       1817 Cremonese
+1800 Dep. A Coruna  1806 AS Roma        1812 A. Lustenau    1818 L.R. Vicenza
+1801 Rayo Vallecano 1807 Lens           1813 Widzew Lodz    1819 Metz
+1802 B. Monchengladbach                 1814 Corvinul       1820 Manchester Utd
+                                                            1821 Vaduz
+                                                            1822 HamKam
+```
+
+**At this rate the entire merge is undone in about five days.**
+
+**Exposure so far is still small**: 13 of the 27 carry any match, and **22 match
+rows in total** now point at a resurrected row. Lens is the clean example —
+`576 Racing Club de Lens` af=116 with 196 matches survives, and `1807 Lens`
+af=NULL was created at 08:52:28 today with **0 matches**. The rows are back; the
+damage has barely started.
+
+## The mechanism — the merge removed the row and left the reason
+
+**`same_team_strict` is the write-path comparator, and it is conservative by
+design.** Tested on the resurrected names against their merge survivors:
+
+| scraper writes | merge survivor | `same_team_strict` | `team_names_similar` |
+| --- | --- | --- | --- |
+| `Lens` | `Racing Club de Lens` | **False** | True |
+| `FC Koln` | `1. FC Köln` | **False** | True |
+| `Levante` | `Levante UD` | **False** | True |
+| `Manchester Utd` | `Man United` | **False** | True |
+| `Parma` | `Parma Calcio 1913` | **False** | True |
+| `Oviedo` | `Real Oviedo` | **False** | True |
+| `PSG` | `Paris SG` | True | True |
+| `Metz` | `FC Metz` | True | True |
+
+> ### s5.10's OP1 kept the LOWEST ID, not the name the scraper writes.
+> So it merged `1624 Lens` into `576 Racing Club de Lens` — and Flashscore goes
+> on writing **"Lens"**. `same_team_strict` correctly refuses to equate them, and
+> a new row is created. **Every merge whose survivor carries a name the source
+> does not use guarantees its own resurrection on the next scrape.**
+
+**This is not a bug in `same_team_strict`.** Refusing `Lens` ≡ `Racing Club de
+Lens` on token-set equality is the behaviour that keeps `Sheffield United` and
+`Sheffield Wednesday` apart. **The comparator is right and the merge's
+survivor-selection rule was wrong for the purpose.**
+
+**AND TWO CASES ARE NOT EXPLAINED BY IT.** `PSG`/`Paris SG` and `Metz`/`FC Metz`
+return **True** from `same_team_strict` and were re-created anyway, so at least
+one other creation path exists that does not consult it. **Flagged, not
+diagnosed** — naming a mechanism that covers six of eight and claiming it covers
+eight is the error this ledger keeps recording.
+
+## What this does to the residual
+
+**s5.9's duplicate-pair residual was 202, and s5.10 took it to 28.** Each
+resurrected row is a **new duplicate of an already-resolved club** — precisely
+the branch-1 pairs the merge removed the condition for. **The residual regrows at
+the resurrection rate**, and today's 26 rows are 26 future pairs as soon as they
+acquire matches. Thirteen already have.
+
+## The correction to my own framing, which the priority rests on
+
+**I reported that new fixtures resolve at ~52% against a repaired base of ~89%,
+and that figure was a mixed cohort.** Measured properly, by creation date and
+splitting backfill from discovery:
+
+| population created since 2026-09-01 | rows | both resolve |
+| --- | --- | --- |
+| **backfill** (past-dated; runs ONLY for teams that already hold a provider id, so it resolves by construction) | 536 | **96.1%** |
+| **discovery** (future-dated — the real inflow) | 365 | **90.7%** |
+
+**Discovery inflow resolves at 90.7% against a repaired base of 88.0% — slightly
+BETTER than the base, not at half.** The 51.9% was rows created since the merge
+with `match_date >= 08-01`, which mixes 27 genuine discoveries (85.2%) with 25
+recent-result rows that resolve at 16%.
+
+> **So the population is NOT degrading at 48% of inflow. The decay is not in
+> fixture resolution at all — it is in TEAM ROW RE-CREATION**, and that rate is
+> 20% of the merge per day. The right number is worse than the wrong one, and it
+> is a different quantity.
+
+**A repair that deletes rows without changing what creates them is a repair with
+a half-life.** s5.10's half-life is measured at roughly two and a half days.
+
+**Remedy, not taken here:** the merge's survivors need the source's names
+attached as aliases — *a threshold is tolerance, an alias is knowledge* — so the
+write path matches them instead of creating twins. **That is a curated-table
+change, the same class as the NEC alias, and it is the thing that makes the next
+merge durable.** Recorded as the successor item to Stage 22's fifth symptom, with
+the rate attached.
+
+---
+
+# H1's TRIGGER — I REPORTED THE OLD UNIT. THE CORRECTED VALUE IS ZERO.
+
+**Yesterday's audit reported "H1: 117 keys with ≥3 pre-kickoff observations".
+That is the RAW KEY COUNT — the metric this ledger already recorded as the one
+that made the problem invisible.**
+
+**The corrected trigger is FIXTURES with ≥3 pre-kickoff observations SEPARATED BY
+≥30 MINUTES.** Measured today:
+
+| definition | value |
+| --- | --- |
+| raw keys with ≥3 observations — **the old unit, what I reported** | **117** |
+| raw FIXTURES with ≥3 observations | **4** |
+| **corrected: keys with ≥3 separated by ≥30 min** | **0** |
+| **corrected: FIXTURES with ≥3 separated by ≥30 min — THE TRIGGER** | **0** |
+| target | 50 |
+
+**The median gap between consecutive points in those keys is 0.0 minutes.** They
+are simultaneous — written by one run. 117 keys sit across **four fixtures**,
+because a fixture contributes a key per bookmaker × market × selection.
+
+> **This ledger's own words, at the corrected-trigger entry: "a satisfied-looking
+> number is exactly what stops anyone checking."** I produced one and it stopped
+> me checking, in the same audit that corrected someone else's units.
+
+**H1's data blocker has NOT lifted. H1 is exactly where it was**, and today's
+2,232 pick-time snapshot rows did not change it, because they are written in a
+single pass and separated points require separate passes. **The blocker remains
+policy, not volume** — which is the `UNADDRESSABLE BY SELF-OBSERVATION` finding,
+unchanged.
+
+**ρ is still unregistered, and n=55 was computed for a MEAN and does not
+transfer to a predictive relationship.** Both hold regardless.
+
+---
+
+# A DEFINITION READ AS AN OCCURRENCE — second instance, same file
+
+**Yesterday's audit grepped the CI log for `429`, `budget exhausted` and
+`not_requested` and reported 20, 1 and 1. All of it was pytest output: the
+workflow runs the suite, and the new tests are NAMED
+`test_every_historical_429_classifies_as_rate_limiting` and
+`test_declined_leagues_report_not_requested_never_ok`.**
+
+> **Counting matches in a log that contains the test suite counts the test
+> suite.**
+
+**This is the second instance of the same shape, and the first was in the same
+file.** `ci_audit.py`'s original failed-step pattern matched the workflow's own
+YAML echoed into the log — **a definition read as an occurrence**. The strings
+that describe a check are not the check firing, whether they arrive as workflow
+source or as test names.
+
+**The general form, which is what makes it worth recording twice:** a log is not
+only a record of what the system did. It also contains descriptions of what the
+system is for — its configuration, its test names, its own source. **A pattern
+that cannot tell a description from an event will report the description.**
+
+*Recorded 2026-09-11.*
