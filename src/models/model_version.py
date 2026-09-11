@@ -635,6 +635,15 @@ TRACKED_KEYS: List[str] = [
 #:       were reported as "quota exhausted". The alarm for the real event had
 #:       been spent on a different one.
 #:
+#:       THE PER-RUN CEILING IS THE SECOND LINE OF DEFENCE AND IT IS NOW OFF
+#:       ON THIS PATH. `max_credits_per_run=0` means the monthly ledger is the
+#:       ONLY guard on the consumer responsible for 59% of spend. A runaway
+#:       single run is unlikely because the request count is bounded by the
+#:       number of leagues with fixtures today — but that bound is INCIDENTAL,
+#:       set by the football calendar rather than by this code. Observed maximum
+#:       23 leagues / 46 credits (2026-09-05). Stated so a later reader does not
+#:       read the 0 as an oversight.
+#:
 #:       Neither sub-change alters a prediction on its own; both alter what the
 #:       pipeline KNOWS about its own budget, and the first can alter which
 #:       odds exist when a pick is priced. Recorded here rather than in a

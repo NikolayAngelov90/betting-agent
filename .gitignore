@@ -77,3 +77,16 @@ htmlcov/
 # Stage 15 L2: runtime record, restored from the Actions cache, never committed.
 data/odds_barren_leagues.json
 data/models/theodds_credits.json
+
+# Runtime state production READS and rewrites each run. Enumerated 2026-09-10
+# after data/models/theodds_credits.json was committed with a value fabricated
+# by the test suite. None of these is an artefact; all are per-environment.
+# data/baselines/ is deliberately EXCLUDED from this list — those are tracked
+# evidence, written only by an explicit `scripts/run_baseline.py` run.
+data/models/ensemble_loss_weights.json
+data/models/probability_calibration.json
+data/models/model_accuracies.json
+data/models/ml_zero_count.json
+data/models/feature_list.json
+data/models/cold_streak_alerted_date.txt
+data/briefings_sent.json

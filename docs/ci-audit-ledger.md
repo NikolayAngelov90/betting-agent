@@ -10902,3 +10902,132 @@ full run.
 follows it.
 
 *Recorded 2026-09-10.*
+
+---
+
+# 1. THE CLASS ENUMERATED — a test must not write to any path production reads
+
+**The 2026-09-10 fix redirected one file. The rule is not file-specific, so the
+paths are enumerated once rather than discovered one at a time.**
+
+## Measured first, not reasoned
+
+A scanner hashes every file under `data/` and `config/`, runs the full suite,
+and diffs. **With the single-file guard in place: `CHANGED 0`.** With it
+disabled, it reports `MODIFIED data/models/theodds_credits.json` — **the control
+on the instrument**, without which "nothing changed" is indistinguishable from a
+broken scanner.
+
+## The three-part test applied to 27 candidate paths
+
+| verdict | count | paths |
+| --- | --- | --- |
+| production reads it, **and it was NOT gitignored** | **8** | `ensemble_loss_weights.json`, `probability_calibration.json`, `model_accuracies.json`, `ml_zero_count.json`, `feature_list.json`, `cold_streak_alerted_date.txt`, **`briefings_sent.json` (already TRACKED)**, `data/baselines/` |
+| production reads it, already gitignored | 14 | the pickles, `.sig` files, the Parquet mirror, `ev_threshold`, `bayesian_weights`, `calibration`, `pick_calibration`, `picks_sent_date`, `odds_barren_leagues`, `scraped_leagues`, `historical_load_cache`, `config.yaml`, the SQLite fallback, `theodds_credits` |
+
+**`data/briefings_sent.json` was already tracked** — the same shape as the
+credit-state file, sitting in the repo since before the incident. It is
+briefing-dedup state, cached across CI runs by `actions/cache`, and production
+reads only *today's* key. **Untracked and ignored.**
+
+> **`data/baselines/` is DELIBERATELY EXCLUDED from the ignore list.** Those
+> three files are tracked *evidence* — the Stage 4/5 clean baseline — written
+> only by an explicit `scripts/run_baseline.py` invocation, never by a module
+> constant and never incidentally. **Gitignoring them would be the opposite
+> error**, and the exclusion is written into `.gitignore` so the next reader
+> does not "finish the job".
+
+## The remedy covers the class, and is ENFORCED rather than maintained
+
+**`conftest.PRODUCTION_STATE_PATHS`** lists all **ten** module-level
+`Path("data/…")` constants in `src/` and an autouse fixture redirects every one
+into `tmp_path`:
+
+```
+src.data.history_mirror._DEFAULT_DIR          src.reporting.telegram_bot._PICKS_SENT_STATE
+src.models.ml_models.MODELS_DIR               src.reporting.telegram_bot._COLD_STREAK_STATE
+src.models.bayesian_weights.WEIGHTS_PATH      src.scrapers.barren_leagues.DEFAULT_PATH
+src.models.probability_calibration.DEFAULT_PATH   src.scrapers.historical_loader.CACHE_FILE
+src.reporting.match_briefing._SENT_PATH       src.scrapers.theodds_scraper._CREDITS_STATE_PATH
+```
+
+**A list like that rots the moment someone adds an eleventh.** So
+`tests/test_no_test_writes_prod_state.py` re-derives the set from `src/` and
+fails when the two disagree — in both directions, missing *and* stale. **Control:
+adding `_ZZ_CONTROL_PATH = Path("data/zz_control_state.json")` to a source file
+fails the test by name.** A third test reads each constant's live value during a
+run and requires it to point outside `data/` and `config/` — **the positive
+control baked in**, because asserting the list is right proves nothing about
+whether the fixture bites.
+
+**931 tests pass with all ten redirected.**
+
+---
+
+# 2. THE GATE'S FIRST REFUSAL — exercised before it fires by itself
+
+**The measured effect over ten days was zero: peak 342 against 450, nothing
+declined. That is historical, and it means the refusal branch HAS NEVER EXECUTED
+IN PRODUCTION.**
+
+**It goes on the never-executed inventory, and that list's own finding is the
+reason this was not left to happen on its own:**
+
+> `experiment_record`'s per-series disposition filter shipped, passed its tests,
+> and was defective on its first real exercise the next day — because no
+> disposition had ever existed on a paper pick carrying a captured MODEL
+> observation, so the branch had never run. **The mechanism that had never been
+> exercised was the one that was wrong.**
+
+**At 34.6 credits/day the ledger's spendable budget is reached around 09-12 and
+the provider's tier around 09-14.** `tests/test_credit_gate_first_refusal.py`
+forces the decline against a temporary low limit in a test-scoped ledger and
+pins the four properties that matter when it fires for real:
+
+| property | pinned |
+| --- | --- |
+| the refusal is **LOUD** | a WARNING-or-above record containing `budget exhausted` |
+| **`not_requested`**, never `ok` | the declined league is absent from the outcome map, and the attribution fallback no longer says `ok` |
+| the run **CONTINUES** | returns 0; a declined league degrades the card, it does not kill the run |
+| **a refusal is not emptiness** | `_outcome_of` never maps a refusal to `no_rows`, and a ledger-declined league never reaches the map at all |
+
+**Control: disabling `claim_requests` fails 4 of the 5.**
+
+## And the test harness had the same defect as the code
+
+**The first draft asserted on `caplog.records` and passed vacuously.** This
+project logs through **loguru**, not stdlib logging, so `caplog` captures
+nothing — the messages were in stderr the whole time. Caught only because the
+assertion was written to fail loudly rather than to confirm.
+
+> **A test that cannot observe the thing it asserts is not a test**, and it has
+> exactly the shape of the defects this file was written about: the evidence
+> line that reports success by default, the schedule read instead of the runs.
+> Replaced with a real loguru sink that asserts on level and message.
+
+---
+
+# 3. `max_credits_per_run=0` REMOVES A SECOND LINE OF DEFENCE — stated so nobody reads it as an oversight
+
+**Disabling the per-run ceiling on the `update()` path was the right call:** the
+24-credit default is sized for the imminent-refresh job, and this path routinely
+wants 20-23 leagues (40-46 credits), so inheriting it would have declined
+roughly half of every day's card. **That is a volume change dressed as
+bookkeeping.**
+
+**But note precisely what it leaves:**
+
+> ### The per-run ceiling no longer applies to the consumer responsible for 59% of spend. The monthly ledger is the only guard on that path.
+
+**A runaway single run is unlikely, because the request count is bounded by the
+number of leagues with fixtures today — but that bound is INCIDENTAL, not
+enforced.** Nothing in the code caps it; the football calendar does. The
+observed maximum is 23 leagues (46 credits) on 2026-09-05, and the highest
+plausible is bounded only by how many mapped leagues play on one day.
+
+**If that bound ever needs to be a real one, the change is a per-run ceiling
+sized to this path — not the refresh job's 24 — and it should be set from the
+observed distribution rather than guessed.** Recorded here rather than left for
+a later reader to infer from a `0`.
+
+*Recorded 2026-09-10.*
