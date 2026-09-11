@@ -11031,3 +11031,104 @@ observed distribution rather than guessed.** Recorded here rather than left for
 a later reader to infer from a `0`.
 
 *Recorded 2026-09-10.*
+
+---
+
+# OVER-CAP CLASS RE-COUNTED AFTER s5.10 — still one
+
+**The class was counted on 2026-09-10 and the decision made: consolidate
+post-s5.3 excess, leave pre-s5.3 documented. That count is now on changed
+inputs, so it was re-run rather than assumed.**
+
+**s5.10 merged 129 team rows on 2026-09-10.** The over-cap predicate groups match
+rows by shared provider id or name similarity, so merging teams makes *more*
+pairs provable — the class could only have grown.
+
+| | 2026-09-10 (pre-merge) | 2026-09-11 (post-merge) |
+| --- | --- | --- |
+| live picks | 1,750 | 1,757 |
+| fixture groups | 1,568 | 1,575 |
+| **over-cap fixtures** | **1** | **1** |
+
+**Still exactly one: 2026-08-08 `Estrela v Sporting CP`, three picks under a cap
+of 2**, rows 49271 and 49308, picks 1044 / 1051 / 1053 — and 1044 and 1053 are
+the SAME selection (`Over 2.5 Goals`) on one real fixture, both `is_paper=False`,
+both settled `win`.
+
+> **The decision stands unchanged, and it stands for the reason it was made
+> rather than by default.** Pre-s5.3 there was no per-fixture guarantee to
+> violate and the cap of 2 was satisfied; `disposition='consolidated'` means
+> never placed, and marking a pick that went to Telegram as never-placed would
+> misstate what happened. The README carries both figures.
+
+**What the re-count adds is not a new answer but a tested one.** A class counted
+once and never re-counted is a class counted under conditions that have since
+changed — the same error as the frontier arithmetic that was never re-derived
+after discovery came back.
+
+---
+
+# OPS-4 — STALE-PRICE REGIME (open when the first decline occurs)
+
+**Recorded as a bounded window, exactly as OPS-1 recorded the API-Football
+outage. Membership is derived from `pick_date`; no row is stamped.**
+
+## What changed, and why this is a regime and not an incident
+
+**Until 2026-09-10, exhausting the Odds API stopped closing-line CAPTURES. It now
+also stops PICK-TIME ODDS**, because the credit ledger covers `update()`. That is
+the intended consequence of routing one account through both consumers — and it
+moves the blast radius from the measurement to the prediction.
+
+**`bookmaker_blend_weight: 0.80`.** The bookmaker price is **80% of the blended
+1X2 and goals probabilities**. A pick built without a fresh price is built on
+whatever the odds table last held, which after a refusal is a figure from before
+the refusal.
+
+> ### Picks made inside this window are a materially different input regime, not merely noisier ones.
+> **At 80% weight, the dominant input is stale by construction.**
+
+## The window
+
+| | |
+| --- | --- |
+| **opens** | the first run in which the ledger or the provider declines a pick-time odds request — **not yet observed**; projected 2026-09-12 (ledger) to 09-14 (provider) at 34.6 credits/day |
+| **closes** | the billing-period reset, **2026-10-01**, when the tier returns to 500 |
+| **duration if it opens on the projection** | roughly **two and a half weeks** |
+| **membership** | `pick_date` within the window. Derived, never stamped. |
+
+**The open date will be written here from the log line that opens it** — one of
+`TheOddsAPI: monthly credit budget exhausted`, `budget allows N/M league
+request(s)`, or `QUOTA EXHAUSTED — 429 with x-requests-remaining=0`. All three
+are WARNING or above and all three are new as of 2026-09-10, so the window's
+opening is observable rather than inferred.
+
+## NOT stamped with `evidence_status` — the same ruling as OPS-1
+
+**`evidence_status` is write-once, and the exclusion case is unproven.** Nothing
+yet establishes that a pick built on a stale price is invalid evidence; it is a
+pick built on a different input regime, which is a question for analysis, not a
+property to be asserted at write time.
+
+> **OPS-1's ruling, applied again: record the WINDOW, derive membership from the
+> date.** A boundary can be revised when the analysis is done. A write-once stamp
+> cannot, and stamping 39 picks in August on an unproven exclusion is exactly the
+> move that was declined then.
+
+**And the fingerprint will not separate them.** Picks inside the window carry the
+same `model_version` as picks outside it, because `model_version` tracks
+configuration and not data availability — **the identical blind spot OPS-1
+recorded**, arriving a second time through a different integration.
+
+## What to do when it opens
+
+1. **Write the open timestamp and the triggering log line into this entry.**
+2. **Count the picks inside it daily**, as OPS-1 tabulated AF requests.
+3. **Do not change `bookmaker_blend_weight` to compensate.** That would be a
+   prediction-affecting change made inside the window it is meant to describe,
+   and it would make the window unanalysable — the regime would no longer be
+   constant across its own span.
+4. **At the reset, close the window and state the pick count**, so any later
+   analysis can separate them with a date range and no schema change.
+
+*Recorded 2026-09-11, before the window opened.*

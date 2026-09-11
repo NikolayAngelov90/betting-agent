@@ -644,6 +644,22 @@ TRACKED_KEYS: List[str] = [
 #:       23 leagues / 46 credits (2026-09-05). Stated so a later reader does not
 #:       read the 0 as an oversight.
 #:
+#:       STALE-PERIOD GATE, added 2026-09-11 in the same amendment.
+#:       `_load_persisted_credits()` read `remaining` and never read `updated`,
+#:       though `_persist_credits` has always written both. August closed at 15
+#:       and cleared the <=10 hard skip by five credits; September is projected
+#:       to exhaust around 09-14, so 1 October's first run would have skipped
+#:       the odds fetch entirely on a figure describing a finished month, with a
+#:       full 500-credit tier unused. A figure from a previous billing period is
+#:       NOT a low reading — it is NO reading, and the answer to no reading is to
+#:       PROBE (/v4/sports is free), not to skip. Same three-states-collapsed-
+#:       into-two as `[]` vs `None` and 429-with-credits vs 429-with-zero: the
+#:       third instance in this module.
+#:
+#:       This one CAN change a prediction, in the direction of making more: a
+#:       run that would have skipped the odds fetch now performs it. Recorded
+#:       under s5.10 because the cohort is still empty.
+#:
 #:       Neither sub-change alters a prediction on its own; both alter what the
 #:       pipeline KNOWS about its own budget, and the first can alter which
 #:       odds exist when a pick is priced. Recorded here rather than in a

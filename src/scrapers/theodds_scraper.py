@@ -35,11 +35,53 @@ _CREDITS_TIER_CRITICAL = 20   # ~1 day remaining
 _CREDITS_GATE_THRESHOLD = 10  # hard skip — not enough for even one league call
 
 
+def _credits_period(d) -> str:
+    """The billing period a reading belongs to. TheOddsAPI resets monthly."""
+    return str(d)[:7]
+
+
 def _load_persisted_credits() -> Optional[int]:
-    """Return last-known TheOddsAPI remaining credits from state file, or None."""
+    """Last-known remaining credits — but ONLY if the reading is from THIS month.
+
+    A figure written in a previous billing period is NOT a low reading. It is
+    NO reading, and the two must not be confused, because the quota resets to
+    the full tier at the period boundary and the stale number describes a month
+    that is over.
+
+    THIS WAS A NEAR-MISS AND IS NOW NEAR-CERTAIN. Until 2026-09-11 this read
+    `remaining` and ignored `updated`, though `_persist_credits` has always
+    written both. August closed at **15** remaining and cleared the <=10 skip by
+    five credits. **September is projected to exhaust around 09-14**, so the file
+    will carry a figure at or near zero into 1 October — and the first run of the
+    new month would have skipped the odds fetch entirely on a number describing
+    a finished month, with a full 500-credit tier sitting unused.
+
+    Returning None hands the caller "no reading", and the caller's answer to no
+    reading is to PROBE, not to skip. `/v4/sports` is free.
+    """
     try:
-        if _CREDITS_STATE_PATH.exists():
-            return json.loads(_CREDITS_STATE_PATH.read_text()).get("remaining")
+        if not _CREDITS_STATE_PATH.exists():
+            return None
+        blob = json.loads(_CREDITS_STATE_PATH.read_text())
+        remaining = blob.get("remaining")
+        if remaining is None:
+            return None
+        updated = blob.get("updated")
+        if not updated:
+            # Written before `updated` existed. Undatable is unusable for the
+            # same reason stale is: it cannot be placed in a period.
+            logger.warning(
+                "TheOddsAPI: persisted credit state carries no `updated` date "
+                "— treating as NO READING rather than a low one")
+            return None
+        if _credits_period(updated) != _credits_period(date.today()):
+            logger.warning(
+                f"TheOddsAPI: persisted credit state is from "
+                f"{_credits_period(updated)} and today is "
+                f"{_credits_period(date.today())} — the quota has reset since. "
+                f"Treating {remaining} as NO READING, not a low one.")
+            return None
+        return remaining
     except Exception:
         pass
     return None
@@ -444,6 +486,35 @@ class TheOddsScraper:
                     })
         return fixtures
 
+    async def probe_credits(self) -> Optional[int]:
+        """Ask the provider what it has left. FREE — /v4/sports costs 0 credits.
+
+        The answer to "no reading" is to probe, not to skip. A skip on an absent
+        or stale figure trades a free question for a whole day of missing odds,
+        which is the wrong way round: the probe costs nothing and the skip costs
+        the card.
+
+        Returns remaining credits, or None if the probe itself could not answer
+        — and None here means the caller should PROCEED, because a failed probe
+        is not evidence of an empty tier either.
+        """
+        if not self.api_key:
+            return None
+        try:
+            session = await self._get_session()
+            async with session.get(
+                    f"{BASE_URL}/sports", params={"apiKey": self.api_key},
+                    timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                self._absorb_quota_headers(resp)
+                if resp.status == 200:
+                    return self._remaining_requests
+                logger.warning(
+                    f"TheOddsAPI: credit probe returned {resp.status}")
+                return self._remaining_requests
+        except Exception as e:
+            logger.warning(f"TheOddsAPI: credit probe failed ({e})")
+            return None
+
     def _absorb_quota_headers(self, resp) -> None:
         """Record the provider's own credit counters from ANY response.
 
@@ -715,7 +786,19 @@ class TheOddsScraper:
 
         # Hard gate: if last-known credits are below the gate threshold, skip
         # entirely rather than burning the last few credits and going silent.
+        # `_load_persisted_credits` returns None for BOTH "no file" and "a file
+        # from a previous billing period". Either way the honest state is "we do
+        # not know", and the response to not knowing is to ask — /v4/sports is
+        # free. Skipping on an unknown figure is what would have lost 1 October
+        # to a number describing September.
         _persisted = _load_persisted_credits()
+        if _persisted is None:
+            _probed = await self.probe_credits()
+            if _probed is not None:
+                logger.info(
+                    f"TheOddsAPI: no current-period credit reading — probed "
+                    f"/v4/sports (free): {_probed} remaining")
+                _persisted = _probed
         if _persisted is not None and _persisted <= _CREDITS_GATE_THRESHOLD:
             logger.warning(
                 f"TheOddsAPI: skipping update — only {_persisted} credits remain "
