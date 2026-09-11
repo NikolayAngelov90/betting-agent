@@ -11502,3 +11502,106 @@ system is for — its configuration, its test names, its own source. **A pattern
 that cannot tell a description from an event will report the description.**
 
 *Recorded 2026-09-11.*
+
+---
+
+# THE RESURRECTION DIAGNOSED — and the alias remedy REFUSED BY THE PIN
+
+**2026-09-11. The fix jumped the queue because at 20%/day s5.10's benefit is
+gone by roughly 09-15; everything else on the list will still be there.**
+
+## The second path was the whole path
+
+**I reported the survivor-selection rule as covering six of eight and called
+`PSG`/`Paris SG` and `Metz`/`FC Metz` unexplained. That was backwards.**
+
+```python
+for cand_id, cand_name in session.query(Team.id, Team.name).filter_by(league=league):
+    if same_team_strict(team_name, cand_name):
+```
+
+**Every s5.10 survivor carries `league IS NULL`, so it is not in the candidate
+set and `same_team_strict` is never called against it.** That covers **all 26**,
+not two. `same_team_strict("PSG","Paris SG")` is True and always was — **it was
+never asked.**
+
+> ### Rule 1: a lookup is only as good as its earliest decision point.
+> The league filter decided the candidate set **before** the comparator was
+> consulted. Knowledge that exists, and a caller that decides before reading it.
+
+**And the concentration is the repair's own doing.** Only **2.9%** of teams carry
+a NULL league. OP1 kept the LOWEST ID; low ids are old rows created before the
+column was populated. **s5.10 walked its survivors into exactly that 2.9%.**
+
+## The alias set is derivable — and the pin refuses it
+
+**The user's framing is right: the aliases are not curated, they are the merge
+log. 129 merges yielded 110 distinct aliases, generated.** Then the pin ran over
+them, before anything landed:
+
+| | |
+| --- | --- |
+| generated aliases | **110** |
+| token-ADDING or neutral (safe) | 35 |
+| **token-DELETING (Stage 20 hazard direction)** | **75** |
+| hazard pairs before | 0 |
+| **NEW symmetric-canonicalisation hazards introduced** | **369** |
+
+**The predicted direction is exactly what happened, for the predicted reason:
+OP1 kept the lowest id rather than the longest name, so most merges canonicalise
+a longer name onto a shorter one and delete tokens.**
+
+**Most of the 369 are club tags** (`boavista fc -> boavista` losing its only
+overlap with `fc koln`) which `_tokens()` strips anyway — the scan uses raw
+`.split()`. **But at least one is genuine and decisive:**
+
+> `b. monchengladbach -> m'gladbach` **loses its only overlap with
+> `borussia monchengladbach`** — two names for one club that would stop
+> matching. **That is the Standard Liège defect.**
+
+**So the generated set does not land.** Each deleting-direction alias needs a
+ruling, and the union behaviour is not a substitute for running the pin — the
+pin was run, and it refused.
+
+## What each remedy actually prevents
+
+| | of the 26 |
+| --- | --- |
+| **league fix alone** (strict already True; only the filter hid the candidate) | **4** |
+| **needs an alias too** (`same_team_strict("Lens","Racing Club de Lens")` is False even when compared) | **18** |
+| survivor not identified by the generated table (diacritics: `FC Koln`/`1. FC Köln`) | 5 |
+
+> **Neither half is sufficient, and the league fix is the PRECONDITION: an alias
+> that makes the comparator return True is worthless while the comparator is
+> never called.** So the league fix ships now and the alias half is blocked on
+> classifying 75 rulings.
+
+## Shipped: `s5.11`
+
+The strict scan now covers `league == scraped OR league IS NULL` — **scoped, not
+unrestricted**, because an open scan would compare same-named clubs across
+countries. **The widening changes WHICH rows are compared, never WHAT counts as
+a match**, pinned by a test that still keeps `Sheffield United` and
+`Sheffield Wednesday` apart. Control: reverting the filter fails
+`test_a_null_league_twin_is_found`.
+
+**Selection-affecting, and s5.10 already carried 20 picks, so it is a BUMP and
+not an amendment.** `s5.11 = stage5_baseline_20260807.32df36`.
+
+## A pre-existing hazard found while testing, not caused by this
+
+**The exact-name lookup above the strict scan has NO league filter at all:**
+
+```python
+team = session.query(Team).filter_by(name=team_name).first()
+if team:
+    return team
+```
+
+**Two clubs sharing an exact name in different countries collapse into one row,
+and always have.** Found because a test I wrote asserted the opposite and failed.
+**Pinned as current behaviour rather than changed** — the blast radius of
+changing it is SPLITTING rows that already collapsed, which is harder than
+merging and needs its own decision.
+
+*Recorded 2026-09-11. 955 tests pass.*

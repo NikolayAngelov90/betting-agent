@@ -665,7 +665,58 @@ TRACKED_KEYS: List[str] = [
 #:       odds exist when a pick is priced. Recorded here rather than in a
 #:       separate revision because the cohort was empty and the two are one
 #:       edit.
-CODE_REVISION = "s5.10"
+#:
+#: s5.11 THE MERGE'S SURVIVORS WERE INVISIBLE TO THE DUPLICATE CHECK.
+#:       Bumped 2026-09-11 because s5.10 already carries 20 picks.
+#:
+#:       MEASURED THE DAY AFTER s5.10: of 27 new unresolved team rows, 26 were
+#:       EXACT-NAME resurrections of rows s5.10 had merged away. 129 merged, 26
+#:       back in ~24 hours — 20% of the repair undone in a day, all of it in
+#:       about five. 13 already carried matches.
+#:
+#:       THE CAUSE IS RULE 1, AND IT IS NOT THE ONE I NAMED FIRST. I reported
+#:       the survivor-selection rule (OP1 kept the lowest id, whose name is
+#:       often not the one the scraper writes) and called two cases unexplained.
+#:       The operative cause covers ALL 26: `flashscore._get_or_create_team`
+#:       scanned `filter_by(league=<scraped>)`, and every merge survivor carries
+#:       `league IS NULL`, so the survivor was never in the candidate set and
+#:       `same_team_strict` was never called against it.
+#:       `same_team_strict("PSG","Paris SG")` is True and always was — it was
+#:       never asked. A lookup is only as good as its earliest decision point.
+#:
+#:       WHY THE SURVIVORS WERE THE NULL ONES. Only 2.9% of teams carry a NULL
+#:       league; low ids are old rows created before the column was populated;
+#:       OP1 kept the lowest id. THE REPAIR WALKED ITS OWN OUTPUT INTO THE
+#:       BLIND SPOT.
+#:
+#:       THE CHANGE: the strict scan now covers `league == scraped OR league IS
+#:       NULL`. Scoped rather than unrestricted — an open scan would compare
+#:       same-named clubs across countries, and the widening must change WHICH
+#:       rows are compared, never WHAT counts as a match.
+#:
+#:       SELECTION-AFFECTING: a scraped name that now attaches to an existing
+#:       club changes which fixtures resolve, therefore which are priced and
+#:       picked, and Elo/Poisson key on team_id.
+#:
+#:       NECESSARY, NOT SUFFICIENT — stated so the remedy is not reported as
+#:       whole. Of the 26 it prevents 4 outright; 18 need an alias too, because
+#:       `same_team_strict("Lens","Racing Club de Lens")` is False even when
+#:       compared. THE ALIAS HALF IS BLOCKED BY THE PIN: the set generated from
+#:       the merge log (110 aliases from 129 merges, derived not curated)
+#:       introduces 369 new symmetric-canonicalisation hazards, with 75 of 110
+#:       in the token-DELETING direction precisely because OP1 kept the lowest
+#:       id rather than the longest name. `b. monchengladbach -> m'gladbach`
+#:       loses its only overlap with `borussia monchengladbach`, which is the
+#:       Standard Liege defect. It does not land until each is classified.
+#:
+#:       AND A PRE-EXISTING HAZARD FOUND WHILE TESTING, NOT CAUSED BY THIS: the
+#:       exact-name lookup above the strict scan has no league filter at all, so
+#:       two clubs sharing an exact name in different countries collapse into
+#:       one row and always did. Pinned as current behaviour in
+#:       tests/test_team_lookup_league_scope.py; changing it is a separate
+#:       decision whose blast radius is splitting rows, which is harder than
+#:       merging them.
+CODE_REVISION = "s5.11"
 
 
 def _stable(value: Any) -> Any:

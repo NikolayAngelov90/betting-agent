@@ -1811,11 +1811,33 @@ class FlashscoreScraper(BaseScraper):
         team = session.query(Team).filter_by(name=team_name).first()
         if team:
             return team
+        from sqlalchemy import or_
+
         from src.utils.team_names import same_team_strict
         # Scan on a two-column projection rather than whole Team rows — this
         # runs once per scraped team name, and only the winner (if any) needs
         # to be materialised as an ORM entity for the caller.
-        for cand_id, cand_name in session.query(Team.id, Team.name).filter_by(league=league):
+        #
+        # NULL-LEAGUE ROWS ARE INCLUDED, and that clause is the whole fix.
+        # Until 2026-09-11 this scanned `filter_by(league=league)` only, so a
+        # team whose stored league is NULL was never in the candidate set and
+        # `same_team_strict` was never called against it. Measured: s5.10
+        # merged 129 rows on 09-10 and 26 were re-created within a day, every
+        # one of them a duplicate of a survivor carrying `league IS NULL`.
+        # `same_team_strict("PSG", "Paris SG")` is True and always was — it was
+        # simply never asked.
+        #
+        # That is rule 1: a lookup is only as good as its earliest decision
+        # point. The league filter decided the candidate set BEFORE the
+        # comparator was consulted, so the knowledge existed and the caller
+        # never reached it.
+        #
+        # Scoped to `league == scraped OR league IS NULL` rather than dropped
+        # entirely: an unrestricted scan would compare every same-named club
+        # across every country, and `same_team_strict` is conservative but not
+        # infallible. This adds exactly the rows that were invisible.
+        for cand_id, cand_name in session.query(Team.id, Team.name).filter(
+                or_(Team.league == league, Team.league.is_(None))):
             if same_team_strict(team_name, cand_name):
                 return session.get(Team, cand_id)
         team = Team(name=team_name, league=league)

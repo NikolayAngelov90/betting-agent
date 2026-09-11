@@ -27,6 +27,12 @@ History:
                     2026-08-30 (Deportivo v Valencia, two picks). 835 pairs
                     match the provable branch; exactly 2 second-picks would
                     have been refused out of 1,458.
+    s5.11 2026-09-11  the merge's survivors were invisible to the duplicate
+                    check. flashscore._get_or_create_team scanned
+                    filter_by(league=<scraped>) and every s5.10 survivor carries
+                    league IS NULL, so same_team_strict was never called against
+                    it. 26 of 129 merged rows were re-created within a day.
+                    Scan now covers league == scraped OR league IS NULL.
     s5.10 2026-09-10  Stage 22 team identity repair. 2 wrong provider ids
                     cleared, 42 rows absorbed into 40 provable components,
                     86 unresolved rows merged into evidenced twins;
@@ -39,14 +45,14 @@ History:
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.10"
+CODE_REVISION_PIN = "s5.11"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.dfd410"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.32df36"
 
 #: The previous cohort, kept so a reader can see what moved and when.
-PREVIOUS_CODE_REVISION = "s5.9"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.694a60"
+PREVIOUS_CODE_REVISION = "s5.10"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.dfd410"
 
 
 #: How many completed-match queries are exempt from the training-exclusion
