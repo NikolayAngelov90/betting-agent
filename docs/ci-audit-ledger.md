@@ -11131,4 +11131,202 @@ recorded**, arriving a second time through a different integration.
 4. **At the reset, close the window and state the pick count**, so any later
    analysis can separate them with a date range and no schema change.
 
+**STATUS 2026-09-11: NOT OPEN.** None of the three triggering lines fired.
+Ledger 386/450 (64 headroom), provider 114 remaining, today's daily-picks claim
+32 credits, nothing declined. At today's rate the ledger's headroom is ~2 days,
+consistent with the 09-12 projection — but the window opens when a log line says
+so, not when a date arrives.
+
 *Recorded 2026-09-11, before the window opened.*
+
+---
+
+# 2026-09-11 — THE FIRST LIVE DAY OF THREE THINGS AT ONCE
+
+**Run `34575058888`, daily-picks, started 07:35 UTC. Plus 6 other new runs.**
+
+**Reconciliation first: `--unaudited` reported 53, of which 8 already had ledger
+rows. Of the 45 remaining, 38 are the no-op capture runs audited COLLECTIVELY in
+yesterday's pass — the summary table named 13 by id and grouped the other 26, so
+they do not match by id. Genuinely new: 7.** Yesterday's daily-picks
+(`34450809949`) is already in the ledger and is not re-audited.
+
+| run_id | workflow | started | conclusion | steps failed | audited on | verdict | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 34490402440 | paper-trading-report | 09-10 14:38 | success | 0 | 2026-09-11 | CLEAN | |
+| 34490476737 | closing-lines | 09-10 14:39 | success | 0 | 2026-09-11 | CLEAN | |
+| 34492536813 | closing-lines | 09-10 14:58 | success | 0 | 2026-09-11 | CLEAN | |
+| 34514152654 | closing-lines | 09-10 18:24 | success | 0 | 2026-09-11 | CLEAN | |
+| 34533063078 | closing-lines | 09-10 21:35 | success | 0 | 2026-09-11 | CLEAN | |
+| 34549031712 | closing-lines | 09-11 01:02 | success | 0 | 2026-09-11 | CLEAN | 0 reconcile events |
+| **34575058888** | **daily-picks** | **09-11 07:35** | success | 0 | 2026-09-11 | **CLEAN** | `disc[fs=27c/-m fdo=6c/5m af=0c/36m]`, 20 picks saved, **first s5.10 cohort members** |
+
+---
+
+## 1. THE CREDIT GATE'S FIRST PRODUCTION RUN — it fired, and the books balance
+
+```
+TheOddsAPI: 16 leagues with today's fixtures (skipping 2 unsupported)
+CREDITS_CLAIMED account=Daily-Betting-Picks credits=32 requests=16 asked=16 month=2026-09
+OddsApiQuota: claimed 32 credits for 16 league request(s). Month 2026-09: 386/450 used.
+TheOddsAPI update complete: 2232 odds rows written, 24 games matched, 0 unmatched (credits remaining: 114)
+```
+
+| question | answer |
+| --- | --- |
+| did `claim_requests()` fire on daily-picks? | **YES** — `account=Daily-Betting-Picks`, a second account name that did not exist before |
+| credits claimed | **32**, for 16 league requests |
+| anything declined? | **NO** — `asked=16`, granted 16 |
+| ledger vs provider | ledger **386/450**; provider header **114 remaining** = **386 used**. **They agree to the credit.** |
+| reconcile events | **0** — nothing to correct |
+| `not_requested` | **0 in any ODDS_REFRESH line** — correct, because nothing was truncated |
+| any league reporting `ok` that was not fetched | **none** |
+| 429s | **none** |
+
+> ### Ten days ago these two numbers diverged by 204 over the month. Today they are the same number.
+> `api_budget` row: `theoddsapi, used=386, limit_=450, updated 2026-09-11 07:56:30` —
+> stamped by the daily-picks claim itself, which is the path that used to be invisible.
+
+**AND A WARNING ABOUT MY OWN COUNTING.** A first pass grepped the log and
+reported `429 total: 20`, `budget exhausted: 1`, `not_requested: 1`. **All of it
+was pytest output** — the workflow runs the suite, and the new tests are *named*
+`test_every_historical_429_classifies_as_rate_limiting`,
+`test_declined_leagues_report_not_requested_never_ok`. The one real
+"budget exhausted" is API-Football's backfill budget, a different integration.
+
+> **Counting matches in a log that contains the test suite counts the test
+> suite.** Read the lines. The instruction to do so was in the prompt and the
+> first pass still got it wrong.
+
+**The gate has still never declined anything in production.** The
+never-executed path remains never-executed; only the claim path has run.
+
+## 2. s5.10's FIRST LIVE DAY
+
+**Today's 20 picks carry `stage5_baseline_20260807.dfd410`. The cohort has
+members, and `cohort_status` has flipped AMEND → BUMP.**
+
+### Fixture resolution
+
+| | fixtures | both resolve | |
+| --- | --- | --- | --- |
+| **2026-09-11 (today)** | 27 | **23** | **85.2%** |
+| 2026-09-10 (under s5.9) | 10 | 8 | 80.0% |
+
+**Against the history entry's projection, measured on the same windows today:**
+
+| window | projected (09-10) | measured (09-11) |
+| --- | --- | --- |
+| since 2026-08-01 | 89.25% | **88.03%** (1405/1596) |
+| last 365 days | 94.27% | **94.04%** (9187/9769) |
+
+> **The measured figure is BELOW the projection, and the reason is the
+> denominator, not the repair.** Matches since 08-01 grew 1,544 → 1,596 (+52)
+> while both-resolve grew 1,378 → 1,405 (+27). **New fixtures resolve at ~52%
+> against a repaired base of ~89%**, because they arrive carrying fresh
+> unresolved team rows. The repair's benefit decays unless new rows resolve too.
+> **The projection is not wrong; it described a fixed population and the
+> population moved** — the same shape as the frontier arithmetic.
+
+### The consequences that follow
+
+**s5.9's residual — no duplicate group formed today.** Checked independently of
+s5.9's own predicate (all 27 fixtures, grouped by league+kickoff, classified by
+branch): **branch1 = 0, branch2 = 0, residual = 0.** Consistent with
+`PICK_REJECTED = 0`, against **2 yesterday**.
+
+**The identity gate fired nothing.** The four `REFUSING fixture row` lines today
+are the Flashscore **kickoff-parse** guard, a different mechanism — refusing rows
+whose kickoff did not parse, including `Nijmegen vs Benfica`. No team-identity
+refusal occurred.
+
+**4 of 27 fixtures still touch an unresolved team, and two of them are s5.10's
+own refusals:**
+
+| fixture | unresolved side | why |
+| --- | --- | --- |
+| m51766 `Rakow v Motor Lublin` | **Rakow** | row 411's wrong id was NULLed by OP3, and OP2 **refused** the merge into `Raków Częstochowa` on head-to-head |
+| m51779 `Montpellier v Pau FC` | **Pau FC** | OP2 **refused** the merge into `St. Pauli` on schedule collision |
+| m51770 `Cherno More v Lok. Sofia` | Cherno More | never resolved |
+| m51756 `Union Berlin v FC Schalke 04` | FC Schalke 04 | never resolved |
+
+**A pick was saved on `Rakow v Motor Lublin` with the warning
+`Pick saved with no injury data` — the unresolved row has no provider id, so the
+injury lookup returns nothing.** That is the *measured cost of refusing*: it is
+real, it is visible, and it is two fixtures out of twenty-seven. **Cheaper than
+fusing two clubs' histories**, which is what the alternative was.
+
+### The selection-affecting half: the models refit under merged identities
+
+| | 09-09 | 09-10 (s5.9) | **09-11 (s5.10)** | change |
+| --- | --- | --- | --- | --- |
+| **Elo teams** | 1,547 | 1,564 | **1,457** | **−107** |
+| **Poisson teams** | 855 | 857 | **775** | **−82** |
+
+**This is the first fit under s5.10 and the merge is in it.** 129 rows were
+merged; Elo lost 107 and Poisson 82 — the difference being merged rows that
+carried no matches and so were never in a fit. **A club whose history was split
+across two ids now trains as one**, which is the half of s5.10 that is
+selection-affecting rather than bookkeeping.
+
+## 3. OPS-4 — the window did NOT open today
+
+**None of the three triggering lines fired.** No `monthly credit budget
+exhausted`, no `budget allows N/M`, no `QUOTA EXHAUSTED — 429 with
+x-requests-remaining=0`. **Today is clean.**
+
+| | |
+| --- | --- |
+| ledger | **386 / 450** — 64 credits of headroom |
+| provider | **114 remaining** |
+| today's claim | 32 credits |
+
+**At today's rate the ledger's headroom lasts ~2 days.** The projection was
+09-12 (ledger) / 09-14 (provider) and **nothing observed today contradicts it —
+but the projection remains a projection** and the window opens when a log line
+says so, not when a date arrives.
+
+## 4. THE CAPLOG CLASS — enumerated, and it is EMPTY
+
+**Exactly two test files reference `caplog`:**
+
+| file | verdict |
+| --- | --- |
+| `test_credit_gate_first_refusal.py` | the one that found the problem; uses a real loguru sink |
+| `test_barren_league_cache.py::test_the_refusal_is_logged` | **VALID** — `src/scrapers/barren_leagues.py` is the one module using stdlib `logging.getLogger(__name__)` |
+
+**Verified by positive control rather than by reading the import:** renaming the
+`EXCLUDING` message to `SILENCED_CONTROL` **fails** that test, and restoring it
+passes. It observes what it asserts.
+
+> **So there was nothing to repair — but the reason it is clean is one edit away
+> from changing.** `caplog` works there ONLY because that module uses stdlib
+> logging. Converting it to loguru would look like a tidy-up and would silently
+> make the test vacuous.
+
+**Pinned in `tests/test_logging_regime.py`**: the set of stdlib-logging modules
+is fixed, loguru is asserted to be the majority regime, and any `caplog` test
+that names no known stdlib module is flagged. **A vacuous assertion cannot be
+spotted by reading the test — only by knowing which logger the module uses**,
+which is now written down.
+
+## 5. THE STANDING MEASUREMENTS
+
+| measure | value |
+| --- | --- |
+| **CLV MODEL** | n=107, fixtures=107, **deff 1.00**, mean **+0.248%**, CI [−0.308%, +0.831%] |
+| **CLV FINAL** | n=125, fixtures=125, **deff 1.00**, mean **+0.125%**, CI [−0.399%, +0.680%] |
+| **H5 two-point 1X2-Home fixtures** | **134** (was 129 at the run; analysis ran ONCE on 09-10 and is not re-run) |
+| **H1 keys with ≥3 pre-kickoff observations** | **117** |
+| **H1 trigger** | n=55 is the MEAN sizing at σ=5.937%. H1 needs a CORRELATION derivation and **no ρ is registered — still blocked**, and the ~100-credit purchase is unaffordable before the reset anyway |
+| **s5.9 guarantee (independent)** | **0 violations** in 448 live picks since the cap-1 change, grouping by match row directly rather than through s5.9's own predicate |
+| **over-cap by FIXTURE identity** | **1**, the pre-s5.3 2026-08-08 case, unchanged |
+| **unpriced alarm** | **INFO — 1 fixture**, `have an API-Football id and no odds — odds-budget coverage, not identity`. A measured classification, not `None`. |
+| **OPS-3 delay** | today **4h35m**; series 09-03→09-11: 4h29, 4h31, 4h12, 4h24, 4h40, 4h31, 4h40, 4h36, **4h35**. Max 4h40m against the 6h40m that would reach the 09:40 boundary. Regime stable. |
+
+**deff = 1.00 on both series is s5.9's guarantee holding in the measurement it
+was built to protect** — one observation per fixture, so no interval is narrowed
+by a duplicated row.
+
+*Audited 2026-09-11. Read-only except the caplog enumeration, which is test-only
+and cohort-neutral. 949 tests pass.*
