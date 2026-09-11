@@ -10841,3 +10841,64 @@ made and was never revisited when its inputs changed.** The difference is that
 this one has a purchase decision hanging off it.
 
 *Recorded 2026-09-10.*
+
+---
+
+# A DEFECT I SHIPPED IN THE FIX, CAUGHT ONE COMMIT LATER — 2026-09-10
+
+**`a318055` committed `data/models/theodds_credits.json` holding
+`{"remaining": 100}`. That number was fabricated by my own tests.**
+
+## What happened
+
+`_absorb_quota_headers` — the method the fix *added* — calls `_persist_credits`,
+which writes the provider's remaining-credit count to
+`data/models/theodds_credits.json`. **`tests/test_odds_credit_gate.py` feeds it
+fabricated header values**, so running the suite overwrote that file with a
+made-up number, and `git add -A` committed it. **The true reading at the time was
+154. The repo shipped 100.**
+
+## Why it is not cosmetic
+
+**The file is not decorative.** `TheOddsScraper.update()` hard-skips the entire
+odds fetch when it reads at or below `_CREDITS_GATE_THRESHOLD` (10):
+
+```
+TheOddsAPI: skipping update — only N credits remain (gate threshold: 10)
+```
+
+**Two of the new tests write `remaining=0`.** The final value on disk was 100
+only because `test_success_still_returns_rows_and_absorbs_headers` happens to run
+last. **A different test ORDER leaves 0, and the next production run silently
+stops fetching pick-time odds entirely** — the exact silent-degradation class
+this suite exists to catch, introduced by the suite, in the commit that closed
+two instances of it.
+
+**And the file was previously UNTRACKED**, so CI had none and
+`_load_persisted_credits()` returned `None` — the gate did not apply. **Committing
+it made a fabricated value the CI default.**
+
+## The fix, structural rather than vigilant
+
+| | |
+| --- | --- |
+| untracked and added to `.gitignore` | it is per-environment runtime state, like every other `data/models/*` entry |
+| local copy restored to **154** | the last true production reading, 2026-09-10 |
+| `conftest.py` autouse fixture redirects `_CREDITS_STATE_PATH` to `tmp_path` | **for every test**, not stubbed in the one file that noticed |
+
+**Verified by positive control**: with the fixture disabled the file is clobbered
+to `{"remaining": 100}`; with it enabled the md5 is identical before and after a
+full run.
+
+> ### This is the filesystem twin of the guard already sitting six lines above it.
+>
+> `conftest.py` strips `DATABASE_URL` because *"tests must NEVER touch a real
+> database… this actually happened."* **The same class reached production state
+> by a second route that the first guard does not cover** — and it did so in the
+> commit whose entire subject was a second consumer bypassing a shared
+> mechanism.
+
+**Recorded rather than quietly amended.** The commit stands; the correction
+follows it.
+
+*Recorded 2026-09-10.*
