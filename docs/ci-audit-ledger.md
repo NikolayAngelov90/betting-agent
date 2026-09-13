@@ -11798,7 +11798,7 @@ No picks exist for 2026-09-13, consistent with an incomplete run.
 | 34709139604 | closing-lines | 09-12 17:44 | CLEAN | |
 | 34719911706 | closing-lines | 09-12 21:25 | CLEAN | |
 | 34729322719 | closing-lines | 09-13 00:58 | CLEAN | |
-| ~~34745992077~~ | daily-picks | 09-13 07:44 | **IN_PROGRESS — RESOLVED** | zero-byte log because the run was still executing: 29 min old, step 15 of 31, inside its 65-min budget. No failure. See the resolution entry. |
+| **34745992077** | daily-picks | 09-13 07:44 | **DEGRADED** | re-audited after completion (success, 08:55:05, ~70 min). `disc[fs=70c/-m fdo=22c/42m af=1c/181m]`, 3 rows carry NO ODDS, **1 alert failed to deliver**, 49 picks. Was IN_PROGRESS when first audited 29 min in. |
 
 | measure | value |
 | --- | --- |
@@ -12147,3 +12147,140 @@ verdict derived from them is final.
    re-audit instruction, not a result.
 
 *Recorded 2026-09-13.*
+
+---
+
+# 2026-09-13 (second pass) — the rule's first test, and DEL-1's real status
+
+## 1. 34745992077 RESOLVED — and the procedure did NOT fire
+
+**Re-audited after completion. `conclusion: success`, finished 08:55:05 UTC,
+total runtime ~70 minutes.**
+
+| | |
+| --- | --- |
+| verdict | **IN_PROGRESS → DEGRADED** |
+| disc | `disc[fs=70c/-m fdo=22c/42m af=1c/181m]` |
+| findings | 3 rows carry NO ODDS while same-league peers do; **1 alert failed to deliver** |
+| picks | **49**, all `stage5_baseline_20260807.32df36` |
+
+### The honest answer about the procedure
+
+> ### The second pass happened because it was raised here. The rule did not cause it.
+
+**The rule was written into `.claude/commands/daily-ci-audit.md` on 2026-09-13
+and is not operative.** Nothing surfaces an unresolved `IN_PROGRESS` or
+`UNAUDITABLE` row: `--unaudited` looks for runs with NO ledger row, and this run
+HAD one — a row saying "come back later" that no mechanism comes back to.
+
+**So the rule as written has the defect it was written about, one level up:**
+
+| | |
+| --- | --- |
+| the original defect | a gap reported as health (`CLEAN` on no evidence) |
+| the fix | name the third state (`UNAUDITABLE`, `IN_PROGRESS`) |
+| **the remaining gap** | **a named non-verdict that nothing is obliged to resolve** |
+
+**`--unaudited` is the wrong instrument for this and cannot be made right by
+care**: a run with a provisional row is, to that query, audited. **What would
+close it: `--unaudited` treating `IN_PROGRESS`/`UNAUDITABLE` rows as unaudited,
+so the next day's pass re-lists them automatically.** Recorded as an open item,
+not built — this pass is read-only.
+
+**Counted honestly: one provisional verdict was issued, one was resolved, and
+the resolution rate depends entirely on someone remembering.**
+
+## 2. The unaudited set — nothing has run since 08:55
+
+**`--unaudited` reported 53; 11 already carry ledger rows; 42 are "genuinely
+new" by id and are the no-op capture and report runs audited COLLECTIVELY on
+09-10 and 09-11**, where the table named a subset by id and grouped the rest.
+They are not re-audited.
+
+**Nothing at all has run after 34745992077 (09-13 07:44 → 08:55).** Checked
+directly against all three workflows: **zero runs after 08:00 UTC, and it is now
+12:55 UTC.**
+
+> **Two scheduled closing-lines slots passed without firing** — `47 10 * * *`
+> and the 11:17 entry. **Four hours of schedule, no runs.** Consistent with the
+> documented GitHub cron unreliability and with the measurement that 199 of 421
+> picks had no run in their pre-kickoff window; recorded here as a fresh
+> instance rather than a new finding.
+
+## 3. DEL-1 — the guarantee did NOT regress. It was never extended to this sender.
+
+**Both failures are `src.reporting.telegram_bot._send_message`. DEL-1's remedy
+in `59d78d0` hardened `scripts/ci_alert.py`. They are different senders.**
+
+```
+2026-09-12 08:54:17 | ERROR | telegram_bot:_send_message:717 - Failed to send Telegram message: Timed out
+2026-09-13 08:53:14 | ERROR | telegram_bot:_send_message:717 - Failed to send Telegram message: Timed out
+```
+
+**Answering each question directly:**
+
+| question | answer |
+| --- | --- |
+| did retries fire and exhaust, or fail on the first attempt? | **First attempt.** `_send_message` has NO timeout retry. Its only retry is for a chat-id migration (`new_chat_id`), which a timeout is not. |
+| was the `::error::` annotation emitted? | **No.** `_send_message` never emits one. |
+| did the step summary carry it? | **No.** It writes no summary. |
+| was the outcome recorded, or inferred? | **INFERRED.** There is no `DeliveryResult`, no database row, no structured outcome — `ci_audit` matches the string `Failed to send Telegram message`. |
+
+> ### A recorded delivery failure is the guarantee working. This is an INFERRED failure, so the guarantee is absent here rather than broken.
+>
+> **The two read identically in the ledger, which is exactly the distinction
+> worth making.** `ci_alert` carries the retry, the backoff, the annotation, the
+> summary and the `DeliveryResult`. `telegram_bot` carries `logger.error(...)`
+> and `return None`.
+
+### What was actually lost, which is worse than a clean failure
+
+| run | sends | fails | what happened |
+| --- | --- | --- | --- |
+| 34680727029 (09-12) | 4 | 1 | three chunks at 08:54:12, **the FOURTH failed at 08:54:17**, and no `Performance report sent to Telegram!` line follows — **the report was truncated** |
+| 34745992077 (09-13) | 6 | 1 | send 08:53:09, **FAIL 08:53:14**, send 08:53:17 — **a MIDDLE chunk was lost and the sequence carried on**, and the report later completed normally |
+
+> **The 09-13 case is the more dangerous shape: a report that arrives looking
+> complete with a section missing from the middle, and nothing in the channel
+> says so.** A reader sees a shorter message, not an error.
+
+**The settlement report on 09-12 delivered fine (08:01:57).** Both failures are
+in the performance-report path, both at the same point in the run, both
+`Timed out` — twice in two days is a pattern, not a coincidence.
+
+**Recorded, not fixed: this pass is read-only.** The remedy is the one already
+built once — extend `ci_alert`'s `DeliveryResult` machinery to
+`telegram_bot._send_message`, which is the second consumer bypassing a shared
+mechanism, the same shape as the credit ledger.
+
+## 4. Standing measurements
+
+**Stage 23 has NOT landed** — it is registered only, so the composition below is
+s5.11's, and the prediction remains unjudged.
+
+| day | total | alias-needed | SQL-null-blind | new club |
+| --- | --- | --- | --- | --- |
+| 2026-09-12 | 18 | 14 | **4** | 0 |
+| 2026-09-13 | 9 | 4 | **3** | 2 |
+
+**SQL-null-blind rows persist at 3–4/day exactly as the registration predicts
+they would until Stage 23 lands.** The registered post-Stage-23 figures — SQL-null
+to 0, alias ~9.5/day — remain the thing to judge against.
+
+| measure | value |
+| --- | --- |
+| **OPS-4** | **still open.** Ledger unchanged at **400/450**, last written 09-11 18:29 — no claim has succeeded since, consistent with total refusal. Closes at the 10-01 reset. |
+| **CLV MODEL** | n=110, fixtures=110, **deff 1.00**, +0.311%, CI [−0.243%, +0.881%] |
+| **CLV FINAL** | n=128, fixtures=128, **deff 1.00**, +0.182%, CI [−0.360%, +0.741%] |
+| **s5.9 guarantee** | **0 rows over cap** in 545 live picks since the cap-1 change |
+| **unpriced alarm** | **3 ALARM-class rows on each of 09-12 and 09-13** — WARNING, identity class (`no API-Football id`), with peer medians of 75–85 quoted. A measured result, not `None`. |
+| **OPS-3 delay** | 09-12 **4h26m**, 09-13 **4h45m**. Series 4h12m–4h45m; today is the largest observed and still 1h55m short of the 6h40m boundary. |
+| cohort | 09-12 **48** picks, 09-13 **49** picks, all `32df36` (s5.11) |
+
+> **The unpriced alarms are downstream of the resurrection defect.**
+> `Freiburg vs M'gladbach` and `Getafe vs Dep. A Coruna` both name rows involved
+> in it — `M'gladbach` is a merge survivor and `Dep. A Coruna` a resurrected
+> duplicate. **A row created without a provider id carries no odds, and the
+> alarm that fires is the identity class.** Three a day is the current cost.
+
+*Audited 2026-09-13, second pass. Read-only.*
