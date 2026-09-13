@@ -124,6 +124,43 @@ def same_team_strict(name_a: str, name_b: str) -> bool:
 def team_names_similar(name_a: str, name_b: str) -> bool:
     """Return True if two team names likely refer to the same team.
 
+    ────────────────────────────────────────────────────────────────────────
+    BEFORE YOU EXTEND THIS COMPARATOR, READ THIS.
+
+    The obvious way to make an alias table safer is to UNION: try raw-vs-raw,
+    aliased-vs-aliased AND raw-vs-aliased, and accept if any passes. That fix
+    is correct in `names_share_an_anchor` (Stage 21) and it is WRONG here. It
+    was measured on 2026-09-13 rather than argued, and it produced 38 new
+    matches of which roughly half are absurd:
+
+        ac milan              == manchester utd
+        cremonese             == usa
+        a. lustenau           == az alkmaar
+        dep. a coruna         == lask
+        cf estrela da amadora == sv darmstadt 98
+
+    (`a. lustenau` keeps the token `a`, which prefix-matches `az` and
+    `almeria` under `_tok_match`.)
+
+        UNION IS SAFE WHERE THE COMBINED FORM IS A SUPERSET OF EACH INPUT'S
+        EVIDENCE, AND UNSAFE WHERE COMBINING CREATES NEW PAIRWISE COMPARISONS.
+
+    The anchor gate intersects token SETS: adding a variant can only add
+    tokens, and a larger set cannot destroy an overlap, so union is monotone.
+    This function is a per-token RATIO with a prefix rule, so the cross product
+    runs comparisons neither pure form performs.
+
+        A COMPARISON THAT DID NOT EXIST CANNOT BE BOUNDED BY REASONING ABOUT
+        THE ONES THAT DID.
+
+    That last sentence is not about union. It is why 75 alias rulings were not
+    attempted by judgement: each would have reasoned about comparisons the
+    change was about to invent, and no amount of care reaches a case that does
+    not yet exist. Measure the extension against the impostor set before
+    shipping it — `tests/test_alias_symmetry_hazard.py` holds the inventory.
+    ────────────────────────────────────────────────────────────────────────
+
+
     Handles common differences between data sources:
     - Abbreviations:    "Man City" vs "Manchester City"
     - Short names:      "Oxford" vs "Oxford Utd" / "Oxford United"

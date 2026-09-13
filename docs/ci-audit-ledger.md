@@ -11131,6 +11131,13 @@ recorded**, arriving a second time through a different integration.
 4. **At the reset, close the window and state the pick count**, so any later
    analysis can separate them with a date range and no schema change.
 
+**DECIDED 2026-09-13: accept the reduced capture, do not spend.** Stage 16
+closed the axis these captures inform — MODEL upper bound +0.107% against a
++1.85% requirement, the 500 target over-specified ~29x — so lost captures buy
+precision on a resolved question. H5 has run at n=134; H1 is blocked on policy
+and an unregistered rho, not on capture volume. Same answer as 2026-09-04, and
+recorded here so the next exhaustion does not re-derive it.
+
 **STATUS 2026-09-12: OPEN.** Opened 2026-09-12 07:52:13 UTC on the line
 `TheOddsAPI: monthly credit budget exhausted - making NO requests this run`,
 after `CREDITS_CLAIMED account=Daily-Betting-Picks credits=0 requests=0
@@ -11976,5 +11983,77 @@ comparators do not.**
 **One measurement established that instead of seventy-five judgements, and the
 reason is now understood rather than assumed** — which is the difference between
 knowing the answer and having been lucky.
+
+*Recorded 2026-09-13.*
+
+---
+
+# OPS-4 — DECIDED: accept the reduced capture, do not spend
+
+**Decision taken 2026-09-13, with the reasoning attached so the next exhaustion
+does not re-open it from scratch.**
+
+## The decision
+
+> ### Accept ~18 days of reduced closing-line capture. Do not spend to restore it.
+
+## Why, from the record rather than from preference
+
+**Stage 16 closed the question the closing lines answer.** The MODEL series'
+upper bound is **+0.107%** against a **+1.85%** requirement, and the 500-capture
+target was over-specified roughly **twenty-nine-fold**. **Lost captures buy
+precision on a resolved axis** — a narrower interval around a number already
+known to sit an order of magnitude below break-even.
+
+**That reasoning is not new here.** It retired the "severe loss" framing on
+2026-09-04 when the same question arose, and **it applies unchanged**: nothing
+about the exhaustion changes which axis the captures inform.
+
+**And nothing else is blocked by it:**
+
+| | |
+| --- | --- |
+| **H5** | analysis RAN, once, at n=134. Not waiting on captures. |
+| **H1** | blocked on policy (one refresh per window) and an unregistered ρ — **not on capture volume**. Buying captures would not move it. |
+| **the MODEL/FINAL experiment** | picks are priced and recorded normally; only the closing half thins |
+| **pick pricing** | unaffected — API-Football, ~18 minutes fresh |
+
+## What the decision is NOT
+
+**It is not "the captures do not matter".** It is that **their marginal value is
+against a closed question**, and this project's own arithmetic says the target
+was 29× over-specified. If the axis reopens — a model change that could plausibly
+beat the close — the calculation changes and this entry should be revisited
+rather than cited.
+
+**Recorded so the next exhaustion reads this instead of re-deriving it.** The
+reasoning is Stage 16's, the measurement is 18 minutes, and the answer is the
+same one given on 09-04.
+
+---
+
+# A CLASS OPENED, ENUMERATED AND CLOSED — the three-state collapse
+
+**Three instances, one path, one shape, all fixed. This has not happened often
+here, and naming the closure is the point of having named the class.**
+
+| # | site | "found nothing" | "could not look" | fixed |
+| --- | --- | --- | --- | --- |
+| 1 | league fetch | `[]` — priced nothing | `None` — the call failed | `Refusal`, 2026-09-10 |
+| 2 | HTTP 429 | credits remaining → rate limited | `x-requests-remaining=0` → exhausted | header-first parse, 2026-09-10 |
+| 3 | audit verdict | no hits → CLEAN | no log → **CLEAN** | `UNAUDITABLE`, 2026-09-13 |
+
+**Every one returned the same value for two different states. Every one was
+fixed by naming the third state rather than by widening a check** — a
+distinction the code could carry, not a threshold someone had to remember.
+
+> **The class is closed.** Enumerated by looking at the path rather than at the
+> instance that surfaced, which is the discipline that found #3 before it cost
+> anything: run 34745992077 scored CLEAN on a zero-byte log, and nothing
+> downstream had yet read that verdict.
+
+**What would reopen it:** a fourth site in this path where an empty result and an
+unmeasured result share a return value. The three known ones now differ by type
+(`Refusal`), by branch (429 split) and by verdict (`UNAUDITABLE`).
 
 *Recorded 2026-09-13.*
