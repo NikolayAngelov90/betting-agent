@@ -11131,6 +11131,14 @@ recorded**, arriving a second time through a different integration.
 4. **At the reset, close the window and state the pick count**, so any later
    analysis can separate them with a date range and no schema change.
 
+**STATUS 2026-09-12: OPEN.** Opened 2026-09-12 07:52:13 UTC on the line
+`TheOddsAPI: monthly credit budget exhausted - making NO requests this run`,
+after `CREDITS_CLAIMED account=Daily-Betting-Picks credits=0 requests=0
+asked=22`. Ledger 400/450, provider still holding ~100 credits — the 50-credit
+safety margin, exactly as this entry anticipated. 48 picks dated 2026-09-12 fall
+inside, all paper, all `stage5_baseline_20260807.32df36`. Membership derived
+from pick_date; nothing stamped. Closes at the 2026-10-01 reset.
+
 **STATUS 2026-09-11: NOT OPEN.** None of the three triggering lines fired.
 Ledger 386/450 (64 headroom), provider 114 remaining, today's daily-picks claim
 32 credits, nothing declined. At today's rate the ledger's headroom is ~2 days,
@@ -11605,3 +11613,192 @@ changing it is SPLITTING rows that already collapsed, which is harder than
 merging and needs its own decision.
 
 *Recorded 2026-09-11. 955 tests pass.*
+
+---
+
+# 2026-09-13 — THE PREDICTION CHECKED, THE UNION MEASURED, OPS-4 OPEN
+
+## 1. The resurrection rate, against the prediction literally
+
+**I predicted the league fix would cut the 26/day rate, and that a drop only to
+~18 would mean the 18 alias-needing cases remain.**
+
+| day | new unresolved rows | |
+| --- | --- | --- |
+| 09-11 | **23** | pre-fix — s5.11 committed 15:56, after the 07:34 run |
+| **09-12** | **18** | **first day under s5.11** |
+| 09-13 | 10 | run incomplete, see section 6 |
+
+**The prediction was right to the row. 09-12 = 18.** The decomposition says the
+cause is not what I assumed:
+
+| | 09-12 | 09-13 |
+| --- | --- | --- |
+| resurrections of s5.10 survivors | 18 | 8 |
+| **league-fix-sufficient — SHOULD BE ZERO** | **4** | **3** |
+| alias-needed | 14 | 5 |
+| survivor-unidentified | 0 | 0 |
+
+## 2. My fix was directional and I fixed only one direction
+
+```
+FC Alverca -> Alverca    lg=None / portugal/primeira-liga
+Milan      -> AC Milan   lg=None / italy/serie-a
+```
+
+**The NEW row carries NULL and the SURVIVOR carries a concrete league — the
+reverse of the case I fixed.** `Team.league == None` is never true in SQL, so
+the survivor is still outside the candidate set. **s5.11 handles "survivor NULL,
+scraped concrete" and not "scraped NULL, survivor concrete".**
+
+**And a THIRD creation path is now the dominant producer.** 21 of 28 post-fix
+rows carry NULL league. `disc[fs=112c/-m fdo=42c/6m af=3c/136m]` on 09-12:
+**footballdataorg created 42 rows**, and its path is exact-name, then a prefix
+fallback, then create — with no league and **no strict matching at all**.
+
+**Three creation paths, three matching regimes:**
+
+| path | matching |
+| --- | --- |
+| `flashscore._get_or_create_team` | exact, then strict scan (league-scoped; NULL survivors added in s5.11) |
+| `apifootball._get_or_create_team_id` | provider-id first, then `Team.league.notin_(nat_list)` — **`NULL NOT IN (...)` is NULL, so NULL-league rows are excluded here too** |
+| `footballdataorg` | exact, then prefix, then create. **`same_team_strict` never called.** |
+
+> **The duplicate check is not one mechanism with a bug. It is three mechanisms
+> with three blind spots, and s5.10's survivors are invisible to all three for
+> three different reasons.**
+
+## 3. The union measurement — NOT safe here, and the classification stands
+
+**Measured rather than argued. One measurement instead of seventy-five
+judgements.**
+
+| test | result |
+| --- | --- |
+| known impostors — Telstar/Maccabi, Rapid Vienna/Bucuresti, Pau/St. Pauli, Cracovia/Rakow, Sheffield Utd/Wed, BW Linz/LASK, AC/Inter Milan, Malmo/Malmo BI | **0 newly matched** |
+| the 359 flagged pairs, regressions | **0** |
+| the 359 flagged pairs, rescued | 3 |
+| `b. monchengladbach` / `borussia monchengladbach` | preserved — raw True, union True |
+| **new matches across the alias name space** | **38** |
+
+**The first four are clean. The fifth is the answer.** Union creates 38 new
+matches and roughly half are wrong, by name:
+
+```
+ac milan              == manchester utd          WRONG
+cremonese             == usa                     WRONG
+a. lustenau           == az alkmaar              WRONG
+a. lustenau           == ud almeria              WRONG
+cf estrela da amadora == sv darmstadt 98         WRONG
+corvinul              == notts county            WRONG
+cottbus               == notts county            WRONG
+dep. a coruna         == lask / lask linz / pae aek / ud almeria    WRONG
+famalicao             == sabah fk                WRONG
+fc copenhagen         == notts county            WRONG
+```
+
+against the correct additions `ac sparta praha == sparta prague`,
+`aek athens == pae aek`, `as saint-etienne == st etienne`,
+`b. monchengladbach == m'gladbach`, `celta de vigo ii == celta vigo b`,
+`dep. a coruna == dep. la coruna`, `fc copenhagen == fc kbenhavn`.
+
+**The mechanism is exactly the risk direction named in advance.** The anchor gate
+unions SETS, where adding cannot delete an overlap. `team_names_similar` is a
+RATIO over tokens, so the raw-versus-aliased cross product introduces
+comparisons neither pure form would make — `a. lustenau` keeps the token `a`,
+which prefix-matches `az` and `almeria`.
+
+> ### The union is safe in the anchor gate and unsafe here, and the difference is set-versus-ratio, not principle.
+>
+> **So the 75 do not collapse to zero and the classification work stands — but
+> it cost one measurement to establish instead of seventy-five judgements, which
+> was the point of measuring.**
+
+## 4. The exact-name collapse — sized, and the size is NOT established
+
+**706 team rows appear in more than one league.** That is an **upper bound and
+mostly innocent**: a club in a European tie legitimately appears in its domestic
+league and the competition. The worst cases by league count — `LASK` 6, `Ajax`
+6, `Fenerbahce` 6, `FCSB` 6 — are all plausibly legitimate.
+
+> **This metric does not isolate the defect, so 706 is not reported as the
+> answer.** What would size it: rows whose matches span leagues in different
+> COUNTRIES with no European competition in the set, which needs a country
+> mapping this query does not have. **Recorded as unsized with the method for
+> sizing it**, rather than quoting a number that would be read as the population.
+
+## 5. OPS-4 IS OPEN — 2026-09-12 07:52:13 UTC
+
+**Projected ledger date was 09-12. It opened on 09-12.**
+
+Triggering line, verbatim:
+
+```
+2026-09-12 07:52:13 | WARNING | src.scrapers.theodds_scraper:_fetch_and_persist:890 -
+TheOddsAPI: monthly credit budget exhausted - making NO requests this run.
+OddsApiQuota 2026-09: 400/450 credits used, 0 spendable (safety margin 50,
+free tier 500), = 0 more league request(s); this run has spent 0/0
+```
+
+and the claim that preceded it:
+
+```
+CREDITS_CLAIMED account=Daily-Betting-Picks credits=0 requests=0 asked=22 month=2026-09
+OddsApiQuota: budget limited this run - asked for 22 league request(s) (44 credits),
+granted 0 (0). Month 2026-09: 400/450 used, 0 spendable after a 50-credit safety margin.
+```
+
+**This is the gate's FIRST REFUSAL IN PRODUCTION and it refused TOTALLY: asked
+22, granted 0.** The never-executed path executed, and against the four
+properties pinned in advance on 09-10: it was **LOUD** (WARNING), the run
+**CONTINUED** (48 picks saved), and no league reported `ok`.
+
+**Membership, derived from `pick_date`, nothing stamped:**
+
+| | |
+| --- | --- |
+| window opened | **2026-09-12 07:52:13 UTC** |
+| closes | 2026-10-01, the period reset |
+| **picks inside so far** | **48**, dated 2026-09-12, all paper, all `stage5_baseline_20260807.32df36` |
+
+**The provider still had roughly 100 credits when the ledger refused** — 400 used
+against a 500 tier, refused at the 450 limit. **That is precisely the 50-credit
+safety-margin window OPS-4 was opened to describe**, and those 48 picks were
+built on odds that were never refreshed.
+
+## 6. The 09-13 run — UNTESTABLE, and ci_audit called it CLEAN
+
+**`34745992077`, daily-picks, started 07:44. Its cached log is ZERO BYTES, and
+`ci_audit --unaudited` reported it `CLEAN`.**
+
+> **A verdict from no evidence.** The tool's CLEAN means "no assertion fired",
+> and no assertion can fire against an empty file. **`UNTESTABLE — empty log`**
+> is the honest verdict. **Third defect recorded against `ci_audit`**, after the
+> `--unaudited` under-report and the `src_apifootball_fixtures` pattern warning.
+
+No picks exist for 2026-09-13, consistent with an incomplete run.
+
+## 7. The standing pass
+
+| run_id | workflow | started | verdict | notes |
+| --- | --- | --- | --- | --- |
+| 34650591387 | closing-lines | 09-11 21:41 | CLEAN | |
+| 34663712783 | closing-lines | 09-12 01:04 | CLEAN | |
+| **34680727029** | **daily-picks** | **09-12 07:26** | **DEGRADED** | `disc[fs=112c/-m fdo=42c/6m af=3c/136m]`. **OPS-4 opened.** 48 picks on unrefreshed odds. 3 rows carry NO ODDS while same-league peers do. **1 alert failed to deliver.** |
+| 34697238863 | paper-trading-report | 09-12 13:44 | CLEAN | |
+| 34697302997 | closing-lines | 09-12 13:45 | CLEAN | |
+| 34698262660 | closing-lines | 09-12 14:05 | CLEAN | |
+| 34709139604 | closing-lines | 09-12 17:44 | CLEAN | |
+| 34719911706 | closing-lines | 09-12 21:25 | CLEAN | |
+| 34729322719 | closing-lines | 09-13 00:58 | CLEAN | |
+| **34745992077** | daily-picks | 09-13 07:44 | **UNTESTABLE** | **zero-byte log** |
+
+| measure | value |
+| --- | --- |
+| **s5.11 in production** | **live from 09-12** — 48 picks carry `stage5_baseline_20260807.32df36` |
+| **CLV MODEL** | n=110, fixtures=110, **deff 1.00**, +0.311%, CI [-0.243%, +0.881%] |
+| **CLV FINAL** | n=128, fixtures=128, **deff 1.00**, +0.182%, CI [-0.360%, +0.741%] |
+| **s5.9 guarantee** | **0 rows over cap** in 496 live picks since the cap-1 change |
+| ledger vs provider | ledger **400/450**, last claim 09-11 18:29; 09-12 claimed **0** |
+
+*Audited 2026-09-13.*
