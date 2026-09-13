@@ -16,7 +16,9 @@
 | genuinely new club | n/a | 0 | 2 | 2 |
 | **total new unresolved rows** | | **18** | **10** | **28** |
 
-### What is predicted
+### SUPERSEDED 2026-09-13 — see the re-registration below
+
+### What was predicted (registration 1)
 
 > **The resurrection rate FALLS TO APPROXIMATELY THE ALIAS-NEEDED COUNT — a
 > mean of 9.5/day against the current ~14/day — and does NOT reach zero.**
@@ -105,3 +107,55 @@ in it.
 > a pipeline whose whole output is priced fixtures.
 
 *Registered 2026-09-13, before the code.*
+
+---
+
+# RE-REGISTERED 2026-09-13, BEFORE THE CODE LANDED
+
+**Registration 1 is kept above with the reason it was superseded: it assumed the
+remaining ~75% needed 75 alias rulings. It does not. The resurrections are
+EXACT — measured 44 of 44, no diacritic, punctuation or token variance — so an
+exact former-name lookup closes them with no comparator, no ratio, no cross
+product and none of the rulings.**
+
+## The premise, verified before the design
+
+| | |
+| --- | --- |
+| resurrections since s5.10 | **44** |
+| **EXACT match to a merged-away name** | **44 (100%)** |
+| differing by diacritics | 0 |
+| differing by punctuation or case | 0 |
+| not a merged name at all | 0 |
+
+**The "5 survivor-unidentified" residual in registration 1 was an artefact of my
+generated alias table's normalisation, not a real class.**
+
+## The new prediction
+
+| | registration 1 | **registration 2** |
+| --- | --- | --- |
+| SQL-null-blind rows/day | 0 | **0** |
+| alias-needed rows/day | unchanged, ~9.5 | **0** |
+| new-club rows/day | unaffected | unaffected |
+| **share of resurrections removed** | ~25% | **~100%** |
+
+**If the rate does not fall to ~0, the residual is a mechanism none of the five
+steps covers** — and a fifth path after four were found by looking at four.
+
+## WHAT WAS FOUND WHILE BUILDING, and it is the registration paying for itself
+
+**The enforcement test found a FOURTH creation path before shipping:
+`src/scrapers/historical_loader.py`.** Registration 1 said a shortfall would
+mean "there is a fourth creation path". There was — and the test found it rather
+than a resurrection finding it a week later.
+
+**Also found: 28 shared-provider-id duplicate components have regrown, where
+s5.10 left ZERO.** `af=193` holds `582 PEC Zwolle || 1784 PEC Zwolle` — an exact
+name and an exact provider id on two rows. The resurrected rows are acquiring
+provider ids and becoming full duplicate clubs with split history.
+
+> **That is a SECOND repair this stage does not perform.** `resolve_team()` stops
+> new ones; the 28 that exist need a merge, and it must record its removed names
+> this time. Out of scope, recorded, and the reason the decay measurement must
+> continue after this lands.

@@ -12433,3 +12433,27 @@ who finds "missed slots, no impact" without the reason would draw the opposite
 conclusion. **The reason is the record.**
 
 *Recorded 2026-09-13.*
+
+---
+
+# DEL-3 HAS A DATE: 2026-09-14 (TOMORROW)
+
+**Established, not assumed.** The weekly performance report is gated
+`Sundays only` (daily-picks.yml:337). **Failures occurred on BOTH 2026-09-12
+(Saturday) and 2026-09-13 (Sunday)**, so the failing send is on the **daily**
+path, not the Sunday-only one.
+
+> ### Deadline: 2026-09-14. Not "before Stage 24".
+
+## Why it did not go first, recorded so the ordering reads as reasoned
+
+| | |
+| --- | --- |
+| **DEL-3's cost does NOT compound** | each report is independent; a repaired one owes nothing to yesterday's. Two corrupt reports is two corrupt reports. |
+| **Stage 23's DOES** | every day added rows the eventual repair must handle — 44 resurrections and 28 regrown duplicate components in three days, each of which the next merge has to resolve |
+
+**That distinction is the ordering.** Stage 23 first because delay multiplies its
+cost; DEL-3 tomorrow because delay only repeats its cost, and it is a day away
+rather than a week.
+
+*Dated 2026-09-13.*

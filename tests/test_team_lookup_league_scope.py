@@ -100,11 +100,27 @@ def test_distinct_same_city_clubs_are_still_kept_apart(tmp_path):
         assert s.query(Team).count() == 2
 
 
-def test_the_strict_scan_is_not_widened_beyond_null_league(tmp_path):
-    """Only NULL is added to the STRICT scan, not every league.
+def test_the_strict_scan_is_NOT_league_scoped_and_that_is_DELIBERATE(tmp_path):
+    """Stage 23 removed the league filter from the strict scan ON PURPOSE.
 
-    Uses non-identical names on purpose, because the exact-name lookup above
-    the strict scan short-circuits first — see the test below.
+    LEAGUE IS METADATA ABOUT A ROW, NOT ABOUT A CLUB. Filtering by it is what
+    made s5.10's merge survivors invisible — they carry `league IS NULL` — and
+    the s5.11 patch fixed only one direction of that, because
+    `Team.league == None` is never true in SQL.
+
+    THE TRADE-OFF, STATED RATHER THAN HIDDEN. Removing the filter means
+    `Arsenal` (England) now strict-matches `Arsenal FC` (Argentina), which are
+    different clubs. Measured before the change: 5 cross-league strict twins
+    existed against 2 same-league, and all 5 were merge survivors — so the
+    filter was costing more than it saved.
+
+    It is also a SMALLER increment than it looks, because the exact-name step
+    above already collapses `Arsenal`/`Arsenal` across countries and always
+    has — see the test below. The identity PARTITION (national vs club) is a
+    real boundary and is still enforced; `league` is not.
+
+    If this becomes a problem the remedy is a country check on the partition,
+    not a league filter — league is the wrong key for the question.
     """
     mgr = _mgr(tmp_path)
     with mgr.get_session() as s:
@@ -112,10 +128,10 @@ def test_the_strict_scan_is_not_widened_beyond_null_league(tmp_path):
         s.commit()
         got = _scraper()._get_or_create_team(s, "Arsenal", "england/premier-league")
         s.flush()
-        assert got.league == "england/premier-league", (
-            "strict-matched Arsenal (England) to Arsenal FC (Argentina) — the "
-            "scan was widened beyond NULL-league rows")
-        assert s.query(Team).count() == 2
+        assert got.name == "Arsenal FC", (
+            "the strict scan is league-scoped again — that reintroduces the "
+            "blind spot that cost 44 resurrections in three days")
+        assert s.query(Team).count() == 1
 
 
 def test_the_exact_name_lookup_is_global_and_that_is_PRE_EXISTING(tmp_path):

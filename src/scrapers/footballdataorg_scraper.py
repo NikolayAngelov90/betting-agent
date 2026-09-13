@@ -678,24 +678,20 @@ class FootballDataOrgScraper:
                     return False
 
             # Get or create home team
-            home_team = session.query(Team).filter_by(name=home_name).first()
-            if not home_team:
-                # Prefix fallback — Flashscore may store truncated names
-                # e.g. "Go Ahead Eag" in DB vs "Go Ahead Eagles" from FDO
-                home_team = self._find_team_by_prefix(session, home_name)
-            if not home_team:
-                home_team = Team(name=home_name)
-                session.add(home_team)
-                session.flush()
+            # Stage 23: ONE resolution function. This path used to do
+            # exact-name, then a prefix guess, then create — it never
+            # called a comparator at all, and it became the dominant
+            # producer of duplicate rows (fdo=42c on 2026-09-12).
+            from src.data.team_resolution import resolve_team
+            home_team = resolve_team(session, home_name)
 
             # Get or create away team
-            away_team = session.query(Team).filter_by(name=away_name).first()
-            if not away_team:
-                away_team = self._find_team_by_prefix(session, away_name)
-            if not away_team:
-                away_team = Team(name=away_name)
-                session.add(away_team)
-                session.flush()
+            # Stage 23: ONE resolution function. This path used to do
+            # exact-name, then a prefix guess, then create — it never
+            # called a comparator at all, and it became the dominant
+            # producer of duplicate rows (fdo=42c on 2026-09-12).
+            from src.data.team_resolution import resolve_team
+            away_team = resolve_team(session, away_name)
 
             match = Match(
                 home_team_id=home_team.id,
@@ -825,18 +821,18 @@ class FootballDataOrgScraper:
             if not home_team:
                 home_team = self._find_team_by_prefix(session, home_name)
             if not home_team:
-                home_team = Team(name=home_name)
-                session.add(home_team)
-                session.flush()
+                # Stage 23: ONE resolution function.
+                from src.data.team_resolution import resolve_team
+                home_team = resolve_team(session, home_name)
 
             # Get or create away team
             away_team = session.query(Team).filter_by(name=away_name).first()
             if not away_team:
                 away_team = self._find_team_by_prefix(session, away_name)
             if not away_team:
-                away_team = Team(name=away_name)
-                session.add(away_team)
-                session.flush()
+                # Stage 23: ONE resolution function.
+                from src.data.team_resolution import resolve_team
+                away_team = resolve_team(session, away_name)
 
             match = Match(
                 home_team_id=home_team.id,

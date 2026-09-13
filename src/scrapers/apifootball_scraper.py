@@ -1676,13 +1676,24 @@ class APIFootballScraper(BaseScraper):
                     if team:
                         return team.id
 
-            # 6. Create new team
+            # 6. Last resort — through the ONE resolution function.
+            #
+            # Stage 23. The steps above are this scraper's own lookups, and
+            # their partition used `Team.league.notin_(national_leagues)`,
+            # which is NULL-unsafe: `NULL NOT IN (...)` is NULL, so every
+            # NULL-league row — including all of s5.10's merge survivors — was
+            # invisible here. Rather than fix that filter in place and leave a
+            # fourth regime, the create goes through resolve_team(), whose
+            # FORMER-NAME step catches exactly the rows this path was
+            # re-creating.
+            from src.data.team_resolution import resolve_team
             country = league.split("/")[0].title() if "/" in league else ""
-            team = Team(name=name, league=league, country=country,
-                        apifootball_team_id=apifootball_team_id)
-            session.add(team)
+            team = resolve_team(session, name, league=league,
+                                provider_id=apifootball_team_id)
+            if team.country is None and country:
+                team.country = country
             session.commit()
-            logger.info(f"Created new team: {name} ({league})")
+            logger.info(f"Resolved team: {name} ({league}) -> {team.id}")
             return team.id
 
     def _find_match_id(self, home_id: int, away_id: int, match_dt: datetime) -> Optional[int]:

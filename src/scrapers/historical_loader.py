@@ -393,13 +393,21 @@ class HistoricalDataLoader(BaseScraper):
         # Find or create teams
         home_team = session.query(Team).filter_by(name=home_name).first()
         if not home_team:
-            home_team = Team(name=home_name, league=league)
+            # Stage 23: ONE resolution function. THIS PATH WAS THE
+            # FOURTH, found by the enforcement test before shipping
+            # rather than by a resurrection after it.
+            from src.data.team_resolution import resolve_team
+            home_team = resolve_team(session, home_name, league=league)
             session.add(home_team)
             session.flush()
 
         away_team = session.query(Team).filter_by(name=away_name).first()
         if not away_team:
-            away_team = Team(name=away_name, league=league)
+            # Stage 23: ONE resolution function. THIS PATH WAS THE
+            # FOURTH, found by the enforcement test before shipping
+            # rather than by a resurrection after it.
+            from src.data.team_resolution import resolve_team
+            away_team = resolve_team(session, away_name, league=league)
             session.add(away_team)
             session.flush()
 

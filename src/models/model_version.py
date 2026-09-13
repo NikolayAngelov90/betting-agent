@@ -716,7 +716,62 @@ TRACKED_KEYS: List[str] = [
 #:       tests/test_team_lookup_league_scope.py; changing it is a separate
 #:       decision whose blast radius is splitting rows, which is harder than
 #:       merging them.
-CODE_REVISION = "s5.11"
+#:
+#: s5.12 STAGE 23 — ONE RESOLUTION FUNCTION, AND THE FORMER-NAME LOOKUP.
+#:       Bumped 2026-09-13; s5.11 carries 97 picks.
+#:
+#:       FOUR creation paths existed, each with its own matching regime and its
+#:       own blind spot, and s5.10's merge survivors were invisible to all of
+#:       them. flashscore scanned `league = scraped`; apifootball used
+#:       `league.notin_(national)`, and `NULL NOT IN (...)` is NULL;
+#:       footballdataorg called no comparator at all; and historical_loader was
+#:       FOUND BY THE ENFORCEMENT TEST while this was being built, not by a
+#:       resurrection a week later. The s5.11 patch was itself NULL-blind in the
+#:       reverse direction, because `Team.league == None` is never true in SQL.
+#:
+#:       MEASURED COST BEFORE: 44 resurrections in 3 days, 100% EXACT matches to
+#:       names s5.10 removed; 28 shared-provider-id duplicate components regrown
+#:       where the merge left ZERO (af=193 held `PEC Zwolle` twice, same name AND
+#:       same provider id); 3 unpriced-fixture alarms a day.
+#:
+#:       DISCOVERED-FIXTURE POPULATION AT THE BUMP:
+#:         since 2026-08-01   1548/1790  86.48%
+#:         last 365 days      9321/9953  93.65%
+#:       (s5.10 left 89.25%/94.27% on 09-10; the decline between is the decay
+#:       this revision exists to stop, and the after-figures belong in the next
+#:       audit rather than being predicted here.)
+#:
+#:       RESURRECTION RATE AT THE BUMP: 18/day (09-12) and 9/day (09-13),
+#:       composition 14+4 and 4+3 (alias-needed + SQL-null-blind). REGISTERED
+#:       PREDICTION: both to ~0. docs/stage23-one-resolution-function.md holds
+#:       registration 1 and its supersession side by side.
+#:
+#:       THE STEP THAT STOPS THE DECAY is the former-name lookup, and it rests on
+#:       migration 010 `team_former_names`, backfilled with 124 of s5.10's
+#:       removed names. s5.10 ran `DELETE FROM teams` and recorded NOTHING:
+#:
+#:         AN OPERATION THAT REMOVES AN IDENTIFIER MUST RECORD IT, OR IT LEAVES
+#:         BEHIND THE REASON THE IDENTIFIER EXISTED.
+#:
+#:       EXACT, not fuzzy, and that is the whole reason the 75 alias rulings are
+#:       unnecessary here: the resurrections are exact, so an exact lookup closes
+#:       them with no ratio, no cross product and no deleted-token hazard.
+#:       Unioning `team_names_similar` was measured on 09-13 and refused — 38 new
+#:       matches, roughly half absurd.
+#:
+#:       SELECTION-AFFECTING: which rows resolve decides which fixtures are
+#:       priced and picked, and Elo/Poisson key on team_id.
+#:
+#:       ONE REGRESSION CAUGHT BY AN EXISTING PIN: exact-name matching must never
+#:       override a provider-id MISMATCH. Two rows with different provider ids
+#:       are different clubs by the provider's own assertion — the 2026-07-22
+#:       dedup lesson — so `_conflicts()` skips them.
+#:
+#:       NOT CLOSED: the 28 regrown duplicate components need their own merge,
+#:       which must record its removed names this time; the 75 alias rulings stay
+#:       open for the fixture matcher's own residual; the exact-name collapse
+#:       stays unsized.
+CODE_REVISION = "s5.12"
 
 
 def _stable(value: Any) -> Any:

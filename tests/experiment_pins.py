@@ -45,14 +45,14 @@ History:
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.11"
+CODE_REVISION_PIN = "s5.12"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.32df36"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.c8c892"
 
 #: The previous cohort, kept so a reader can see what moved and when.
-PREVIOUS_CODE_REVISION = "s5.10"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.dfd410"
+PREVIOUS_CODE_REVISION = "s5.11"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.32df36"
 
 
 #: How many completed-match queries are exempt from the training-exclusion
