@@ -478,6 +478,17 @@ def verdict(facts: Dict[str, object], hits: List[str],
     row rather than inflating the CLEAN count — which is exactly how nine
     DEGRADED runs went unnoticed in the pass this tool was built to replace.
     """
+    # A run still executing has no verdict to give. Its log is empty because
+    # `gh run view --log` returns nothing until completion, NOT because
+    # anything failed — found 2026-09-13 on run 34745992077, which was 20
+    # minutes old and mid-step-15 when it was audited and reported UNAUDITABLE.
+    # Checked BEFORE the log test so an in-flight run is never mistaken for a
+    # missing one: both look identical from the log alone, and only the run
+    # metadata separates them.
+    if str(facts.get("run_status") or "").lower() in ("in_progress", "queued",
+                                                      "waiting", "pending",
+                                                      "requested"):
+        return "IN_PROGRESS"
     if log is not None and len(log.strip()) < _MIN_AUDITABLE_LOG_BYTES:
         return "UNAUDITABLE"
     if facts.get("steps_failed") or facts.get("tracebacks"):
@@ -498,7 +509,17 @@ def main() -> int:
     a = ap.parse_args()
 
     if a.run:
-        runs = [{"databaseId": int(a.run), "workflow": "?",
+        # Fetch the run's real status: --run used to synthesise a row with no
+        # status at all, so an in-flight run audited this way could never
+        # report IN_PROGRESS. The single-run path is the one used to chase an
+        # anomaly, which is exactly when the distinction matters most.
+        _st = ""
+        try:
+            _st = json.loads(_sh("gh", "run", "view", a.run, "--json",
+                                 "status") or "{}").get("status", "")
+        except Exception:
+            pass
+        runs = [{"databaseId": int(a.run), "workflow": "?", "status": _st,
                  "startedAt": "", "conclusion": "?"}]
     else:
         runs = list_runs(a.since, a.until, a.limit)
@@ -518,6 +539,9 @@ def main() -> int:
         rid = str(r["databaseId"])
         log = fetch_log(rid)
         facts = extract(log)
+        # Run metadata, not log-derived: the only evidence that
+        # separates "still running" from "log unavailable".
+        facts["run_status"] = r.get("status")
         # Only the DAY'S FIRST run of a workflow exercises discovery from cold.
         # A same-day re-run legitimately finds no NEW fixtures, because the
         # first run already added them — so applying the per-source check to

@@ -53,3 +53,24 @@ If something new surfaces that is not about this run — a defect, a pattern, a 
 2. **Do not trigger a workflow** to produce evidence, and do not spend Odds API or API-Football credits.
 3. **Do not mark a run CLEAN because nothing looked wrong.** Mark it CLEAN because the counts you checked agreed with what the run should have produced. Say which you checked.
 4. If a run cannot be judged from its log, say so and record `UNTESTABLE` with the reason.
+
+## UNAUDITABLE and IN_PROGRESS are not final verdicts
+
+**Naming the third state stops a gap being reported as health. It does not stop
+the gap.** A verdict of "I could not look" is a request to look somewhere else,
+and if nothing does, `UNAUDITABLE` becomes the new `CLEAN`.
+
+1. **An `UNAUDITABLE` verdict must be resolved against a SECOND SOURCE before
+   the day closes** — `gh run view --json status,conclusion,jobs` for the run
+   metadata, the Telegram channel for what was said, the database for what was
+   written. The log file is one source and it is the one that was missing.
+2. **It resolves to `IN_PROGRESS`, `BROKEN`, `DEGRADED` or `CLEAN`** like any
+   other run. **A day that closes with an unresolved `UNAUDITABLE` row has an
+   uninvestigated production event in it.**
+3. **`IN_PROGRESS` is a re-audit instruction, not a result.** Re-run the audit
+   for that run once it completes.
+
+**Recorded 2026-09-13 after run 34745992077 was reported UNAUDITABLE and read as
+a possible incident. It was a run twenty minutes old, midway through step 15 of
+31, entirely healthy — and the audit that flagged it had compared a LOCAL file
+mtime against a UTC run start.**

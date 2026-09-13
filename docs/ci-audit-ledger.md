@@ -11798,7 +11798,7 @@ No picks exist for 2026-09-13, consistent with an incomplete run.
 | 34709139604 | closing-lines | 09-12 17:44 | CLEAN | |
 | 34719911706 | closing-lines | 09-12 21:25 | CLEAN | |
 | 34729322719 | closing-lines | 09-13 00:58 | CLEAN | |
-| **34745992077** | daily-picks | 09-13 07:44 | **UNTESTABLE** | **zero-byte log** |
+| ~~34745992077~~ | daily-picks | 09-13 07:44 | **IN_PROGRESS — RESOLVED** | zero-byte log because the run was still executing: 29 min old, step 15 of 31, inside its 65-min budget. No failure. See the resolution entry. |
 
 | measure | value |
 | --- | --- |
@@ -12055,5 +12055,95 @@ distinction the code could carry, not a threshold someone had to remember.
 **What would reopen it:** a fourth site in this path where an empty result and an
 unmeasured result share a return value. The three known ones now differ by type
 (`Refusal`), by branch (429 split) and by verdict (`UNAUDITABLE`).
+
+*Recorded 2026-09-13.*
+
+---
+
+# 34745992077 RESOLVED — it was a run in flight, and the incident was mine
+
+**Investigated 2026-09-13 from `gh run view` and the workflow definition, both
+independent of the log file. The verdict resolves from UNAUDITABLE to
+IN_PROGRESS — no failure occurred.**
+
+## What the metadata says
+
+| | |
+| --- | --- |
+| status / conclusion | **`in_progress`** / empty |
+| started | 2026-09-13 **07:44:58 UTC** |
+| steps 1–14 (`Set up job` → `Run tests`) | **all `success`**, finished 07:48:43 |
+| **step 15** `Run daily update (fixtures + odds)` | **`in_progress` since 07:48:43** |
+| steps 16–31 | **`pending`** |
+| step 15's own limit | **`timeout-minutes: 65`** |
+| elapsed when audited | **29 min total, 26 min in step 15** |
+
+**Answering the four questions directly:**
+
+* **cancelled, timed out, runner died?** **None of them.** The run is executing
+  normally and well inside step 15's 65-minute budget.
+* **which step did it reach?** Step 15 of 31, the fixtures-and-odds update.
+* **any Telegram message?** **No — and correctly so.** Every step that sends one
+  (22 send picks, 27 weekly report, 31 notify-on-failure) is `pending`. Silence
+  here is the absence of an event, not a failed delivery.
+* **where did the 10 unresolved rows come from?** **This run.** All ten were
+  created **07:50:46–07:51:10 UTC**, two minutes into step 15 — the exact step
+  that creates team rows. A normal scrape by a run still going, not a fragment
+  of a broken one.
+
+**Zero picks because step 22 has not run. Zero-byte log because
+`gh run view --log` returns nothing until a run completes.**
+
+## The incident is mine, and it is a familiar shape
+
+**I fetched the log at 11:04:47 LOCAL, which is 08:04:47 UTC — twenty minutes
+after the run started — then compared that timestamp against a UTC run start and
+concluded hours had passed.** Local here is UTC+3.
+
+> ### The file mtime recorded when *I* looked. I read it as when the *run* did something.
+>
+> **That is the same shape as reading a declaration for an event** — the
+> schedule read instead of the runs, `plan["requested"]` read instead of what
+> was fetched, `result=ok` defaulting to success. **Third time in this ledger,
+> and this one was about my own instrument rather than the pipeline's.**
+
+**And it produced a real claim in the previous entry**: *"the run never
+completed"*, written of a run that was 29 minutes old. **Corrected here rather
+than edited away.**
+
+## The structural fix: IN_PROGRESS ahead of UNAUDITABLE
+
+**From the log alone, "still running" and "log unavailable" are identical — both
+are empty. Only the run metadata separates them**, so `verdict()` now consults
+`run_status` BEFORE the log test and returns **`IN_PROGRESS`** for
+`in_progress`/`queued`/`waiting`/`pending`/`requested`.
+
+**`--run` was also fixed**: it synthesised a row with no status at all, so an
+in-flight run chased through the single-run path — **the path used precisely
+when something looks wrong** — could never report IN_PROGRESS. It now fetches
+the real status.
+
+**Checked ahead of `BROKEN` too**, because a step that has not finished cannot
+have failed: facts extracted from a partial log describe a partial run, and no
+verdict derived from them is final.
+
+## THE PROCEDURE RULE — added because the mirror is exact
+
+> ### Naming the third state stops a gap being reported as health. It does not stop the gap.
+>
+> **A verdict of "I could not look" is a request to look somewhere else. If
+> nothing does, UNAUDITABLE becomes the new CLEAN** — the same failure it was
+> introduced to end, one level up.
+
+**Added to the daily procedure:**
+
+1. **An `UNAUDITABLE` verdict is NOT final.** It must be resolved against a
+   second source — `gh run view` metadata, the Telegram channel, the database —
+   **before the day closes.**
+2. **It resolves to `IN_PROGRESS`, `BROKEN`, `DEGRADED` or `CLEAN` like any
+   other run.** A day that ends with an unresolved UNAUDITABLE row has an
+   uninvestigated production event in it.
+3. **`IN_PROGRESS` is also not final**, for the same reason — it is a
+   re-audit instruction, not a result.
 
 *Recorded 2026-09-13.*

@@ -78,3 +78,37 @@ def test_omitting_the_log_preserves_the_old_signature():
     """Callers that do not pass a log keep the previous behaviour."""
     assert ci.verdict({}, []) == "CLEAN"
     assert ci.verdict({}, ["hit"]) == "DEGRADED"
+
+
+# ── IN_PROGRESS: the state UNAUDITABLE was hiding ─────────────────────────
+
+def test_an_in_flight_run_is_IN_PROGRESS_not_unauditable():
+    """Found 2026-09-13 on run 34745992077.
+
+    Its log was empty because `gh run view --log` returns nothing until a run
+    completes, NOT because anything failed — it was 20 minutes old and midway
+    through step 15 of 31. UNAUDITABLE was reported and read as a possible
+    incident; it was a run in flight.
+
+    From the log alone the two are identical. Only the run metadata separates
+    them, which is why this is checked BEFORE the log test.
+    """
+    for status in ("in_progress", "queued", "waiting", "pending", "requested"):
+        assert ci.verdict({"run_status": status}, [], log="") == "IN_PROGRESS", (
+            f"a run with status={status!r} reported something other than "
+            "IN_PROGRESS — an executing run has no verdict to give")
+
+
+def test_a_completed_run_with_an_empty_log_is_still_UNAUDITABLE():
+    """IN_PROGRESS must not swallow the genuine no-evidence case."""
+    assert ci.verdict({"run_status": "completed"}, [], log="") == "UNAUDITABLE"
+
+
+def test_in_progress_outranks_a_failed_step():
+    """A step that has not finished cannot have failed.
+
+    Facts extracted from a partial log describe a partial run, so no verdict
+    derived from them is final.
+    """
+    assert ci.verdict({"run_status": "in_progress", "steps_failed": 1},
+                      [], log="y" * 5000) == "IN_PROGRESS"
