@@ -112,3 +112,52 @@ def test_in_progress_outranks_a_failed_step():
     """
     assert ci.verdict({"run_status": "in_progress", "steps_failed": 1},
                       [], log="y" * 5000) == "IN_PROGRESS"
+
+
+# ── a provisional verdict must not be permanent by default ────────────────
+
+def test_a_provisional_row_is_relisted_as_unaudited(tmp_path, monkeypatch):
+    """THE RULE MADE OPERATIVE.
+
+    Run 34745992077 carried IN_PROGRESS on 2026-09-13 and was re-audited only
+    because a human asked. `--unaudited` looks for runs with NO ledger row, and
+    this run HAD one — a row saying "come back later" that no mechanism came
+    back to.
+
+    Naming the third state stopped it reading as health; nothing was obliged to
+    act on the name. This is what obliges it.
+    """
+    led = tmp_path / "ledger.md"
+    led.write_text(
+        "| 111111111 | daily-picks | 09-13 | CLEAN | |\n"
+        "| 222222222 | daily-picks | 09-13 | **IN_PROGRESS** | still running |\n"
+        "| 333333333 | closing-lines | 09-13 | UNAUDITABLE | empty log |\n"
+        "| **444444444** | **daily-picks** | 09-13 | **DEGRADED** | bolded row |\n",
+        encoding="utf-8")
+    monkeypatch.setattr(ci, "LEDGER", led)
+    ids = ci.audited_run_ids()
+    assert "111111111" in ids, "a CLEAN row must count as audited"
+    assert "444444444" in ids, (
+        "a BOLDED row was not recognised — this is the defect that made the "
+        "09-10 pass re-list six already-audited runs")
+    assert "222222222" not in ids, "IN_PROGRESS must be re-listed"
+    assert "333333333" not in ids, "UNAUDITABLE must be re-listed"
+
+
+def test_a_note_mentioning_a_provisional_verdict_does_not_relist(tmp_path,
+                                                                monkeypatch):
+    """A definition is not an occurrence — fourth time in this ledger.
+
+    The first version of this check tested `"IN_PROGRESS" in row` and re-listed
+    a row whose VERDICT is DEGRADED and whose NOTE says "Was IN_PROGRESS when
+    first audited". The word appearing in a row is not the row carrying that
+    verdict.
+    """
+    led = tmp_path / "ledger.md"
+    led.write_text(
+        "| 555555555 | daily-picks | 09-13 | **DEGRADED** | "
+        "Was IN_PROGRESS when first audited 29 min in |\n", encoding="utf-8")
+    monkeypatch.setattr(ci, "LEDGER", led)
+    assert "555555555" in ci.audited_run_ids(), (
+        "a resolved row was re-listed because its NOTE mentions the "
+        "provisional verdict it used to carry")

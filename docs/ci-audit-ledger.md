@@ -12284,3 +12284,152 @@ to 0, alias ~9.5/day — remain the thing to judge against.
 > alarm that fires is the identity class.** Three a day is the current cost.
 
 *Audited 2026-09-13, second pass. Read-only.*
+
+---
+
+# DEL-3 — SEQUENCE INTEGRITY FOR CHUNKED SENDS. Specified, not built.
+
+**On 2026-09-13 a multi-part performance report lost its MIDDLE chunk and the
+sequence carried on. The channel received a report that looks complete with a
+section missing, and nothing said so.**
+
+> ### That is this project's central failure mode in its purest form, and it is now in the one channel that exists to tell Niki what happened.
+
+## The scope error, stated first because it is the reusable half
+
+**`59d78d0` hardened `scripts/ci_alert.py`: retry with backoff, an `::error::`
+annotation, the step summary, and the outcome as a `DeliveryResult`. Both
+observed failures are `src/reporting/telegram_bot.py::_send_message`.**
+
+**The guarantee's DESIGN was right and its SCOPE was wrong.** It was applied to
+*the senders of alerts* rather than to *the shared last hop* — reports reach the
+same Telegram API through a different caller, and that caller got none of it.
+
+| | |
+| --- | --- |
+| the category the fix covered | "the thing that sends alerts" |
+| the mechanism actually shared | **the Telegram send** |
+
+**Sixth instance of that shape** — after the predicates, the overround band, the
+alert senders, the credit ledger's second consumer, and the three team-creation
+paths. **A fix scoped to the instance's category rather than to the shared
+mechanism leaves every other caller of that mechanism unprotected**, and the
+next one is found the same way: by something failing in it.
+
+## WHAT THE RECEIVER SEES — the requirement
+
+**Retrying chunk 3 is necessary and not sufficient. If it ultimately fails,
+chunks 4 and 5 must not be sent as though nothing happened.**
+
+**Contract, in the order the receiver experiences it:**
+
+1. **Every chunk of a multi-part report carries its position**, rendered in the
+   message itself: `(2/5)`. A reader can then see a gap without being told.
+2. **On a chunk's final failure the send does NOT silently continue.** The
+   remaining chunks are still sent — a partial report beats none — but the
+   sequence is **interrupted by a marker message in the same stream**, in
+   position:
+
+   ```
+   ⚠️ PART 3 OF 5 FAILED TO SEND — this report is INCOMPLETE.
+   Missing: settled-pick detail. Run 34745992077, 2026-09-13 08:53 UTC.
+   ```
+
+3. **The marker is itself a send**, and if IT fails the run must not exit
+   claiming success — that is the one case where the caller raises.
+4. **A report with no failures carries no marker**, so the marker's presence is
+   the signal and its absence is not evidence of anything on its own — which is
+   why (5) exists.
+5. **The final chunk carries a terminator**: `(5/5) ✅ end of report`. **A report
+   whose last received message is not a terminator is truncated**, and the
+   reader can see that without counting anything.
+
+> **(1) and (5) together make the two failure shapes visible to a human with no
+> tooling: a hole shows as a missing number, a truncation shows as a missing
+> terminator.** The 09-12 failure lost the LAST chunk — detectable only by
+> absence today, and by the missing terminator under this contract.
+
+## HOW THE AUDIT DISTINGUISHES COMPLETE FROM TRUNCATED — without counting characters
+
+**Not by length, and not by counting chunks in the log.** Both would be
+measurements of the sender's intent rather than of what arrived.
+
+**The send records a `DeliveryResult` per REPORT, not per chunk:**
+
+```
+chunks_planned=5  chunks_delivered=4  terminator_sent=False  attempts=[1,1,3,1,1]
+```
+
+**and emits one structured line the audit already knows how to read:**
+
+```
+REPORT_DELIVERY report=performance chunks=4/5 terminator=no failed_parts=[3] run=34745992077
+```
+
+**Three audit assertions follow directly, and none inspects content:**
+
+| assertion | fires when |
+| --- | --- |
+| `report_delivery_incomplete` | `chunks_delivered < chunks_planned` |
+| `report_delivery_unterminated` | `terminator=no` — catches a lost FINAL chunk, which a chunk count alone cannot |
+| `report_delivery_unrecorded` | a `Telegram message sent` appears for a report with **no** `REPORT_DELIVERY` line — the guarantee itself missing, which is today's state |
+
+**The third is the one that matters most**, because it is the assertion that
+would have fired on 09-12 and 09-13. **Today's "1 alert failed to deliver" is
+INFERRED from `logger.error` by a string match; under this contract a delivery
+failure is RECORDED, and an unrecorded delivery is itself a finding.**
+
+## Where the machinery comes from
+
+**`ci_alert`'s `DeliveryResult`, retry and backoff already exist and are
+tested.** DEL-3 is **not** new delivery code — it is the existing mechanism
+moved to the shared last hop and given a per-report sequence wrapper. **Doing it
+the other way round is what produced this entry.**
+
+*Specified 2026-09-13. Not built; today's pass was read-only and this is a
+requirement, not a change.*
+
+---
+
+# STAGE 23 — THE CASE, WITH THE MEASURED DAILY COST ATTACHED
+
+**The item is no longer "consolidate three creation paths".**
+
+| measured, per day | |
+| --- | --- |
+| **SQL-null-blind rows** | **3–4** (4 on 09-12, 3 on 09-13) |
+| **unpriced-fixture ALARMS** | **3** on each of 09-12 and 09-13 |
+| alias-needed rows (NOT closed by Stage 23) | 14 and 4 |
+
+**And the connection is the point: a row created without a provider id carries
+no odds, so the unpriced alarms are DOWNSTREAM of the resurrection defect rather
+than a separate problem.** `Freiburg vs M'gladbach` and
+`Getafe vs Dep. A Coruna` both name rows involved in it — `M'gladbach` is a
+merge survivor, `Dep. A Coruna` a resurrected duplicate.
+
+> ### 3 unpriced fixtures/day plus 3–4 SQL-null rows/day, compounding, against a merge whose benefit was already measured as decaying.
+
+**That is the case.** Not a tidy-up of three code paths, but a measured daily
+loss of priced fixtures, in a pipeline whose whole output is priced fixtures,
+accumulating against a repair that is already losing ground.
+
+*Case updated 2026-09-13 with the measured cost.*
+
+---
+
+# FOUR HOURS OF MISSED SLOTS — watched, not acted on
+
+**Two closing-lines slots (`47 10 * * *` and the 11:17 entry) passed without
+firing; zero runs between 08:55 and 12:55 UTC.** Inside the OPS-3 envelope and
+consistent with the documented cron unreliability.
+
+> **The cost today is ZERO, and that is precisely why it is recorded rather than
+> acted on.** **OPS-4 is open**: the ledger stands at 400/450 and refuses every
+> claim, so those runs would have found `granted 0` and captured nothing. **Two
+> faults coincided and cancelled.**
+
+**The next time they do not coincide, the cost will not be zero** — and a reader
+who finds "missed slots, no impact" without the reason would draw the opposite
+conclusion. **The reason is the record.**
+
+*Recorded 2026-09-13.*

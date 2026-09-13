@@ -70,12 +70,69 @@ def _sh(*args: str) -> str:
     return r.stdout or ""
 
 
+#: Verdicts that are NOT a result. A row carrying one of these is a note saying
+#: "come back later", and until 2026-09-13 nothing came back.
+PROVISIONAL_VERDICTS = ("IN_PROGRESS", "UNAUDITABLE")
+
+#: Matches a ledger row's run id whether or not it is bolded. The original
+#: pattern required a bare `| 123… |` and silently skipped every
+#: bolded row — which is why the 09-10 pass re-listed six runs that were
+#: already audited, and why this function over-reported ever since.
+_LEDGER_ROW = re.compile(r"^\|\s*\**\s*(\d{9,})\s*\**\s*\|(.*)$", re.M)
+
+
 def audited_run_ids() -> set:
-    """Run ids already carrying a verdict in the ledger."""
+    """Run ids carrying a FINAL verdict in the ledger.
+
+    TWO DEFECTS, BOTH FOUND BY USING IT.
+
+    1. It matched only unbolded rows, so `| **34199783169** | **daily-picks** |`
+       read as unaudited. On 2026-09-10 that made `--unaudited` report 59 runs of
+       which six already had verdicts. Over-reporting wastes work; it does not
+       hide anything, which is why it survived.
+
+    2. It counted ANY row as audited, including `IN_PROGRESS` and
+       `UNAUDITABLE` — verdicts that explicitly mean "no verdict yet". Run
+       34745992077 carried `IN_PROGRESS` on 2026-09-13 and was re-listed only
+       because a human asked. **That one hides something**: a provisional
+       verdict is permanent by default when the query that finds work treats it
+       as finished.
+
+    THE SECOND IS THE THIRD-STATE PROBLEM ONE LEVEL UP. Naming the state stopped
+    it reading as health; nothing was obliged to act on the name. A rule that
+    fires only when someone remembers it is not a practice.
+    """
     if not LEDGER.exists():
         return set()
-    return set(re.findall(r"^\|\s*(\d{9,})\s*\|", LEDGER.read_text(
-        encoding="utf-8"), re.M))
+    out = set()
+    for rid, rest in _LEDGER_ROW.findall(LEDGER.read_text(encoding="utf-8")):
+        if _is_provisional(rest):
+            continue          # re-list it: this row is a request, not a result
+        out.add(rid)
+    return out
+
+
+def _is_provisional(row_rest: str) -> bool:
+    """True when a ledger row's VERDICT CELL is provisional.
+
+    Checked per CELL, never as a substring of the row. The first version tested
+    `"IN_PROGRESS" in rest` and immediately re-listed 34745992077 — whose row
+    says DEGRADED and whose NOTE says "Was IN_PROGRESS when first audited".
+
+    That is the same error this ledger has recorded three times: a definition
+    read as an occurrence. The word appearing in a row is not the row carrying
+    that verdict, exactly as a workflow's YAML echoed into a log is not a failed
+    step and a test named after a string is not that string occurring.
+
+    A cell counts as provisional when, stripped of bold markers, it BEGINS with
+    a provisional verdict — so `IN_PROGRESS` and `UNAUDITABLE — empty log` both
+    match while a note mentioning either does not.
+    """
+    for cell in row_rest.split("|"):
+        c = cell.replace("*", "").replace("~", "").strip().upper()
+        if any(c.startswith(v) for v in PROVISIONAL_VERDICTS):
+            return True
+    return False
 
 
 def list_runs(since: Optional[str], until: Optional[str],

@@ -87,4 +87,21 @@ suite, not become a fourth blind spot.**
   which is harder than merging;
 * **cohort** — selection-affecting, so it takes a bump. s5.11 carries picks.
 
+## THE MEASURED DAILY COST — added 2026-09-13
+
+| per day | |
+| --- | --- |
+| SQL-null-blind rows | **3-4** |
+| **unpriced-fixture ALARMS** | **3** |
+
+**A row created without a provider id carries no odds, so the unpriced alarms
+are DOWNSTREAM of this defect rather than a separate problem.**
+`Freiburg vs M'gladbach` and `Getafe vs Dep. A Coruna` both name rows involved
+in it.
+
+> **3 unpriced fixtures/day plus 3-4 SQL-null rows/day, compounding, against a
+> merge whose benefit was already measured as decaying.** That is the case - not
+> a tidy-up of three code paths, but a measured daily loss of priced fixtures in
+> a pipeline whose whole output is priced fixtures.
+
 *Registered 2026-09-13, before the code.*
