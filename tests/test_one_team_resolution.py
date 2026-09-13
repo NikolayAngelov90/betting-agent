@@ -123,3 +123,57 @@ def test_a_missing_former_names_table_fails_open(tmp_path):
         s.commit()
         got = resolve_team(s, "Lens", league="france/ligue-1")
         assert got is not None          # created; no table, so step 2 is silent
+
+
+# ── the country check, applied from the AF-id gate ────────────────────────
+
+def test_the_country_check_refuses_a_cross_country_name_match(tmp_path):
+    """Arsenal (England) must not become Arsenal FC (Argentina).
+
+    THE SAME CHECK THE AF-ID GATE USES, applied to close an asymmetry rather
+    than to fix an observed failure: that gate refused a cross-country match
+    while this name path permitted one. Measured before applying — of the 25
+    name-path joins resolve_team could then make, it refuses ZERO.
+    """
+    mgr = _mgr(tmp_path)
+    with mgr.get_session() as s:
+        s.add(Team(name="Arsenal FC", league="argentina/primera",
+                   country="Argentina"))
+        s.commit()
+        got = resolve_team(s, "Arsenal", league="england/premier-league",
+                           country="England")
+        assert got.country == "England", (
+            "strict-matched across a real country boundary — the AF-id gate "
+            "refuses this and the name path must too")
+        assert s.query(Team).count() == 2
+
+
+def test_the_country_check_fails_OPEN_on_a_missing_country(tmp_path):
+    """`teams.country` records where a club was FIRST SEEN, not where it plays.
+
+    Levski Sofia is stored as "Europe" because a Conference League tie created
+    it. Refusing on a missing or continental value would reject legitimate
+    fixtures wholesale, so absence must fall through — 56% of rows carry no
+    real country.
+    """
+    mgr = _mgr(tmp_path)
+    with mgr.get_session() as s:
+        s.add(Team(name="Malmo FF", league=None, country=None))
+        s.commit()
+        got = resolve_team(s, "Malmö FF", league="sweden/allsvenskan",
+                           country="Sweden")
+        assert got.name == "Malmo FF", (
+            "a missing stored country caused a refusal — the check must fail "
+            "open, or it rejects the 56% of rows that carry no real country")
+        assert s.query(Team).count() == 1
+
+
+def test_a_continental_country_value_also_falls_through(tmp_path):
+    mgr = _mgr(tmp_path)
+    with mgr.get_session() as s:
+        s.add(Team(name="Levski Sofia", league=None, country="Europe"))
+        s.commit()
+        got = resolve_team(s, "Levski Sofia", league="bulgaria/efbet-league",
+                           country="Bulgaria")
+        assert got.country == "Europe"
+        assert s.query(Team).count() == 1

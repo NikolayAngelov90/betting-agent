@@ -1689,7 +1689,8 @@ class APIFootballScraper(BaseScraper):
             from src.data.team_resolution import resolve_team
             country = league.split("/")[0].title() if "/" in league else ""
             team = resolve_team(session, name, league=league,
-                                provider_id=apifootball_team_id)
+                                provider_id=apifootball_team_id,
+                                country=country)
             if team.country is None and country:
                 team.country = country
             session.commit()

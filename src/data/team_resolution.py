@@ -137,8 +137,38 @@ def _conflicts(candidate, provider_id) -> bool:
             and candidate.apifootball_team_id != provider_id)
 
 
+def _country_conflict(candidate, country) -> bool:
+    """True when two rows name DIFFERENT real countries.
+
+    THE SAME CHECK THE AF-ID GATE USES, not a second one. It refused
+    `Rapid Vienna` against `Rapid Bucuresti` and `Pau FC` against `St. Pauli`,
+    and it is deliberately shaped to FAIL OPEN: refuse only when both sides name
+    a real country and they differ.
+
+    That shape is not timidity. `teams.country` records where a club was FIRST
+    SEEN rather than where it plays — Levski Sofia is stored as "Europe" because
+    a Conference League tie created it — so refusing on a missing or continental
+    value would reject legitimate fixtures wholesale. 44% of rows carry a real
+    country; the rest fall through.
+
+    APPLIED HERE 2026-09-13 to close an asymmetry, not to fix an observed
+    failure: the AF-id gate refused a cross-country match while this name path
+    permitted one. Measured before applying — of the 25 name-path joins
+    `resolve_team` could currently make, it refuses ZERO. It costs nothing today
+    and stops `Arsenal` (England) from ever matching `Arsenal FC` (Argentina),
+    which was otherwise left to be discovered by biting.
+    """
+    from src.scrapers.apifootball_scraper import is_a_real_country
+
+    return (is_a_real_country(country)
+            and is_a_real_country(candidate.country)
+            and str(country).strip().lower()
+            != str(candidate.country).strip().lower())
+
+
 def resolve_team(session, name: str, *, league: str = None,
-                 provider_id: int = None, create: bool = True):
+                 provider_id: int = None, country: str = None,
+                 create: bool = True):
     """Resolve a scraped team name to a Team row. THE single entry point.
 
     Returns the Team, or None when `create=False` and nothing matched.
@@ -165,8 +195,8 @@ def resolve_team(session, name: str, *, league: str = None,
     # 3. EXACT CURRENT NAME, partition-scoped, never league-scoped.
     t = (_partition_filter(session.query(Team), league)
          .filter(Team.name == name).first())
-    if t and _conflicts(t, provider_id):
-        t = None          # same name, different provider id => different club
+    if t and (_conflicts(t, provider_id) or _country_conflict(t, country)):
+        t = None          # provably a different club: provider id or country
     if t:
         if provider_id and not t.apifootball_team_id:
             t.apifootball_team_id = provider_id
@@ -177,7 +207,8 @@ def resolve_team(session, name: str, *, league: str = None,
             session.query(Team.id, Team.name), league):
         if same_team_strict(name, cand_name):
             t = session.get(Team, cand_id)
-            if t is not None and _conflicts(t, provider_id):
+            if t is not None and (_conflicts(t, provider_id)
+                                  or _country_conflict(t, country)):
                 continue
             if provider_id and t is not None and not t.apifootball_team_id:
                 t.apifootball_team_id = provider_id
@@ -187,6 +218,8 @@ def resolve_team(session, name: str, *, league: str = None,
     if not create:
         return None
     t = Team(name=name, league=league)
+    if country:
+        t.country = country
     if provider_id:
         t.apifootball_team_id = provider_id
     session.add(t)

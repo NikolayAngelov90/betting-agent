@@ -12457,3 +12457,94 @@ cost; DEL-3 tomorrow because delay only repeats its cost, and it is a day away
 rather than a week.
 
 *Dated 2026-09-13.*
+
+---
+
+# THE COUNTRY CHECK APPLIED — closing an asymmetry, not fixing a failure
+
+**I wrote that if `Arsenal` (England) matching `Arsenal FC` (Argentina) became a
+problem, the remedy was a country check. That check already exists, is already
+validated in production, and already fails open on absence. Waiting for the
+case to bite would have been choosing to rediscover something the project
+already knows.**
+
+## The asymmetry
+
+| path | cross-country match |
+| --- | --- |
+| `apifootball` AF-id gate | **REFUSED** — it is what turned away `Rapid Vienna` / `Rapid Bucuresti` and `Pau FC` / `St. Pauli` |
+| `resolve_team()` name path (steps 3–4) | **PERMITTED** |
+
+**Same pipeline, same question, two answers.** Rule 1's lesson exactly:
+knowledge that exists and a caller that does not consult it.
+
+## Measured before applying, the way the gate was measured
+
+| | |
+| --- | --- |
+| exact-name pairs `resolve_team` could join | 3 |
+| strict-match pairs it could join | 22 |
+| **total name-path joins currently possible** | **25** |
+| **the country check would REFUSE** | **0** |
+| teams carrying a real country | 669 of 1534 (**44%**) — the rest fall through by design |
+
+> **It costs nothing today and forecloses the case permanently.** No legitimate
+> join is lost, because there is not one to lose.
+
+**Applied with the gate's exact shape — refuse only when BOTH sides name a real
+country and they differ.** `teams.country` records where a club was FIRST SEEN
+rather than where it plays (Levski Sofia is stored as `Europe` because a
+Conference League tie created it), so absence and continental values must fall
+through. Three tests pin that: the refusal, the missing-country fall-through,
+and the continental fall-through.
+
+---
+
+# THE 28 REGROWN DUPLICATES — the rate confirms first, then the merge
+
+**`af=193` carrying `582 PEC Zwolle || 1784 PEC Zwolle` is the escalation: the
+resurrections are acquiring provider ids and becoming full duplicate clubs.
+s5.10's zero has regrown to 28 in four days.**
+
+> ### The order is: let the registered prediction resolve, THEN merge.
+
+| if the rate falls as registered (SQL-null → 0, alias-needed → 0) | the 28 are a **bounded backlog**, and merging them closes the class |
+| --- | --- |
+| **if it does not fall** | merging feeds a still-leaking system — **the exact mistake that produced this**, which was merging before the entry path was fixed |
+
+**One or two days of observation, and it is the difference between a cleanup and
+a treadmill.**
+
+**When the merge does run, it must call `record_former_name()` as it goes.**
+That is the property s5.10 lacked and the single reason this recurred — the
+merge removed 129 identifiers and recorded none of them.
+
+**Recorded as the gate on the next action, not as a deferral**: the decision is
+already made, and only the measurement is outstanding.
+
+---
+
+# WHAT THE REGISTRATION BOUGHT — two corrections from one exercise
+
+**Registration 1 said a shortfall would mean "there is a fourth creation path".
+There was one, and the enforcement test found it BEFORE shipping:
+`src/scrapers/historical_loader.py`.**
+
+> ### The first time here that a predicted failure mode was intercepted before it could occur rather than diagnosed after.
+>
+> Every previous registration that paid — the four schedule predictions, H5's
+> bands, the identity gate's replay — paid by making a result unarguable after
+> the fact. **This one changed what shipped.**
+
+**And the same exercise produced a second correction: the "5
+survivor-unidentified" residual dissolved into an artefact of my own generated
+alias table's normalisation.** Verifying the premise — 44 of 44 resurrections
+EXACT, zero diacritic or punctuation variance — showed the residual was a
+property of my instrument, not of the data.
+
+**Both corrections came from writing the prediction down and then checking its
+premise rather than its conclusion.** The registration's value was not in being
+right; it was in being specific enough to be found wrong in two different places
+before any code depended on it.
+
+*Recorded 2026-09-13.*

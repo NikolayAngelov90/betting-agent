@@ -759,6 +759,17 @@ TRACKED_KEYS: List[str] = [
 #:       Unioning `team_names_similar` was measured on 09-13 and refused — 38 new
 #:       matches, roughly half absurd.
 #:
+#:       THE COUNTRY CHECK IS APPLIED TO THE NAME PATH, using the AF-id gate's
+#:       existing helper rather than a second one. The pipeline had an
+#:       asymmetry: that gate refused a cross-country match while this name path
+#:       permitted one. Measured before applying — of the 25 name-path joins
+#:       resolve_team could then make, it refuses ZERO — so it costs nothing
+#:       today and forecloses `Arsenal` (England) matching `Arsenal FC`
+#:       (Argentina) permanently. Same shape as the gate: refuse only when BOTH
+#:       sides name a real country and they differ, because `teams.country`
+#:       records where a club was first seen and 56% of rows carry no real
+#:       value.
+#:
 #:       SELECTION-AFFECTING: which rows resolve decides which fixtures are
 #:       priced and picked, and Elo/Poisson key on team_id.
 #:
