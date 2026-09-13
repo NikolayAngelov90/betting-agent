@@ -452,7 +452,34 @@ def discovery_summary(facts: Dict[str, object]) -> str:
     return "disc[" + " ".join(parts) + "]"
 
 
-def verdict(facts: Dict[str, object], hits: List[str]) -> str:
+#: A log shorter than this carries no step output — a run that is still
+#: executing, or whose log could not be fetched. Not a threshold on quality:
+#: a real daily-picks log is ~600k and the smallest real capture log ~10k.
+_MIN_AUDITABLE_LOG_BYTES = 200
+
+
+def verdict(facts: Dict[str, object], hits: List[str],
+            log: str = None) -> str:
+    """CLEAN means the checks ran and found nothing. It cannot mean nothing ran.
+
+    THIRD INSTANCE OF THE SAME COLLAPSE IN THIS TOOL. `[]` versus `None` in the
+    odds path, 429-with-credits versus 429-with-zero, and now an empty result
+    versus an unmeasured one — all three returned the same value for "found
+    nothing" and "could not look".
+
+    Found 2026-09-13: run 34745992077 (daily-picks, 09-13 07:44) had a
+    ZERO-BYTE cached log and this function returned CLEAN. No assertion can fire
+    against an empty file, so `hits` was empty, so the run scored clean. A
+    verdict from no evidence.
+
+        No evidence is not a clean verdict.
+
+    `UNAUDITABLE` is named and counted so it appears in the ledger as its own
+    row rather than inflating the CLEAN count — which is exactly how nine
+    DEGRADED runs went unnoticed in the pass this tool was built to replace.
+    """
+    if log is not None and len(log.strip()) < _MIN_AUDITABLE_LOG_BYTES:
+        return "UNAUDITABLE"
     if facts.get("steps_failed") or facts.get("tracebacks"):
         return "BROKEN"
     return "DEGRADED" if hits else "CLEAN"
@@ -489,7 +516,8 @@ def main() -> int:
     seen_days: set = set()
     for r in runs:
         rid = str(r["databaseId"])
-        facts = extract(fetch_log(rid))
+        log = fetch_log(rid)
+        facts = extract(log)
         # Only the DAY'S FIRST run of a workflow exercises discovery from cold.
         # A same-day re-run legitimately finds no NEW fixtures, because the
         # first run already added them — so applying the per-source check to
@@ -499,7 +527,7 @@ def main() -> int:
         seen_days.add(_day)
         hits = assertions(facts, by_wf[r["workflow"]])
         by_wf[r["workflow"]].append(facts)
-        v = verdict(facts, hits)
+        v = verdict(facts, hits, log)
         # STAGE 19 item 2: per-source discovery figures are printed on EVERY
         # daily-picks row, verdict or not, and belong in the ledger note.
         # The AGGREGATE is the number that lied for three months: a healthy

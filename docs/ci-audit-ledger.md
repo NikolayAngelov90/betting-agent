@@ -11802,3 +11802,179 @@ No picks exist for 2026-09-13, consistent with an incomplete run.
 | ledger vs provider | ledger **400/450**, last claim 09-11 18:29; 09-12 claimed **0** |
 
 *Audited 2026-09-13.*
+
+---
+
+# OPS-4's PREMISE IS WRONG, MEASURED — the picks are not on stale prices
+
+**The window was opened on the reasoning that exhausting the Odds API leaves
+picks priced from whatever the odds table last held. Measured on the 48 picks
+inside it, that is false.**
+
+| the 48 picks dated 2026-09-12 | |
+| --- | --- |
+| picks with a priced market | **48 of 48** |
+| picks with NO priced market | **0** |
+| **age of the taken price** | **min 0.3h, median 0.3h, max 0.4h** |
+| picks on a price older than 6h | **0** |
+| picks on a price written before the fixture row existed | **0** |
+
+**Every taken price was roughly eighteen minutes old.**
+
+## Why, and it is the thing the window did not account for
+
+**There are two odds providers, and only one was exhausted.**
+
+```
+odds rows written 2026-09-12 for picked fixtures: 3,765
+  of which TheOddsAPI: 0   (0%)
+  Bet365 1528, 1xBet 1353, Pinnacle 884 — all API-Football, all at 07:51:18
+```
+
+**The gate refused at 07:52:13. API-Football had written the card one minute
+earlier**, out of its own separate 100/day budget, which the Odds API ledger
+does not touch.
+
+| | 09-11 | 09-12 |
+| --- | --- | --- |
+| odds_snapshots written | 4,407 | **3,842** |
+| …of which TheOddsAPI | 2,990 | **0** |
+
+**The substrate continues. What stops is the TheOddsAPI near-kickoff refresh —
+which is what the closing-lines workflow uses to capture closes, not what prices
+a pick.**
+
+> ### So OPS-4 is a CLOSING-LINE CAPTURE degradation, not a stale-price regime.
+> **`bookmaker_blend_weight: 0.80` still reads a price eighteen minutes old.**
+> The 80% figure was the reason the window looked serious, and it is not
+> engaged: the blend's input is fresh, from the other provider.
+
+**The window stays open and membership stays derived from `pick_date`** — the
+regime IS different, and a later analysis may still want to separate these
+picks. **But `evidence_status` is now less arguable, not more**: the measured
+staleness is eighteen minutes, and a pick at eighteen minutes is a bet anyone
+could have placed.
+
+## THE QUESTION FOR NIKI, with the corrected number attached
+
+**The original framing — "should the pipeline keep generating picks for nineteen
+days on prices it cannot refresh?" — rests on a premise the measurement
+retires.** The pipeline CAN refresh; it does so through API-Football.
+
+**What is actually at stake for the remaining ~18 days:**
+
+| | |
+| --- | --- |
+| pick pricing | **unaffected** — API-Football, ~18 minutes fresh |
+| the MODEL/FINAL experiment | **unaffected** — picks are priced and recorded normally |
+| **closing-line capture** | **degraded** — the TheOddsAPI refresh that puts a fresh price near kickoff is gone until 2026-10-01 |
+| CLV coverage | already the binding constraint: 6 captured observations on picks dated 09-11, against 57 on 09-05 |
+
+> **So the decision is narrower and it is still a decision: accept ~18 days of
+> reduced CLV capture, or spend to restore it.** Stopping pick generation buys
+> nothing now, because the picks are properly priced — that argument died with
+> the premise. **Continuing costs nothing and produces a cohort whose only
+> defect is thinner closing-line coverage, which the coverage figures already
+> record independently.**
+
+**Niki's call, and the number that matters for it is 18 minutes, not a week.**
+
+---
+
+# CLEAN FROM A ZERO-BYTE LOG — CLOSED
+
+**`verdict()` returned CLEAN for run 34745992077 because no assertion can fire
+against an empty file.** Fixed: a log below 200 bytes yields **`UNAUDITABLE`**,
+checked BEFORE `BROKEN` — because if the log is absent, every fact derived from
+it is absent too, including the ones that would have said BROKEN.
+
+**Third instance of one collapse, all three in the same path:**
+
+| | "found nothing" | "could not look" |
+| --- | --- | --- |
+| league fetch | `[]` | `None` |
+| 429 | credits remaining | `x-requests-remaining=0` |
+| **audit verdict** | **no hits** | **no log** |
+
+**Every one returned the same value for both, and every one was fixed by naming
+the third state rather than widening a check.**
+
+**Positive control**: `tests/test_ci_audit_no_evidence.py` feeds it an empty
+string and asserts the verdict is not CLEAN; reverting the guard fails 4 of the
+8. Re-audited live: `34745992077` now reports **UNAUDITABLE**.
+
+---
+
+# STAGE 23, SCOPED NOT BUILT — one resolution function, three call sites
+
+**Scoped before 09-15 because the resurrection rate is still 10/day and every
+day of patching adds rows the eventual merge must handle.**
+
+## The case for a stage rather than a fourth patch
+
+**Three creation paths, three matching regimes, three blind spots:**
+
+| path | matching | blind to |
+| --- | --- | --- |
+| `flashscore._get_or_create_team` | exact → strict scan, `league == scraped OR league IS NULL` | rows whose league is CONCRETE and different from the scraped one |
+| `apifootball._get_or_create_team_id` | provider-id → `Team.league.notin_(nat_list)` | **every NULL-league row — `NULL NOT IN (...)` is NULL** |
+| `footballdataorg` | exact → prefix → create | **everything; `same_team_strict` is never called** |
+
+> ### And the repair for a NULL-blindness was itself NULL-blind, in the reverse direction.
+> `Team.league == None` is never true in SQL. **s5.11 fixed "survivor NULL,
+> scraped concrete" and left "scraped NULL, survivor concrete" — which is 4 of
+> 09-12's 18 and 3 of 09-13's 8.** A patch written against the path in front of
+> it produces the next blind spot.
+
+**The same move that fixed the predicates, the overround band and the alert
+senders: ONE definition, imported by every caller.**
+
+    resolve_team(session, name, league=None, provider_id=None) -> Team
+
+* provider id first when present — the only identity that is not a string;
+* then exact name, **scoped by the identity partition, not by league**;
+* then `same_team_strict` over candidates **selected without a league filter at
+  all**, because league is metadata about a row, not about a club;
+* create only when every step refuses.
+
+**The enforcement is the part that makes it a stage and not a refactor:** a test
+that scans `src/` for `Team(` construction outside that function and fails,
+exactly as `test_no_test_writes_prod_state` enforces the path list and
+`test_overround_band_is_one_definition` enforces the band. **A fourth creation
+site must fail the suite, not produce a fourth blind spot.**
+
+**What it does NOT include:** the 75 alias rulings (separate, and unblocked only
+by classification), and the exact-name collapse (which needs sizing first, and
+whose remedy is splitting rows — harder than merging).
+
+---
+
+# THE UNION'S BOUNDARY CONDITION — recorded beside rule 4
+
+**Rule 4 is "aggregate at the level of the decision". The union fix has its own
+boundary and this is it:**
+
+> ### Union is the safe fix when the comparison is a SET OVERLAP. It is not when the comparison is a RATIO.
+>
+> **In `names_share_an_anchor` the operation is intersection over token sets.
+> Adding a variant can only add tokens, and a larger set cannot destroy an
+> overlap — so union is monotone and strictly safe.**
+>
+> **In `team_names_similar` the operation is a per-token ratio with a prefix
+> rule. The raw-versus-aliased cross product introduces COMPARISONS that neither
+> pure form performs**, and a comparison that did not exist cannot be bounded by
+> reasoning about the ones that did. Measured: 38 new matches, roughly half
+> absurd — `ac milan == manchester utd`, `cremonese == usa`,
+> `dep. a coruna == lask`. The mechanism is that `a. lustenau` retains the token
+> `a`, which prefix-matches `az` and `almeria`.
+
+**The general form, which is the part worth keeping:** *union is safe where the
+combined form is a superset of each input's evidence, and unsafe where combining
+creates new pairwise comparisons.* **Set operations satisfy the first; scored
+comparators do not.**
+
+**One measurement established that instead of seventy-five judgements, and the
+reason is now understood rather than assumed** — which is the difference between
+knowing the answer and having been lucky.
+
+*Recorded 2026-09-13.*
