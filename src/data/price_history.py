@@ -39,7 +39,7 @@ def record_price(session, *, match_id: int, bookmaker: str, market_type: str,
             observed_at=observed_at or utcnow(),
         ))
     except Exception as exc:                      # pragma: no cover - defensive
-        logger.debug(f"price snapshot skipped for match {match_id}: {exc}")
+        logger.warning(f"price snapshot skipped for match {match_id}: {exc}")
 
 
 def stamp_first_seen(row, observed_at=None) -> None:
@@ -54,7 +54,7 @@ def stamp_first_seen(row, observed_at=None) -> None:
         if getattr(row, "first_seen_at", None) is None:
             row.first_seen_at = observed_at or utcnow()
     except Exception as exc:                      # pragma: no cover - defensive
-        logger.debug(f"first_seen_at not stamped: {exc}")
+        logger.warning(f"first_seen_at not stamped: {exc}")
 
 
 def record_injury(session, *, team_id: int, player_id: Optional[int] = None,
@@ -70,4 +70,4 @@ def record_injury(session, *, team_id: int, player_id: Optional[int] = None,
             source=source, observed_at=observed_at or utcnow(),
         ))
     except Exception as exc:                      # pragma: no cover - defensive
-        logger.debug(f"injury observation skipped for team {team_id}: {exc}")
+        logger.warning(f"injury observation skipped for team {team_id}: {exc}")

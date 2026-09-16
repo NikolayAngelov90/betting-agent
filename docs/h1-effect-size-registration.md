@@ -109,3 +109,73 @@ observations do not exist because the window/interval policy permits one — H1 
 filed under **`UNADDRESSABLE BY SELF-OBSERVATION`**, disposition (a), ~100
 credits. It competes with H5 Q1's `--any-fixture` control for the same ceiling.
 See `docs/unaddressable-by-self-observation.md`.
+
+---
+
+# ρ DERIVED AND REGISTERED — 2026-09-16, before the purchase
+
+**Argued from what must be cleared, exactly as δ = +2% was, and NOT fitted from
+data that would then be the test's own.** The sensitivity table above stays as
+sensitivity; this fixes the number.
+
+## The policy has to be fixed first, because ρ is not a property of the market alone
+
+A correlation is only worth detecting if ACTING on it pays, and what "acting"
+means decides how much of ρ is captured. For a signal `z = (t0->t1 move) / σ`,
+predicted `t1->t2 = ρ·σ·z`, and the expected captured gain is `ρ·σ·E[z|acted]`.
+
+| policy | `E[z | acted]` | ρ needed for +2% | **n** |
+| --- | --- | --- | --- |
+| **two-sided timing on every pick** | `E|z| = √(2/π) = 0.798` | **0.422** | **33** |
+| top-decile selection | 1.755 | 0.192 | 167 |
+
+> **A five-fold swing in n from the policy alone.** Registering a ρ without
+> fixing the policy would have been registering nothing.
+
+## THE POLICY IS FORCED HERE, so ρ follows
+
+**This pipeline does not choose fixtures by drift.** Picks are already selected
+on EV; the drift signal can only change **WHEN the price is taken**, never
+**WHICH** fixture is bet. Every pick therefore gets a timing decision and the
+signal's sign chooses the direction — a negative signal means take it now, a
+positive one means wait. **That is two-sided timing on every pick, and it is the
+only policy available**, so `E[z|acted] = E|z| = 0.798`.
+
+## REGISTERED
+
+| | |
+| --- | --- |
+| σ (fixture-level, measured 2026-09-10, n=129) | **5.937%** |
+| policy | **two-sided timing on every pick** |
+| δ (actionable, inherited from the overround) | **+2%** |
+| **ρ** | **0.42** |
+| **required n** | **33** |
+
+`z_r = ½·ln((1+ρ)/(1-ρ)) = 0.448`, `n = (2.487/z_r)² + 3 = 33`.
+
+**Why 0.42 and not something smaller:** below it, acting on the signal returns
+less than the overround, so the correlation is real and worthless — the same
+argument that set δ. **An experiment powered for ρ = 0.20 would spend 153
+observations to detect something it could not act on.**
+
+## What this changes about the purchase
+
+**n = 33, not 55 and not 137.** 55 was computed for a mean and does not
+transfer; 137 came from a σ taken from fifteen fixtures.
+
+> **33 < 50, so the registration's own resize-or-refuse condition does NOT
+> fire.** The purchase gets smaller rather than being re-argued, and it is
+> sized **before** the 10-01 reset rather than after.
+
+**Sensitivity, stated so the number is not read as precision:** at the
+break-even +1.85% the requirement is ρ = 0.391 and n = 39, so the whole
+actionable band is **n = 33-39**. The estimate is a LOWER BOUND on ρ in one
+further respect — it assumes acting captures the full predicted move, and any
+slippage raises the ρ needed and lowers n.
+
+**Still `UNADDRESSABLE BY SELF-OBSERVATION`, disposition (a).** Three separated
+observations do not exist because the window/interval policy permits one. This
+sizes the purchase; it does not authorise it, and it still competes with H5 Q1's
+`--any-fixture` control for the same ceiling.
+
+*Registered 2026-09-16, before any credit is spent.*

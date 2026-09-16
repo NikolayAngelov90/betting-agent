@@ -90,7 +90,15 @@ def lookup_former_name(session, name: str) -> Optional[int]:
     Fails open: if the table does not exist yet (migration 010 unapplied) this
     returns None and the caller falls through to its remaining steps. The
     pipeline degrades to pre-Stage-23 behaviour rather than breaking — the
-    resurrections come back, which is the observable cost.
+    resurrections come back.
+
+    THE FAILURE IS LOGGED AT **WARNING**, AND THAT WAS NOT TRUE UNTIL
+    2026-09-16. This docstring previously called the returning resurrections
+    "the observable cost". They were not observable: `setup_logger` installs
+    sinks at INFO, so the DEBUG line this handler used to emit did not exist in
+    production, and neither did the `TEAM_RESOLVE` record that would have shown
+    the consequence. **A fail-open whose failure is silent is a fail-open nobody
+    can audit** — see LOG-1.
     """
     try:
         row = session.execute(
@@ -98,7 +106,7 @@ def lookup_former_name(session, name: str) -> Optional[int]:
             {"n": name}).fetchone()
         return int(row[0]) if row else None
     except Exception as e:                       # pragma: no cover - env-dependent
-        logger.debug(f"team_former_names unavailable ({e}) — skipping step 2")
+        logger.warning(f"team_former_names unavailable ({e}) — skipping step 2")
         return None
 
 
@@ -188,10 +196,23 @@ def _record(name: str, team, step: str, league: Optional[str]) -> None:
     announced itself, so an attribution for steps 1, 3 and 4 had to be argued
     from `league IS NULL` in the data rather than read from a log.
 
-    DEBUG, because it fires once per team per scrape (~90-180 a run) and
-    DEBUG is confirmed to reach CI logs. It carries no PII and no secret.
+    **INFO, NOT DEBUG, AND THAT IS THE WHOLE POINT.** The first version of this
+    said "DEBUG, because it fires once per team per scrape and DEBUG is
+    confirmed to reach CI logs". **The second half was false.** `setup_logger`
+    installs sinks at INFO, so the record did not exist in production: run
+    35071608733 created 138 fixtures, made roughly 270 resolutions, and emitted
+    ZERO lines. The instrument registered to settle Stage 24 produced a zero
+    indistinguishable from the absence it was built to detect.
+
+    VOLUME IS THE REASON DEBUG WAS CHOSEN AND IT WAS THE WRONG TRADE. ~270 INFO
+    lines on a 138-fixture card, against ~412 INFO lines the run already emits.
+    Roughly a doubling of a 650 KB log, and it buys the only measurement that
+    separates "nothing was attempted" from "everything was intercepted" — the
+    ambiguity that made 09-14/09-15 unreadable.
+
+    It carries no PII and no secret.
     """
-    logger.debug(
+    logger.info(
         f"TEAM_RESOLVE name={name!r} step={step} "
         f"team={getattr(team, 'id', None)} "
         f"resolved={getattr(team, 'name', None)!r} league={league!r}")

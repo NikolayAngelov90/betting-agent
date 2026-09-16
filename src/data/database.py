@@ -41,7 +41,7 @@ def _register_numpy_psycopg2_adapters():
         register_adapter(np.int16, lambda v: AsIs(int(v)))
         register_adapter(np.bool_, lambda v: AsIs("true" if bool(v) else "false"))
     except Exception as e:  # pragma: no cover - depends on optional deps
-        logger.debug(f"numpy/psycopg2 adapter registration skipped: {e}")
+        logger.warning(f"numpy/psycopg2 adapter registration skipped: {e}")
 
 
 _register_numpy_psycopg2_adapters()
@@ -191,7 +191,7 @@ class DatabaseManager:
                         f"({col_type}{nullable_clause}{default_clause})"
                     )
                 except Exception as e:
-                    logger.debug(f"Column {table_name}.{col.name} migration skipped: {e}")
+                    logger.warning(f"Column {table_name}.{col.name} migration skipped: {e}")
 
     def _migrate_missing_indexes(self):
         """Create any indexes defined in models that don't yet exist in the DB."""
@@ -206,7 +206,7 @@ class DatabaseManager:
                         idx.create(self.engine)
                         logger.info(f"Migration: created index {idx.name} on {table_name}")
                     except Exception as e:
-                        logger.debug(f"Index {idx.name} creation skipped: {e}")
+                        logger.warning(f"Index {idx.name} creation skipped: {e}")
 
     def prune_old_odds(self, keep_days: int = 400, batch_size: int = 500,
                        max_batches: int = 200):

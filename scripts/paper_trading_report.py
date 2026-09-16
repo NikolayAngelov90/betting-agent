@@ -180,7 +180,7 @@ def _attach_observations(picks: List[_Pick]) -> None:
                 PickObservation.closing_captured_at,
             ).filter(PickObservation.pick_id.in_(ids)).all()
     except Exception as e:
-        logger.debug(f"pick_observations unavailable ({e}) — reporting from "
+        logger.warning(f"pick_observations unavailable ({e}) — reporting from "
                      f"saved_picks only. Is migration 006 applied?")
         return
 

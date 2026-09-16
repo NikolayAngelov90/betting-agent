@@ -288,9 +288,9 @@ class FootballBettingAgent:
                     cal_path.write_text(json.dumps(existing, indent=2))
                     logger.info("Saved corrected calibration (ml=1.0) to disk")
                 except Exception as _save_err:
-                    logger.debug(f"Could not save corrected calibration: {_save_err}")
+                    logger.warning(f"Could not save corrected calibration: {_save_err}")
         except Exception as _e:
-            logger.debug(f"Stale calibration reset skipped: {_e}")
+            logger.warning(f"Stale calibration reset skipped: {_e}")
 
     _SCRAPED_LEAGUES_FILE = Path("data/scraped_leagues.json")
 
@@ -1393,9 +1393,9 @@ class FootballBettingAgent:
                                     f"(+5pp) — calibration restored to 1.0"
                                 )
                     except Exception as _fe:
-                        logger.debug(f"Could not apply load-time model floor: {_fe}")
+                        logger.warning(f"Could not apply load-time model floor: {_fe}")
             except Exception as _ce:
-                logger.debug(f"Could not reload calibration: {_ce}")
+                logger.warning(f"Could not reload calibration: {_ce}")
 
         # Idempotency guard — skip if today's picks already exist (AC1 Story 8.3)
         if not force:
@@ -2014,7 +2014,7 @@ class FootballBettingAgent:
                             f"briefing today (decisions are binding for the day)"
                         )
         except Exception as _fe:
-            logger.debug(f"Briefing-final filter skipped: {_fe}")
+            logger.warning(f"Briefing-final filter skipped: {_fe}")
 
         # Daily exposure limit: cap total Kelly stake across all picks to
         # prevent over-betting even when many value picks are found.
@@ -3524,7 +3524,7 @@ class FootballBettingAgent:
             try:
                 _acc_path.write_text(json.dumps(accuracies, indent=2))
             except Exception as _ae:
-                logger.debug(f"Could not persist model accuracies: {_ae}")
+                logger.warning(f"Could not persist model accuracies: {_ae}")
 
             # Reset ML zero-count when ML accuracy recovers (Story 7.3 AC3)
             if cal_factors.get("ml", 0.0) > 0.0:
@@ -3815,7 +3815,7 @@ class FootballBettingAgent:
                         f"majority baseline {_goals_baseline:.1%}"
                     )
         except Exception as _gate_err:
-            logger.debug(f"GoalsML accuracy gate check failed (non-fatal): {_gate_err}")
+            logger.warning(f"GoalsML accuracy gate check failed (non-fatal): {_gate_err}")
 
         # Free the training preload cache — it holds history for all training teams
         # and is no longer needed now that feature extraction is done.

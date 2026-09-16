@@ -224,7 +224,7 @@ def _load_observations(session, pick_ids, stats: dict) -> list:
         stats["db_queries"] += 1
         return obs
     except Exception as e:
-        logger.debug(f"pick_observations unavailable ({e}) — skipping the "
+        logger.warning(f"pick_observations unavailable ({e}) — skipping the "
                      f"dual-attribution pass. Is migration 006 applied?")
         return []
 

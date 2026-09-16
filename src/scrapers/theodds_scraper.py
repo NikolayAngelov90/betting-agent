@@ -741,7 +741,7 @@ class TheOddsScraper:
                     sess.commit()
                 except Exception as e:
                     sess.rollback()
-                    logger.debug(f"TheOddsAPI game save failed for match_id={match_id}: {e}")
+                    logger.warning(f"TheOddsAPI game save failed for match_id={match_id}: {e}")
                     return 0
 
         return written
@@ -805,7 +805,7 @@ class TheOddsScraper:
                           odds_value=odds_value, observed_at=_now)
             return 1
         except Exception as e:
-            logger.debug(f"TheOddsAPI upsert failed ({bookmaker} / {market_type} / {selection}): {e}")
+            logger.warning(f"TheOddsAPI upsert failed ({bookmaker} / {market_type} / {selection}): {e}")
             return 0
 
     async def update(self) -> int:

@@ -63,7 +63,7 @@ class ApiBudgetStore:
             try:
                 self._available = inspect(self.db.engine).has_table("api_budget")
             except Exception as e:
-                logger.debug(f"api_budget probe failed: {e}")
+                logger.warning(f"api_budget probe failed: {e}")
                 self._available = False
             if not self._available:
                 logger.info(
@@ -198,4 +198,4 @@ class ApiBudgetStore:
                     )
                 )
         except Exception as e:
-            logger.debug(f"api_budget release failed: {e}")
+            logger.warning(f"api_budget release failed: {e}")

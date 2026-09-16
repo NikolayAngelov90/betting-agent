@@ -328,7 +328,7 @@ class HistoryMirror:
             except FileNotFoundError:
                 pass
             except Exception as e:
-                logger.debug(f"could not remove {path}: {e}")
+                logger.warning(f"could not remove {path}: {e}")
 
     # ------------------------------------------------------------------- sync
 

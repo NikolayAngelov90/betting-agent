@@ -14460,3 +14460,190 @@ environment where it matters**, which is the same sentence three times in three
 layers.
 
 *Recorded 2026-09-16. Read-only.*
+
+---
+
+# STAGE 25 — THE ANNOUNCEMENT STAGE. Log level only, cohort-neutral, no s5.14.
+
+`tests/` **1042 passed.** `CODE_REVISION` unchanged at s5.13, fingerprint
+unchanged at `ee60cd` — nothing here touches selection.
+
+---
+
+## 1. THE 158 ARE LARGE. They are their own stage, and the 20 shipped first.
+
+Same predicate as the 66, applied mechanically and reported with its own
+uncertainty rather than rounded:
+
+| | |
+| --- | --- |
+| silent handlers | **158** (153 swallow, 5 re-raise) |
+| **firm: guard a guarantee / measurement / gate** | **16** |
+| firm: convenience (imports, driver cleanup, CLI args, DOM parse) | 63 |
+| **unclear — the keyword predicate cannot settle them** | **79** |
+
+**Floor 16, ceiling 95, ratio-estimate ~48.** The predicate that sorted the 66
+does not transfer cleanly: half the population needs eyes. **That is the count,
+and it is the reason this is a separate stage rather than a fold-in.**
+
+**And the 16 firm ones include sites more central than some of the 21 just
+raised:**
+
+| site | what goes silent |
+| --- | --- |
+| `theodds_scraper._absorb_quota_headers` ×2 | **`int(remaining)` / `int(used)` in a bare `except`.** The credit gate's own input, discarded without a word — the *guard whose input degrades* shape, again |
+| `model_version._stable`, `fingerprint_inputs` | **the cohort fingerprint**, computed from partial inputs |
+| `history_mirror.filter_generation` | **the cache-validity digest** — and its own docstring names this as its boundary |
+| `api_budget` via `_shared_budget` | the budget store silently unavailable |
+| `market_spec.check_overround` | the overround band |
+
+---
+
+## 2. THE 21 RAISED, AND THE FIRING RATE WAS MEASURED FIRST
+
+**66 → 45 DEBUG-only; 125 → 146 at WARNING or above.**
+
+### The noise question, answered before shipping
+
+`fixtures_zero_active` fired 21 times a day and became noise four days after it
+was written. **These cannot**, and the difference is structural:
+
+> **`fixtures_zero_active` asserted a CONDITION that was routinely false. These
+> are EXCEPTION handlers — they fire only when an operation that currently works
+> stops working.**
+
+**Measured from each guarded operation's success in production**, because a
+handler whose operation succeeds never fires whatever its level:
+
+| | |
+| --- | --- |
+| `team_former_names` | 125 rows |
+| `api_budget` | 45 rows |
+| `pick_observations` | 1,700 rows |
+| `injury_observations` | 3,366 rows |
+| `odds_snapshots` (what `record_price` writes) | 97,986 rows |
+| calibration / ev_threshold / weights / credits files | all present |
+
+**Measured firing rate: 0 per run, for all 21.** A healthy run gains zero lines,
+and any line that appears is a real degradation.
+
+### The pattern was taken from the tree, not invented
+
+`coverage_checks` and `fixture_plausibility` log DEBUG and return `None` while
+their **callers** emit `CHECK DID NOT RUN` at WARNING. Those two are correct and
+are pinned as correct-by-design. The other twenty-one had no such caller, so the
+announcement is made where the failure is.
+
+**`tests/test_guard_handlers_announce.py`** — 16 tests: every named site must log
+at WARNING+, the two caller-announces pairs must keep both halves, and a census
+tripwire fails if the DEBUG-only population grows past 45.
+
+### And a docstring that claimed the very thing LOG-1 disproved
+
+`lookup_former_name` said migration 010 going missing would let *"the
+resurrections come back, **which is the observable cost**"*. **It was not
+observable** — neither the handler's DEBUG line nor the `TEAM_RESOLVE` record
+that would show the consequence existed in production. Corrected in place.
+*A fail-open whose failure is silent is a fail-open nobody can audit.*
+
+**Verified live**: running `resolve_team` against a table-less database through
+`setup_logger(level="INFO")` now emits
+`WARNING … team_former_names unavailable … — skipping step 2`. Previously
+nothing.
+
+---
+
+## 3. STEP 2 RE-REGISTERED AT INFO, AND THE ORIGINAL LEFT STRUCK THROUGH
+
+The registration's *"at DEBUG, confirmed to reach CI logs"* is struck through
+rather than deleted, **because it is the error**. The correction sits beneath it.
+
+**Verified through the pipeline's own `setup_logger(log_level="INFO")` — not a
+bare loguru sink, which is exactly what made the original claim false.** The
+record now appears.
+
+> **Production verification is still OUTSTANDING and is named as such:**
+> `grep TEAM_RESOLVE` against the next `daily-picks` log must return a non-zero
+> count. **Until that grep runs the registration is armed, not confirmed** — and
+> saying so is the whole of MB-1's operational form.
+
+**The prediction is unchanged**: ≥1 on a card creating ≥50 fixtures, ~8-14 on a
+full ~88-fixture card, and the zero case still worth more than the pass. **The
+09-16 card qualified at 138 fixtures and produced no reading, so it is not
+evidence either way and is not counted as an attempt.**
+
+**The volume trade, stated:** ~270 INFO lines on a 138-fixture card against ~412
+the run already emits — roughly a doubling of a 650 KB log. **It buys the only
+measurement that separates "nothing was attempted" from "everything was
+intercepted".** DEBUG was chosen for volume and it was the wrong trade.
+
+---
+
+## 4. THE MIRROR — AND I WAS WRONG YESTERDAY
+
+**`updated_at` DOES move.** `trg_matches_updated_at` is a `BEFORE UPDATE`
+trigger, and all 52 marked rows now carry `updated_at = 2026-09-16 08:35:56`.
+
+**And `_completed_count` filters on `training_exclusion_reason.is_(None)`**, so
+after marking, `len(frame) != db_count` by exactly 52 → the row-count reconcile
+fires → **`_full_resync`.**
+
+| | |
+| --- | --- |
+| the mechanism | **MIR-1's in-query membership plus the row-count reconcile** |
+| `invalidate()` | **a backstop** |
+
+> ### So the previous finding — "the 52 marks reached nothing for anything that learns" — was TOO PESSIMISTIC, and is corrected here.
+>
+> The marks propagate to production on the next sync **by themselves**. The
+> local `invalidate()` was unnecessary rather than merely misdirected.
+
+**What survives from that finding is the rule**, and it survives intact: *verify
+an invalidation against the artifact the consuming environment actually
+restores.* CI restores `data/models/` from an `actions/cache`; a local
+`invalidate()` would not have reached it **had the reconcile not made it
+unnecessary.** The rule was right; the alarm was not.
+
+**The one-line change the question was aimed at is not needed** — the membership
+is already in-query, which is why the reconcile works.
+
+---
+
+## 5. ρ DERIVED — the H1 purchase is sized BEFORE 10-01
+
+Registered in `docs/h1-effect-size-registration.md`, argued from what must be
+cleared exactly as δ = +2% was, and **not fitted from data that would then be
+the test's own**.
+
+### ρ is not a property of the market alone
+
+Expected captured gain is `ρ·σ·E[z|acted]`, so the acting policy is half the
+answer:
+
+| policy | `E[z|acted]` | ρ for +2% | **n** |
+| --- | --- | --- | --- |
+| **two-sided timing on every pick** | 0.798 | **0.422** | **33** |
+| top-decile selection | 1.755 | 0.192 | 167 |
+
+**A five-fold swing in n from the policy alone. Registering ρ without fixing the
+policy would have been registering nothing.**
+
+### The policy is forced, so ρ follows
+
+**This pipeline does not choose fixtures by drift.** Picks are already selected
+on EV; the signal can only change **when** the price is taken, never **which**
+fixture is bet. Every pick gets a timing decision and the sign chooses the
+direction. That is two-sided timing, `E|z| = √(2/π) = 0.798`, and
+
+> ### ρ = 0.42, n = 33.
+
+**Not 55 (computed for a mean) and not 137 (a σ from fifteen fixtures).**
+**33 < 50, so the resize-or-refuse condition does not fire — the purchase gets
+smaller.** Band across the actionable range: **n = 33-39**, and it is a lower
+bound on ρ because it assumes acting captures the full predicted move.
+
+**Still `UNADDRESSABLE BY SELF-OBSERVATION`, disposition (a).** This sizes the
+purchase; it does not authorise it, and it still competes with H5 Q1 for the
+same ceiling.
+
+*Stage 25 recorded 2026-09-16. Log level only — cohort-neutral, s5.13 unchanged.*

@@ -101,11 +101,34 @@ merged-away name. The same scrape that used to create a row must now be
 intercepted by the lookup. **The old creation rate IS the predicted hit rate** —
 if the two do not match, one of the two measurements is wrong.
 
-**The log line to look for**, at DEBUG, confirmed to reach CI logs:
+### ~~**The log line to look for**, at DEBUG, confirmed to reach CI logs:~~
+
+> **CORRECTED 2026-09-16, and the original is left above struck through because
+> it is the error.** "Confirmed to reach CI logs" was **FALSE**. It was confirmed
+> against a local session at DEBUG. `setup_logger()` installs sinks at INFO, so
+> the line did not exist in production: run `35071608733` created 138 fixtures,
+> made roughly 270 resolutions, and emitted **zero** `TEAM_RESOLVE` lines. The
+> card qualified and the prediction could not be read.
+>
+> **The record is now at INFO** (`team_resolution._record`), and this time it was
+> verified through the pipeline's own `setup_logger(log_level="INFO")` rather
+> than a bare loguru sink — *the bare sink is what made the original claim
+> false.* **Production verification is still outstanding** and happens on the
+> next `daily-picks` run: `grep TEAM_RESOLVE` against its log must return a
+> non-zero count. Until that grep runs, this registration is armed, not
+> confirmed.
+
+**The log line to look for**, now at INFO:
 
 ```
 TEAM_RESOLVE name='Lens' step=former_name team=576 resolved='Racing Club de Lens' league='france/ligue-1'
 ```
+
+**RE-REGISTERED 2026-09-16. The prediction is UNCHANGED — ≥1 hit on a card
+creating ≥50 fixtures, ~8-14 on a full ~88-fixture card, and the zero case still
+worth more than the pass. What changed is that it can now be emitted.** The
+2026-09-16 card qualified at 138 fixtures and produced no reading, so it is not
+evidence either way and is not counted as an attempt.
 
 **AMENDED 2026-09-16, BEFORE the card it measures.** The original registration
 quoted step 2's own prose line, which announced only step 2 — so a run could
