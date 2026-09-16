@@ -168,6 +168,6 @@ deadline is end of September 2026.
 | 1 | Stage 21 lead-time benefit | **UNADDRESSABLE BY SELF-OBSERVATION** | (c) open, claim uncitable |
 | 2 | H5 Q1 picked-vs-unpicked control | **UNADDRESSABLE BY SELF-OBSERVATION** | (a) available, ~credits, not taken |
 | 3 | Saturday schedule-margin boundary | **CLOSED** by substitution | (b) delay distribution, regime named |
-| 4 | H1 momentum | **UNADDRESSABLE BY SELF-OBSERVATION** *(was `UNTESTABLE`)* | (a) ~100 credits, sizing to be re-derived |
+| 4 | H1 momentum | **UNADDRESSABLE BY SELF-OBSERVATION** *(was `UNTESTABLE`)* | (a) **SIZED 2026-09-16: ρ=0.42, n=33 (band 33-39), 66-78 credits** — about two-thirds of ~100. Waits on 10-01 for budget only. |
 
 *Named 2026-09-10. Add instances here rather than rediscovering the class.*

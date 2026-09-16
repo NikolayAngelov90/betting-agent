@@ -146,6 +146,18 @@ changed is that it can now be checked, and the amendment landed while the
 | --- | --- |
 | **hits ≈ the old creation rate** | the model is right end to end: the scrapes that created rows are the scrapes the lookup now absorbs |
 | **hits = 0 on a full card** | **step 2 is not reachable in production.** The unit tests pass and the branch is dead — exactly the shape the credit-gate exercise existed to rule out, and the most valuable possible result |
+
+> ### A ZERO NOW MEANS SOMETHING DIFFERENT THAN IT DID ON 2026-09-16, and the difference is the whole of this re-registration.
+>
+> | when | a zero meant |
+> | --- | --- |
+> | **09-16** | **the instrument was missing.** The record was at DEBUG, `setup_logger` installs INFO sinks, and 138 fixtures produced no line. The zero was the channel's, not the branch's, and carried no information about step 2 at all. |
+> | **from the next run** | **the branch is unreachable.** The record is at INFO and verified through the pipeline's own logger, so a zero on a qualifying card is a fact about `resolve_team`. |
+>
+> **Until the production grep returns non-zero this registration is ARMED, not
+> CONFIRMED** — because an instrument verified locally is exactly what failed
+> the first time. One `grep TEAM_RESOLVE` against the next `daily-picks` log
+> promotes it, and nothing else does.
 | **hits ≫ the old creation rate** | the lookup is intercepting names that were resolving correctly before, i.e. it is shadowing step 3 and the table contains names that are still current |
 
 ### D. THE HONEST LIMIT ON THE 09-14/09-15 RESULT

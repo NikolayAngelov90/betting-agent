@@ -173,6 +173,59 @@ actionable band is **n = 33-39**. The estimate is a LOWER BOUND on ρ in one
 further respect — it assumes acting captures the full predicted move, and any
 slippage raises the ρ needed and lowers n.
 
+## WHY n = 33 IS TRUSTWORTHY RATHER THAN CONVENIENT
+
+**A smaller n derived after the fact is exactly what a motivated analysis
+produces, so the reason the policy is what it is matters more than the number.**
+
+> **The policy is a CONSTRAINT THE SYSTEM IMPOSES, not a choice made to shrink
+> the figure.** The pipeline selects picks on EV. A drift signal cannot change
+> *which* fixture is bet — that decision is already made by the time any price
+> is observed — so the only thing it can change is *when* the price is taken.
+> **Two-sided timing is not the policy that gives the best n; it is the only
+> policy the architecture permits.**
+
+Had the pipeline been able to select fixtures by drift, the honest registration
+would have been ρ = 0.192 and **n = 167**, and the purchase would have been
+refused under this document's own resize-or-refuse rule. **The number fell
+because the system is more constrained than the general case, not because the
+question was asked more gently.**
+
+## THE FIGURE IS LOWER-BOUND-DRIVEN, AND THE BAND IS 33-39
+
+`ρ·σ·E[z|acted]` **assumes acting captures the full predicted move.** Any
+slippage — a price that has already moved, a market that closes, a stake that
+cannot be placed at the quoted line — reduces the captured fraction, which
+raises the ρ needed and lowers n further. **So 33 is the floor of the actionable
+band and not a point estimate:**
+
+| | δ | ρ | n |
+| --- | --- | --- | --- |
+| break-even | +1.85% | 0.391 | **39** |
+| actionable | +2.00% | 0.422 | **33** |
+
+**Register the band, quote 33-39, and do not quote 33 alone.**
+
+## THE PURCHASE, NOW SIZED
+
+`docs/unaddressable-by-self-observation.md` anchors the variation at **~100
+credits for n = 50** — 2 credits per fixture at `CREDITS_PER_REQUEST = 2`.
+Scaling at that anchor:
+
+| n | credits |
+| --- | --- |
+| 33 | **66** |
+| 39 | **78** |
+
+> **66-78 credits, about two-thirds of the ~100 it replaces.** The anchor is
+> itself approximate, so the band should be read as *roughly two-thirds*, not to
+> the credit.
+
+**The sizing no longer waits on anything. The purchase waits on 10-01 for the
+budget** — the gate refuses every request until the quota resets, and
+66-78 credits against a 400-credit monthly budget is affordable on any day after
+it.
+
 **Still `UNADDRESSABLE BY SELF-OBSERVATION`, disposition (a).** Three separated
 observations do not exist because the window/interval policy permits one. This
 sizes the purchase; it does not authorise it, and it still competes with H5 Q1's

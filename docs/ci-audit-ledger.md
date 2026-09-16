@@ -14647,3 +14647,108 @@ purchase; it does not authorise it, and it still competes with H5 Q1 for the
 same ceiling.
 
 *Stage 25 recorded 2026-09-16. Log level only — cohort-neutral, s5.13 unchanged.*
+
+---
+
+# EFF-1 — AN EFFECT SIZE IS NOT A PROPERTY OF THE PHENOMENON
+
+> ### An effect size is a property of the phenomenon AND the policy that would act on it. Sizing a study before fixing the policy sizes nothing.
+
+**Demonstrated, not argued.** H1's phenomenon — does pre-kickoff drift predict
+further drift — did not change between these two rows. Only the rule for acting
+on it did:
+
+| policy | `E[z | acted]` | ρ needed for +2% | **required n** |
+| --- | --- | --- | --- |
+| two-sided timing on every pick | 0.798 | 0.422 | **33** |
+| top-decile selection | 1.755 | 0.192 | **167** |
+
+**A five-fold swing in n, with σ fixed at 5.937%, δ fixed at +2%, and the
+hypothesis untouched.**
+
+The mechanism is arithmetic and it generalises past this project: expected
+captured gain is `ρ·σ·E[z|acted]`. **The policy sets `E[z|acted]`, so it sets
+how much ρ is worth detecting, so it sets n.** Any study whose value comes from
+acting on a result inherits this — the sizing cannot be done first and the
+policy chosen afterwards, because the first number was computed for a policy
+nobody had picked.
+
+## WHERE IT SITS AMONG THE OTHERS
+
+This is the third member of a family about **what a number is a property of**:
+
+| | the error |
+| --- | --- |
+| *a filter in the instrument read as a fact about the data* | the instrument's shape read as the world's |
+| **MB-1** — a predicate that rejects its own motivating examples | the instrument's blind spot read as the world's, **directionally** |
+| **EFF-1** — an effect size sized before the policy is fixed | **the policy's shape read as the phenomenon's** |
+
+**And it is the constructive one.** The first two are ways to be misled by a
+measurement already taken. EFF-1 fires *before* the measurement, which is the
+only point at which it is free.
+
+## THE COROLLARY THAT MADE n = 33 CREDIBLE
+
+**A smaller n derived after the fact is what a motivated analysis produces**, so
+the reason for the policy carries the weight, not the number:
+
+> **The policy is a constraint the system imposes, not a choice made to shrink
+> the figure.** The pipeline selects picks on EV. By the time any price is
+> observed the fixture is already chosen, so a drift signal can only change
+> **when** a price is taken, never **which** fixture is bet. **Two-sided timing
+> is not the policy with the best n — it is the only policy the architecture
+> permits.**
+
+**Had the pipeline been able to select fixtures by drift**, the honest
+registration would have been ρ = 0.192 and **n = 167** — and under this
+document's own resize-or-refuse rule the purchase would have been **refused**.
+**The number fell because the system is more constrained than the general case,
+not because the question was asked more gently.**
+
+**That distinction is the test to apply next time**: when a sizing shrinks, ask
+whether the policy was *discovered* or *selected*. Discovered is a finding;
+selected is a thumb on the scale.
+
+---
+
+## THE PURCHASE, SIZED
+
+| | |
+| --- | --- |
+| registered ρ | **0.42** |
+| n | **33**, band **33-39** — quote the band |
+| credits at the doc's own ~100-for-50 anchor (2/fixture) | **66-78**, about two-thirds of the figure it replaces |
+| waits on | **10-01, for budget only** |
+
+**33 is LOWER-BOUND-DRIVEN and must be recorded as such**: `ρ·σ·E[z|acted]`
+assumes acting captures the full predicted move, and any slippage raises the ρ
+needed and lowers n further. It is the floor of the actionable band, not a point
+estimate.
+
+> **The sizing no longer waits on anything.** The gate refuses every request
+> until the quota resets, and 66-78 credits against a 400-credit monthly budget
+> is affordable on any day after 10-01. Still disposition (a) —
+> `UNADDRESSABLE BY SELF-OBSERVATION`, competing with H5 Q1 for the same ceiling.
+> **This sizes the purchase; it does not authorise it.**
+
+---
+
+## STEP 2 — ARMED, AND A ZERO NOW CARRIES INFORMATION IT DID NOT CARRY YESTERDAY
+
+**Recorded in the registration**, because the same observation changed meaning
+between two consecutive days:
+
+| when | a zero on the grep meant |
+| --- | --- |
+| **2026-09-16** | **the instrument was missing.** 138 fixtures, ~270 resolutions, no line — the zero belonged to the channel and said nothing about `resolve_team` |
+| **from the next run** | **the branch is unreachable.** The record is at INFO and verified through the pipeline's own `setup_logger`, so a zero on a qualifying card is a fact about step 2 |
+
+**Armed, not confirmed, and the word is doing work.** An instrument verified
+locally is precisely what failed the first time, so nothing but a production
+`grep TEAM_RESOLVE` returning non-zero promotes it.
+
+> **The zero is still worth more than the pass** — it would mean a branch that
+> is unit-tested, loaded with 125 rows, and dead. **But only the second kind of
+> zero is worth anything, and yesterday's was the first kind.**
+
+*Recorded 2026-09-16.*
