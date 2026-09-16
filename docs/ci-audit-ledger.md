@@ -13461,3 +13461,175 @@ is the difference between having learned a lesson and having a habit.
 
 *Recorded 2026-09-16. Read-only measurement: no identifier written, cleared or
 repaired; no API credit spent.*
+
+---
+
+# 2026-09-16, fifth pass — the loop that manufactures false proof, counted
+
+**Queries only. No identifier written, cleared or repaired; no API credit spent.**
+
+---
+
+## CORRECTION FIRST — row 124 no longer exists, and the loop is broken by accident
+
+**s5.10 did more than NULL the id.** Its corrected order was OP3 (clear wrong
+provider ids) → OP1 → OP2: clearing 604 made row 124 *unresolved*, and OP2 then
+absorbed it into the evidenced twin — **row 1528 `Telstar`, which carries the
+CORRECT id 427.** The four `other/israel` fixtures now sit on 1528.
+
+**The substantive point survives intact, and only the row number moved.** The
+fixture path runs for teams where `apifootball_team_id IS NULL`; 1528 has one,
+so the loop cannot fire on it **today**.
+
+> **It is broken incidentally, not deliberately.** Nothing removed the evidence.
+> The four fixtures still attribute Maccabi Tel Aviv's matches to a Dutch club,
+> and the moment that row's id is cleared — **which is exactly what OP3 does to a
+> wrong id** — all four become live candidates again and any of them yields 604.
+> Clearing a bad identifier re-arms the mechanism that wrote it.
+
+**And row `1531 Telstar 1963` is unidentified right now with 5 AF-linked
+fixtures**, so the Telstar cluster still has a live member in the population
+below.
+
+---
+
+## (a) THE 29 MARKS DO NOT COVER THESE FIXTURES
+
+| | |
+| --- | --- |
+| `phantom_kickoff_now_stamp` | 510 |
+| `corrupt_team_identity` | **29** — still present, as recorded |
+| **of the four Israeli fixtures, marked** | **0 of 4** |
+
+All four carry `training_exclusion_reason = NULL`. **The most provable
+mis-attribution in the database — a Dutch second-tier club with four Israeli
+league fixtures — is not among the 29.** Stage 13's detection found a different
+population by a different method, and this instance was never a candidate.
+
+## (b) THE PATH DOES NOT CONSULT THE EXCLUSION AT ALL
+
+```python
+fix_row = session.query(Match).filter(
+    _or(Match.home_team_id == tid, Match.away_team_id == tid),
+    Match.apifootball_id.isnot(None),
+).order_by(Match.id).first()
+```
+
+**No `Match.training_exclusion_reason.is_(None)`.** It reads `matches` directly.
+
+The exclusion is applied at **14+ sites** across `feature_engineer`,
+`history_mirror`, `match_history`, `clean_dataset` and `betting_agent` — every
+one of them a path that LEARNS FROM or MEASURES a match. **This path does
+neither. It writes identity**, and it was written after the class was quantified.
+
+> **Both halves fail independently.** The marks do not include these fixtures,
+> and the query would not consult the marks if they did. Fixing either one alone
+> changes nothing here.
+
+**This is the guard-design rule, fourth instance: *an exclusion is only as good
+as the queries applying it*.** The previous three were queries that learn; this
+is the first that writes.
+
+## (c) THE POPULATION OF THE LOOP — 58 rows, and nobody had counted it
+
+| | |
+| --- | --- |
+| unidentified team rows | 133 |
+| **of those, with ≥1 AF-linked fixture attributed to them** | **58 (44%)** |
+| total candidate fixtures those rows expose | **130** |
+| **of those 130, excluded** | **0** |
+
+`572 Sport Lisboa e Benfica` (12), `411 Rakow` (11), `492 Sporting Clube de
+Braga` (9), `461 BW Linz` (7), `420 Cracovia` (6), `1531 Telstar 1963` (5)…
+
+> **58 rows are one execution of that branch away from acquiring a permanent
+> identity from unverified fixture attribution, and the exclusion mechanism
+> would stop none of them.**
+
+---
+
+## AND THE LOOP IS NOT HYPOTHETICAL — it is how the duplicates got their ids
+
+**19 firings in the cached CI logs; 54 distinct team rows have had
+`apifootball_team_id` written by this path.**
+
+**21 of those 54 are in the population Stage 24 merged this morning.**
+
+| of the 32 merged pairs | |
+| --- | --- |
+| **SURVIVOR's** id written by this path | **13** |
+| **DUPLICATE's** id written by this path | **8** |
+| both sides written by it | **0** |
+| neither side | 11 |
+
+**In 8 pairs the path is the proximate cause of the collision**: the survivor
+already held the id, and the duplicate acquired *the same id* by reading it off a
+fixture — `af=99` `Clermont`, `af=171` `Nurnberg`, `af=195` `Willem II
+Tilburg`, `af=338` `Wisla`, `af=426` `Sp Rotterdam`, `af=1009` `Erzurumspor`,
+`af=1416` `Lok. Sofia`, `af=1837` `Wrexham AFC`.
+
+> **This is how a resurrection became a full duplicate CLUB.** The 09-13 note
+> recorded the escalation — *"the resurrected rows are acquiring provider ids"* —
+> without a mechanism. **This is the mechanism**, and it never wrote both sides,
+> so it completes collisions rather than creating them alone.
+
+---
+
+# THE OPEN ITEM, RESTATED WITH ITS CHAIN — ING-1
+
+**Filed at the end of Stage 22 as "match rows assigned to the wrong team row by
+name-first matching at ingestion", and it has read as a cosmetic mis-assignment
+ever since. It is not cosmetic. It is the entry point of a loop.**
+
+```
+  1. INGESTION attributes a fixture to the wrong team row
+         (a backfill put four Israeli matches on a Dutch club)
+                              |
+  2. the fixture PERSISTS, unmarked — the 29 do not cover it,
+     and no invariant asks whether a club's fixtures are in its own competition
+                              |
+  3. the fixture-derived path READS it as evidence
+     (no exclusion predicate; 58 rows and 130 fixtures currently exposed)
+                              |
+  4. it WRITES apifootball_team_id — permanently
+                              |
+  5. resolve_team step 1 treats that column as PROOF,
+     ahead of the former-name lookup and both name steps
+                              |
+     -> and a wrong id makes the row unresolvable, which s5.10's OP3 clears,
+        which returns the row to state 3 with the evidence untouched
+```
+
+**Both remedies shipped so far act on steps 3-5.** Ordering fixes
+arbitrary-among-candidates. Verification would fix wrong-source. **Neither
+touches step 1**, and step 1 is where the Telstar chain started.
+
+> ### "Sometimes a fixture is on the wrong club" and "the mechanism that writes provable identity is fed by unverified attribution" are the same item. Only the second one gets built.
+
+**It is the fifth symptom of one cause under a fifth name.** The others: the
+resurrections, the shared-provider-id duplicates, the unpriced-fixture alarms,
+and the two wrong-id rows. Each was worked as its own defect; each is downstream
+of team identity being decided by name matching over data nothing verifies.
+
+**The cheapest available check is an invariant nobody has written**: a club's
+fixtures should lie in competitions it can plausibly enter. `Telstar` in
+`other/israel` fails it on inspection, and it would have caught step 1 before
+step 2 — which is where every one of these gets cheap to fix.
+
+*Not built. Recorded with its chain, which is what was missing.*
+
+---
+
+## METHOD RECORD — the line worth keeping
+
+> ### The other four were each found by being bitten; producer/parser drift is the first caught prospectively — the difference between having learned a lesson and having a habit.
+
+And the second entry, from this pass:
+
+> **My own correction on 411 — a filter in the instrument read as a fact about
+> the data — is rule 1 arriving in the ANALYSIS layer**, which is the one layer
+> that had not yet produced an instance. The pipeline had the league-scoped
+> lookup, the NULL-blind `notin_`, and the league-scoped strict scan. The
+> analysis layer had been the thing that FOUND those. It is not exempt.
+
+*Recorded 2026-09-16.*

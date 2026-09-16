@@ -840,6 +840,20 @@ TRACKED_KEYS: List[str] = [
 #:       and on 09-14/09-15 the creations and the step-2 interceptions were both
 #:       zero, which are the same observation without it.
 #:
+#:       ING-1, MEASURED AND NOT BUILT. Ordering acts on how evidence is
+#:       SELECTED; it does not touch how a wrongly-attributed fixture comes to
+#:       exist, which is where the Telstar chain started. The loop: ingestion
+#:       puts a fixture on the wrong team row -> the fixture persists unmarked
+#:       (0 of the 4 Telstar/Israel fixtures are among Stage 13's 29) -> the
+#:       fixture-derived path reads it as evidence WITHOUT any
+#:       training_exclusion_reason predicate -> it writes apifootball_team_id
+#:       permanently -> step 1 treats that column as PROOF. Clearing a bad id
+#:       (OP3) returns the row to the start with the evidence untouched.
+#:       POPULATION: 58 of 133 unidentified rows expose 130 AF-linked fixtures,
+#:       0 of them excluded. The path is live — 19 firings, 54 rows written, and
+#:       in 8 of the 32 pairs merged today it is what gave the DUPLICATE the
+#:       colliding id.
+#:
 #:       STILL NOT CLOSED: the 75 alias rulings; the exact-name collapse; and
 #:       `resolve_team` step 2, which has still never fired in production — see
 #:       `docs/stage24-merge-32-and-step2-first-exercise.md`, which registers
