@@ -1866,7 +1866,7 @@ class FlashscoreScraper(BaseScraper):
             home_team_id=home_team.id,
             away_team_id=away_team.id,
             match_date=match_date,
-        ).first()
+        ).order_by(Match.id).first()
         if existing:
             return _apply_update(existing)
 
@@ -1874,7 +1874,7 @@ class FlashscoreScraper(BaseScraper):
         if match_data.get("flashscore_id"):
             existing = session.query(Match).filter_by(
                 flashscore_id=match_data["flashscore_id"]
-            ).first()
+            ).order_by(Match.id).first()
             if existing:
                 return _apply_update(existing)
 
@@ -1953,8 +1953,8 @@ class FlashscoreScraper(BaseScraper):
         """Get head-to-head data between two teams from the database."""
         db = get_db()
         with db.get_session() as session:
-            team1 = session.query(Team).filter_by(name=team1_name).first()
-            team2 = session.query(Team).filter_by(name=team2_name).first()
+            team1 = session.query(Team).filter_by(name=team1_name).order_by(Team.id).first()
+            team2 = session.query(Team).filter_by(name=team2_name).order_by(Team.id).first()
 
             if not team1 or not team2:
                 return []

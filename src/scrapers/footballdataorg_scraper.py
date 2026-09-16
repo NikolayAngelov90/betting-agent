@@ -636,13 +636,13 @@ class FootballDataOrgScraper:
         # FDO name starts with DB name (DB name is a truncated prefix)
         candidate = session.query(Team).filter(
             Team.name.ilike(f"{name[:12]}%")
-        ).first()
+        ).order_by(Team.id).first()
         if candidate:
             return candidate
         # DB name starts with FDO name (FDO name is shorter)
         candidate = session.query(Team).filter(
             Team.name.ilike(f"{name}%")
-        ).first()
+        ).order_by(Team.id).first()
         return candidate
 
     def _ensure_fixture(
@@ -805,6 +805,7 @@ class FootballDataOrgScraper:
                     Match.match_date < date_end,
                     Team.name == home_name,
                 )
+                .order_by(Match.id)
                 .first()
             )
             if existing:
@@ -817,7 +818,7 @@ class FootballDataOrgScraper:
                 return False
 
             # Get or create home team
-            home_team = session.query(Team).filter_by(name=home_name).first()
+            home_team = session.query(Team).filter_by(name=home_name).order_by(Team.id).first()
             if not home_team:
                 home_team = self._find_team_by_prefix(session, home_name)
             if not home_team:
@@ -826,7 +827,7 @@ class FootballDataOrgScraper:
                 home_team = resolve_team(session, home_name)
 
             # Get or create away team
-            away_team = session.query(Team).filter_by(name=away_name).first()
+            away_team = session.query(Team).filter_by(name=away_name).order_by(Team.id).first()
             if not away_team:
                 away_team = self._find_team_by_prefix(session, away_name)
             if not away_team:

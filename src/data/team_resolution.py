@@ -166,6 +166,37 @@ def _country_conflict(candidate, country) -> bool:
             != str(candidate.country).strip().lower())
 
 
+def _record(name: str, team, step: str, league: Optional[str]) -> None:
+    """ONE structured line per resolution. THE INCOMING NAME BESIDE THE ROW.
+
+    WHY THIS EXISTS, and why it is worth a line on every resolution: until now
+    the database stored only the row a name RESOLVED TO, never the name that
+    came in. So "how many resurrection attempts were there" could not be asked
+    — this card or any future one — and on 2026-09-14/15 both the creations and
+    the step-2 interceptions were ZERO. **Zero attempts and zero failures are
+    the same observation**, and the p = 0.004 on the creation drop rested on
+    fixtures-created being a fair exposure measure, which that ambiguity is
+    precisely the evidence against.
+
+    With this line the next card answers the two separately:
+
+        attempts    = lines whose `name` is in `team_former_names`
+        intercepted = those with `step=former_name`
+        residual    = those with `step=create`
+
+    It also closes a gap named in Stage 24's registration: only step 2
+    announced itself, so an attribution for steps 1, 3 and 4 had to be argued
+    from `league IS NULL` in the data rather than read from a log.
+
+    DEBUG, because it fires once per team per scrape (~90-180 a run) and
+    DEBUG is confirmed to reach CI logs. It carries no PII and no secret.
+    """
+    logger.debug(
+        f"TEAM_RESOLVE name={name!r} step={step} "
+        f"team={getattr(team, 'id', None)} "
+        f"resolved={getattr(team, 'name', None)!r} league={league!r}")
+
+
 def resolve_team(session, name: str, *, league: str = None,
                  provider_id: int = None, country: str = None,
                  create: bool = True):
@@ -176,8 +207,10 @@ def resolve_team(session, name: str, *, league: str = None,
     # 1. PROVIDER ID — proof, when present.
     if provider_id:
         t = (_partition_filter(session.query(Team), league)
-             .filter(Team.apifootball_team_id == provider_id).first())
+             .filter(Team.apifootball_team_id == provider_id)
+             .order_by(Team.id).first())
         if t:
+            _record(name, t, "provider_id", league)
             return t
 
     # 2. FORMER NAME — the step that stops the decay.
@@ -190,21 +223,24 @@ def resolve_team(session, name: str, *, league: str = None,
                 f"({t.name!r}) — not creating a duplicate")
             if provider_id and not t.apifootball_team_id:
                 t.apifootball_team_id = provider_id
+            _record(name, t, "former_name", league)
             return t
 
     # 3. EXACT CURRENT NAME, partition-scoped, never league-scoped.
     t = (_partition_filter(session.query(Team), league)
-         .filter(Team.name == name).first())
+         .filter(Team.name == name)
+         .order_by(Team.id).first())
     if t and (_conflicts(t, provider_id) or _country_conflict(t, country)):
         t = None          # provably a different club: provider id or country
     if t:
         if provider_id and not t.apifootball_team_id:
             t.apifootball_team_id = provider_id
+        _record(name, t, "exact_name", league)
         return t
 
     # 4. same_team_strict over candidates chosen WITHOUT a league filter.
     for cand_id, cand_name in _partition_filter(
-            session.query(Team.id, Team.name), league):
+            session.query(Team.id, Team.name), league).order_by(Team.id):
         if same_team_strict(name, cand_name):
             t = session.get(Team, cand_id)
             if t is not None and (_conflicts(t, provider_id)
@@ -212,10 +248,12 @@ def resolve_team(session, name: str, *, league: str = None,
                 continue
             if provider_id and t is not None and not t.apifootball_team_id:
                 t.apifootball_team_id = provider_id
+            _record(name, t, "strict", league)
             return t
 
     # 5. CREATE.
     if not create:
+        _record(name, None, "no_match", league)
         return None
     t = Team(name=name, league=league)
     if country:
@@ -224,4 +262,5 @@ def resolve_team(session, name: str, *, league: str = None,
         t.apifootball_team_id = provider_id
     session.add(t)
     session.flush()
+    _record(name, t, "create", league)
     return t

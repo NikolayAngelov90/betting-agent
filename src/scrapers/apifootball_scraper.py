@@ -1533,7 +1533,7 @@ class APIFootballScraper(BaseScraper):
             if apifootball_team_id:
                 team = _partition(session.query(Team).filter_by(
                     apifootball_team_id=apifootball_team_id
-                )).first()
+                )).order_by(Team.id).first()
                 if team:
                     # Stage 13 Part B — verify against the payload in hand.
                     #
@@ -1597,7 +1597,8 @@ class APIFootballScraper(BaseScraper):
                             and t.apifootball_team_id != apifootball_team_id)
 
             # 1. Exact match
-            team = _partition(session.query(Team).filter_by(name=name)).first()
+            team = _partition(session.query(Team).filter_by(name=name)
+                              ).order_by(Team.id).first()
             if team and _id_compatible(team):
                 _save_api_id(team)
                 return team.id
@@ -1605,7 +1606,8 @@ class APIFootballScraper(BaseScraper):
             # 2. Check alias map (API-Football name -> historical name)
             alias = TEAM_NAME_ALIASES.get(name)
             if alias:
-                team = _partition(session.query(Team).filter_by(name=alias)).first()
+                team = _partition(session.query(Team).filter_by(name=alias)
+                                  ).order_by(Team.id).first()
                 if team and _id_compatible(team):
                     _save_api_id(team)
                     return team.id
@@ -1706,7 +1708,7 @@ class APIFootballScraper(BaseScraper):
                 Match.away_team_id == away_id,
                 Match.match_date >= match_dt - window,
                 Match.match_date <= match_dt + window,
-            ).first()
+            ).order_by(Match.id).first()
             return match.id if match else None
 
     def _find_match_by_date_league(
@@ -1733,6 +1735,7 @@ class APIFootballScraper(BaseScraper):
                     Match.match_date <= match_dt + window,
                     Match.apifootball_id.is_(None),
                 )
+                .order_by(Match.id)
                 .all()
             )
             from src.utils.team_names import team_names_similar
@@ -2478,7 +2481,7 @@ class APIFootballScraper(BaseScraper):
                     fix_row = session.query(Match).filter(
                         _or(Match.home_team_id == tid, Match.away_team_id == tid),
                         Match.apifootball_id.isnot(None),
-                    ).first()
+                    ).order_by(Match.id).first()
                     if not fix_row:
                         continue
                     fix_api_id = fix_row.apifootball_id

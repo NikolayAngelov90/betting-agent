@@ -13111,3 +13111,184 @@ bump: it changes how a report is delivered, never which picks it contains.
 
 *Recorded 2026-09-16. Merge applied to production; registration committed first
 as `1e40f28`.*
+
+---
+
+# 2026-09-16, third pass — the unordered-selection inventory
+
+**`.first()` over an unordered match is a data-integrity defect, and the merge
+removed the population that made it visible without removing the pattern.**
+
+---
+
+## THE ENUMERATION — 21 selections, 8 of which can match multiple rows today
+
+Every `.first()` / `.one_or_none()` / `.all()`-then-take-first in identity
+resolution, with the live multiplicity of its key measured on 2026-09-16.
+
+| # | site | key | keys matching >1 row **today** | what decided the winner |
+| --- | --- | --- | --- | --- |
+| 1 | `team_resolution` step 1 | `apifootball_team_id` (partition-scoped) | **0** — *was 32 until Stage 24 merged them, hours earlier* | planner |
+| 2 | `team_resolution` step 3 | `name` (partition-scoped) | **1** (`Iraklis 1908`, two rows, two provider ids) | planner |
+| 3 | `team_resolution` step 4 | strict scan over all candidates | iteration order | **first match wins** |
+| 4 | `apifootball._find_match_id` | `(home, away, ±1 day)` | **3,882 rows have a rival in the window** | planner |
+| 5 | `apifootball._find_match_by_date_league` | league + 26h + name similarity | `.all()` unordered | **first similar wins** |
+| 6 | `apifootball` resolve-id-from-a-fixture | any fixture of the team with an AF id | **20 of 133** unidentified teams | planner |
+| 7 | `apifootball._get_or_create_team_id` | `apifootball_team_id` | 0 | planner |
+| 8 | ″ | `name`, then `TEAM_NAME_ALIASES[name]` | 1 | planner |
+| 9 | `flashscore` fixture step 1 | `(home, away, exact match_date)` | **773 keys** | planner |
+| 10 | `flashscore` fixture step 2 | `flashscore_id` | 0 | planner |
+| 11 | `flashscore` fixture step 3 | wide window + equal score | — | **already `ORDER BY match_date`** |
+| 12 | `flashscore.get_h2h_data` | `name` ×2 | 1 | planner |
+| 13 | `fdo._find_team_by_prefix` | `name ILIKE prefix%` | **29 of 889 names** | planner |
+| 14 | `fdo._ensure_fixture` | `(league, date, home team NAME)` | **2,156 keys** | planner |
+| 15 | `fdo` team lookups ×2 | `name` | 1 | planner |
+| 16 | `historical_loader` team ×2, fixture ×1 | `name`; `(home, away, ±24h)` | 1; same shape as #4 | planner |
+| 17 | `historical_loader` odds dedup | `(match, bookmaker, market, selection)` | — | **existence probe — exempt** |
+
+**Also measured:** `Match.apifootball_id` itself matches more than one row for
+**264 keys** — the fixture-level twin of the team-level defect Stage 24 merged
+away, and eight times larger.
+
+### The two that are not merely arbitrary but arbitrary-and-PERSISTED
+
+> **#6 writes a permanent identifier chosen from an arbitrary row.** It takes
+> *any* fixture of an unidentified team that carries an `apifootball_id`, fetches
+> it, reads the team id off the home or away side, and **writes it to
+> `teams.apifootball_team_id`**. That column is what `resolve_team` step 1 calls
+> *proof*. **Proof selected arbitrarily among candidates is not proof**, and 20
+> of the 133 unidentified teams have more than one candidate fixture.
+
+> **#4 decides which match row a fixture's odds attach to**, over a ±1-day window
+> in which 3,882 rows currently have a rival.
+
+### And #11 is the precedent, in the same file
+
+`flashscore`'s third fixture branch already reads
+`.order_by(Match.match_date.asc()).first()`. **The remedy was present, one
+function away from four sites that lacked it.** Rule 1 again, and the fourth
+time in this area.
+
+---
+
+## THE REMEDY — one total order, everywhere, deliberately chosen
+
+**s5.2 is the precedent and it is exact.** Ties resolved by iteration order made
+the day's picks depend on fixture iteration order and change systematically
+under sharding; the fix was a total order, and it was a cohort event. **This is
+that defect in identity resolution**, and it matters more, because Elo and
+Poisson key on `team_id`: a club's history could split across two rows
+**differently between runs**, and each run's models trained on whichever split
+that run produced.
+
+**`ORDER BY id` ascending, at all 20 identity-deciding sites.** The choice is
+argued rather than defaulted:
+
+* the lowest id is the **oldest** row — the one other tables already reference
+  most;
+* it is the **same survivor rule** s5.10's OP1 and Stage 24 used, so the
+  codebase has one convention rather than two;
+* one rule everywhere beats a locally clever rule at each site, which is how the
+  three matching regimes of Stage 23 came about.
+
+**It cannot change WHICH rows match** — only which of several equally-matching
+rows wins, and only where the answer was previously arbitrary.
+
+### Pinned, because care does not survive a refactor
+
+`tests/test_identity_selection_is_ordered.py` scans the five identity modules
+and fails on any unordered selection — the same move as the `Team(` construction
+scan and the production-path list. **An existence probe is exempt and must say
+why**: `if existing: continue` cannot be changed by which row comes back, and a
+second test asserts the exemption still names a line that is actually a
+selection, because a line-numbered allowlist rots silently when code moves above
+it.
+
+---
+
+## ITEM 2 — the measurement now exists BEFORE the exposure
+
+**`TEAM_RESOLVE name=<incoming> step=<which of the five> team=<row> resolved=<name> league=<…>`**,
+one line per resolution, at DEBUG (confirmed to reach CI).
+
+> **Zero attempts and zero failures were the same observation.** The database
+> stored the row a name RESOLVED TO and never the name that came in, so "how
+> many resurrection attempts were there" was unanswerable — not only for
+> 09-14/09-15, but for every future card.
+
+Now separable:
+
+| | |
+| --- | --- |
+| **attempts** | lines whose `name` is in `team_former_names` |
+| **intercepted** | those with `step=former_name` |
+| **residual** | those with `step=create` |
+
+`ci_audit` prints the split as
+`resolve[provider_id=N former_name=N exact_name=N strict=N create=N]` beside
+`disc[...]`, and a test pins that the producer's format and the audit's parser
+still agree — **a drift there degrades to "no resolution data", which reads
+exactly like a run that resolved nothing.**
+
+**Landed while the 2026-09-16 `daily-picks` run had still not fired**, so the
+instrument exists before the card it is meant to measure rather than being added
+afterwards to explain a number. Stage 24's registration was amended in place to
+quote the new line; the prediction itself is unchanged.
+
+**This also closes an OUT OF SCOPE item from that registration on the same day
+it was written** — "there is no log line saying which of the five steps resolved
+a name" — which is why the 09-14/09-15 attribution had to be argued from
+`league IS NULL` in the data rather than read from a log.
+
+---
+
+## ITEM 3 — two shapes worth keeping
+
+### A COUNT OF CALLS IS NOT A COUNT OF EFFECTS
+
+`record_former_name` is `ON CONFLICT DO NOTHING`. **30 calls wrote 1 row**, and
+the registration's falsifier was phrased in ROWS — *"if more than 1 former name
+is written"*. A script reporting the call count would have reported **30 against
+a predicted 1** and read as a failed prediction against a met one.
+
+> **Fourth time a registration's specificity found something the code would have
+> reported as fine.** The others: the fourth creation path caught by the
+> enforcement test before shipping; the "5 survivor-unidentified" residual
+> dissolving into an artefact of my own normalisation; and the exposure
+> ambiguity above, which the registration's insistence on a COMPOSITION rather
+> than a total is what exposed.
+
+**It is also the fifth instance of "a definition is not an occurrence"** — an
+attempted write is not a write, exactly as a word in a ledger row is not that
+row's verdict, and a workflow's YAML echoed into a log is not a failed step.
+
+### A GUARD WHOSE INPUT DEGRADES IN THE CONDITION IT GUARDS AGAINST
+
+`theodds_credits.json` **is written only when a run SPENDS.** So a gate that
+refuses every request freezes the last figure, and the file goes stale *because*
+the condition it exists to detect is occurring.
+
+> **The staler the reading, the more likely it is describing exactly the state
+> that must not be trusted.** Staleness and danger are not independent here —
+> they are produced by the same event.
+
+**This is the reconciler-blind-at-429 defect in a different file**: the
+reconciler could not read quota headers on the responses that mattered most,
+because a 429 is precisely when the numbers matter and precisely when the
+reconciler was not looking.
+
+**The shape, named:** *a guard whose input is refreshed by the activity it is
+guarding stops being refreshed exactly when it starts mattering.* Worth checking
+for wherever a cached figure gates the action that updates it.
+
+---
+
+## COHORT
+
+**s5.13 amended in place** — the cohort is still empty (0 picks), so no bump.
+The ordering change is selection-affecting and is recorded as the revision's
+third such change; `TEAM_RESOLVE` is not, and is recorded as riding along.
+
+`tests/` **1010 passed.**
+
+*Recorded 2026-09-16.*

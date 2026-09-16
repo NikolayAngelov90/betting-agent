@@ -402,6 +402,20 @@ def extract(log: str) -> Dict[str, object]:
             for r in _rd]
     f["report_incomplete"] = len(re.findall(r"REPORT INCOMPLETE:", log))
 
+    # ---- s5.13: the resolution record, split BY STEP ---------------------
+    # `TEAM_RESOLVE name=... step=... team=...`. Counted per step, never as a
+    # total, for the reason every other split here exists: the total is the
+    # number that cannot answer the question. On 2026-09-14/15 the creations
+    # AND the step-2 interceptions were both zero, and a total of "0 new rows"
+    # reads as success while being equally consistent with nothing having been
+    # attempted. These two counts separate those.
+    _tr = re.findall(r"TEAM_RESOLVE name=(?:'[^']*'|\"[^\"]*\") step=(\w+)", log)
+    if _tr:
+        steps: Dict[str, int] = {}
+        for st in _tr:
+            steps[st] = steps.get(st, 0) + 1
+        f["team_resolve_steps"] = steps
+
     _fx = re.findall(PATTERNS["fixtures_scraped"], log)
     if _fx:
         f["fixtures_scraped"] = sum(int(x) for x in _fx)
@@ -620,6 +634,27 @@ def discovery_summary(facts: Dict[str, object]) -> str:
     return "disc[" + " ".join(parts) + "]"
 
 
+def resolution_summary(facts: Dict[str, object]) -> str:
+    """`resolve[provider_id=N former_name=N exact=N strict=N create=N]`.
+
+    The composition of team identity resolution for a run, from s5.13's
+    `TEAM_RESOLVE` line. Printed beside `disc[...]` because it answers the
+    question `disc[...]` cannot: a fixture count says how much was scraped, this
+    says how each team NAME in it was decided.
+
+    `former_name` is the one to watch — `resolve_team` step 2 had never fired in
+    production as of 2026-09-16, so its first non-zero here is the first
+    evidence that branch is reachable at all.
+    """
+    steps = facts.get("team_resolve_steps")
+    if not steps:
+        return ""
+    order = ("provider_id", "former_name", "exact_name", "strict",
+             "create", "no_match")
+    parts = [f"{k}={steps[k]}" for k in order if steps.get(k)]
+    return "resolve[" + " ".join(parts) + "]" if parts else ""
+
+
 #: A log shorter than this carries no step output — a run that is still
 #: executing, or whose log could not be fetched. Not a threshold on quality:
 #: a real daily-picks log is ~600k and the smallest real capture log ~10k.
@@ -738,8 +773,10 @@ def main() -> int:
         # total hid a dead source for 88 days. A reader must not have to
         # reconstruct which source produced what.
         disc = discovery_summary(facts)
+        res = resolution_summary(facts)
+        _pre = "  ".join(x for x in (disc, res) if x)
         print(f"{rid:<12} {r['workflow']:<14} {(r.get('startedAt') or '')[:16]:<17} "
-              f"{v:<10} {((disc + '  ') if disc else '') + '; '.join(hits)}"[:170])
+              f"{v:<10} {((_pre + '  ') if _pre else '') + '; '.join(hits)}"[:190])
         for h in hits[1:]:
             print(f"{'':<56} {h[:60]}")
     if listing_warning:

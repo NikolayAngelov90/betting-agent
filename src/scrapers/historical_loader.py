@@ -391,7 +391,7 @@ class HistoricalDataLoader(BaseScraper):
         from datetime import timedelta
 
         # Find or create teams
-        home_team = session.query(Team).filter_by(name=home_name).first()
+        home_team = session.query(Team).filter_by(name=home_name).order_by(Team.id).first()
         if not home_team:
             # Stage 23: ONE resolution function. THIS PATH WAS THE
             # FOURTH, found by the enforcement test before shipping
@@ -401,7 +401,7 @@ class HistoricalDataLoader(BaseScraper):
             session.add(home_team)
             session.flush()
 
-        away_team = session.query(Team).filter_by(name=away_name).first()
+        away_team = session.query(Team).filter_by(name=away_name).order_by(Team.id).first()
         if not away_team:
             # Stage 23: ONE resolution function. THIS PATH WAS THE
             # FOURTH, found by the enforcement test before shipping
@@ -421,7 +421,7 @@ class HistoricalDataLoader(BaseScraper):
                     match_date + timedelta(hours=24),
                 ),
             )
-        ).first()
+        ).order_by(Match.id).first()
 
         if existing:
             if existing.is_fixture:

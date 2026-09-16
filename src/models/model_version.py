@@ -807,6 +807,34 @@ TRACKED_KEYS: List[str] = [
 #:       picks it contains. It is recorded here so the revision's contents are
 #:       complete, not because it forces the bump.
 #:
+#:       AMENDED the same day, cohort still empty. A THIRD selection-affecting
+#:       change: EVERY identity selection now carries a total order.
+#:
+#:       21 selections across 5 modules picked one row out of possibly several
+#:       with no ORDER BY, so which row won was whatever the planner returned —
+#:       and could differ between two runs of the same code over the same data.
+#:       This is s5.2's ranking defect (ties resolved by iteration order) moved
+#:       into identity resolution, and its remedy is the same: a total order,
+#:       deliberately chosen. `id` ascending everywhere — the oldest row, the one
+#:       other tables reference most, and the survivor rule s5.10 and Stage 24
+#:       already used.
+#:
+#:       MEASURED at the time of the fix, keys matching more than one row:
+#:       apifootball._find_match_id 3,882 rows had a rival inside its +/-1 day
+#:       window; fdo._ensure_fixture 2,156 keys; flashscore exact (home, away,
+#:       date) 773; Match.apifootball_id 264; fdo._find_team_by_prefix 29 of 889
+#:       names; and one site derived a team's PERMANENT provider id from an
+#:       arbitrary fixture (20 of 133 unidentified teams had more than one
+#:       candidate). Stage 24's merge removed the population that made this
+#:       visible in team_resolution; it did not remove the pattern.
+#:
+#:       Also added, and NOT selection-affecting: `TEAM_RESOLVE`, one structured
+#:       record per resolution carrying the INCOMING name beside the resolved
+#:       row. Until it existed the database stored only what a name resolved TO,
+#:       so "how many resurrection attempts were there" could not be asked —
+#:       and on 09-14/09-15 the creations and the step-2 interceptions were both
+#:       zero, which are the same observation without it.
+#:
 #:       STILL NOT CLOSED: the 75 alias rulings; the exact-name collapse; and
 #:       `resolve_team` step 2, which has still never fired in production — see
 #:       `docs/stage24-merge-32-and-step2-first-exercise.md`, which registers

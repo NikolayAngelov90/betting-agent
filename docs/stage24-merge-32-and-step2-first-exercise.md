@@ -104,8 +104,18 @@ if the two do not match, one of the two measurements is wrong.
 **The log line to look for**, at DEBUG, confirmed to reach CI logs:
 
 ```
-resolve_team: 'Lens' is a FORMER NAME of team 576 ('Racing Club de Lens') — not creating a duplicate
+TEAM_RESOLVE name='Lens' step=former_name team=576 resolved='Racing Club de Lens' league='france/ligue-1'
 ```
+
+**AMENDED 2026-09-16, BEFORE the card it measures.** The original registration
+quoted step 2's own prose line, which announced only step 2 — so a run could
+report zero interceptions and zero creations and leave no way to tell whether
+anything was attempted. `resolve_team` now emits ONE structured record at every
+one of its five steps, carrying the INCOMING name beside the resolved row, and
+`ci_audit` prints the split as `resolve[provider_id=N former_name=N exact_name=N
+strict=N create=N]` next to `disc[...]`. The prediction is unchanged; what
+changed is that it can now be checked, and the amendment landed while the
+2026-09-16 run had still not fired.
 
 ### C. What each outcome means, fixed in advance
 
@@ -140,11 +150,11 @@ this is the evidence against.
 
 ## OUT OF SCOPE, stated so the result is not read as whole
 
-* **No resolution-path instrument.** There is no log line saying which of the
-  five steps resolved a name — only step 2 announces itself. Attribution for
-  steps 1, 3 and 4 remains unobservable, and that is why the 09-14/09-15
-  attribution had to be argued from `league IS NULL` in the data rather than
-  read from a log. **The next stage that touches this should emit the step.**
+* ~~**No resolution-path instrument.**~~ **CLOSED the same day, before the next
+  card.** `resolve_team` now emits `TEAM_RESOLVE name=… step=… team=…` at all
+  five steps. The 09-14/09-15 attribution had to be argued from `league IS NULL`
+  in the data because only step 2 announced itself; that argument will not be
+  needed again.
 * **The country check** stays in the same never-fired state. It refuses 0 of 25
   possible joins, so there is nothing to exercise; it is armed and idle by
   design, and that is recorded rather than resolved.
