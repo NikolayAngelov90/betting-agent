@@ -12880,3 +12880,234 @@ slots dropped and slots doubled.
 
 *Audited 2026-09-16. Read-only — no code, config, schema or production data
 changed.*
+
+---
+
+# 2026-09-16, second pass — DEL-3 built, three states named, the 32 merged
+
+**Four items, and none of them a new date.**
+
+---
+
+## 1. STAGE 24 — the merge ran, and sizing it first corrected its purpose
+
+**Registered in `docs/stage24-merge-32-and-step2-first-exercise.md` and
+committed as `1e40f28` BEFORE the merge was run.** Every figure below was fixed
+in advance.
+
+| registered | measured on apply |
+| --- | --- |
+| components merged | **32** = 32 |
+| team rows removed | **32** = 32 (teams 1534 -> 1502) |
+| **former names WRITTEN** | **1** = 1 (`Vitória SC` -> 601 `Guimaraes`) |
+| `team_former_names` total | **125** = 125 |
+| references re-pointed | 19 components | **150 rows** |
+| components remaining | **0** = 0 |
+| refused for ambiguity | **0** = 0 |
+| orphaned references | **0** = 0, checked across all four FK columns independently |
+
+### THE CORRECTION, found by sizing before building
+
+**The plan was: merge, `record_former_name()` writes 32 names, the next scrape
+hits the lookup, step 2 gets its first production pass. Two of those three are
+wrong.**
+
+| | |
+| --- | --- |
+| removed names ALREADY in the table, pointing at the correct survivor | **29** |
+| removed names already mapped somewhere else (a conflict) | **0** |
+| pairs where survivor and duplicate share an IDENTICAL name, so nothing is removed | **2** (`PEC Zwolle`, `Fortuna Sittard`) |
+| **names the merge actually removes from circulation** | **1** |
+
+> **The backfill already armed step 2 for 29 of these 30 names on 09-13.** And
+> `flashscore`, `footballdataorg` and `historical_loader` all call
+> `resolve_team()` with **no provider id**, so step 1 is skipped and **step 2 is
+> already their first lookup**. The merge does not arm it. It was armed.
+
+**A former name must be a name that is no longer current.** Recording the two
+exact-name pairs would have put a LIVE name into a table of removed ones and let
+step 2 short-circuit step 3 for nothing. The merge records only what it removes.
+
+### And a counter that would have lied
+
+`record_former_name` is `ON CONFLICT DO NOTHING`, so **30 calls wrote 1 row**.
+The first version of the script printed the call count. **The registration's
+falsifier is "more than 1 former name WRITTEN"** — a counter reporting 30 would
+have read as a failed prediction while the truth was a met one. It now reports
+both. *A call is not a write*, which is the same shape as a definition read as
+an occurrence, for the fifth time.
+
+### What the merge actually bought
+
+1. **A LIVE NON-DETERMINISM REMOVED.** `resolve_team` step 1 is
+   `.filter(apifootball_team_id == provider_id).first()` **with no ordering**,
+   and 32 provider ids matched two rows. Which row an API-Football fixture
+   attached to was whatever Postgres returned first. Not a latent risk — a coin
+   flip on every AF resolution for 32 clubs, with Elo and Poisson keying on
+   `team_id`.
+2. **150 split references re-pointed.** `Erzurumspor` alone had 46 matches, 1
+   pick and 91 odds rows on the wrong row; it is now one club with 56 matches.
+3. The one missing former name.
+
+### Step 2 is STILL unexercised, and that is now registered rather than assumed
+
+**Prediction, fixed before the fact:** on the next `daily-picks` run creating
+**50 or more fixtures**, step 2 fires **at least once**, and at the pre-s5.12
+resurrection rate (~0.16 per created fixture) roughly **8-14 times on a full
+~88-fixture card**. The old creation rate IS the predicted hit rate, because
+every resurrection was an exact match to a merged-away name.
+
+```
+resolve_team: 'Lens' is a FORMER NAME of team 576 ('Racing Club de Lens') — not creating a duplicate
+```
+
+| outcome | reading |
+| --- | --- |
+| hits ≈ old creation rate | the model holds end to end |
+| **hits = 0 on a full card** | **step 2 is unreachable in production** — the unit tests pass and the branch is dead. The most valuable possible result, and exactly what the credit-gate exercise existed to rule out |
+| hits ≫ old rate | the table holds names that are still current, and step 2 is shadowing step 3 |
+
+### THE LIMIT ON THE 09-14/09-15 RESULT, stated rather than smoothed over
+
+**Both the creations AND the step-2 hits were zero, and on one exposure model
+they cannot both be.** At ~0.16 per created fixture the 32 fixtures created over
+those days predict ~5 events *whichever side of the fix they land on*.
+
+**So the exposure model is not established.** The supporting measurement is that
+**0 of the 64 team rows those fixtures referenced carries a name in
+`team_former_names`** — the cards simply held none of the affected clubs.
+
+> **The counterfactual cannot be reconstructed: the scraped NAME is never
+> stored, only the row it resolved to.** So "what would the old code have done
+> with this card" is unanswerable after the fact, and yesterday's p = 0.004
+> rests on fixtures-created being fair exposure — which this is the evidence
+> against. **The claim is therefore moved to the next full card and not drawn
+> from the two days already in hand.**
+
+---
+
+## 2. `returned == limit` IS NOW A NAMED STATE
+
+**Not a bigger limit.** `list_runs` returns a `RunListing` that knows whether it
+is whole, and `main()` prints the warning **above the table, below the table,
+and loudest when the answer is "No runs to audit"** — the reading most changed
+by a truncated query.
+
+> ### Fourth instance of one class, and the first three are cited in the docstring
+>
+> | | |
+> | --- | --- |
+> | `[]` vs `None` | measured-and-empty vs never-measured |
+> | 429-with-credits vs 429-with-zero | rate-limited vs exhausted |
+> | no-hits vs no-log | a clean run vs an unreadable one |
+> | **`returned == limit`** | **complete vs truncated** |
+
+**Raising 250 to 400 moves the cliff. Naming the state removes it.** Six tests,
+including the two that matter: a date filter cannot argue the cap away (the cap
+is a property of the QUERY, not the window), and an empty result from a capped
+query is still unknown.
+
+---
+
+## 3. DEL-3 — BUILT. Not re-dated, not dropped.
+
+**A third date was ruled out, and an enforced date is still a promise rather
+than a result. So: build or drop, and the cost of dropping is a corrupt report
+that reads as complete.**
+
+`_send_chunked` now sends a **sequence**:
+
+| surface | catches |
+| --- | --- |
+| position markers `(2/5)` on every part | the reader can see a gap unaided |
+| **in-stream failure marker** at the hole | **a lost MIDDLE chunk** — the stream still ends normally, so nothing else sees it |
+| terminator on the final part | **a lost LAST chunk** — the stream ends early and leaves no gap |
+
+**Two failure shapes with opposite signatures.** One surface catches one of them
+— which is precisely how this survived being "the sender works". The terminator
+rides on the last chunk rather than as its own message: a separate send costs
+an extra call and could itself fail and fake a truncation.
+
+`_send_one` adds **DEL-1's retry policy, imported rather than re-chosen** (3
+attempts, 2s/5s), annotates to `::error::` and the step summary on final
+failure, and keeps **`ok` and `attempted` apart** so an unconfigured Telegram is
+never counted as a broken one — the same third state, in a fourth place.
+
+**`REPORT_DELIVERY report=… chunks=N sent=K failed=… terminator=yes|no
+attempts=N`** is parsed by `ci_audit` as a RECORD, and **three assertions read
+three different fields**: a hole, an early end, and the arithmetic
+(`sent + failed == chunks`) that catches a part going missing without being
+recorded at all.
+
+**10 tests.** The one that matters most replays 2026-09-13 exactly: part 2 of 4
+fails, parts 3 and 4 succeed, and the delivered stream must say so.
+
+---
+
+## 4. A CREDIT READING NOW HAS AN AGE
+
+**The period check asks "has the quota reset". It cannot see a figure from THIS
+month that describes a state six days gone.**
+
+| source | said |
+| --- | --- |
+| `data/models/theodds_credits.json` | `{"remaining": 154, "updated": "2026-09-10"}` |
+| provider | 100 remaining |
+| durable ledger | **0 spendable** |
+
+**Stale in the direction of SPENDING**, and inert only while the database is
+reachable — the moment it is not, that file is the authority.
+
+> **The file is written only when a run SPENDS.** A gate refusing every request
+> therefore freezes the last figure, so **staleness correlates with exactly the
+> condition it must not fail open on.**
+
+Max age **1 day**, because `_persist_credits` runs on every spending run and the
+pipeline runs daily. Older is **NO READING** — `None`, never `0`, because
+rounding "we do not know" down to "there are none" would trip the hard gate and
+skip the fetch: the same substitution in the other direction. The answer to no
+reading is to probe, and `/v4/sports` is free. **7 tests**, including that the
+original period check still fires.
+
+---
+
+## COHORT — **s5.12 -> s5.13**, and why it is a bump
+
+s5.12 carried 30 picks, so this could not be an amend. **Two of the four changes
+move selection:**
+
+* **the credit-reading age** — it changes whether the odds fetch is skipped, and
+  therefore which prices exist to pick from;
+* **the merge** — step 1's unordered `.first()` over a doubled provider id made
+  fixture attachment a coin flip, and Elo/Poisson key on `team_id`.
+
+**DEL-3 does not**, and is recorded as riding along rather than as causing the
+bump: it changes how a report is delivered, never which picks it contains.
+
+| | |
+| --- | --- |
+| `CODE_REVISION` | s5.12 -> **s5.13** |
+| `model_version` | `c8c892` -> **`ee60cd`** |
+| picks in the new cohort | **0** -> verdict AMEND |
+
+`tests/` **1001 passed.**
+
+---
+
+## WHAT THIS PASS ESTABLISHED
+
+1. **Sizing the merge before writing it changed what the merge was for.** The
+   stated purpose — arming step 2 — was already true before the merge, and the
+   real payoff turned out to be a non-determinism nobody had named: an unordered
+   `.first()` over a provider id held by two rows.
+2. **Step 2 is still the never-executed branch**, and it now has a registered
+   first-hit prediction with a falsifier that would be worth more than a pass.
+3. **Yesterday's p = 0.004 was narrowed, not withdrawn.** The creation drop is
+   real; the exposure model behind the p-value is not established, and the
+   counterfactual is permanently unavailable because scraped names are not
+   stored.
+4. **A counter was caught lying before it could be read as a failed prediction**
+   — 30 calls, 1 write.
+
+*Recorded 2026-09-16. Merge applied to production; registration committed first
+as `1e40f28`.*

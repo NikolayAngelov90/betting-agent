@@ -782,7 +782,36 @@ TRACKED_KEYS: List[str] = [
 #:       which must record its removed names this time; the 75 alias rulings stay
 #:       open for the fixture matcher's own residual; the exact-name collapse
 #:       stays unsized.
-CODE_REVISION = "s5.12"
+#:
+#: s5.13 (2026-09-16) — BUMP, because s5.12 already carried 30 picks and two of
+#:       these changes move SELECTION:
+#:
+#:       1. A CREDIT READING NOW HAS AN AGE. `_load_persisted_credits` already
+#:          refused a reading from a finished billing period; it could not see a
+#:          figure from THIS month describing a state six days gone. The file
+#:          read `{"remaining": 154}` while the provider said 100 and the ledger
+#:          said 0 spendable. A too-high stale figure is permission to spend
+#:          that does not exist, and the file only updates when a run SPENDS —
+#:          so staleness correlates with the refusal it must not fail open on.
+#:          Selection-affecting: it changes whether the odds fetch is skipped,
+#:          and therefore which prices exist to pick from.
+#:
+#:       2. STAGE 24's MERGE. 32 shared-provider-id components merged, 32 rows
+#:          removed, 150 references re-pointed. Selection-affecting because
+#:          step 1 of `resolve_team` was `.first()` over an UNORDERED match on a
+#:          provider id held by two rows — which row a fixture attached to was a
+#:          coin flip, and history followed the coin. That is now deterministic.
+#:
+#:       DEL-3 (report sequence integrity) ships in the same revision and is NOT
+#:       selection-affecting — it changes how a report is DELIVERED, never which
+#:       picks it contains. It is recorded here so the revision's contents are
+#:       complete, not because it forces the bump.
+#:
+#:       STILL NOT CLOSED: the 75 alias rulings; the exact-name collapse; and
+#:       `resolve_team` step 2, which has still never fired in production — see
+#:       `docs/stage24-merge-32-and-step2-first-exercise.md`, which registers
+#:       what its first hit should look like BEFORE it happens.
+CODE_REVISION = "s5.13"
 
 
 def _stable(value: Any) -> Any:
