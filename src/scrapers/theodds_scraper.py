@@ -34,6 +34,25 @@ _CREDITS_TIER_WARNING = 40    # ~2 days remaining
 _CREDITS_TIER_CRITICAL = 20   # ~1 day remaining
 _CREDITS_GATE_THRESHOLD = 10  # hard skip — not enough for even one league call
 
+#: How old a credit reading may be and still describe NOW.
+#:
+#: The period check below asks "is this reading from a month that has ended".
+#: That is necessary and it is not sufficient, because a figure can be from THIS
+#: month and still describe a state that is over. On 2026-09-16 the file read
+#: `{"remaining": 154, "updated": "2026-09-10"}` while the provider reported 100
+#: remaining and the durable ledger reported 0 spendable: same period, six days
+#: stale, and wrong in the direction of SPENDING.
+#:
+#: The file is written only when a run actually spends. A gate that refuses
+#: every request therefore FREEZES the last figure, so the staler the file is,
+#: the more likely it is that something stopped the pipeline from updating it —
+#: staleness correlates with exactly the condition it must not fail open on.
+#:
+#: One day, because `_persist_credits` runs on every spending run and the
+#: pipeline runs daily. A reading older than that is NO READING, and the answer
+#: to no reading is to probe — `/v4/sports` is free.
+_CREDITS_MAX_AGE_DAYS = 1
+
 
 def _credits_period(d) -> str:
     """The billing period a reading belongs to. TheOddsAPI resets monthly."""
@@ -80,6 +99,26 @@ def _load_persisted_credits() -> Optional[int]:
                 f"{_credits_period(updated)} and today is "
                 f"{_credits_period(date.today())} — the quota has reset since. "
                 f"Treating {remaining} as NO READING, not a low one.")
+            return None
+        # SAME PERIOD IS NOT THE SAME AS CURRENT. A reading can be from this
+        # month and still describe a state that ended days ago, and a stale
+        # figure that is too HIGH is a permission to spend that does not exist.
+        # This is the period check one layer down: not "has the quota reset"
+        # but "does this number still describe now".
+        try:
+            age = (date.today() - date.fromisoformat(str(updated))).days
+        except ValueError:
+            logger.warning(
+                f"TheOddsAPI: persisted credit state carries an unparseable "
+                f"`updated` ({updated!r}) — treating as NO READING")
+            return None
+        if age > _CREDITS_MAX_AGE_DAYS:
+            logger.warning(
+                f"TheOddsAPI: persisted credit state is {age} day(s) old "
+                f"(written {updated}, max {_CREDITS_MAX_AGE_DAYS}). "
+                f"Treating {remaining} as NO READING, not a current one — a "
+                f"stale figure that is too high permits spending that is not "
+                f"there. Probing instead.")
             return None
         return remaining
     except Exception:

@@ -1,6 +1,7 @@
 """Telegram notification bot for betting picks."""
 
 import asyncio
+from dataclasses import dataclass
 from datetime import date, timezone, timedelta
 from html import escape as html_escape
 from pathlib import Path
@@ -12,6 +13,28 @@ from src.utils.config import get_config
 from src.utils.logger import get_logger
 
 logger = get_logger()
+
+@dataclass
+class ChunkOutcome:
+    """What happened to ONE part of a report. DEL-3.
+
+    `ok` and `attempted` are separate fields on purpose. A part that was never
+    attempted (Telegram not configured) and a part that was attempted three
+    times and failed are both "not delivered" and are NOT the same fact: the
+    first is a disabled integration, the second is a hole in a report someone
+    is reading. Collapsing them is the defect this project has now closed in
+    four places.
+    """
+
+    ok: bool
+    attempted: bool
+    message: object = None
+    attempts: int = 0
+    detail: str = ""
+
+    def __bool__(self) -> bool:
+        return self.ok
+
 
 # State file tracking whether picks were already sent today (Story 8.2)
 _PICKS_SENT_STATE = Path("data/models/picks_sent_date.txt")
@@ -100,6 +123,9 @@ class TelegramNotifier:
         self.bot_token = notifications.get("telegram_bot_token", "")
         self.chat_id = notifications.get("telegram_chat_id", "")
         self._bot = None
+        #: Why the last `_send_message` returned None. Read by `_send_one` to
+        #: tell "not attempted" from "attempted and failed" — see ChunkOutcome.
+        self._last_send_error = ""
 
     def _get_bot(self):
         """Lazy-load the Telegram bot."""
@@ -275,7 +301,7 @@ class TelegramNotifier:
 
         # Send (split if needed)
         message = "\n".join(lines)
-        await self._send_chunked(message, header)
+        await self._send_chunked(message, header, report="daily picks")
         try:
             _mark_picks_sent_today()
         except Exception as _mse:
@@ -428,7 +454,7 @@ class TelegramNotifier:
                 lines.append(f"\n⏳ {leftover} other picks still pending")
 
         message = "\n".join(lines)
-        await self._send_chunked(message)
+        await self._send_chunked(message, report="settlement report")
 
     async def send_performance_report(self, stats: dict, experiment=None):
         """Send a comprehensive performance report via Telegram.
@@ -556,7 +582,8 @@ class TelegramNotifier:
             lines.append(f"\n⏳ {pending} picks still pending")
 
         message = "\n".join(lines)
-        sent = await self._send_chunked(message, header)
+        sent = await self._send_chunked(message, header,
+                                       report="performance report")
 
         # Pin the report so it stays visible at the top of the group
         bot = self._get_bot()
@@ -656,33 +683,153 @@ class TelegramNotifier:
                 f"{result.detail} — surfaced to CI: {result.surfaced}")
         return result
 
-    async def _send_chunked(self, message: str, header: str = ""):
-        """Send a message, splitting into chunks if over Telegram's 4096 char limit.
-        Returns the last sent Message object."""
-        if len(message) <= 4000:
-            return await self._send_message(message)
+    @staticmethod
+    def _split_chunks(message: str) -> List[str]:
+        """Paragraph-aligned split. Extracted so the SPLIT can be tested alone.
 
-        # Split by double newline (paragraph breaks)
-        paragraphs = message.split("\n\n")
+        Unchanged behaviour: 4000-char passthrough, 3800-char chunk ceiling,
+        break on blank lines. It is a separate function only so a test can
+        assert how many parts a given report produces without sending anything.
+        """
+        if len(message) <= 4000:
+            return [message]
+        parts: List[str] = []
         chunk = ""
-        last_msg = None
-        for para in paragraphs:
+        for para in message.split("\n\n"):
             if len(chunk) + len(para) + 2 > 3800:
                 if chunk.strip():
-                    last_msg = await self._send_message(chunk)
+                    parts.append(chunk)
                 chunk = para
             else:
                 chunk = chunk + "\n\n" + para if chunk else para
-
         if chunk.strip():
-            last_msg = await self._send_message(chunk)
+            parts.append(chunk)
+        return parts
+
+    async def _send_chunked(self, message: str, header: str = "",
+                            report: str = "report"):
+        """Send a report, with the SEQUENCE made verifiable. DEL-3.
+
+        THE DEFECT THIS CLOSES. The previous version sent each chunk with
+        `_send_message`, discarded every return value, and returned the LAST
+        chunk's Message. A middle chunk that failed left a hole, the loop
+        carried on, the final chunk succeeded, and the caller received a truthy
+        Message. **A corrupt report was indistinguishable from a complete one**,
+        and on 2026-09-13 that happened for real: send 08:53:09, FAIL 08:53:14,
+        send 08:53:17.
+
+            A DELIVERY IS NOT A SEQUENCE UNTIL SOMETHING CAN TELL THAT A PART
+            IS MISSING.
+
+        Three surfaces, because they fail in different directions:
+
+        * **position markers** ``(2/5)`` — the reader can see a gap themselves;
+        * **an in-stream failure marker** — a hole announces itself AT the hole,
+          which is the only thing that catches a lost MIDDLE chunk, since the
+          stream still ends normally;
+        * **a terminator** on the final part — catches the opposite case, a
+          stream that stops early and would otherwise just look like the end.
+
+        Plus a structured ``REPORT_DELIVERY`` line the audit reads, so a failure
+        is RECORDED rather than inferred from the absence of a success.
+
+        `header` was accepted and silently ignored by every previous version.
+        It is used now: it is what a repeated position marker attaches to.
+        """
+        parts = self._split_chunks(message)
+        n = len(parts)
+        results: List[ChunkOutcome] = []
+        failed: List[int] = []
+        last_msg = None
+        terminator_sent = False
+
+        for i, part in enumerate(parts, 1):
+            text = part
+            if n > 1:
+                text = f"<i>({i}/{n})</i>\n{text}"
+                if i == n:
+                    # Appended to the LAST part rather than sent as its own
+                    # message: a separate terminator costs an extra send and,
+                    # worse, could itself fail and fake a truncation.
+                    text = f"{text}\n\n<i>— end of {html_escape(report)} · {n}/{n} —</i>"
+            out = await self._send_one(text)
+            results.append(out)
+            if out.ok:
+                last_msg = out.message
+                if n > 1 and i == n:
+                    terminator_sent = True
+            else:
+                failed.append(i)
+                if out.attempted and n > 1:
+                    # BEST EFFORT, AND ITS FAILURE IS NOT FATAL. If this send
+                    # also fails the position markers and the missing terminator
+                    # still carry the signal — which is why there are three
+                    # surfaces and not one.
+                    await self._send_one(
+                        f"⚠️ <b>part {i}/{n} of this {html_escape(report)} "
+                        f"FAILED TO SEND</b> — the report above is INCOMPLETE.")
+
+        logger.info(
+            f"REPORT_DELIVERY report={report} chunks={n} "
+            f"sent={sum(1 for r in results if r.ok)} "
+            f"failed={','.join(str(i) for i in failed) if failed else 'none'} "
+            f"terminator={'yes' if (n == 1 and results and results[0].ok) or terminator_sent else 'no'} "
+            f"attempts={sum(r.attempts for r in results)}")
+        if failed:
+            logger.error(
+                f"REPORT INCOMPLETE: {len(failed)} of {n} part(s) of the "
+                f"{report} did not send (parts {failed}). A reader sees a "
+                f"report that ends normally.")
         return last_msg
 
-    async def _send_message(self, text: str):
-        """Send a message via Telegram using HTML parse mode. Returns the sent Message object."""
+    async def _send_one(self, text: str) -> "ChunkOutcome":
+        """One send, WITH retry, and with the three states kept apart.
+
+        `_send_message` returned None for BOTH "Telegram is not configured, so
+        nothing was attempted" and "it was attempted and it failed". That is the
+        same collapse as ``[]`` versus ``None`` in the odds path, and a caller
+        counting failures could not tell a disabled bot from a broken one.
+
+        Retry policy is DEL-1's, imported rather than re-chosen: the alert path
+        already decided 3 attempts with 2s/5s backoff, and a second opinion here
+        would be a second policy to keep in step. The TRANSPORT stays
+        `python-telegram-bot` because rich messages need HTML and the Message
+        object back; only the policy is shared.
+        """
+        from src.reporting.alert_delivery import BACKOFF, MAX_ATTEMPTS, _annotate
+
         bot = self._get_bot()
         if not bot or not self.chat_id:
             logger.debug("Telegram not configured, skipping message")
+            return ChunkOutcome(ok=False, attempted=False, detail="not configured")
+
+        detail = ""
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            msg = await self._send_message(text)
+            if msg is not None:
+                return ChunkOutcome(ok=True, attempted=True, message=msg,
+                                    attempts=attempt)
+            detail = self._last_send_error or "unknown"
+            if attempt < MAX_ATTEMPTS:
+                await asyncio.sleep(BACKOFF[min(attempt - 1, len(BACKOFF) - 1)])
+        _annotate(f"Telegram report part not delivered after {MAX_ATTEMPTS} "
+                  f"attempt(s): {detail}")
+        return ChunkOutcome(ok=False, attempted=True, attempts=MAX_ATTEMPTS,
+                            detail=detail)
+
+    async def _send_message(self, text: str):
+        """Send a message via Telegram using HTML parse mode. Returns the sent Message object.
+
+        Kept returning Message-or-None so existing callers are unchanged. The
+        reason a None happened is recorded on `self._last_send_error`, which is
+        what `_send_one` reads to tell "not attempted" from "attempted and
+        failed".
+        """
+        self._last_send_error = ""
+        bot = self._get_bot()
+        if not bot or not self.chat_id:
+            logger.debug("Telegram not configured, skipping message")
+            self._last_send_error = "not configured"
             return None
 
         try:
@@ -713,8 +860,10 @@ class TelegramNotifier:
                     return msg
                 except Exception as e2:
                     logger.error(f"Failed to send after chat migration: {e2}")
+                    self._last_send_error = f"after chat migration: {e2}"
                     return None
             logger.error(f"Failed to send Telegram message: {e}")
+            self._last_send_error = f"{type(e).__name__}: {e}"
             return None
 
 

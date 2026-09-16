@@ -337,7 +337,17 @@ def test_telegram_message_carries_a_paper_banner():
     n = TelegramNotifier.__new__(TelegramNotifier)
     n.enabled = True
     n._get_bot = lambda: object()
-    n._send_message = lambda msg, **kw: sent.append(msg) or asyncio.sleep(0)
+    n.chat_id = "1"
+    n._last_send_error = ""
+
+    async def _capture(msg, **kw):
+        # Returns a Message-like object, not None. DEL-3 made the return value
+        # MEAN something: None is now "attempted and failed" and triggers the
+        # retry path. A double that returns None models a broken Telegram.
+        sent.append(msg)
+        return SimpleNamespace(message_id=len(sent))
+
+    n._send_message = _capture
 
     pick = SimpleNamespace(
         match="A vs B", market="1X2", selection="Home Win", odds=2.0,

@@ -1014,7 +1014,7 @@ class TestExposedDroppedPicks:
         async def _fake_send(text):
             notifier._sent_messages.append(text)
         notifier._send_message = _fake_send
-        notifier._send_chunked = AsyncMock(side_effect=lambda msg, header="": notifier._sent_messages.append(msg))
+        notifier._send_chunked = AsyncMock(side_effect=lambda msg, header="", report="": notifier._sent_messages.append(msg))
         return notifier
 
     def test_skipped_cap_section_in_telegram(self):
@@ -1067,7 +1067,7 @@ class TestSupplementHeader:
 
         notifier._send_message = _fake_send
         notifier._send_chunked = AsyncMock(
-            side_effect=lambda msg, header="": notifier._sent_messages.append(msg)
+            side_effect=lambda msg, header="", report="": notifier._sent_messages.append(msg)
         )
 
         state_file = tmp_path / "picks_sent_date.txt"

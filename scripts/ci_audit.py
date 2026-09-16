@@ -135,15 +135,73 @@ def _is_provisional(row_rest: str) -> bool:
     return False
 
 
+class RunListing(list):
+    """A list of runs that knows whether it is the WHOLE list.
+
+    THE THIRD STATE, NAMED. `returned == limit` does not mean "that is all
+    there is" — it means the query stopped counting and nobody can tell which.
+    A complete listing and a listing cut off at its ceiling are the same object
+    until one of them says so.
+
+    This is the fourth instance of the class in this file and the same one the
+    odds path closed three times:
+
+        ``[]`` vs ``None``                 measured-and-empty vs never-measured
+        429-with-credits vs 429-with-zero  rate-limited vs exhausted
+        no-hits vs no-log                  a clean run vs an unreadable one
+        **returned == limit**              **complete vs truncated**
+
+    `list_runs`'s own docstring already recorded this defect for
+    `closing-lines` at ``limit=40`` — *"which read as 'no closing-lines runs in
+    the window' rather than as a truncated query"* — and it recurred at 250 for
+    `daily-picks` on 2026-09-16, hiding 24 unaudited runs. **Knowledge present,
+    caller not consulting it.**
+
+    RAISING THE LIMIT MOVES THE CLIFF; NAMING THE STATE REMOVES IT. A bigger
+    number is right until the next workflow outgrows it, and it fails the same
+    silent way when it does.
+    """
+
+    #: Workflows whose query came back at the cap, so their history is UNKNOWN
+    #: beyond that point rather than exhausted. `{workflow: limit}`.
+    truncated: Dict[str, int]
+
+    def __init__(self, rows=(), truncated=None):
+        super().__init__(rows)
+        self.truncated = dict(truncated or {})
+
+    @property
+    def complete(self) -> bool:
+        return not self.truncated
+
+    def warning(self) -> Optional[str]:
+        """The sentence a caller must print, or None when the listing is whole."""
+        if self.complete:
+            return None
+        parts = ", ".join(f"{wf} (limit {n})"
+                          for wf, n in sorted(self.truncated.items()))
+        return (f"TRUNCATED LISTING: {parts} returned exactly as many runs as "
+                f"were asked for, so anything older is UNKNOWN, not absent. "
+                f"Counts below are a LOWER BOUND. Re-run with a higher --limit "
+                f"to see further back.")
+
+
 def list_runs(since: Optional[str], until: Optional[str],
-              limit: int = 250) -> List[dict]:
+              limit: int = 250) -> RunListing:
     """`limit` is per workflow and must outrun the busiest one.
 
     closing-lines fires roughly every two hours, so 40 covered five days and
     silently dropped everything older — which read as "no closing-lines runs in
     the window" rather than as a truncated query.
+
+    THE RETURN VALUE NOW CARRIES WHETHER IT IS COMPLETE. See `RunListing`: a
+    workflow that came back at exactly `limit` is recorded as truncated, and
+    every caller that reports a COUNT must say so. The filtering below is
+    applied AFTER the cap, so `since`/`until` cannot be used to argue the cap
+    was not reached — the cap is a property of the query, not of the window.
     """
-    out = []
+    out: List[dict] = []
+    truncated: Dict[str, int] = {}
     for wf in WORKFLOWS:
         raw = _sh("gh", "run", "list", "--workflow", wf, "--limit", str(limit),
                   "--json", "databaseId,startedAt,conclusion,event,status")
@@ -151,6 +209,8 @@ def list_runs(since: Optional[str], until: Optional[str],
             rows = json.loads(raw or "[]")
         except json.JSONDecodeError:
             rows = []
+        if len(rows) >= limit:
+            truncated[wf.replace(".yml", "")] = limit
         for r in rows:
             day = (r.get("startedAt") or "")[:10]
             if since and day < since:
@@ -159,7 +219,8 @@ def list_runs(since: Optional[str], until: Optional[str],
                 continue
             r["workflow"] = wf.replace(".yml", "")
             out.append(r)
-    return sorted(out, key=lambda r: r.get("startedAt") or "")
+    return RunListing(sorted(out, key=lambda r: r.get("startedAt") or ""),
+                      truncated)
 
 
 def fetch_log(run_id: str) -> str:
@@ -322,6 +383,25 @@ def extract(log: str) -> Dict[str, object]:
     if _fdm:
         f["src_footballdataorg_matched"] = sum(int(x) for x in _fdm)
 
+    # ---- DEL-3: per-report sequence integrity ---------------------------
+    # Parsed as a RECORD, not counted as an occurrence. A report's delivery is
+    # one fact with several fields, and the three assertions below each read a
+    # different field. Counting matches would collapse them back together.
+    #
+    # `REPORT_DELIVERY report=<name> chunks=N sent=K failed=<list|none>
+    #  terminator=<yes|no> attempts=N`
+    _rd = re.findall(
+        r"REPORT_DELIVERY report=(.+?) chunks=(\d+) sent=(\d+) "
+        r"failed=(\S+) terminator=(yes|no) attempts=(\d+)", log)
+    if _rd:
+        f["report_deliveries"] = [
+            {"report": r[0], "chunks": int(r[1]), "sent": int(r[2]),
+             "failed": ([] if r[3] == "none"
+                        else [int(x) for x in r[3].split(",") if x.isdigit()]),
+             "terminator": r[4] == "yes", "attempts": int(r[5])}
+            for r in _rd]
+    f["report_incomplete"] = len(re.findall(r"REPORT INCOMPLETE:", log))
+
     _fx = re.findall(PATTERNS["fixtures_scraped"], log)
     if _fx:
         f["fixtures_scraped"] = sum(int(x) for x in _fx)
@@ -476,6 +556,37 @@ def assertions(facts: Dict[str, object],
         hits.append("API-Football reported the account suspended")
     if facts.get("telegram_failed"):
         hits.append(f"{facts['telegram_failed']} alert(s) failed to deliver")
+
+    # ---- DEL-3, three assertions, each on a DIFFERENT failure shape -------
+    #
+    # A lost middle chunk and a stream that stopped early are not the same
+    # event and do not present the same way. One leaves a hole and ends
+    # normally; the other ends early and leaves no hole. A single assertion
+    # would catch whichever was written first and miss the other — which is
+    # precisely how the defect survived: `_send_chunked` returned the LAST
+    # chunk's Message, so it was blind to holes and blind to nothing else.
+    for d in (facts.get("report_deliveries") or []):
+        # 1. A HOLE. Parts failed; the report reached a reader incomplete.
+        if d["failed"]:
+            hits.append(
+                f"the {d['report']} was delivered INCOMPLETE — part(s) "
+                f"{d['failed']} of {d['chunks']} failed to send; a reader sees "
+                f"a report that ends normally")
+        # 2. AN EARLY END. No terminator, so the stream stopped before the
+        #    last part and nothing in it says so.
+        elif not d["terminator"]:
+            hits.append(
+                f"the {d['report']} carries NO TERMINATOR — the final part "
+                f"never sent, so the message a reader has is truncated with "
+                f"nothing marking the cut")
+        # 3. ARITHMETIC. sent + failed must equal chunks. A mismatch with an
+        #    empty `failed` list means a part went missing WITHOUT being
+        #    recorded, which is the original defect returning by another route.
+        if d["sent"] + len(d["failed"]) != d["chunks"]:
+            hits.append(
+                f"the {d['report']}'s parts do not add up: {d['sent']} sent + "
+                f"{len(d['failed'])} failed != {d['chunks']} chunks — a part "
+                f"went missing without being recorded")
     if facts.get("steps_failed"):
         hits.append(f"core step(s) reported failure: {facts['steps_failed'][-1]}")
     return hits
@@ -578,14 +689,26 @@ def main() -> int:
             pass
         runs = [{"databaseId": int(a.run), "workflow": "?", "status": _st,
                  "startedAt": "", "conclusion": "?"}]
+        listing_warning = None
     else:
-        runs = list_runs(a.since, a.until, a.limit)
+        listing = list_runs(a.since, a.until, a.limit)
+        # CONSULTED, not merely available. The defect this exists for was never
+        # that the truncation was unknowable — it was that nothing asked.
+        listing_warning = listing.warning()
+        runs = list(listing)
         if a.unaudited:
             done = audited_run_ids()
             runs = [r for r in runs if str(r["databaseId"]) not in done]
 
+    if listing_warning:
+        print(f"!! {listing_warning}\n")
+
     if not runs:
-        print("No runs to audit.")
+        # "No runs" is the reading most changed by a truncated query, so the
+        # warning is repeated rather than assumed to have been read above.
+        print("No runs to audit."
+              + ("  (SEE THE TRUNCATION WARNING — this may be a cut-off "
+                 "query, not an empty window.)" if listing_warning else ""))
         return 0
 
     by_wf: Dict[str, List[Dict[str, object]]] = defaultdict(list)
@@ -619,6 +742,12 @@ def main() -> int:
               f"{v:<10} {((disc + '  ') if disc else '') + '; '.join(hits)}"[:170])
         for h in hits[1:]:
             print(f"{'':<56} {h[:60]}")
+    if listing_warning:
+        # Printed AGAIN under the table: the number a reader carries away is
+        # the one at the bottom of a long listing, and that is the number the
+        # truncation qualifies.
+        print(f"\n!! {listing_warning}")
+        print(f"!! {len(runs)} run(s) listed above is a LOWER BOUND.")
     return 0
 
 
