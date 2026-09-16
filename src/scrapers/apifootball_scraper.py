@@ -2481,6 +2481,16 @@ class APIFootballScraper(BaseScraper):
                     fix_row = session.query(Match).filter(
                         _or(Match.home_team_id == tid, Match.away_team_id == tid),
                         Match.apifootball_id.isnot(None),
+                        # ING-1 STEP 3. This path DERIVES PERSISTENT STATE from a
+                        # match, so the exclusion gates it — it was the only one
+                        # of fifteen consulting sites that did not.
+                        #
+                        # Without this the plausibility invariant is a detector
+                        # wired to nothing: it marks a fixture, and the next run
+                        # reads the same row and writes an identifier off it.
+                        # Detection without enforcement is the shape this project
+                        # has named four times in the odds path alone.
+                        Match.training_exclusion_reason.is_(None),
                     ).order_by(Match.id).first()
                     if not fix_row:
                         continue
@@ -2508,13 +2518,68 @@ class APIFootballScraper(BaseScraper):
             # Persist resolved IDs
             if resolved:
                 with self.db.get_session() as session:
+                    written, refused = [], []
                     for tid, api_id in resolved.items():
                         team = session.get(Team, tid)
-                        if team and not team.apifootball_team_id:
-                            team.apifootball_team_id = api_id
+                        if not team or team.apifootball_team_id:
+                            continue
+                        # ING-1 STEP 4. A PROVIDER ID IS AN IDENTITY CLAIM, AND
+                        # TWO ROWS HOLDING ONE IS A CONTRADICTION BY
+                        # CONSTRUCTION — the same impossibility argument that
+                        # made branch 1 of the fixture key provable.
+                        #
+                        # This is the half the plausibility invariant CANNOT
+                        # reach. `1531 Telstar 1963` has five fixtures, all of
+                        # them legitimate Dutch league matches, so nothing marks
+                        # them — and `1528 Telstar` already holds af=427. Left
+                        # alone this path writes a CORRECT identifier onto a
+                        # SECOND row, which is a collision rather than a wrong
+                        # id, and no amount of verification would catch it
+                        # because the id is right.
+                        #
+                        # MEASURED: of the 32 components merged on 2026-09-16,
+                        # 8 had the DUPLICATE's id written by this path. Never
+                        # both sides — so it completes collisions rather than
+                        # creating them alone, and refusing is what breaks the
+                        # completion.
+                        #
+                        # Refuse, say so, and leave the row unidentified. An
+                        # unidentified row is a known, handled state; two rows
+                        # sharing an identity is not.
+                        holder = (session.query(Team)
+                                  .filter(Team.apifootball_team_id == api_id,
+                                          Team.id != tid)
+                                  .order_by(Team.id).first())
+                        if holder is not None:
+                            refused.append((tid, api_id, holder.id))
+                            logger.warning(
+                                f"PROVIDER ID COLLISION REFUSED: team {tid} "
+                                f"({team.name!r}) resolved to api id {api_id}, "
+                                f"which team {holder.id} ({holder.name!r}) "
+                                f"already holds. A provider id is an identity "
+                                f"claim and two rows cannot hold one. Leaving "
+                                f"{tid} unidentified — it is most likely a "
+                                f"DUPLICATE of {holder.id} and needs a merge, "
+                                f"not an id.")
+                            continue
+                        team.apifootball_team_id = api_id
+                        written.append(tid)
                     session.commit()
-                logger.info(f"Resolved API team IDs for {len(resolved)} teams: "
-                            + ", ".join(str(i) for i in resolved.keys()))
+                if written:
+                    logger.info(f"Resolved API team IDs for {len(written)} teams: "
+                                + ", ".join(str(i) for i in written))
+                if refused:
+                    logger.warning(
+                        f"PROVIDER ID COLLISIONS REFUSED: {len(refused)} — "
+                        "each is a probable duplicate row awaiting a merge.")
+
+                # `resolved` is the PROPOSAL; `written` is what the database
+                # accepted. The rebuild below feeds the backfill, so it must
+                # read the second — otherwise a refused row is carried forward
+                # as though it held an id it does not have, and the refusal
+                # becomes invisible one line after being logged.
+                _accepted = set(written)
+                resolved = {t: a for t, a in resolved.items() if t in _accepted}
 
                 # Rebuild low_coverage with resolved IDs
                 low_coverage = [

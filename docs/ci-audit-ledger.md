@@ -13933,3 +13933,128 @@ that check here, so 11 stands as "at least 11, by a comparator known to miss the
 motivating cases", never as 11.
 
 *Recorded 2026-09-16. `tests/` 1020 passed.*
+
+---
+
+# 2026-09-16, eighth pass — ING-1 steps 3 and 4 closed
+
+**The identity-writing path now honours the exclusion mark and refuses to write
+a provider id another row already holds.** 6 tests, 52 fixtures marked, the
+history mirror invalidated. `tests/` 1026 passed.
+
+---
+
+## STEP 3 — the fifteenth consuming site now consults the gate
+
+```python
+Match.apifootball_id.isnot(None),
+Match.training_exclusion_reason.is_(None),      # <- added
+```
+
+**This path DERIVES PERSISTENT STATE from a match, so it is inside the gate**,
+and it was the only one of fifteen consulting sites that was not. Without it the
+plausibility invariant is a detector wired to nothing: it marks a fixture, the
+next run reads the same row, and writes an identifier off it.
+
+## STEP 4 — a provider id is an identity claim
+
+**Two rows holding one is a contradiction by construction** — the same
+impossibility argument that made branch 1 of the fixture key provable. The write
+now refuses, logs `PROVIDER ID COLLISION REFUSED`, and leaves the row
+unidentified. *An unidentified row is a known, handled state; two rows sharing
+an identity is not.*
+
+**The number that justifies it was already in hand: 8 of the 32 components
+merged this morning had the DUPLICATE's id written by this path**, and it never
+wrote both sides — so it completes collisions rather than creating them alone,
+and refusing is what breaks the completion.
+
+### The two halves do not overlap, and each is blind where the other sees
+
+| | the id is | another row holds it | caught by |
+| --- | --- | --- | --- |
+| `Telstar` / `other/israel` | **wrong** (604) | no | **the exclusion** |
+| `1531 Telstar 1963` | **right** (427) | **yes**, 1528 | **the collision guard** |
+
+`1531`'s five fixtures are all legitimate Dutch league matches, so nothing marks
+them and no amount of verification helps — **the id would be correct.** Only the
+collision refusal reaches it.
+
+### And one bug introduced and caught in the same change
+
+`resolved` is the PROPOSAL; `written` is what the database accepted. The
+rebuild below it feeds the backfill, and it read `resolved` — **so a refused row
+would have been carried forward as though it held an id it does not have, and
+the refusal would be invisible one line after being logged.** Narrowed to
+`written`, and pinned by a test.
+
+---
+
+## THE 52 — and "the 17" was the wrong set, exactly as limit 1 predicted
+
+**The invariant reports the MINORITY country and explicitly refuses to call it
+the wrong one. For two of the five unmarked rows the MAJORITY is the
+contaminated side.**
+
+| row | contaminated side | evidence | marked |
+| --- | --- | --- | --- |
+| 374 `Aris` | cyprus **(minority)** | Greek club; 4 v Omonia Nicosia are Aris Limassol's | 4 |
+| 1528 `Telstar` | israel **(minority)** | Dutch club; 4 v Hapoel Beer Sheva are Maccabi Tel Aviv's | 4 |
+| 187 `Kocaelispor` | cyprus **(minority)** | Turkish club; 3 v Omonia Nicosia | 3 |
+| 1353 `NK Varazdin` | azerbaijan **(the tied half)** | Croatian club; 4 v Neftchi Baku | 4 |
+| **1608 `York City`** | **usa (MAJORITY, 37)** | English League Two club holding **New York City FC's entire 2024 MLS season** — Cincinnati, Red Bulls, Inter Miami, CF Montreal… Its 4 English fixtures are the real club. | **37** |
+
+> **The minority heuristic would have marked 6 LEGITIMATE fixtures and missed 41
+> contaminated ones.** Limit 1 was written down before it could bite, and it bit
+> within a day.
+
+`corrupt_team_identity`: **29 -> 81.**
+
+---
+
+## TWO THINGS THE VERIFICATION SURFACED THAT I WILL NOT GLOSS
+
+### 1. MARKING DOES NOT REACH THE LEARNING PATHS ON ITS OWN
+
+`history_mirror.filter_generation()` digests **the predicate's source**, so it
+invalidates when the FILTER changes and not when the DATA does — its own
+docstring says so. The mirror is also watermark-incremental, so marking a 2024
+fixture moves no watermark and **the cached row would be served as clean
+forever.** The ML pickles share the generation.
+
+> **That is the same rule one layer down: mark and invalidate in one operation,
+> or the mark is detection wired to nothing.** The mirror was invalidated in the
+> same script run. Without that step the 52 marks would have changed nothing for
+> any path that learns.
+
+### 2. THE GATE PROTECTS ZERO ROWS TODAY
+
+| armed rows the id path can read evidence for | |
+| --- | --- |
+| before the gate | 58 |
+| **with the gate honoured** | **58** |
+
+**All 52 marked fixtures sit on rows that already HAVE provider ids**, so none
+of them is in the unidentified population the path consumes. The gate closed no
+current exposure.
+
+**Its value is the CLR-1 cycle, and that value is real.** Clearing a bad
+identifier makes a row unidentified — the exact input this path consumes — so
+until today, *clearing was a countdown*. With the evidence detached, clearing
+`1528`'s id can no longer re-acquire 604 from the same four fixtures.
+
+> **The gate is what makes clearing an id safe. It is prophylactic, it protects
+> nothing today, and both halves of that are worth saying.**
+
+---
+
+## A NOTE: the ground is still moving
+
+`NK Varazdin` read `azerbaijan=4, croatia=4` when the marking set was decided and
+`croatia=7, azerbaijan=4` when it was verified — **the 09-16 run added three
+Croatian fixtures between the two.** The decision was made on the club's
+identity rather than on which half was larger, so the tie breaking differently
+changed nothing. **Had it been made on the majority rule it would have inverted.**
+
+*Recorded 2026-09-16. Marking is reversible by design: `training_exclusion_reason`
+is deliberately not write-once.*

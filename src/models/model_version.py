@@ -860,6 +860,21 @@ TRACKED_KEYS: List[str] = [
 #:       produced the bad value is dealt with in the SAME operation. Detach the
 #:       evidence, do not only clear the field.
 #:
+#:       ING-1 STEPS 3 AND 4 CLOSED 2026-09-16. The identity-writing path now
+#:       (a) honours `training_exclusion_reason` — it derives persistent state
+#:       from a match and was the only one of fifteen consuming sites that did
+#:       not — and (b) refuses to write a provider id another row already holds,
+#:       because a provider id is an identity claim and two rows holding one is
+#:       a contradiction by construction. Justified by measurement: 8 of the 32
+#:       components merged that morning had the DUPLICATE's id written by this
+#:       path. The two halves do not overlap — the exclusion cannot see 1531
+#:       Telstar 1963, whose five fixtures are legitimate and whose id would be
+#:       CORRECT on a second row. 52 fixtures marked (corrupt_team_identity
+#:       29 -> 81) and the history mirror invalidated in the same operation,
+#:       because filter_generation() digests the PREDICATE and not the data, so
+#:       a mark alone never reaches a watermark-incremental cache.
+#:       SELECTION-AFFECTING: excluded matches leave the fitting set.
+#:
 #:       THE PLAUSIBILITY INVARIANT, BUILT 2026-09-16 (not selection-affecting:
 #:       it logs, it does not filter). `src/data/fixture_plausibility.py`, run in
 #:       daily_update after ingestion and before anything reads a fixture as
