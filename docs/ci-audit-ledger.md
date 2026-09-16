@@ -14287,3 +14287,176 @@ s5.14 regardless.
 
 *Audited 2026-09-16, second pass. Read-only: no code, config, schema or
 production data changed.*
+
+---
+
+# LOG-1 — NOTHING LOGGED AT DEBUG EXISTS IN PRODUCTION
+
+> ### DEL-3 fired and was visible because it logs at INFO. TEAM_RESOLVE did not exist because it logs at DEBUG. Same run, same day, same author. The difference was a sink level nobody had checked.
+
+```
+REPORT_DELIVERY report=daily picks chunks=2 sent=2 failed=none terminator=yes attempts=2   <- INFO, read
+(no TEAM_RESOLVE line, from ~270 resolutions)                                              <- DEBUG, gone
+```
+
+Both shipped on 2026-09-16. Both were built to answer a registered question. One
+answers it; the other cannot, and produced a zero that reads exactly like the
+absence it was built to detect.
+
+## THE MECHANISM, and the evidence was produced by its own refutation
+
+`setup_logger()` calls `logger.remove()` and installs sinks at
+`log_cfg.get("level", "INFO")`. Every `logger.debug()` after that is discarded.
+
+**The 46 DEBUG lines I cited as proof the channel was open were emitted by
+loguru's DEFAULT handler, in the moment before it was removed** —
+`src.utils.config` (40) and `src.models.ml_models` (6), both at import time, in
+all three runs checked, with no operational module among them.
+
+> **The evidence that the channel worked was produced by the channel closing.**
+
+---
+
+## EVERY CLAIM RESTING ON AN ABSENT DEBUG LINE — UNFOUNDED, NOT NECESSARILY WRONG
+
+The distinction matters and is the worse one: each has been **cited as evidence**.
+
+| where | the claim | the line's level | status |
+| --- | --- | --- | --- |
+| **ledger MASK-3** | *"0 conflict lines, so no duplicates occurred"* | `logger.debug("Pick already saved by a concurrent writer…")` | **UNFOUNDED** |
+| **ledger, Stage 24 pass** | *"Zero `FORMER NAME` lines… step 2 has never fired in production"* | DEBUG | **WITHDRAWN** (already) |
+| **ledger, TEAM_RESOLVE** | *"one line per resolution, at DEBUG (confirmed to reach CI)"* | DEBUG | **FALSE** |
+| **`docs/stage24-…md`** | *"The log line to look for, at DEBUG, **confirmed to reach CI logs**"* | DEBUG | **FALSE — and it is in a registration** |
+| **`team_resolution.py:92`** | migration 010 missing → *"the resurrections come back, **which is the observable cost**"* | DEBUG | **FALSE.** Neither the failure line nor its consequence is observable. |
+
+**CHECKED AND FOUND FOUNDED:** s5.9's *"`resolve_fixture_groups` has never
+emitted an unconditional line"* — that module logs at WARNING and INFO only, so
+the sink level does not touch it. Its inference chain is weak for the reasons
+the ledger already records, and this is not one of them.
+
+### MASK-3 IS THE FIRST INSTANCE, AND IT IS OLDER THAN TODAY
+
+The same sentence — *"DEBUG does reach CI logs (46 lines…)"* — appears in the
+MASK-3 entry, with **the same 46**, about a different question. And two
+sentences above it that entry had already written:
+
+> *"1. it is `DEBUG`, not a counted metric … 3. nothing aggregates or alarms on
+> it"* … *"a broken gate would be **discoverable in principle and invisible in
+> practice**"*
+
+**The knowledge and the unfounded inference are in the same paragraph.** The
+entry diagnosed the defect and then used the defect's own output as proof of
+health, four lines later. That is not an oversight in a detail; it is the
+strongest available demonstration that *knowledge present, caller not
+consulting it* applies to the person writing the ledger as readily as to the
+code it describes.
+
+---
+
+## THE 66 HANDLERS ARE NOW MEASURED, NOT THEORETICAL
+
+**Census of `except` handlers in `src/` + `scripts/`:**
+
+| | |
+| --- | --- |
+| total | **350** |
+| logging at WARNING or above | 125 |
+| logging at INFO only | 1 |
+| **logging at DEBUG only** | **66** — silent in production |
+| **logging nothing at all** | **158** — silent everywhere |
+| of the 66, re-raising so the caller still learns | **0** |
+| of the 66, swallowing and returning | **66** |
+
+*(sized at 69 weeks ago; 66 today is code churn, not a change of state)*
+
+> **A handler at DEBUG in production is a handler that does not report. All 66
+> swallow. None re-raises. Every one of them is silent by construction.**
+
+### SORTED BY THE RULE — degrading a guarantee, measurement or gate needs WARNING
+
+**NEEDS WARNING — ~20 of the 66:**
+
+| site | what goes silent |
+| --- | --- |
+| `team_resolution.py:100 lookup_former_name` | **step 2 itself.** Migration 010 absent → every resolution reverts to pre-Stage-23 and nothing says so |
+| `history_mirror.py:330 invalidate` | *"could not remove"* — **a failed invalidation leaves the stale mirror serving.** Directly the layer-3 problem below |
+| `api_budget.py:65 available`, `:200 release` | **the credit gate.** A failed probe silently drops to per-process counting; a failed release leaks claimed budget |
+| `database.py:43` numpy/psycopg2 adapters | the numpy-2 class — silent skip, then "schema X does not exist" much later |
+| `database.py:193/208` column + index migration | *"migration skipped"* — a column silently absent |
+| `price_history.py:41/56/72` | **the CLV instrument.** Price snapshots, `first_seen_at`, injury observations. Coverage is 15.5% and falling, and these fail silently |
+| `capture_closing_lines.py:226`, `paper_trading_report.py:182` | *"pick_observations unavailable"* — **the MODEL/FINAL dual attribution degrades without a word** |
+| `betting_agent.py:1395/1397` | load-time model floor, calibration reload — **selection gates** |
+| `betting_agent.py:2016` | *"Briefing-final filter skipped"* — a pick filter |
+| `betting_agent.py:3817` | *"GoalsML accuracy **gate** check failed (non-fatal)"* — named a gate in its own message |
+| `betting_agent.py:290/292`, `:3526` | stale-calibration reset; model accuracies not persisted |
+| `theodds_scraper.py:742/807` | odds rows silently not written |
+
+**CORRECTLY DEBUG — the caller already warns:** `coverage_checks.py:78` and
+`fixture_plausibility.py:128` both return `None` at DEBUG and their callers emit
+`CHECK DID NOT RUN` at WARNING. **That is the pattern the other 20 need**, and it
+already exists in-tree twice.
+
+**CORRECTLY DEBUG — conveniences:** weather features, WC tournament features,
+LightGBM absent, pinning a report, briefing footers and per-element parse errors
+that carry aggregate counts elsewhere. Roughly 44.
+
+### AND THE LARGER POPULATION IS THE 158 THAT LOG NOTHING
+
+Out of scope for this sorting and recorded so it is not lost: **158 handlers
+emit nothing at any level.** They are invisible in production *and* in a local
+DEBUG session, so the trick that would expose the 66 does not reach them.
+
+> ### This is the announcement stage's third member, and it now has a measured cause rather than an argument. Scoped, not built.
+
+The work: change ~20 handlers from `debug` to `warning`, keep the two
+caller-warns pairs as the pattern, and pin the classification with a test — the
+same move as the `Team(` construction scan. **Not selection-affecting** (log
+level only), so it need not wait for s5.14.
+
+---
+
+## REPLACING THIS MORNING'S "BOUNDED BACKLOG" READING
+
+**The morning entry concluded: the 32 were a bounded backlog, the rate had
+fallen to zero, and merging closed the class. The timestamps say otherwise.**
+
+| UTC | event |
+| --- | --- |
+| **07:36** | merge applied. Shared-provider-id components verified independently at **0** |
+| **08:02** | `daily-picks` 35071608733 starts on `098a368` |
+| ~08:29 | `Resolved API team IDs for 3 teams: 1858, 738, 735` |
+| **08:38** | the collision guard is committed — **eleven minutes too late** |
+| **08:57** | run ends. Components: **3** |
+
+**The backlog was bounded. The entry path was not closed at the moment of
+merging, and the treadmill resumed within eighty minutes of reaching zero.**
+
+Its justification moves from **8 of 32, historical** to **3 of 3 on the very
+next run** — and all three are cases the guard refuses outright, because
+`holder` is non-None for 1468, 509 and 756. **The demonstration is better
+evidence than the measurement was.**
+
+---
+
+## THE 52 MARKS — LAYER THREE OF ONE PROBLEM
+
+| layer | the fix | why it reached nothing |
+| --- | --- | --- |
+| 1 | mark the fixtures | the identity path did not consult the mark |
+| 2 | gate the path on the mark | the mark lives behind a cache |
+| 3 | invalidate the cache | **the invalidation ran against the wrong copy** |
+
+CI restores `data/models/` from an `actions/cache` (`betting-models-…`), so
+**production carries its own mirror** and `HistoryMirror().invalidate()` on this
+machine deleted this machine's files.
+
+> **The fix worked locally, and production's topology differs.**
+
+**The rule, recorded:** *verify an invalidation against the artifact the
+consuming environment actually restores, not against the local path of the same
+name.* For CI that means the cache key, not `data/models/`. Nothing here is a
+new class — it is **the environment where a repair is verified must be the
+environment where it matters**, which is the same sentence three times in three
+layers.
+
+*Recorded 2026-09-16. Read-only.*
