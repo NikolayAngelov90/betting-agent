@@ -854,6 +854,21 @@ TRACKED_KEYS: List[str] = [
 #:       in 8 of the 32 pairs merged today it is what gave the DUPLICATE the
 #:       colliding id.
 #:
+#:       CLR-1, the rule ING-1 produced: CLEARING A FIELD TO FIX A BAD VALUE
+#:       RETURNS THE ROW TO THE STATE THAT PRODUCED IT. Any remedy of the form
+#:       "null it and let it re-derive" is a cycle unless the evidence that
+#:       produced the bad value is dealt with in the SAME operation. Detach the
+#:       evidence, do not only clear the field.
+#:
+#:       THE PLAUSIBILITY INVARIANT, SIZED AND NOT BUILT: a club's fixtures must
+#:       lie in at most ONE domestic country's competitions (continental,
+#:       neutral and national-team leagues exempt). Measured 2026-09-16 — it
+#:       refuses 8 of 1,493 teams (0.5%), NONE of them legitimate, covering 46
+#:       fixtures of which 27 are already among Stage 13's 29. It would add 19,
+#:       including the four Telstar/Israel rows that started the chain. Blind to
+#:       same-country corruption (the 2 of 29 it misses), and it flags the ROW
+#:       rather than the SIDE — `York City` is refused with the MAJORITY wrong.
+#:
 #:       STILL NOT CLOSED: the 75 alias rulings; the exact-name collapse; and
 #:       `resolve_team` step 2, which has still never fired in production — see
 #:       `docs/stage24-merge-32-and-step2-first-exercise.md`, which registers

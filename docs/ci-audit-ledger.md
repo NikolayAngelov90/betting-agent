@@ -13633,3 +13633,171 @@ And the second entry, from this pass:
 > analysis layer had been the thing that FOUND those. It is not exempt.
 
 *Recorded 2026-09-16.*
+
+---
+
+# 2026-09-16, sixth pass — the standing instance, the clearing rule, and the invariant sized
+
+**Queries only. Nothing written, cleared or repaired.**
+
+---
+
+## 1. `1531 Telstar 1963` — THE STANDING INSTANCE, and its failure mode is not the expected one
+
+**Armed today: no provider id, five AF-linked fixtures.** Ordering does not
+touch it — ordering decides *which* fixture supplies the id, never *whether* a
+contaminated one should.
+
+**Checked on the same test that condemns `Telstar` in `other/israel`. All five
+PASS.**
+
+| match | league | opponent | shared AF fixture id? |
+| --- | --- | --- | --- |
+| 49266 | netherlands/eredivisie | Nijmegen | no |
+| 49494 | netherlands/eredivisie | Sparta Rotterdam | no |
+| 51394 | netherlands/eredivisie | Cambuur | no |
+| 51535 | netherlands/eredivisie | FC Twente '65 | no |
+| 52140 | netherlands/eredivisie | Heerenveen | no |
+
+> **So the next run does NOT write a wrong id from them. It writes the RIGHT
+> one — onto a second row.** `1528 Telstar` already holds **af=427**. The moment
+> the loop fires on 1531 it produces a shared-provider-id collision: the 33rd
+> component, four hours after 32 were merged.
+
+**AND THAT IS THE GENERAL CASE, NOT THE EXCEPTION.**
+
+| | |
+| --- | --- |
+| armed rows (no provider id, ≥1 AF-linked fixture) | **61** |
+| **…that strict-match an already-identified row** | **11** |
+
+`1829 Milan` == `89 AC Milan` (af=489) · `1830 Porto` == `146 FC Porto` ·
+`1831 AFC Ajax` == `133 Ajax` · `1847 Málaga CF` == `281 Malaga` ·
+`341 Pau FC` == `1536 PAU` · and six more.
+
+**11 is a FLOOR, not the number.** `same_team_strict` is the comparator, and it
+returns False for `Rakow`/`Raków Częstochowa` and for `Telstar 1963`/`Telstar` —
+**the two cases this section is about are both invisible to the instrument
+counting them.** That is the alias-needed class measuring its own blind spot.
+
+> **The loop's most likely output is not a wrong identifier. It is a correct
+> identifier on a duplicate row** — which is precisely how 8 of the 32 pairs
+> merged this morning acquired their colliding ids.
+
+---
+
+## 2. THE CLEARING RULE — CLR-1
+
+> ### Clearing a field to fix a bad value returns the row to the state that produced it.
+
+OP3 clears a bad provider id → the row becomes unidentified → **unidentified with
+AF-linked fixtures is exactly the input the faulty producer consumes.** The
+repair re-arms the mechanism that wrote it.
+
+**It generalises past this path.** *Any remedy of the form "null it and let it
+re-derive" is a cycle unless the evidence that produced the bad value is dealt
+with in the same operation.* The field is the symptom; the evidence is the
+cause; clearing only the field is the merge-without-recording mistake in a
+different column.
+
+**So the rule for the remaining wrong ids, and for row 411:**
+
+    DETACH THE EVIDENCE, DO NOT ONLY CLEAR THE FIELD.
+    Mark the implausible fixtures in the SAME operation that clears the id,
+    or the clear is a countdown.
+
+**Row 411 turns out to need a different remedy again, and the rule is what
+surfaces it.** Its 11 AF-linked fixtures are all `poland/*` and all plausible —
+there is no contaminated evidence to detach. Its exposure is the section above:
+`Raków Częstochowa` already holds **af=3491**, so re-deriving gives 411 the right
+id and a collision. **411 is a duplicate awaiting a merge, not an id awaiting a
+clear**, and clearing has never been its remedy.
+
+---
+
+## 3. THE PLAUSIBILITY INVARIANT, SIZED BEFORE BUILDING — as the country check was
+
+**The rule, stated so it needs no per-team country data** (`teams.country` is 44%
+populated and records where a club was FIRST SEEN): *a club's fixtures must lie
+in at most ONE domestic country's competitions.* Continental ties (`europe/*`),
+neutral ground (`other/world`) and national-team leagues are exempt by
+construction, and `other/israel` is normalised to the same country token as
+`israel/*` so the two spellings do not read as two countries.
+
+### What it would refuse
+
+| | |
+| --- | --- |
+| teams with any fixtures | 1,493 |
+| **teams it refuses** | **8 (0.5%)** |
+| **of those, LEGITIMATE** | **0** |
+| minority-country fixtures implicated | **46** |
+| **already marked `corrupt_team_identity`** | **27** |
+| **NOT marked — what it would ADD** | **19** |
+
+| team | majority | minority | already marked |
+| --- | --- | --- | --- |
+| 66 `St. Pauli` | germany=150 | france=14 (Pau FC's) | **14/14** |
+| 467 `SK Rapid` | austria=105 | romania=10 (Rapid Bucuresti's) | **10/10** |
+| 757 `Levski Sofia` | bulgaria=34 | greece=3 | **3/3** |
+| 374 `Aris` | greece=134 | cyprus=4 (Aris Limassol's) | 0/4 |
+| **1528 `Telstar`** | netherlands=48 | **israel=4** | **0/4** |
+| 187 `Kocaelispor` | turkey=38 | cyprus=3 | 0/3 |
+| 1608 `York City` | usa=37 | england=4 | 0/4 |
+| 1353 `NK Varazdin` | azerbaijan=4 | croatia=4 | 0/4 |
+
+> ### One mechanical rule reproduces 27 of Stage 13's hand-built 29, refuses nothing legitimate, and finds 19 more — including the four that started the Telstar chain.
+
+**It is the cheapest thing on the list, and the measurement says so rather than
+the argument.**
+
+**The four unmarked clusters share the Telstar shape exactly**: a season's worth
+of one foreign league against a single dominant opponent — Omonia Nicosia,
+Hapoel Beer Sheva, Neftchi Baku. **These are opponent-season backfills in which
+one opponent name resolved to the wrong row**, which is ING-1 step 1 caught in
+the act, four times over.
+
+### Two limits, stated before it is built
+
+* **It flags the ROW, not the SIDE.** `1608 York City` is refused with
+  `usa=37, england=4` — and the **majority** is the contamination there (York
+  United's Canadian fixtures on the English club's row). A second judgement
+  decides which side to detach; the invariant only says the row is impossible.
+* **It cannot see same-country corruption** — one club's fixtures on another
+  club's row within one league. That is the **2 of 29** it does not reach, and
+  it is a blind spot by construction, not an oversight.
+
+---
+
+## A NOTE ON THE GROUND MOVING UNDER THE MEASUREMENT
+
+**The armed population read 58, then 61, from the same predicate minutes apart.**
+Not an instrument error: **`daily-picks` run `35071608733` started at 08:02 UTC
+and is still in flight**, creating fixtures while the queries ran.
+
+Stage 22's verification demanded a static database and aborted on a live one;
+the lesson taken then was to assert invariants rather than snapshots. **The same
+lesson applies to a measurement**: 58 and 61 are both correct, each at its own
+moment, and neither is "the" number. The armed population is a *rate*, not a
+count, and it grows whenever a run creates an AF-linked fixture for a row with
+no id.
+
+### The first card under s5.13 is running NOW, and the instrument is on it
+
+| | |
+| --- | --- |
+| run | `35071608733`, **IN PROGRESS** |
+| `headSha` | **`098a368`** — the commit that landed `TEAM_RESOLVE` and the ordering |
+| instrument committed | 07:45 UTC |
+| run started | **08:02 UTC** |
+
+**The instrument preceded the card it measures by seventeen minutes.** Verified
+from the run's own `headSha` rather than from a local timestamp — the mtime-vs-UTC
+error is on this ledger once already.
+
+> **The reading is DEFERRED. The run is in flight, and a run in flight is not a
+> result** — the rule that produced `IN_PROGRESS` and that `_is_provisional`
+> now enforces. One team row has been created so far; that number is not final
+> and is not reported as one.
+
+*Recorded 2026-09-16.*
