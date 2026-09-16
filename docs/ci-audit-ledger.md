@@ -12548,3 +12548,335 @@ right; it was in being specific enough to be found wrong in two different places
 before any code depended on it.
 
 *Recorded 2026-09-13.*
+
+---
+
+# AUDIT 2026-09-16 — three days, 18 runs, and the prediction resolves
+
+**Window: everything after `34745992077` (09-13 07:44) through 09-15 23:30.**
+19 runs, 18 of them unaudited. 09-16's `daily-picks` had not fired at audit time
+(07:07 UTC; the 03:00 cron has run 4.8-5.3h late all week).
+
+| run | workflow | started | verdict | note |
+| --- | --- | --- | --- | --- |
+| 34763378785 | paper-trading-report | 09-13 14:41 | CLEAN | report + artifact; this job never sends Telegram, so 0 sends is correct |
+| 34763446996 | closing-lines | 09-13 14:42 | CLEAN | gate refused: `credits=0 asked=10` |
+| 34764028620 | closing-lines | 09-13 14:54 | CLEAN | duplicate firing of the 13:17 slot |
+| 34773807639 | closing-lines | 09-13 18:10 | CLEAN | 0 captured, 6 missing, 7 late (of 13 pending) |
+| 34783750242 | closing-lines | 09-13 21:24 | CLEAN | |
+| 34794533526 | closing-lines | 09-14 01:01 | CLEAN | no pending picks within 120 min |
+| **34821872367** | daily-picks | 09-14 08:16 | CLEAN | `disc[fs=20c/-m fdo=8c/22m af=0c/90m]`, 20 picks, settled 49, **0 new team rows**, 0 unpriced alarms, 0 delivery failures |
+| 34869382471 | paper-trading-report | 09-14 16:33 | CLEAN | |
+| 34869688325 | closing-lines | 09-14 16:36 | CLEAN | 0 captured, 10 missing, 4 late (of 14) |
+| 34871697404 | closing-lines | 09-14 16:56 | CLEAN | duplicate firing of the 15:17 slot |
+| 34895843148 | closing-lines | 09-14 20:55 | CLEAN | 0 captured, 0 missing, 4 late |
+| 34910674776 | closing-lines | 09-14 23:50 | CLEAN | no pending picks within 120 min |
+| **34945355361** | daily-picks | 09-15 08:08 | CLEAN | `disc[fs=12c/-m fdo=6c/6m af=0c/32m]`, 10 picks, settled 20, **0 new team rows**, 0 unpriced alarms, 0 delivery failures |
+| 34987302642 | paper-trading-report | 09-15 15:16 | CLEAN | |
+| 34987375864 | closing-lines | 09-15 15:16 | CLEAN | 0 captured, 2 missing (of 2) |
+| 34989156962 | closing-lines | 09-15 15:32 | CLEAN | duplicate firing of the 15:17 slot |
+| 35018335391 | closing-lines | 09-15 20:13 | CLEAN | 0 captured, 0 missing, 8 late |
+| 35035998532 | closing-lines | 09-15 23:30 | CLEAN | no pending picks within 120 min |
+
+---
+
+## 0. `--unaudited` RECONCILES — and under-reports for a reason its own docstring names
+
+**Reported 62. Independently recomputed 62.** Both defects `07c2e6c` fixed are
+holding: bolded rows are matched, and provisional rows re-list. **0 provisional
+rows remain** — `34745992077` now reads DEGRADED and is correctly NOT re-listed
+even though its note contains the word `IN_PROGRESS`, which is the per-cell
+check earning its place.
+
+**But the count is only as good as the query that feeds it.**
+
+| `limit` (per workflow) | daily-picks rows returned | unaudited |
+| --- | --- | --- |
+| 250 (current) | **250 — exactly the cap** | 62 |
+| 400 | 296 | **86** |
+| 600 | 296 | 86 |
+
+**`list_runs(limit=250)` is truncating, silently, and says nothing.** That is the
+defect its own docstring records for `closing-lines` at `limit=40` — *"which read
+as 'no closing-lines runs in the window' rather than as a truncated query"* —
+recurring at 250 for the workflow that outgrew it.
+
+**Third instance of the class: a query at its cap is indistinguishable from a
+query that found everything.** The 24 runs it hides are 2026-02-15..02-24,
+pre-ledger, so nothing recent was concealed — but the instrument cannot tell me
+that, and I only know because I raised the limit and looked.
+
+---
+
+## 1. THE STAGE 23 PREDICTION — resolved, and the attribution is not what was designed
+
+### The composition, not the total
+
+| | 09-12 | 09-13 | **09-14** | **09-15** |
+| --- | --- | --- | --- | --- |
+| new unresolved team rows | 21 | 14 | **0** | **0** |
+| exact-name resurrections of merged-away names | — | 14 | **0** | **0** |
+| **SQL-null-blind** (predicted **0**) | 4 | 3 | **0** yes | **0** yes |
+| genuinely new clubs (predicted *unaffected*) | 0 | 2 | **0** | **0** |
+
+**Registration 2 predicted ~100% of resurrections removed. Measured: 100%.**
+
+### The confound was real and was controlled for
+
+**The card collapsed at the same moment the fix landed** — 88 fixtures on 09-13,
+20 on 09-14, 12 on 09-15 — and registration 1 named exactly this hazard: *"the
+daily total tracks card size and a raw count would confound the two."*
+
+| | fixtures | team-refs | new teams | per fixture |
+| --- | --- | --- | --- | --- |
+| 09-08 .. 09-13 (pre) | 742 | 964 | 126 | **0.170** (daily range 0.128-0.196) |
+| 09-14 .. 09-15 (post) | 32 | 64 | **0** | **0.000** |
+
+**Expected 5.4 new rows at the pre-rate; observed 0. Poisson p = 0.004**
+(p = 0.0002 on the team-reference denominator). **The drop survives the
+normalisation.**
+
+**Control that the pipeline ran at all:** 20 and 12 fixtures created, referencing
+**64 distinct team rows**, 0 tracebacks, 0 ERROR lines, 0 delivery failures. Every
+one of those 64 references resolved to an existing row.
+
+### THE CORRECTION: the step built to stop the decay never fired
+
+**Zero `FORMER NAME` lines in either run.** DEBUG *does* reach CI (46 lines, all
+`src.utils.config`), so this is a measured absence, not a filtered one. And **0 of
+the 64 referenced rows carry a name in `team_former_names`.**
+
+> ### The 124-row table is loaded, correct, unit-tested — and untouched. Step 2 has never fired in production.
+
+**What actually closed the resurrections is step 1 and steps 3-4.** Every one of
+the 32 duplicate components has one side carrying `league = NULL`:
+
+| af | survivor | resurrection |
+| --- | --- | --- |
+| 85 | `569 Paris SG` **league NULL** | `1855 Paris Saint Germain` france/ligue-1 |
+| 242 | `486 FC Famalicao` **league NULL** | `1856 Famalicao` portugal/primeira-liga |
+| 426 | `125 Sparta Rotterdam` netherlands/eredivisie | `1853 Sp Rotterdam` **league NULL** |
+
+`apifootball`'s provider-id lookup was scoped `Team.league.notin_(nat)`, and
+`NULL NOT IN (...)` is NULL — so it could not see the survivor **and created a
+second row carrying the same provider id**. `_partition_filter` spells the NULL
+case out. **`af=426` is the reverse direction — the half s5.11 left open.**
+
+> **So the prediction resolved as registered, by a different mechanism than the
+> one the stage is named after.** A result read at the level of the total would
+> have credited the former-name lookup with a fix it did not perform.
+
+**AND THE COROLLARY IS AN OPEN EXPOSURE.** Step 2's first hit has not happened.
+The credit gate's first refusal was *deliberately exercised before it fired*
+because a guard that has never refused is a guard with an untested branch.
+**Step 2 is in exactly that state and was not exercised.** 68 of its 124 names
+also exist as live team rows, so when one of those is next scraped, step 2 fires
+ahead of step 3 and redirects the fixture to the survivor — a path with no
+production evidence behind it.
+
+---
+
+## 2. THE 28 — now 32, and it HELD. **THE GATE OPENS.**
+
+| newest member appeared | components |
+| --- | --- |
+| 09-11 | +25 |
+| 09-12 | +4 |
+| 09-13 | +3 -> **32** |
+| **09-14** | **+0** |
+| **09-15** | **+0** |
+| **09-16** | **+0** |
+
+**It grew to 32 before s5.12 landed and has not moved since.** All 32 are size 2;
+64 rows involved; none predates the merge.
+
+> ### Backlog, not a rate. The condition set in advance is met and the merge is authorised.
+
+**Not merged in this pass, as instructed.** Scope when it runs:
+
+* 32 components, 32 rows removed, 32 surviving;
+* **it must call `record_former_name()` as it goes** — the property s5.10 lacked
+  and the single reason this recurred;
+* and it should be the thing that gives **step 2 its first production hit**,
+  which closes the untested-branch exposure above in the same operation.
+
+---
+
+## 3. DEL-3 — **DID NOT SHIP.** Deadline 2026-09-14; today is 09-16.
+
+**No commit exists after `ce6a1cc` (2026-09-13).** `REPORT_DELIVERY` does not
+appear anywhere in `src/`, `tests/` or `scripts/`. `_send_chunked` still calls
+`_send_message` per chunk, discards each result, and returns the last chunk's
+Message — so a lost middle chunk still returns truthy and still reads as a
+complete report.
+
+**Stated plainly: it is two days overdue and nothing was built.**
+
+### What the three days cost
+
+| day | messages sent | delivery failures |
+| --- | --- | --- |
+| 09-13 | 6 | **1** — `_send_message:717 Failed to send Telegram message: Timed out` |
+| 09-14 | 4 | 0 |
+| 09-15 | 2 | 0 |
+
+**One unrecorded failure, on 09-13, on the sender DEL-1 does not cover** — and
+the ledger already records that this run *"send 08:53:09, FAIL 08:53:14, send
+08:53:17 — a MIDDLE chunk was lost and the sequence carried on."*
+
+> **The three-day streak broke on 09-14, but exposure fell with it: 6 -> 4 -> 2
+> messages.** A smaller card sends a shorter report and chunks less. **That is
+> the streak ending for a reason unrelated to the defect**, and reading two quiet
+> days as improvement is the error the measurement exists to prevent.
+
+---
+
+## 4. s5.12's FIRST LIVE DAYS
+
+| check | result |
+| --- | --- |
+| picks carry `stage5_baseline_20260807.c8c892` | **yes — 30 stamped** of 1908 |
+| `cohort_status.py` | **VERDICT: BUMP** (was AMEND while empty) |
+| country check refusals in three days | **0** — re-measured at 25 possible name-path joins (3 exact + 22 strict), refuses **0**, unchanged since it was applied |
+| teams carrying a real country | 669 / 1534 = **44%**, unchanged |
+| enforcement test | **16 passed**; **0** `Team(` construction sites outside the allowed list |
+
+**The country check has no production observable** — `_country_conflict` does not
+log — so "0 refusals" is bounded rather than witnessed: a refusal at steps 3-4
+that exhausted its candidates would fall to step 5 and create a row, and **zero
+rows were created**. The counterfactual re-measure is the direct evidence and it
+is unchanged.
+
+**The enforcement test still holds after a week in which a fourth creation site
+was added and caught.** That is the property worth confirming: it is not that
+`historical_loader.py` was found once, but that the scan is still the thing
+standing between a fifth site and a fifth blind spot.
+
+---
+
+## 5. STANDING MEASUREMENTS
+
+### OPS-4 — the two figures AGREE, and the gate is refusing everything
+
+| | |
+| --- | --- |
+| provider `x-requests-used` | **400** — identical across **9** independent probes, 09-13 to 09-15 |
+| provider `x-requests-remaining` | 100 |
+| ledger | **400/450 used, 0 spendable** (safety margin 50, free tier 500) |
+| drift over three days | **ZERO** |
+
+**The credit divergence is closed and stayed closed.** 400 used is exactly
+`DEFAULT_MONTHLY_BUDGET`; the 100 provider credits are the margin, deliberately
+unspent. Window remains open to the **10-01** reset.
+
+**One divergence remains, unfixed and recorded:**
+`data/models/theodds_credits.json` still reads `{"remaining": 154, "updated":
+"2026-09-10"}` — six days stale, same month, so `_load_persisted_credits()` would
+return it rather than None. **The DB ledger says 0 spendable and the JSON
+fallback says 154.** It is inert while the DB is reachable; it is a
+permission-to-spend that does not exist if the DB ever is not.
+
+### The cost of the refusal, which no run reported
+
+**Every closing-lines run in the window captured ZERO, and every one verdicted
+CLEAN.**
+
+| | 09-13 | 09-14 | 09-15 |
+| --- | --- | --- | --- |
+| valid CLV pairs | **129** | **129** | **129** |
+| past-kickoff picks | 755 | 804 | 824 |
+| capture coverage | 17.1% | 16.0% | **15.7%** |
+
+> **The numerator is frozen and the denominator is growing, so coverage falls
+> while nothing is wrong with any individual run.** Three days added 69
+> past-kickoff picks and 0 pairs.
+
+### CLV MODEL/FINAL with deff — **identical on all three days**
+
+| | MODEL | FINAL |
+| --- | --- | --- |
+| CLV mean | -0.462% | -0.359% |
+| worst-case effective n | **110** | **128** |
+| design effect | **1.00** | **1.00** |
+| to the 200 checkpoint | 90 | 72 |
+
+`final - model = +0.104%, 95% CI [-0.4%, +0.6%]` on 76 shared observations —
+unchanged, and it will stay unchanged until 10-01.
+
+### The unpriced alarm — a MEASURED zero, not an inferred one
+
+| match day | fixtures | ALARM | INFO (covered) |
+| --- | --- | --- | --- |
+| 09-12 | 116 | 3 | 24 |
+| 09-13 | 73 | **3** | 11 |
+| 09-14 | 20 | **0** | 0 |
+| 09-15 | 12 | **0** | 0 |
+
+**`report_unpriced_fixtures` logs NOTHING when both lists are empty**, so a
+measured zero and a check that never ran are the same silence. I ran the query
+directly; it reproduces 09-13's three alarms exactly — same three fixtures — so
+the instrument is sound and the zeros are real.
+
+**BUT THE ZERO IS UNDERPOWERED AND MUST NOT BE CLAIMED AS EVIDENCE.** Pooled
+pre-rate 6/189 = 3.2%; on 32 post fixtures that predicts **1.0** alarms and
+P(0) = **0.36**. **The alarm count falling is consistent with Stage 23 and
+equally consistent with a small card.** The team-row measurement (p = 0.004) is
+the load-bearing one; this is corroboration at best.
+
+### s5.9 — guarantee holds
+
+**0 match rows carrying more than 2 live picks, in 834 live picks** (was 545 at
+the last check), verified by grouping on the match row directly rather than
+through s5.9's own predicate. `deff = 1.00` on both CLV series is the same
+guarantee showing up in the measurement that would break first.
+
+### OPS-3 — delays, and 46% of slots that never ran
+
+| | n | min | median | max | mean |
+| --- | --- | --- | --- | --- | --- |
+| scheduled-start delay | 20 | 8m | **100m** | **347m** | 136m |
+
+**`daily-picks` ran 285m / 316m / 309m late — and all three started before the
+09:45 UTC deadline.** Stage 21 moved that cron from 09:37 to 03:00 precisely to
+absorb this, and **this is the week it paid**: under the old cron all three runs
+would have started around 14:20-14:50 UTC, hours after the earliest kickoff.
+
+**`closing-lines` is worse than the "four hours of missed slots" watched on
+09-13:**
+
+| day | slots scheduled | fired | **missed** |
+| --- | --- | --- | --- |
+| 09-13 | 8 | 5 | 3 — 15:17, 21:17, 23:17 |
+| 09-14 | 8 | 4 | **4** — 13:17, 17:17, 21:17, 23:17 |
+| 09-15 | 8 | 4 | **4** — 13:17, 17:17, 21:17, 23:17 |
+| **total** | **24** | **13** | **11 = 46%** |
+
+**21:17 and 23:17 missed all three days**, and GitHub fired duplicates for
+15:17/13:17 on three occasions instead — so this is not only lateness, it is
+slots dropped and slots doubled.
+
+> ### OPS-4 IS CURRENTLY MASKING OPS-3'S COST.
+> A missed capture slot costs nothing while the credit gate refuses every
+> request anyway — the 13 slots that *did* fire captured zero too. **On 10-01 the
+> gate reopens and the 46% becomes live loss**, which is the moment this stops
+> being a watch item.
+
+---
+
+## WHAT THIS PASS ESTABLISHED
+
+1. **A registered prediction resolved as written, and reading it as a
+   composition rather than a total is what exposed that the named mechanism was
+   not the one that acted.** Step 2 has never fired.
+2. **Two guards are now in the same untested state for the same reason** — the
+   former-name lookup and the country check have each been correct in every test
+   and have never been consulted in anger. One comparable guard, the credit
+   gate, was deliberately exercised first. These two were not.
+3. **Three separate measurements were nearly reported as results and were not**:
+   the unpriced-alarm zero (underpowered, p = 0.36), the delivery-failure streak
+   breaking (exposure fell, not the defect), and `--unaudited`'s count (correct,
+   from a truncated query).
+4. **DEL-3 is overdue and its premise is intact.**
+
+*Audited 2026-09-16. Read-only — no code, config, schema or production data
+changed.*
