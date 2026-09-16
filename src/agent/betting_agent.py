@@ -882,6 +882,26 @@ class FootballBettingAgent:
                 f"reporting ({_cov_e}). This run has NO evidence either way "
                 f"about unpriced fixtures. Not a clean result.")
 
+        # ING-1 step 1: a fixture attributed to the wrong team row.
+        #
+        # RUN HERE, AFTER INGESTION AND BEFORE ANYTHING READS A FIXTURE AS
+        # EVIDENCE. This is the only point in that chain where a fix is cheap —
+        # once the identity-writing path has read a contaminated fixture, the
+        # wrong id is stored, and clearing it returns the row to this state with
+        # the evidence intact (CLR-1).
+        try:
+            from src.data.fixture_plausibility import (
+                report_implausible_attributions)
+            with self.db.get_session() as _plaus_session:
+                report_implausible_attributions(_plaus_session)
+        except Exception as _plaus_e:
+            # Same reason as above: the check announces its own failure, but
+            # only if the call reached it. A fallback must record that it fired.
+            logger.warning(
+                f"IMPLAUSIBLE ATTRIBUTION CHECK DID NOT RUN — it raised before "
+                f"reporting ({_plaus_e}). This run has NO evidence either way "
+                f"about fixture attribution. Not a clean result.")
+
         logger.info("Daily update cycle complete")
 
     def _unanalyzable_today(self) -> set:

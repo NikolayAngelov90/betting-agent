@@ -267,6 +267,9 @@ PATTERNS = {
     # the 3 that were not.
     "unpriced_fixtures": r"UNPRICED FIXTURES: (\d+) row",
     "unpriced_check_dead": r"UNPRICED FIXTURE CHECK DID NOT RUN",
+    # ING-1 step 1. A team row whose fixtures span >1 domestic country.
+    "implausible_rows": r"IMPLAUSIBLE ATTRIBUTIONS: (\d+) team row",
+    "implausible_check_dead": r"IMPLAUSIBLE ATTRIBUTION CHECK DID NOT RUN",
     "report_sent": r"(?:Performance report sent to Telegram|Settlement report sent to Telegram)",
     # s5.9's OWN refusal, distinct from the ordinary per-match cap. Both log
     # `PICK_REJECTED reason=same_fixture_limit`; only the duplicate case says
@@ -337,6 +340,7 @@ def extract(log: str) -> Dict[str, object]:
         if key in ("fixtures_created", "reviews", "no_rows",
                    "decisions_discarded", "fixtures_zero_active",
                    "no_fixtures_at_all", "unpriced_check_dead",
+                   "implausible_check_dead",
                    "duplicate_fixture_refusals", "picks_run_guard_declined",
                    "report_sent"):
             f[key] = len(ms)
@@ -545,6 +549,16 @@ def assertions(facts: Dict[str, object],
             "or a duplicate row holding the same fixture)")
 
     # A check that did not run is not a clean check.
+    if facts.get("implausible_rows"):
+        hits.append(
+            f"{facts['implausible_rows']} team row(s) carry fixtures from more "
+            "than one DOMESTIC country — a club plays in one pyramid, so one "
+            "group belongs to another club (which group is NOT decided here)")
+
+    if facts.get("implausible_check_dead"):
+        hits.append("the implausible-attribution check DID NOT RUN — no "
+                    "evidence either way, not a clean result")
+
     if facts.get("unpriced_check_dead"):
         hits.append("the unpriced-fixture check DID NOT RUN — no evidence "
                     "either way, not a clean result")

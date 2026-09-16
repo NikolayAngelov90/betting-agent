@@ -860,7 +860,17 @@ TRACKED_KEYS: List[str] = [
 #:       produced the bad value is dealt with in the SAME operation. Detach the
 #:       evidence, do not only clear the field.
 #:
-#:       THE PLAUSIBILITY INVARIANT, SIZED AND NOT BUILT: a club's fixtures must
+#:       THE PLAUSIBILITY INVARIANT, BUILT 2026-09-16 (not selection-affecting:
+#:       it logs, it does not filter). `src/data/fixture_plausibility.py`, run in
+#:       daily_update after ingestion and before anything reads a fixture as
+#:       evidence — the only point in ING-1 where a fix is cheap. It reproduces
+#:       its pre-build measurement exactly: 8 rows, 46 fixtures, 27 of Stage
+#:       13's 29 recovered, 17 carrying no mark at all. Two limits stated at the
+#:       point of use AND tested: it flags the ROW not the SIDE (York City is
+#:       refused with the majority wrong), and it is blind to same-country
+#:       corruption, which is the 2 of 29 it misses.
+#:
+#:       THE PLAUSIBILITY INVARIANT, AS SIZED BEFORE BUILDING: a club's fixtures must
 #:       lie in at most ONE domestic country's competitions (continental,
 #:       neutral and national-team leagues exempt). Measured 2026-09-16 — it
 #:       refuses 8 of 1,493 teams (0.5%), NONE of them legitimate, covering 46

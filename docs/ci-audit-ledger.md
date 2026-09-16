@@ -13801,3 +13801,135 @@ error is on this ledger once already.
 > and is not reported as one.
 
 *Recorded 2026-09-16.*
+
+---
+
+# 2026-09-16, seventh pass — the plausibility invariant BUILT
+
+`src/data/fixture_plausibility.py`, wired into `daily_update` after ingestion
+and before anything reads a fixture as evidence, plus 10 tests and two audit
+assertions.
+
+---
+
+## IT REPRODUCES ITS OWN PRE-BUILD MEASUREMENT
+
+| | predicted before building | shipped check finds |
+| --- | --- | --- |
+| team rows refused | 8 | **8** |
+| minority-country fixtures | 46 | **46** |
+
+| the 46, by exclusion state | |
+| --- | --- |
+| `corrupt_team_identity` | **27** — Stage 13's hand-built 29, 93% of it, from one rule |
+| **no mark at all** | **17** |
+| `phantom_kickoff_now_stamp` | 2 |
+
+**The pre-build figure said 19 would be added and the shipped check reports 17
+unmarked. Both are right and they answer different questions:** 19 is what this
+rule adds to the `corrupt_team_identity` class; **17 is what the learning paths
+still consume**, because 2 of the 19 are already excluded for an unrelated
+reason. The operational number is 17.
+
+> **A rule that recovers 27 of 29 marks assembled by hand over a week, refuses
+> nothing legitimate, and finds 19 the hand missed is not a cheap check. It is a
+> better instrument than the one it supplements.**
+
+## WHERE IT RUNS, AND WHY THERE
+
+**After ingestion, before anything reads a fixture as evidence.** That is the
+only point in ING-1 where a fix is cheap:
+
+* caught here → one marked fixture;
+* caught after step 4 → the wrong attribution has already become a stored
+  identity, and clearing that identity returns the row to step 3 with the
+  evidence intact (**CLR-1**).
+
+Ordering, verification, clearing and merging all act on consequences. This is
+the first thing built that acts on the cause.
+
+## THE TWO LIMITS ARE AT THE POINT OF USE, AND TESTED
+
+Stated in the module docstring — where they will be read — not only here. And
+**exercised**, because a limit nobody tests is a claim rather than a property:
+
+| limit | test |
+| --- | --- |
+| **it flags the ROW, not the SIDE** | `test_the_MAJORITY_can_be_the_contaminated_side` — `York City` is refused with `usa=37, england=4` and the MAJORITY is wrong. A caller assuming "minority = contamination" would detach the only legitimate fixtures the row has. The result dict deliberately has no `wrong_*` key. |
+| **blind to same-country corruption** | `test_same_country_corruption_is_NOT_detected_and_that_is_KNOWN` — one Polish club's fixtures on another Polish club's row return CLEAN. That is precisely the 2 of 29 it misses, and it is a blind spot by construction. |
+
+The `None`-vs-`[]` third state is kept: a failed query returns `None` and the
+caller says "CHECK DID NOT RUN", never "nothing wrong".
+
+---
+
+# THE OPPONENT-SEASON BACKFILL — a signature, named
+
+**Four independent instances of one mechanism, found by a rule designed for
+something else.**
+
+| row | majority | the deposited season | one dominant opponent | marked? |
+| --- | --- | --- | --- | --- |
+| **1528 `Telstar`** | netherlands=48 | `other/israel` ×4 | **Hapoel Beer Sheva** | **0/4** |
+| **374 `Aris`** | greece=134 | `other/cyprus` ×4 | **Omonia Nicosia** | **0/4** |
+| **187 `Kocaelispor`** | turkey=38 | `other/cyprus` ×3 | **Omonia Nicosia** | **0/3** |
+| **1353 `NK Varazdin`** | azerbaijan=4 | `other/croatia` ×4 | **Neftchi Baku** | **0/4** |
+
+> ### THE SHAPE: one foreign league, ONE dominant opponent, a contiguous season, and not one fixture marked.
+
+**That is not a signature anyone would guess. It is what an opponent-season
+backfill looks like when a single name resolves to the wrong row.** Backfilling
+one club's season resolves each opponent name in turn; one bad resolution
+deposits that club's *entire season* on the wrong row — which is why these
+arrive in fours rather than singly, and why each has exactly one recurring
+opponent.
+
+**It also explains why Stage 13 missed all four.** Its 29 were found among the
+impostor pairs — `Pau FC`/`St. Pauli`, `Rapid Vienna`/`Rapid Bucuresti` — which
+are *name collisions*. These four are not name collisions at all: nothing about
+`Telstar` resembles `Maccabi Tel Aviv`. **A detector built on name similarity
+cannot see a mechanism that does not involve similar names.**
+
+**Recognise it on sight.** A row with a small contiguous block of foreign-league
+fixtures against one repeated opponent is an opponent-season backfill that
+landed on the wrong club, and the fix is at the attribution, not the identifier.
+
+---
+
+# MEASUREMENT BIAS — MB-1, and it is sharper than the usual form
+
+> ### A count built on a predicate that would reject its own motivating examples is a lower bound IN THE WORST DIRECTION.
+
+Reported yesterday: *11 of 61 armed rows strict-match an already-identified row,
+and 11 is a floor.* The floor is not ordinary undercounting.
+
+**`same_team_strict` returns False for `Rakow`/`Raków Częstochowa` and for
+`Telstar 1963`/`Telstar` — the two cases that motivated the count.** The
+instrument measuring the population systematically excludes the class of
+interest, so:
+
+* the number is biased **downward**, toward making the problem look smaller;
+* and the examples that would prove it wrong are **exactly the ones it drops**;
+* so the count cannot correct itself by being re-run, only by being re-built.
+
+**This is the flattering member of a family whose other member is already
+filed** — *a filter in the instrument read as a fact about the data* (the 411
+opponent query keyed on `apifootball_team_id`, which silently removed the
+NULL-id row the question was about).
+
+| | |
+| --- | --- |
+| **a filter in the instrument read as a fact about the data** | the instrument drops rows; the reader attributes the absence to the world |
+| **MB-1: a predicate that rejects its own motivating examples** | the instrument drops *precisely the class being counted*; the error is **directional**, and it always understates |
+
+**The first misleads. The second flatters**, which is worse, because a number
+that understates a problem is acted on as reassurance and nobody goes looking
+for the cases it dropped.
+
+**THE CHECK THIS IMPLIES, and it is cheap:** before quoting a count, run the
+counting predicate against the examples that prompted the count. **If it rejects
+them, the number is not a measurement of that class.** `same_team_strict` fails
+that check here, so 11 stands as "at least 11, by a comparator known to miss the
+motivating cases", never as 11.
+
+*Recorded 2026-09-16. `tests/` 1020 passed.*
