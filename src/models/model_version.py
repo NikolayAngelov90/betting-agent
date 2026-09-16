@@ -817,7 +817,12 @@ TRACKED_KEYS: List[str] = [
 #:       into identity resolution, and its remedy is the same: a total order,
 #:       deliberately chosen. `id` ascending everywhere — the oldest row, the one
 #:       other tables reference most, and the survivor rule s5.10 and Stage 24
-#:       already used.
+#:       already used. IT BUYS DETERMINISM, NOT CORRECTNESS: `id` ascending is
+#:       what walked s5.10's survivors into the 2.9% of NULL-league rows, because
+#:       low ids predate the column. Where the oldest row is the wrong one this
+#:       makes the wrongness REPRODUCIBLE rather than removing it — still a large
+#:       gain, since a defect that behaves the same way every time is findable
+#:       and one that flips per query is not, but not validation.
 #:
 #:       MEASURED at the time of the fix, keys matching more than one row:
 #:       apifootball._find_match_id 3,882 rows had a rival inside its +/-1 day

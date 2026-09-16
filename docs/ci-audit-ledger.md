@@ -13292,3 +13292,172 @@ third such change; `TEAM_RESOLVE` is not, and is recorded as riding along.
 `tests/` **1010 passed.**
 
 *Recorded 2026-09-16.*
+
+---
+
+# 2026-09-16, fourth pass — the two wrong-id rows have DIFFERENT mechanisms
+
+**Measurement only. Rows 411 and 420 stay NULLed exactly as s5.10 left them; no
+identifier was written, cleared or repaired.**
+
+---
+
+## THE DISCRIMINATOR
+
+The 2026-08 diagnosis said `/teams?search=` took the first result unverified.
+**That was reasoned from the resolution order, not measured** — stated as such at
+the time, with no key available locally.
+
+The fixture-derived path produces the same signature by another route: take an
+arbitrary fixture of a team, read the team id off the API's copy of it, write it
+permanently. **The two are separable from the data**: does the wrong id belong
+to a club that appears in one of that row's own fixtures — *and* could the path
+have reached it, which requires `Match.apifootball_id IS NOT NULL`?
+
+| | **411 `Rakow`** ← af=350 | **124 `Telstar`** ← af=604 |
+| --- | --- | --- |
+| the id truly belongs to | `Cracovia` (row 1854 holds 350) | **`Maccabi Tel Aviv`** — no row exists for it |
+| does that club appear in the row's own fixtures? | **YES** — 7 fixtures vs row 420 `Cracovia` | **YES** — as the true occupant of 4 fixtures |
+| do those fixtures carry an `apifootball_id`? | **0 of 7** | **4 of 4** (1214904, 1214995, 1360214, 1360229) |
+| could the path have reached it? | **NO** | **YES** |
+| **verdict** | **search remains the suspect** | **the fixture path explains it** |
+
+### 411 — the path is excluded on a hard requirement
+
+`Rakow` has 120 fixtures, 32 distinct opponents, **11 carrying an AF fixture
+id** — Lechia, Korona, Lech, Pogon, Slask, Jagiellonia, Gornik, Motor, Omonia,
+and `Raków Częstochowa` (af=3491, *the club playing itself*, a separate
+duplicate). **Not one of the 11 involves Cracovia.**
+
+The 7 Rakow–Cracovia fixtures all predate AF linkage entirely — created
+2026-02-28 and 2026-04-25 from another source — and **carry `apifootball_id =
+NULL`**, which the path filters on explicitly. It could not have selected one.
+
+> **Ordering does not touch this row. Only verification does.**
+
+### 124 — the path fits, and the fixtures that prove it are still there
+
+`Telstar` (Dutch second tier, true id **427**) holds **four `other/israel`
+fixtures against `Hapoel Beer Sheva`**, home and away, across the 2024-25 Israeli
+season, created 2026-08-04 12:04 in a backfill of that club's season. **A Dutch
+second-tier club did not play those matches.** The real occupant of that side is
+an Israeli club meeting Hapoel Beer Sheva twice a season, and **af=604 sits in
+the major-European-club block** — 598 Crvena Zvezda, 611 Fenerbahce, 617
+Panathinaikos, 619 PAOK, 620 Dinamo Zagreb — exactly where Maccabi Tel Aviv
+belongs. (Israeli clubs reached by ordinary league coverage sit at 4195-6192.)
+
+**All four carry an AF fixture id**, so the path had candidates. Fetch one, read
+the side `Telstar` occupies, and it returns the club that actually played:
+**604.**
+
+**THE CHAIN IS COMPLETE AND IT IS SELF-INFLICTED IN TWO STEPS.** A name resolved
+wrongly to `Telstar` at backfill time; that wrong resolution created a fixture;
+**the fixture then became evidence, and the evidence wrote an identifier.** An
+error in the resolver was laundered into a stored identity by a path that
+consults fixtures as if they were facts.
+
+### The one step not taken
+
+**Confirming that AF fixture 1214904 names Maccabi Tel Aviv is one
+`/fixtures?id=` call away, and it was not spent.** Everything above is from
+local data. That single request would convert "the only mechanism that fits" to
+"the mechanism, confirmed".
+
+---
+
+## WHY THIS MATTERED — the remedies are different, and one shipped today
+
+**Ordering fixes arbitrary-among-candidates. Only verification fixes
+wrong-source.** Had both rows been the fixture path, today's `ORDER BY` would
+have closed the class. Had both been search, ordering would have been beside the
+point.
+
+**They are one of each.** So the inventory closed half of a two-mechanism
+population, and 411 remains open with its original suspect intact —
+*"shipping one and believing you closed the other"* avoided by measuring rather
+than by assuming the newer explanation displaced the older one.
+
+### AND I NEARLY REPORTED THE RIGHT VERDICT FOR THE WRONG REASON
+
+My first pass on 411 answered **NO — Cracovia does not appear among its
+opponents**. It does: 7 fixtures. The query had collected opponents **keyed on
+their `apifootball_team_id`**, and row 420 `Cracovia` carries NULL, so it was
+filtered out of the candidate set before the question was asked.
+
+> **A filter in the instrument, read as a fact about the data.** The verdict
+> survived re-checking, but on a different fact — *the fixtures carry no AF id*,
+> not *the club never appears*. The first reason was wrong and would have been
+> quoted as the finding.
+
+**This is the league-scoped lookup defect in an analysis query**: a candidate set
+narrowed before the comparator ran, so the comparator was never asked. Fourth
+instance, and the first in a measurement rather than in the pipeline.
+
+---
+
+## ORDER BY id BUYS DETERMINISM, NOT CORRECTNESS
+
+Recorded in `tests/test_identity_selection_is_ordered.py` and in the s5.13
+history entry, so nobody later reads an `ORDER BY` as validation.
+
+> **`id` ascending has a known pathology in this codebase.** It is exactly what
+> walked s5.10's survivors into the 2.9% of rows carrying `league IS NULL` — low
+> ids predate the column being populated, so "oldest" selected precisely the
+> rows the league-scoped lookups were blind to, and the repair walked its own
+> output into the blind spot. **Oldest is not a proxy for correct.**
+
+**Where the oldest row is the wrong row, ordering makes the wrongness
+reproducible rather than removing it.** That is still a large improvement, and
+the reason is worth stating rather than assuming: **a defect that behaves the
+same way every time is findable; one that flips per query is not.** A wrong
+identity that is stable can be caught by a test, a diff, or an audit. A wrong
+identity that changes between runs defeats all three.
+
+**The strongest part of the change remains the consistency** — the same row wins
+at every site, which is what makes it a rule rather than twenty separate
+choices. But a rule is not a proof.
+
+---
+
+## TWO METHOD RESULTS
+
+These are results, not implementation notes.
+
+### 1. THE INSTRUMENT PRECEDED THE CARD — the first time here
+
+`TEAM_RESOLVE` landed while 2026-09-16's `daily-picks` had not yet fired, so the
+measurement exists **before** the exposure it was built to measure.
+
+**Every previous measurement in this project arrived after the thing it
+measures.** The phantom denominators, the credit split, the resurrection rate,
+the drift bands — each was constructed to explain a number already in hand, and
+each carried the standing doubt that comes with choosing an instrument once the
+answer is visible.
+
+> **A measurement built before the data cannot be shaped by it.** That is the
+> same property pre-registration buys for a prediction, applied one level down:
+> not "what did we expect" but "what were we able to see".
+
+### 2. A THIRD STATE ANTICIPATED RATHER THAN DISCOVERED — also a first
+
+`test_the_audit_parses_the_line_it_is_given` pins that the producer's format and
+the audit's parser agree, **because a drift between them degrades to "no
+resolution data", which reads exactly like a run that resolved nothing.**
+
+Every previous instance of this class was found by being bitten:
+
+| | discovered by |
+| --- | --- |
+| `[]` vs `None` | a dead credential printing "0 unpriced" |
+| 429-with-credits vs 429-with-zero | six historical 429s replayed |
+| no-hits vs no-log | an unreadable log scoring CLEAN |
+| `returned == limit` | 24 unaudited runs hidden behind a cap |
+| **producer/parser drift** | **nothing — it was pinned before it could occur** |
+
+**The class is now recognised prospectively rather than retrospectively**, which
+is the difference between having learned a lesson and having a habit.
+
+---
+
+*Recorded 2026-09-16. Read-only measurement: no identifier written, cleared or
+repaired; no API credit spent.*

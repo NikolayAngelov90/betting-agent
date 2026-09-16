@@ -32,6 +32,21 @@ default: the lowest id is the oldest row, the one other tables already reference
 most, and the same survivor rule s5.10's OP1 and Stage 24 used. One rule across
 every site beats a locally clever rule at each.
 
+    THIS BUYS DETERMINISM, NOT CORRECTNESS, AND THE DIFFERENCE MATTERS.
+
+`id` ascending has a KNOWN PATHOLOGY in this codebase. It is exactly what walked
+s5.10's survivors into the 2.9% of rows carrying `league IS NULL` — low ids
+predate the column being populated, so "oldest" selected precisely the rows the
+league-scoped lookups were blind to, and the repair walked its own output into
+the blind spot. **Oldest is not a proxy for correct.**
+
+So where the oldest row is the WRONG row, ordering makes the wrongness
+reproducible rather than removing it. That is still a large improvement — **a
+defect that behaves the same way every time is findable; one that flips per
+query is not** — but nobody should read the presence of an ORDER BY as evidence
+that the right row won. Ordering fixes arbitrary-among-candidates. Only
+verification fixes wrong-source, and the two have different remedies.
+
 WHAT THIS DOES NOT PIN. An EXISTENCE PROBE is not a selection: `if existing:
 continue` cares only whether a row is there, so which one comes back cannot
 change an outcome. Those are listed below with their reason, exactly as
