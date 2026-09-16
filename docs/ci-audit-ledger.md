@@ -14058,3 +14058,232 @@ changed nothing. **Had it been made on the majority rule it would have inverted.
 
 *Recorded 2026-09-16. Marking is reversible by design: `training_exclusion_reason`
 is deliberately not write-once.*
+
+---
+
+# AUDIT 2026-09-16 (second pass) — the instrument does not emit
+
+| run | workflow | started | verdict | note |
+| --- | --- | --- | --- | --- |
+| **35071608733** | daily-picks | 09-16 08:02 | **DEGRADED** | `disc[fs=17c/-m fdo=4c/5m af=0c/29m]`, 138 fixtures created, 4 new team rows, 16 picks. **3 shared-provider-id collisions written where the merge left 0.** No `resolve[...]` — the instrument emitted nothing. |
+
+`--unaudited` listed 45, of which **one** is inside this window; the other 44 are
+the pre-ledger August/September backlog. The truncation warning fired correctly
+and the count is reported as a lower bound.
+
+---
+
+## 1. THE HEADLINE — `TEAM_RESOLVE` EMITTED NOTHING, AND MY EARLIER CLAIM WAS WRONG
+
+**The instrument was deployed.** `headSha = 098a368`, which contains all seven
+`_record(` calls. The run created 138 fixtures, so `resolve_team` was called
+roughly 270 times. **It produced ZERO `TEAM_RESOLVE` lines.**
+
+```
+Logger initialized — level=INFO
+```
+
+| | |
+| --- | --- |
+| DEBUG lines in the run | 46 |
+| modules emitting them | `src.utils.config` (40), `src.models.ml_models` (6) — **both at import time** |
+| operational modules emitting DEBUG | **none** |
+
+`setup_logger()` calls `logger.remove()` and installs sinks at
+`log_cfg.get("level", "INFO")`. The 46 DEBUG lines are loguru's DEFAULT handler
+firing during import, **before** that replacement. After it, every
+`logger.debug()` in the codebase is discarded.
+
+> ### I WROTE THE OPPOSITE IN THIS LEDGER, AND TWO CONCLUSIONS BUILT ON IT MUST BE WITHDRAWN.
+
+On 09-16 I recorded: *"DEBUG **does** reach CI (46 lines, all
+`src.utils.config`), so this is a measured absence, not a filtered one."*
+**That was wrong.** I read 46 DEBUG lines as proof the channel was open, when
+they were import-time emissions from a handler that was about to be removed.
+
+| claim | status |
+| --- | --- |
+| "step 2 has never fired in production" (09-14/09-15) | **WITHDRAWN.** It may have fired every day and been invisible. The evidence was the absence of a line that cannot be emitted. |
+| Stage 24's registration: the log line is *"confirmed to reach CI logs"* | **FALSE.** It was confirmed against a local session at DEBUG, never against a production run. |
+
+**This is the third member of the family, and the first one that is mine inside a
+registration** — after *a filter in the instrument read as a fact about the data*
+(the 411 opponent query) and **MB-1** (a predicate that rejects its own
+motivating examples). All three are the same error: **a property of the
+instrument read as a property of the world.**
+
+**The check that would have caught it is the one I wrote down yesterday and did
+not apply here:** before quoting a count, run the counting predicate against an
+example that must produce a hit. One `grep TEAM_RESOLVE` against any prior
+production log would have shown zero before the registration was written.
+
+---
+
+## 2. THE REGISTERED PREDICTIONS
+
+### Stage 23 — RESOLVED, and on a thick card this time
+
+| | |
+| --- | --- |
+| **fixtures created** | **138** — the card is not thin; the "move it again" branch does not apply |
+| new team rows | **4** |
+| exact-name resurrections of merged-away names | **0 of 4** (none is in `team_former_names`) |
+| genuinely new clubs | **3** — `Maccabi Tel Aviv` (af=604), `AEL` (3396), `Aris` Limassol (3408) |
+| a duplicate | **1** — `H. Beer Sheva` (563), see below |
+
+**Rate: 4/138 = 0.029 per fixture against a pre-s5.12 rate of 0.127** (recomputed
+on current data — the Stage 24 merge deleted 32 rows and lowered the historical
+daily counts it is measured against). At the old rate, 138 fixtures predict
+**17.5**; observed **4**.
+
+> **And the three genuinely-new rows are exactly the clubs the plausibility
+> invariant named as contaminating other rows.** Maccabi Tel Aviv, whose identity
+> sat on `Telstar`; Aris Limassol, whose season sat on Greek `Aris`; AEL, a
+> Cypriot club. **The real clubs now have their own rows.** That is the
+> contamination resolving from the far end, and it does not repair the fixtures.
+
+### Stage 24, step 2 — UNRESOLVABLE, not zero
+
+**The card qualified (138 ≥ 50). The instrument emitted nothing.** So the
+registered outcome table cannot be entered: this is neither the pass nor the
+valuable zero, because **the zero it would report is the instrument's, not the
+branch's.**
+
+**Re-registration required, and the fix is one word**: the record must be emitted
+at INFO, or the level must be raised for that module. Until then the prediction
+is not testable and no further reading of it should be attempted.
+
+### TEAM_RESOLVE — producer/parser
+
+`ci_audit` printed no `resolve[...]`. **Producer and parser agree** — the test
+pins that, and it passes. **The producer emitted nothing**, which is the third
+state that test was written to keep apart from drift, and it is now the actual
+state.
+
+---
+
+## 3. THE FOUR MECHANISMS DID NOT FIRE — NONE WAS DEPLOYED
+
+**Proven from the run's own `headSha`, not from absent warnings.**
+
+| commit | UTC | in the run? |
+| --- | --- | --- |
+| `098a368` TEAM_RESOLVE + ordering | 07:45 | **YES** — this is `headSha` |
+| `fd263f7` plausibility invariant | **08:27** | NO |
+| `97a38a1` exclusion gate + collision guard | **08:38** | NO |
+| the 52 marks | ~08:35 | NO |
+
+Run: **08:02:16 → 08:57:46**. The last three landed *during* it, after checkout.
+`git cat-file` confirms `fixture_plausibility.py` is absent from `098a368` and
+that neither the gate nor the guard is in its `apifootball_scraper.py`.
+
+> **So the answer to "did it announce itself or are you inferring a clean pass
+> from an absent warning" is neither: the code was not there.** Their first card
+> is 09-17.
+
+### AND THE UN-GATED PATH FIRED, WRITING THREE COLLISIONS
+
+```
+Historical backfill: 3 low-coverage teams (< 10 matches): H. Beer Sheva(0), Omonia(8), Din. Zagreb(8)
+Resolved API team IDs for 3 teams: 1858, 738, 735
+```
+
+**Those three writes are the three collisions.**
+
+| af | already held by | written today onto |
+| --- | --- | --- |
+| 563 | `1468 Hapoel Beer Sheva` | **`1858 H. Beer Sheva`** |
+| 3402 | `509 Omonia Nicosia` | **`738 Omonia`** |
+| 620 | `756 Dinamo Zagreb` | **`735 Din. Zagreb`** |
+
+**The merge left ZERO shared-provider-id components at 07:36. There are three at
+08:57**, and all three were written by the exact path ING-1 step 4 guards.
+
+> ### The guard was committed at 08:38 and the writes happened inside a run that started at 08:02. It missed them by eleven minutes.
+>
+> Its justification was *"8 of the 32 components had the duplicate's id written
+> by this path"* — historical. **It is now 3 of 3 on the very next run**, and
+> every one of them is a case the guard refuses: `holder` is non-None for
+> 1468, 509 and 756 respectively.
+
+**This is the strongest possible evidence for the guard and the worst possible
+timing.** It also revises this morning's "bounded backlog" reading: the backlog
+was bounded, the *entry path* was not closed at the moment of merging, and the
+treadmill resumed within an hour.
+
+### DEL-3 DID fire — because it logs at INFO
+
+```
+REPORT_DELIVERY report=settlement report chunks=1 sent=1 failed=none terminator=yes attempts=1
+REPORT_DELIVERY report=daily picks   chunks=2 sent=2 failed=none terminator=yes attempts=2
+```
+
+**First production evidence of the sequence record**, and the contrast is the
+lesson: DEL-3 chose INFO and is readable; `TEAM_RESOLVE` chose DEBUG and is not.
+3 messages sent, 0 failures, 0 `REPORT INCOMPLETE`.
+
+---
+
+## 4. THE 52 MARKS DID NOT REACH THE LEARNING PATHS
+
+**The invalidation was local-only.** CI restores `data/models/` from an
+`actions/cache` (`Restore ML models + history mirror cache`, key
+`betting-models-…`), so **production carries its own mirror**, and
+`HistoryMirror().invalidate()` run on this machine deleted this machine's files.
+
+> **The marks are in the database and the cache in front of them is not
+> invalidated.** The next run restores a mirror built before they existed and
+> serves all 52 as clean rows.
+
+**That is the finding, stated as it stands:** yesterday's note said "mark and
+invalidate in one operation, or the mark is detection wired to nothing" — and
+the operation invalidated the wrong copy. *The environment where a repair is
+verified must be the environment where it matters.*
+
+---
+
+## 5. STANDING
+
+| | |
+| --- | --- |
+| **OPS-4** | `OddsApiQuota 2026-09: 400/450 used, 0 spendable`. Unchanged; gate still refusing. Window open to 10-01. |
+| **s5.9 guarantee** | **0 match rows over cap in 850 live picks**, checked by grouping on the match row directly. Holds. |
+| **CLV** | pairs **129** (frozen since 09-13), past-kickoff live picks **834**, coverage **15.5%** — down from 15.7%. `deff = 1.00` both series, MODEL eff n 110, FINAL 128 (09-15 report; today's has not run). |
+| **unpriced alarm** | measured, not inferred: 09-14 **0/0**, 09-15 **0/0**, 09-16 **0/0**. |
+| **OPS-3** | daily-picks 08:02 against a 03:00 cron = **302m late**, still before the 09:45 deadline — Stage 21 absorbing it again. closing-lines: **0 of 2 slots due by 12:30 have fired.** |
+| **armed rows** | **58** with or without the gate — the gate still protects nothing, because all 52 marks sit on identified rows. |
+
+**The 11-of-24 slot loss is free only while the credit gate refuses every
+request.** On **10-01** the quota resets, capture resumes, and every missed slot
+becomes a missed closing price — at which point OPS-3 stops being a watch item
+and starts costing the CLV series directly.
+
+---
+
+## 6. A COHORT PROBLEM I CREATED TODAY
+
+| | |
+| --- | --- |
+| `CODE_REVISION` | s5.13 |
+| `model_version` | `ee60cd` |
+| picks stamped | **16** |
+| verdict | **BUMP** |
+
+**When I amended s5.13 in place for the gate, the guard and the 52 marks, the
+cohort held 0 picks and AMEND was correct. The run populated it to 16 during the
+same hour**, and those 16 picks were produced by `098a368` — which has none of
+those three changes.
+
+> **So `ee60cd` now labels two configurations: the one that made its picks and
+> the one at HEAD.** That is exactly what the bump rule exists to prevent, and it
+> was not prevented by following the rule, because the rule was evaluated at a
+> moment when the answer was still empty.
+
+**The amend-while-empty check is a snapshot of a value that a concurrent run can
+change.** Recorded as it stands; the next selection-affecting change must take
+s5.14 regardless.
+
+---
+
+*Audited 2026-09-16, second pass. Read-only: no code, config, schema or
+production data changed.*
