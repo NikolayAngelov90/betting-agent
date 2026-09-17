@@ -14752,3 +14752,225 @@ locally is precisely what failed the first time, so nothing but a production
 > zero is worth anything, and yesterday's was the first kind.**
 
 *Recorded 2026-09-16.*
+
+---
+
+# AUDIT 2026-09-17 — the grep returns 1991. PROMOTED.
+
+| run | workflow | started | verdict | note |
+| --- | --- | --- | --- | --- |
+| **35198099722** | daily-picks | 09-17 08:08 | **DEGRADED** | `headSha 889f8ba`. `disc[fs=12c/-m fdo=2c/2m af=0c/29m]` · `resolve[provider_id=1 former_name=189 exact_name=1779 strict=22]` · 8 implausible-attribution rows · 12 fixtures created, **0 new team rows** |
+
+---
+
+## 1. `grep TEAM_RESOLVE` → **1991**
+
+**Raw, before interpretation.** Non-zero.
+
+> ### The registration is PROMOTED from ARMED to CONFIRMED. The instrument exists in production.
+>
+> And the zero that did not happen is the one that would have been a finding:
+> a zero today would have meant the branch is unreachable. It is emphatically
+> reachable.
+
+| step | hits |
+| --- | --- |
+| `exact_name` | 1,779 |
+| **`former_name`** | **189** |
+| `strict` | 22 |
+| `provider_id` | 1 |
+| **total resolutions** | **1,991** |
+
+### The card first, as the registration demands
+
+**12 fixtures created.** The card does **not** qualify — the registered threshold
+is ≥50 — and yet step 2 fired 189 times.
+
+### THE PREDICTION'S FLOOR IS MET AND ITS RATE MODEL IS WRONG
+
+Registered: *"≥1 on a card creating ≥50 fixtures, ~8-14 on a full ~88-fixture
+card"*, at ~0.16 hits **per created fixture**.
+
+> **The denominator was wrong, and only the instrument could have shown it.**
+> `resolve_team` is called on every fixture **UPDATE**, not only on creation:
+> 1,991 resolutions against 12 creations — a factor of **166**. Hits per created
+> fixture is not a rate the mechanism has.
+
+**The honest rate is 189 / 1,991 = 9.5% of resolutions.** The registration's
+outcome table reads this as *"hits ≫ the old creation rate → the lookup is
+intercepting names that were resolving correctly before"* — **and that reading is
+half right, which the instrument also settles.**
+
+### 38 distinct names, split by what step 2 actually prevented
+
+| | |
+| --- | --- |
+| distinct names intercepted | **38** (189 hits — the same clubs across many fixtures) |
+| **incoming name has NO live row** → step 3 misses, step 5 would CREATE | **22** |
+| incoming name ALSO exists as a live row → step 2 steered away from it | **16** |
+
+**The 22 are resurrections prevented outright.** `Málaga CF`→`Malaga`,
+`Besiktas`→`Beşiktaş`, `Real Sociedad`→`Sociedad`, `Oxford Utd`→`Oxford`,
+`Sheffield Wed`→`Sheff Wed`, `Notts County`→`Notts Co` — scraped names that
+differ from the stored name and that s5.10 removed. **Exactly the class Stage 23
+was built for.**
+
+**The 16 are not harmful shadowing.** Every live row they were steered away from
+is in the 1800s — `1802`, `1803`, `1810`, `1811`, `1812`, `1814`, `1816`, `1818`,
+`1820`, `1822`, `1843`, `1847` — **the 09-11/09-13 resurrection wave that Stage
+24 did not merge** because those rows carry no provider id. Step 2 is keeping
+today's fixtures off known duplicates. **It is correcting step 3, not shadowing
+it.**
+
+**0 new team rows on a 12-fixture card.**
+
+---
+
+## 2. FOUR MECHANISMS — ONE FIRED, THREE DID NOT EXECUTE
+
+### The plausibility invariant — FIRED, and it announced itself
+
+**8 rows at WARNING, the exact set measured before it was built, 0 legitimate:**
+`St. Pauli` germany=150/france=14 · `Aris` greece=134/cyprus=4 · `SK Rapid`
+austria=105/romania=10 · `Telstar` netherlands=48/israel=4 · `Kocaelispor`
+turkey=38/cyprus=3 · `York City` usa=37/england=4 · `Levski Sofia`
+bulgaria=34/greece=3 · `NK Varazdin` croatia=8/azerbaijan=4.
+
+Summary line: *"8 team row(s) … 2 implicated fixture(s) are unmarked"* — the two
+being `York City`'s English fixtures, which carry `phantom_kickoff_now_stamp`
+rather than nothing. **Reproduces its pre-build measurement in production.**
+
+### The other three DID NOT EXECUTE — and I could not tell that from the log
+
+| mechanism | fired? |
+| --- | --- |
+| the exclusion gate on the identity path | **did not execute** |
+| the collision guard (`PROVIDER ID COLLISION REFUSED`) | **did not execute** |
+| the resolved/written narrowing | **did not execute** |
+
+All three live inside the `missing_api_id` loop, and `Historical backfill:` — the
+INFO line that prints when that loop has candidates — is **absent**.
+
+> ### THE NO-OP BRANCH LOGS AT DEBUG.
+>
+> ```python
+> if not low_coverage:
+>     logger.debug("All fixture teams have sufficient historical data …")
+>     return
+> ```
+>
+> **So "no candidates" and "the step never ran" produce identical silence.** I
+> was inferring a pass from an absent line — the thing that has been wrong twice
+> this week — and I could not do better from the log.
+
+**MEASURED FROM THE DATABASE INSTEAD: 0 teams on today's card carry no provider
+id.** The loop had zero candidates. All three mechanisms are **ARMED, NOT
+CONFIRMED** — the state `TEAM_RESOLVE` was in yesterday, and the same word
+applies.
+
+**And this is a LOG-1 residue Stage 25 did not reach.** That census covered
+`except` handlers only; **this is a normal-path DEBUG**, and it is the first one
+found by using the system rather than by scanning it. The class is larger than
+the handler census implied.
+
+**The three collisions from 09-16 still stand** — `af=563`, `af=620`, `af=3402`.
+The guard prevents new ones; it does not repair these, and it has still never
+refused anything in production.
+
+---
+
+## 3. THE FOUNDATIONAL SITES DID NOT SHIP
+
+**Stated plainly, as asked.**
+
+| site | state |
+| --- | --- |
+| `model_version.fingerprint_inputs` | **SILENT — logs nothing at any level** |
+| `model_version._stable` | **SILENT** |
+| `history_mirror.filter_generation` | **SILENT** |
+| `theodds_scraper._absorb_quota_headers` ×2 | **SILENT** |
+
+Stage 25 touched `history_mirror.py` and `theodds_scraper.py` — but the
+`invalidate` and odds-write handlers, **not these**. `model_version.py` was not
+touched at all. They were among the 16 firm guards inside the 158 and were
+deferred as a separate stage; **the deferral is still in force and the silence is
+still total.**
+
+> **What that silence costs, restated because it has not changed:** the cohort
+> fingerprint can be computed from partial inputs, the cache-validity digest can
+> degrade, and the credit gate's own header parse can be discarded — each without
+> a word. **It is the basis for trusting every cohort boundary this ledger
+> draws.**
+
+---
+
+## 4. THE 52 MARKS HAVE NOT REACHED THE MIRROR — and the reason is new
+
+**The mechanism was verified yesterday** (the `BEFORE UPDATE` trigger moved all
+52 to `08:35:56`; `_completed_count` filters the exclusion, so the frame would
+drift by exactly 52 and force `_full_resync`). **Confirmation in production was
+asked for. It has not happened.**
+
+| | |
+| --- | --- |
+| `history mirror` lines in today's run | **0** |
+| in the 12 most recent cached runs | **0** |
+| the cache itself | restored fine — `Cache restored from key: betting-models-297` |
+
+**Nothing has synced the mirror.** It is reached only through
+`match_history.get()` → `_load_from_mirror` → `sync()`, and no run since the
+marks were written has taken that path.
+
+**The count-drift line is INFO and would have been visible had the reconcile
+fired.** Its absence is therefore evidence, not silence — *for that one line.*
+**But the successful-sync line is `logger.debug`**, so a clean sync would also
+leave no trace. **Another normal-path DEBUG residue, on the exact question being
+asked.**
+
+> **Corrected again**: the marks have not reached the learning paths, and **the
+> reason is not the misdirected invalidation** — it is that **nothing reads the
+> mirror on the daily path at all.** Two wrong explanations in two days for one
+> unchanged fact; the fact is that no learning path has consumed anything since
+> the marks were written.
+
+---
+
+## 5. STANDING
+
+| | |
+| --- | --- |
+| **the 21 raised handlers** | **0 fired.** Every one silent — the predicted healthy state, and the first live confirmation that the sorting produces no noise |
+| **OPS-4** | `400/450 used, 0 spendable`. Unchanged. Reset 10-01; nothing changes before it |
+| **s5.9 guarantee** | **0 match rows over cap in 862 live picks** |
+| **CLV** | pairs **129** (frozen since 09-13), past-kickoff **850**, coverage **15.2%** — down from 15.5%. `deff = 1.00` both series |
+| **unpriced alarm** | measured: 09-16 **0/0**, 09-17 **0/0** |
+| **DEL-3** | 2 `REPORT_DELIVERY` lines, `chunks=1` each, `failed=none`, `terminator=yes`. 0 `REPORT INCOMPLETE` |
+| **OPS-3** | daily-picks **309m** late against the 03:00 cron, **inside** the 09:45 deadline. closing-lines: **0 of 2 slots due have fired** |
+
+**Unaudited: 1 run in this window** (today's). The truncation warning fired at
+both ends and the count is a lower bound, as designed.
+
+---
+
+## THE COHORT ITEM — `ee60cd` LABELS TWO CONFIGURATIONS
+
+| pick_date | picks | produced by |
+| --- | --- | --- |
+| 2026-09-16 | 16 | **`098a368`** — no plausibility invariant, no gate, no collision guard, record at DEBUG |
+| 2026-09-17 | 12 | **`889f8ba`** — all of them, record at INFO |
+| **total on `ee60cd`** | **28** | **two configurations under one fingerprint** |
+
+**Confirmed and recorded.** `cohort_status` says **BUMP**.
+
+> ### THE AMEND-WHILE-EMPTY RULE IS RETIRED. ALWAYS BUMP.
+>
+> The rule failed not because it was misapplied but because **it evaluates a
+> value a concurrent run can change**: the cohort held 0 picks when the amend was
+> made and 16 within the hour. **A check on a mutable count, made by one writer
+> while another is writing, is not a check.**
+>
+> **The next selection-affecting change takes `s5.14` regardless of how many
+> picks the current revision holds.**
+
+*Audited 2026-09-17. Read-only — no code, config, schema or production data
+changed.*
