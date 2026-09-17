@@ -898,7 +898,32 @@ TRACKED_KEYS: List[str] = [
 #:       `resolve_team` step 2, which has still never fired in production — see
 #:       `docs/stage24-merge-32-and-step2-first-exercise.md`, which registers
 #:       what its first hit should look like BEFORE it happens.
-CODE_REVISION = "s5.13"
+#: s5.14 (2026-09-17) — BUMP, and the rule that produced it is new.
+#:
+#:       THE AMEND-WHILE-EMPTY RULE IS RETIRED. It failed on 09-16 not by being
+#:       misapplied but because it evaluates a MUTABLE COUNT: the cohort held 0
+#:       picks when s5.13 was amended and 16 within the hour, so `ee60cd` ended
+#:       up labelling two configurations. A check on a value a concurrent run
+#:       can change is not a check. **Always bump.**
+#:
+#:       THE CHANGE: `filter_generation()` returns **None** instead of the
+#:       string "unknown" when the exclusion predicate's source cannot be read,
+#:       and BOTH consumers refuse on unknown BEFORE comparing.
+#:
+#:       A CONSTANT COMPARES EQUAL TO ITSELF. Every cache stamped "unknown"
+#:       validated against every other one, so the digest stopped discriminating
+#:       at exactly the moment validity became uncomputable — and reported that
+#:       as validity. Stage 25 made it announce; announcing does not stop a
+#:       caller comparing two strings from seeing agreement. `None == None` is
+#:       also True, which is why the refusal precedes the equality rather than
+#:       following it.
+#:
+#:       Selection-affecting by the same reading that made s5.13's credit-age
+#:       change selection-affecting: it decides whether a possibly-contaminated
+#:       cache reaches the models, hence which training data produces the picks.
+#:       It diverges only on a path healthy runs do not take — which is the
+#:       whole reason it was worth fixing.
+CODE_REVISION = "s5.14"
 
 
 def _stable(value: Any) -> Any:

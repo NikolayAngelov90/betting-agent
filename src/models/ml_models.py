@@ -49,7 +49,7 @@ else:
 
 
 
-def training_filter_generation() -> str:
+def training_filter_generation() -> Optional[str]:
     """Fingerprint of the data the model was allowed to train on.
 
     Stage 13 (s5.3). The mirror and the model pickles are the SAME finding, not
@@ -71,7 +71,11 @@ def training_filter_generation() -> str:
         from src.data.history_mirror import filter_generation
         return filter_generation()
     except Exception:            # pragma: no cover — import shape
-        return "unknown"
+        # None, not a constant — see history_mirror.filter_generation. A shared
+        # sentinel that compares equal to itself turns "we cannot tell" into
+        # "they agree", inside the check that decides whether a pickle trained
+        # under an unknown exclusion filter may be trusted.
+        return None
 
 
 def _compute_hmac(data: bytes) -> str:
@@ -606,6 +610,20 @@ class MLModels:
         # the next run instead of serving contaminated weights.
         _want = training_filter_generation()
         _got = state.get("training_filter_generation")
+        # UNKNOWN IS NOT A MATCH, and it is checked BEFORE the equality because
+        # `None == None` is True — which would restore a pickle whose training
+        # filter cannot be established, the contaminated-weights case this
+        # block exists to refuse.
+        if _want is None or _got is None:
+            logger.warning(
+                f"ML artifact exclusion filter is UNKNOWN (stamped={_got!r}, "
+                f"current={_want!r}) — provenance cannot be established, so it "
+                f"is discarded and a retrain forced. Unknown is not agreement."
+            )
+            self.is_fitted = False
+            self.trained_at = None
+            self.training_filter_generation = None
+            return
         if _got != _want:
             logger.warning(
                 f"ML artifact was trained under exclusion filter {_got!r}, "
@@ -915,6 +933,20 @@ class GoalsMLModel:
         # the next run instead of serving contaminated weights.
         _want = training_filter_generation()
         _got = state.get("training_filter_generation")
+        # UNKNOWN IS NOT A MATCH, and it is checked BEFORE the equality because
+        # `None == None` is True — which would restore a pickle whose training
+        # filter cannot be established, the contaminated-weights case this
+        # block exists to refuse.
+        if _want is None or _got is None:
+            logger.warning(
+                f"ML artifact exclusion filter is UNKNOWN (stamped={_got!r}, "
+                f"current={_want!r}) — provenance cannot be established, so it "
+                f"is discarded and a retrain forced. Unknown is not agreement."
+            )
+            self.is_fitted = False
+            self.trained_at = None
+            self.training_filter_generation = None
+            return
         if _got != _want:
             logger.warning(
                 f"ML artifact was trained under exclusion filter {_got!r}, "

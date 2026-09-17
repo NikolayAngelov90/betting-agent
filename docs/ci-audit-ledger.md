@@ -15281,3 +15281,125 @@ collapses and the `return` still skips — but a run in which either happens is 
 longer indistinguishable from a healthy one.
 
 *Recorded 2026-09-17.*
+
+---
+
+# FRM-1 — WHEN BOTH OPTIONS ARE WRONG, THE FRAME IS WRONG
+
+> ### The choice was never WARNING versus DEBUG. DEBUG is wrong because invisible; WARNING is wrong because routine. INFO was the tier that was missing.
+
+**A false binary caught before it produced the outcome.** `apifootball:2458` at
+WARNING would have been `fixtures_zero_active` **for the third time** — and the
+first two were each found *after* they had already trained a reader to skip the
+line. This one was found by re-asking the question instead of answering it as
+posed.
+
+**Twenty-five became six, five and fourteen** because the frame widened, not
+because the answer improved.
+
+| | |
+| --- | --- |
+| **6 → WARNING** | rare, guards something, measured 0/run |
+| **5 → INFO** | routine per-run state a reader would infer from — **visible, carrying no alarm** |
+| **14 → stay DEBUG** | per-item chatter, aggregates elsewhere |
+
+**The cost of the missing tier was three incidents.** `fixtures_zero_active`
+twice, and the near-miss here. **The third answer was available the whole
+time** — `INFO` is not an exotic level — and it went unconsidered because the
+question arrived pre-shaped as a pair.
+
+> **THE TEST: if both options are defensible-but-wrong, stop choosing and ask
+> what the options have in common.** Here both assumed the decision was *how
+> loudly to say it*, when the decision was *whether this is an alarm at all*.
+
+**And `flashscore:772` reaching WARNING closes the 88-day death from the other
+end.** The incident was diagnosed in the pipeline; this is the line that would
+have reported it.
+
+---
+
+# s5.14 — "unknown" REPLACED BY None, AND THE REFUSAL PUT FIRST
+
+**The one item on the list where the mechanism could still hand out a wrong
+answer.** Stage 25 made it announce; **announcing does not stop it returning a
+value that reads as agreement.**
+
+```python
+except (OSError, TypeError):
+    return "unknown"        # a stamp that says unknown and a stamp that
+                            # matches are both "not a mismatch" to a caller
+                            # comparing two strings
+```
+
+| | |
+| --- | --- |
+| **before** | `"unknown" == "unknown"` → **served** |
+| **after** | `None` → **rebuild** |
+
+### The refusal precedes the equality, and that is the whole of it
+
+**`None == None` is also True.** A sentinel swapped in without moving the check
+is the original defect wearing new clothes — and it would have been the *common*
+case, because a source unreadable now was probably unreadable when the cache was
+written.
+
+```python
+if _want is None or _got is None:   # <- BEFORE
+    ... discard ...
+if _got != _want:                   # <- not here
+```
+
+### Both consumers, because they share one generation by design
+
+| | |
+| --- | --- |
+| `history_mirror._read_meta` | the Parquet history mirror |
+| `ml_models.load` ×2 (`MLModels`, `GoalsMLModel`) | the trained-model pickles |
+
+They share `filter_generation()` deliberately *"so the two caches can never
+disagree about what 'excluded' means"* — **which means both carried the same hole
+and both are fixed.** 9 tests, including `None` on **both** sides still being a
+refusal, and a source check that the unknown test precedes the equality in both
+model classes.
+
+**This is `[]`-versus-`None` in the one mechanism that decides whether cached
+data may be trusted at all** — *unknown* rendered as *equal*, inside a comparison
+whose entire job is to be unequal when anything differs.
+
+## THE BUMP, AND THE RULE THAT PRODUCED IT
+
+**s5.13 → s5.14**, `ee60cd` → **`00febf`**, 0 picks.
+
+**Selection-affecting by the same reading that made s5.13's credit-age change
+selection-affecting**: it decides whether a possibly-contaminated cache reaches
+the models, hence which training data produces the picks. **It diverges only on a
+path healthy runs do not take — which is precisely why it was worth fixing**, and
+by this week's evidence the branches that never run are the ones that are wrong.
+
+> **The amend-while-empty rule is retired and this is the first bump under
+> "always".** It failed on 09-16 not by misapplication but because it evaluates a
+> **mutable count**: s5.13 held 0 picks at the amend and 16 within the hour, so
+> `ee60cd` labels two configurations. **A check on a value a concurrent run can
+> change is not a check.**
+
+`ee60cd`'s double labelling is recorded in `experiment_pins.py` beside the
+previous-cohort constants, where the next reader meets it.
+
+---
+
+# WHAT IS LEFT, AND NOTHING COMPOUNDS
+
+| item | state |
+| --- | --- |
+| **SUP-1** — a guard whose failure silences its own alarm | **announced, not repaired.** Recorded as such; the repair needs thought |
+| the 155 remaining silent handlers | counted (16 firm / 79 unclear / 63 convenience), scoped, not shipped |
+| the 14 per-item DEBUG lines | classified, aggregates cover them |
+| the 75 alias rulings · the exact-name collapse | open, unchanged |
+| invariants 2 and 3 · MASK-1's mechanism tests · the dual-engine proposal | open, unchanged |
+| **step 2's registered "hits do not fall"** | pending the next comparable card |
+| **the 3 shared-provider-id collisions from 09-16** | still present; the guard prevents new ones and has still never refused |
+
+**H1 is sized and waiting on the reset alone: 33-39 fixtures, 66-78 credits,
+ρ = 0.42, available 1 October.**
+
+*Recorded 2026-09-17. `tests/` 1055 passed.*

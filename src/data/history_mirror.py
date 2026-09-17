@@ -105,15 +105,23 @@ def filter_generation() -> str:
     try:
         src = inspect.getsource(_HistoryCache._base_filter)
     except (OSError, TypeError) as exc:  # pragma: no cover — source unavailable
-        # "unknown" is a CONSTANT, so every mirror built while the source is
-        # unreadable carries the same generation and validates against every
-        # other one. The digest stops discriminating exactly when it cannot be
-        # computed, and a stale mirror is then served as valid.
+        # NONE, NOT A CONSTANT.
+        #
+        # This returned the string "unknown" until 2026-09-17, and announcing
+        # the failure was not enough: a caller comparing two strings sees
+        # "unknown" == "unknown" as AGREEMENT, so every mirror built while the
+        # source was unreadable validated against every other one. **The digest
+        # stopped discriminating at exactly the moment validity became
+        # uncomputable, and reported that as validity.**
+        #
+        # `None` means UNKNOWN, and every caller must treat unknown as REBUILD
+        # rather than as a match. That is the `[]`-versus-`None` distinction in
+        # the one mechanism deciding whether cached data may be trusted at all.
         logger.warning(
             f"history mirror: exclusion-filter source unreadable ({exc}) — "
-            f"generation degrades to the constant 'unknown', so mirrors built "
-            f"under DIFFERENT predicates will validate against each other")
-        return "unknown"
+            f"generation is UNKNOWN, so every cache stamped with it must be "
+            f"rebuilt rather than compared")
+        return None
     return hashlib.blake2s(src.encode("utf-8"), digest_size=6).hexdigest()
 
 
@@ -290,10 +298,22 @@ class HistoryMirror:
             # Stage 13 (s5.3): refuse, do not serve. A mirror built under a
             # different exclusion predicate holds rows this code must not see.
             _want = filter_generation()
-            if meta.get("filter_generation") != _want:
+            _got = meta.get("filter_generation")
+            # UNKNOWN IS NOT A MATCH. Checked BEFORE the equality, because
+            # `None == None` is True and would serve a mirror whose provenance
+            # nobody can establish. Either side unknown means rebuild.
+            if _want is None or _got is None:
+                logger.warning(
+                    f"history mirror: exclusion filter is UNKNOWN "
+                    f"(stamped={_got!r}, current={_want!r}) — provenance cannot "
+                    f"be established, so the mirror is discarded rather than "
+                    f"compared. Unknown is not agreement."
+                )
+                return {}
+            if _got != _want:
                 logger.warning(
                     "history mirror was built under exclusion filter "
-                    f"{meta.get('filter_generation')!r}, current is {_want!r} "
+                    f"{_got!r}, current is {_want!r} "
                     "— discarding it and reading from the database"
                 )
                 return {}

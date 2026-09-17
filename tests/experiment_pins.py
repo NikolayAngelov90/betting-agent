@@ -68,17 +68,36 @@ History:
                     DEL-3 ships in the same revision and is NOT
                     selection-affecting: it changes how a report is DELIVERED,
                     never which picks it contains.
+
+    s5.14 2026-09-17  filter_generation() returns None, not the string
+                    "unknown", when the exclusion predicate's source cannot be
+                    read — and both consumers (the Parquet history mirror and
+                    the ML pickles) refuse on unknown BEFORE comparing. A
+                    CONSTANT COMPARES EQUAL TO ITSELF, so every cache stamped
+                    "unknown" validated against every other one: the digest
+                    stopped discriminating at exactly the moment validity became
+                    uncomputable and reported that as validity. `None == None`
+                    is also True, hence the refusal precedes the equality.
+                    Selection-affecting by the same reading as s5.13's
+                    credit-age change: it decides whether a possibly
+                    contaminated cache reaches the models.
+                    ALSO: the amend-while-empty rule is RETIRED. It evaluates a
+                    mutable count — s5.13 held 0 picks at the amend and 16
+                    within the hour, so ee60cd labels two configurations. Always
+                    bump.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.13"
+CODE_REVISION_PIN = "s5.14"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.ee60cd"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.00febf"
 
 #: The previous cohort, kept so a reader can see what moved and when.
-PREVIOUS_CODE_REVISION = "s5.12"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.c8c892"
+#: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16
+#: and 12 by 889f8ba on 09-17. That is the defect the always-bump rule closes.
+PREVIOUS_CODE_REVISION = "s5.13"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.ee60cd"
 
 
 #: How many completed-match queries are exempt from the training-exclusion
