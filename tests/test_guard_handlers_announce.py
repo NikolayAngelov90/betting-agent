@@ -48,6 +48,12 @@ MUST_ANNOUNCE = {
     ],
     "src/data/history_mirror.py": [
         ("invalidate", "a failed invalidation leaves the stale mirror serving"),
+        # `unknown` is a CONSTANT: the digest stops discriminating at exactly
+        # the moment it cannot be computed, so mirrors built under DIFFERENT
+        # predicates validate against each other.
+        ("filter_generation",
+         "the cache-validity digest degrades to a constant and stale mirrors "
+         "are served as valid"),
     ],
     "src/data/api_budget.py": [
         ("available", "the credit gate falls back to per-process counting"),
@@ -67,6 +73,22 @@ MUST_ANNOUNCE = {
     "src/scrapers/theodds_scraper.py": [
         ("_save_game_odds", "odds rows are silently not written"),
         ("_upsert_odds", "an odds upsert is silently dropped"),
+        # THE GATE'S OWN INPUT. A malformed header froze the credit reading AND
+        # skipped every tier warning below it — the guard degrading in exactly
+        # the condition it guards against.
+        ("_absorb_quota_headers",
+         "the credit gate's own reading freezes and its tier alarms are skipped"),
+    ],
+    # THE THREE FOUNDATIONAL SITES, shipped 2026-09-17 after being deferred
+    # once. Nothing in this project checks any of these against a second
+    # source, BECAUSE EACH IS THE SOURCE — that is why silence here costs the
+    # basis for trusting every cohort boundary the ledger draws.
+    "src/models/model_version.py": [
+        ("_stable",
+         "two configs equal in meaning hash differently, splitting one cohort"),
+        ("fingerprint_inputs",
+         "a tracked key becomes None and the revision stops distinguishing "
+         "configs that differ only in it"),
     ],
 }
 

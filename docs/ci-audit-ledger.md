@@ -14974,3 +14974,163 @@ both ends and the count is a lower bound, as designed.
 
 *Audited 2026-09-17. Read-only — no code, config, schema or production data
 changed.*
+
+---
+
+# 2026-09-17, second pass — the mirror closed, the foundations shipped
+
+---
+
+## 1. THE MIRROR — TRACED IN CODE, AND THE ANSWER IS THE THIRD ONE
+
+**Stop reading logs for it. Done.** The trace, run against production at the
+pipeline's own level:
+
+```
+history mirror: full resync (no usable local mirror)        <- INFO
+history mirror rebuilt: 40,986 completed matches            <- INFO
+```
+
+| question | answer |
+| --- | --- |
+| does the daily path read the mirror? | **YES** — `poisson_model.fit` / `elo_system.fit` / `feature_engineer` all call `get_completed_matches` → `_load_from_mirror` → `sync()`, and today's run fitted Poisson on 811 teams and Elo on 1,479 |
+| is it disabled? | no — `HISTORY_MIRROR_DISABLED` unset, pyarrow 25.0.1 and pandas 3.0.5 installed |
+| does a full resync announce itself? | **yes, twice, at INFO** |
+| does a clean delta sync announce itself? | **no — `logger.debug`** |
+
+**So zero INFO mirror lines means the delta path ran cleanly.** Not unused, not
+stale.
+
+### And MIR-1 already removes an excluded row. It was built for exactly this.
+
+```python
+# _fetch_delta: "The WHERE clause still selects on updated_at ALONE, deliberately.
+#  Membership cannot be a WHERE condition here: a row that stops belonging
+#  — a result cleared, or a match NEWLY EXCLUDED — must still come back,
+#  or it is never removed from the mirror."
+
+# _merge:  if r.is_member: completed.append(...)  else: removed.append(r.id)
+#          frame = frame[~frame["id"].isin(touched)]
+```
+
+**The 52 marks moved `updated_at` → the delta returned them → `is_member` was
+false → they were DROPPED from the frame → counts matched → no drift line.**
+
+> ### The silence is the signature of success. The marks reached the mirror on the very next run, by a mechanism built two stages ago for this exact case.
+
+**Third explanation in three days, and the only one derived from the code rather
+than inferred from logs — which is why it closes.** The invalidation was not
+merely unnecessary; it was never the mechanism. *Two of the three previous
+answers were reached by reading silence, which is the thing this whole week has
+been about.*
+
+---
+
+## 2. THE FOUNDATIONAL SITES — SHIPPED
+
+Log level only. **`fingerprint` still computes `ee60cd`** — cohort-neutral.
+
+| site | what it now says when it fires |
+| --- | --- |
+| `model_version._stable` | *"unsortable list left in source order — two equivalent configs may hash differently"* |
+| `model_version.fingerprint_inputs` | *"tracked key `k` could not be normalised — recorded as None, so this revision no longer distinguishes configs that differ only in `k`"* |
+| `history_mirror.filter_generation` | *"generation degrades to the constant `'unknown'`, so mirrors built under DIFFERENT predicates will validate against each other"* |
+| `theodds._absorb_quota_headers` ×2 | *"x-requests-remaining is not an integer — credit reading NOT updated and tier warnings skipped"* |
+
+**The `_absorb_quota_headers` one was worse than "a number is lost":** its
+`return` also skipped `_persist_credits` **and every tier warning below it**. A
+provider that started sending a malformed header would have frozen the credit
+reading *and* suppressed the alarms that would report it — **the
+guard-degrades-in-the-condition-it-guards shape, on the gate itself.**
+
+`"unknown"` is a **constant**, so `filter_generation` stops discriminating at
+exactly the moment it cannot be computed. **Each of these is the source; nothing
+checks it against a second one.** 20 pins pass.
+
+---
+
+## 3. THE NORMAL-PATH CENSUS — 25, and it contains both prior offenders
+
+Stage 25's census covered `except` handlers only. **Extended with the predicate
+"would a reader infer anything from not seeing this line":**
+
+| | |
+| --- | --- |
+| normal-path `logger.debug` calls | **87** |
+| **silence would be read as a pass** | **25** |
+| progress / trace only | 62 |
+
+**The class is 25, not the 3 found today — and two of the 25 are the lines that
+produced unfounded ledger claims:**
+
+| site | the line |
+| --- | --- |
+| `apifootball_scraper.py:2458` | *"All fixture teams have sufficient historical data"* — **today's**, which made three mechanisms unconfirmable |
+| **`betting_agent.py:2202`** | *"Pick already saved by a concurrent writer, skipping"* — **MASK-3's**, whose absence this ledger read as *"0 conflict lines, so no duplicates occurred"* |
+| `flashscore_scraper.py:772` | *"Chrome not available, skipping results scrape"* — **a dead Flashscore is silent**, and Flashscore's 88-day death is this project's canonical silent failure |
+| `telegram_bot.py:803/831` | *"Telegram not configured, skipping message"* |
+| `injury_scraper.py:45/163` | injury update skipped entirely |
+| `theodds_scraper.py:874` | *"no DB fixtures, skipping API call"* |
+| `apifootball_scraper.py:1070/1792` | xG backfill skipped; *"Quota limit reached — skipping odds"* |
+
+> **Third time a predicate's scope was narrower than the class it was taken to
+> measure — MB-1's shape: a census that would reject its own motivating
+> examples.** The `except`-handler scan could not see the line that produced the
+> error the scan was written in response to.
+
+**Counted, scoped, not shipped.** Two of the 25 have already cost a false claim
+each, which is the argument for doing them first.
+
+---
+
+## 4. THE 16-COMPONENT MERGE — SCOPED, AND THE PREDICTION IS THE OPPOSITE OF THE OBVIOUS ONE
+
+**A merge list derived from production rather than from a scan.** It did not
+exist yesterday: step 2's own log names these clubs by name every day.
+
+| | |
+| --- | --- |
+| step-2 hits today | **189** across **38** distinct names |
+| names WITH a live duplicate row | **16** — **76 hits** |
+| names with no live row (creates prevented) | 22 — 113 hits |
+| rows to remove | **16** |
+| references to re-point | **29** |
+| af-id conflicts | **0** |
+
+`Corvinul`→`Corvinul Hunedoara` · `Widzew Lodz`→`Widzew Łódź` ·
+`Sheffield Wed`→`Sheff Wed` · `Manchester Utd`→`Man United` ·
+`FC Koln`→`1. FC Köln` · `Málaga CF`→`Malaga` … all in the 1800s, all the
+09-11/09-13 wave Stage 24 could not merge for want of a provider id.
+
+### THE REGISTERED PREDICTION: step-2 hits DO NOT FALL
+
+**All 16 names are ALREADY in `team_former_names`** — that is why step 2 fires on
+them. **Step 2 keys on the name being a former name, not on whether a duplicate
+row exists.** Remove the row and the name is still a former name, so the lookup
+still intercepts and still returns the survivor.
+
+> ### So "how many step-2 hits disappear" has the answer ZERO, and that is the registration.
+
+| | predicted |
+| --- | --- |
+| duplicate rows removed | **16** |
+| references re-pointed | **29** |
+| new `team_former_names` rows written | **0** — all 16 already present *(the same shape as Stage 24's "1 written, not 32")* |
+| **step-2 hits on the next comparable card** | **UNCHANGED, ~76 from these names** |
+
+**If the hits DO fall, step 2 is keyed on something other than the former-name
+table and the model of it is wrong.** That is the falsifier, and it is worth more
+than the pass.
+
+**What the merge actually buys is the end of the masking.** Today those 76 hits
+are step 2 routing fixtures *around* a live duplicate; afterwards they route to
+the only row that exists. **Correctness stops depending on a lookup staying
+healthy** — which is the exposure worth closing, because a bad alias, a scope
+change or a sink level would snap those fixtures back onto the duplicates
+without a word.
+
+**When it runs it must call `record_former_name()` as it goes** — even though it
+will write 0 rows here, because the property is "an operation that removes an
+identifier records it", not "it usually has something to record".
+
+*Recorded 2026-09-17.*

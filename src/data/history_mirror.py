@@ -104,7 +104,15 @@ def filter_generation() -> str:
 
     try:
         src = inspect.getsource(_HistoryCache._base_filter)
-    except (OSError, TypeError):  # pragma: no cover — source unavailable
+    except (OSError, TypeError) as exc:  # pragma: no cover — source unavailable
+        # "unknown" is a CONSTANT, so every mirror built while the source is
+        # unreadable carries the same generation and validates against every
+        # other one. The digest stops discriminating exactly when it cannot be
+        # computed, and a stale mirror is then served as valid.
+        logger.warning(
+            f"history mirror: exclusion-filter source unreadable ({exc}) — "
+            f"generation degrades to the constant 'unknown', so mirrors built "
+            f"under DIFFERENT predicates will validate against each other")
         return "unknown"
     return hashlib.blake2s(src.encode("utf-8"), digest_size=6).hexdigest()
 

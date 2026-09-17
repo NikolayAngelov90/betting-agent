@@ -910,7 +910,14 @@ def _stable(value: Any) -> Any:
         # excluded_markets / gates are order-insensitive sets in meaning.
         try:
             return sorted(items, key=lambda x: json.dumps(x, sort_keys=True))
-        except TypeError:
+        except TypeError as exc:
+            # UNSORTED IS NOT UNSTABLE, BUT IT IS NOT GUARANTEED STABLE EITHER.
+            # Two configs equal in meaning can hash differently if this falls
+            # through, which splits one cohort into two. Silence here removes
+            # the only notice that a fingerprint boundary may be arbitrary.
+            logger.warning(
+                f"fingerprint: unsortable list left in source order ({exc}) — "
+                f"two equivalent configs may hash differently")
             return items
     if isinstance(value, float) and value.is_integer():
         # 0.8 and 0.80 must hash the same; so must 1 and 1.0.
@@ -924,7 +931,16 @@ def fingerprint_inputs(config) -> Dict[str, Any]:
     for key in TRACKED_KEYS:
         try:
             out[key] = _stable(config.get(key, None))
-        except Exception:
+        except Exception as exc:
+            # A KEY THAT SILENTLY BECOMES None IS A SETTING THE COHORT STOPS
+            # TRACKING. The fingerprint still computes, still looks like a
+            # fingerprint, and no longer separates the configurations it names.
+            # Nothing in this project checks the fingerprint against a second
+            # source, because it IS the source.
+            logger.warning(
+                f"fingerprint: tracked key {key!r} could not be normalised "
+                f"({exc}) — recorded as None, so this revision no longer "
+                f"distinguishes configs that differ only in {key!r}")
             out[key] = None
     return out
 

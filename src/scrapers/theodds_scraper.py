@@ -572,7 +572,17 @@ class TheOddsScraper:
         if remaining is not None:
             try:
                 self._remaining_requests = int(remaining)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as exc:
+                # THE GATE'S OWN INPUT, DISCARDED. This `return` also skips
+                # `_persist_credits` and every tier warning below it, so a
+                # provider that starts sending a malformed header silently
+                # freezes the credit reading AND suppresses the alarms that
+                # would report it — the guard-degrades-in-the-condition-it-
+                # guards shape, on the gate itself.
+                logger.warning(
+                    f"TheOddsAPI: x-requests-remaining={remaining!r} is not an "
+                    f"integer ({exc}) — credit reading NOT updated and tier "
+                    f"warnings skipped for this response")
                 return
             _persist_credits(self._remaining_requests)
             _r = self._remaining_requests
@@ -592,8 +602,11 @@ class TheOddsScraper:
         if used is not None:
             try:
                 self._used_requests = int(used)
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    f"TheOddsAPI: x-requests-used={used!r} is not an integer "
+                    f"({exc}) — the reconciliation figure is stale for this "
+                    f"response")
 
     async def _fetch_league_odds(self, sport_key: str):
         """Call The Odds API for a single sport key.
