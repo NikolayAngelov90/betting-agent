@@ -1067,7 +1067,7 @@ class APIFootballScraper(BaseScraper):
         xg_budget = self._daily_limit - self._budget_used() - self.BUDGET_RESERVE - injury_reserve
         xg_budget = max(0, min(xg_budget, self.BUDGET_XG))
         if xg_budget == 0:
-            logger.debug(
+            logger.info(
                 f"xG backfill skipped — no budget left after odds+injury reserve "
                 f"({self._today_fixture_count} fixtures today)"
             )
@@ -2455,7 +2455,7 @@ class APIFootballScraper(BaseScraper):
                         ))
 
         if not low_coverage:
-            logger.debug("All fixture teams have sufficient historical data (>= %d matches)", min_matches)
+            logger.info("All fixture teams have sufficient historical data (>= %d matches)", min_matches)
             return
 
         # Sort by least data first so we prioritise the most data-starved teams

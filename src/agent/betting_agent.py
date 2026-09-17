@@ -782,7 +782,7 @@ class FootballBettingAgent:
                     )
                     logger.info("ML models retrained")
             else:
-                logger.debug("ML models fresh — skipping retrain")
+                logger.info("ML models fresh — skipping retrain")
         except asyncio.TimeoutError:
             logger.warning("ML retrain timed out after 12 minutes — skipping")
         except Exception as e:
@@ -838,7 +838,7 @@ class FootballBettingAgent:
                         self.feature_engineer.elo_ratings = self.predictor.elo.ratings
                         logger.info(f"Models re-fitted after backfill ({_reqs_used} requests used)")
                     else:
-                        logger.debug("Backfill made no API calls — skipping re-fit")
+                        logger.info("Backfill made no API calls — skipping re-fit")
         except Exception as e:
             logger.warning(f"Low-coverage backfill failed: {e}")
 
@@ -2199,7 +2199,7 @@ class FootballBettingAgent:
                 # does not re-notify for a pick another worker just wrote.
                 inserted_id = _insert_pick_if_absent(session, values)
                 if inserted_id is None:
-                    logger.debug(
+                    logger.warning(
                         f"Pick already saved by a concurrent writer, skipping: "
                         f"{pick.match} / {pick.selection}"
                     )

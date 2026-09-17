@@ -769,7 +769,7 @@ class FlashscoreScraper(BaseScraper):
         """
         driver = self._get_driver()
         if not driver:
-            logger.debug("Flashscore: Chrome not available, skipping results scrape")
+            logger.warning("Flashscore: Chrome not available, skipping results scrape")
             return []
         matches = []
 

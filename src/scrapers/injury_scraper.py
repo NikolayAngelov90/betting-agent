@@ -42,7 +42,7 @@ class InjuryScraper:
                                   Used to prioritise fixtures with open picks.
         """
         if not self.apifootball or not self.apifootball.enabled:
-            logger.debug("API-Football not available — skipping injury update")
+            logger.warning("API-Football not available — skipping injury update")
             return
 
         # Dynamic budget: use remaining requests, capped to fixture count and
@@ -160,7 +160,7 @@ class InjuryScraper:
             if fetched >= injury_budget:
                 break
             if self.apifootball._plan_restricted:
-                logger.debug("Skipping injury fetch — API-Football plan restriction active")
+                logger.warning("Skipping injury fetch — API-Football plan restriction active")
                 break
             try:
                 _t0 = _time.monotonic()

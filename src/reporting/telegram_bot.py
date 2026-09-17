@@ -800,7 +800,7 @@ class TelegramNotifier:
 
         bot = self._get_bot()
         if not bot or not self.chat_id:
-            logger.debug("Telegram not configured, skipping message")
+            logger.warning("Telegram not configured, skipping message")
             return ChunkOutcome(ok=False, attempted=False, detail="not configured")
 
         detail = ""
@@ -828,7 +828,7 @@ class TelegramNotifier:
         self._last_send_error = ""
         bot = self._get_bot()
         if not bot or not self.chat_id:
-            logger.debug("Telegram not configured, skipping message")
+            logger.warning("Telegram not configured, skipping message")
             self._last_send_error = "not configured"
             return None
 

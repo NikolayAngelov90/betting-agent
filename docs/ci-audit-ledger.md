@@ -15134,3 +15134,150 @@ will write 0 rows here, because the property is "an operation that removes an
 identifier records it", not "it usually has something to record".
 
 *Recorded 2026-09-17.*
+
+---
+
+# 2026-09-17, third pass — the 25 sorted, the merge run, two shapes named
+
+`tests/` **1046 passed.** `s5.13` / `ee60cd` unchanged — log level and a data
+merge, no fingerprint movement.
+
+---
+
+## 1. THE 25, SORTED INTO THREE TIERS RATHER THAN TWO
+
+Measured from each branch's frequency in production, the way the 21 were:
+
+| line | measured | tier |
+| --- | --- | --- |
+| `flashscore:772` *"Chrome not available, skipping results scrape"* | results scraped **40×** today, so **0/run** | **WARNING** |
+| `betting_agent:2202` *"Pick already saved by a concurrent writer"* | **12 attempted, 12 saved → 0 conflicts** | **WARNING** |
+| `telegram_bot:803/831` *"not configured"* | 2 messages sent → **0/run** | **WARNING** |
+| `injury_scraper:45/163` | 110 injuries from 12 fixtures → **0/run** | **WARNING** |
+| `apifootball:2458` *"All fixture teams have sufficient…"* | fired today, not yesterday → **~daily** | **INFO** |
+| `betting_agent:785/841`, `database:384`, `apifootball:1070` | routine per-run | **INFO** |
+| the remaining 14 | **per-item** — per fixture, per market, per league | **stays DEBUG** |
+
+> ### The choice was never WARNING versus DEBUG. A routine per-run decision belongs at INFO: visible, and carrying no alarm.
+>
+> DEBUG is wrong because invisible. WARNING is wrong because routine — that is
+> `fixtures_zero_active` exactly. **INFO is the tier that was missing**, and five
+> of the twenty-five needed it.
+
+**11 changed; the "silence reads as a pass" population falls 25 → 14**, and the
+14 are per-item chatter with aggregates elsewhere.
+
+**`flashscore:772` is the whole argument and it is now a WARNING.** A dead
+Flashscore was silent by construction, and its 88-day death is the incident that
+made everything since necessary. **The justification was never a risk model — it
+is three named incidents, two of them already in this ledger as errors.**
+
+---
+
+## 2. THE MERGE — AND IT WAS 39, NOT 16
+
+**Registered: 16 rows, 29 references. Actual: 39 rows, 57 references.**
+
+> ### The 16 was "names scraped on ONE CARD". The class is "live rows whose name is a former name", and the database knows all of them.
+>
+> **MB-1 again, and I nearly shipped it**: a merge sized from a predicate — one
+> day's log — narrower than the class it was taken to measure. The 16 would have
+> left **23 behind**, and those 23 would have been invisible for exactly the same
+> reason: they were not on today's card.
+
+The script derives the list from the data instead:
+
+```sql
+FROM teams t JOIN team_former_names f ON f.name = t.name
+JOIN teams s ON s.id = f.team_id WHERE s.id <> t.id
+```
+
+**A live row whose own name resolves, through the former-name table, to a
+different row is by construction the thing step 2 routes around.**
+
+`Milan`→`AC Milan` · `Porto`→`FC Porto` · `AFC Ajax`→`Ajax` ·
+`Man City`→`Manchester City` · `Sheffield United`→`Sheffield Utd` ·
+`RC Deportivo La Coruña`→`Dep. La Coruna` · `Málaga CF`→`Malaga` …
+
+| | registered | actual |
+| --- | --- | --- |
+| rows removed | 16 | **39** |
+| references re-pointed | 29 | **57** |
+| **former names WRITTEN** | **0** | **0** |
+| `record_former_name` calls | 16 | 39 |
+| pairs remaining | 0 | **0** |
+| orphaned references | 0 | **0** |
+
+Teams **1506 → 1467**. Verified independently: **0 live rows whose name is a
+former name**, 0 orphans across all four FK columns.
+
+### The prediction that matters is still pending, and it is registered to fail
+
+**Step-2 hits are registered to stay UNCHANGED.** All 39 names remain in
+`team_former_names` — that is *why* step 2 fires on them — and the lookup keys on
+the **name**, not on whether a duplicate row exists. **125 names still in the
+table, unchanged by the merge.**
+
+> **If hits fall on the next comparable card, step 2 is keyed on something other
+> than the former-name table and the model of it is wrong.** The prediction that
+> would embarrass me is the one worth registering.
+
+**What the merge bought is the end of the masking**: those hits were routing
+fixtures *around* live duplicates, so correctness was coming from a lookup
+staying healthy rather than from the data being clean.
+
+### RCD-1 — the rule, as a property
+
+> ### An operation that removes an identifier records it. The property is the invariant, not the usual case. A call that writes zero rows today is what makes the next removal safe.
+
+`record_former_name` was called **39 times and wrote 0 rows**, because all 39
+names were already recorded. **Calling it anyway is the point.** That is the rule
+s5.10 lacked — stated as a property rather than as a remedy, so it cannot be
+skipped by an operation that happens to have nothing to record.
+
+---
+
+## 3. TWO SHAPES NAMED
+
+### SUP-1 — a guard whose failure silences the alarms about its own failure
+
+`_absorb_quota_headers` on a malformed `x-requests-remaining`:
+
+```python
+except (TypeError, ValueError):
+    return          # skips _persist_credits AND every tier warning below it
+```
+
+**The credit reading freezes, and the CRITICAL / WARNING / INFO tier alarms that
+would report a frozen reading are skipped by the same `return`.**
+
+> **Worse than reconciler-blind-at-429, and the difference is structural.** There
+> the blindness was *incidental* — the reconciler happened not to be looking when
+> it mattered. Here the suppression is **downstream of the failure**: the guard's
+> own failure path is what disables the reporting. **A guard that fails loudly is
+> a bug; a guard whose failure disables its own alarm cannot be audited from
+> outside at all.**
+
+### The `"unknown"` constant — `[]` vs `None` in the validity mechanism
+
+```python
+except (OSError, TypeError):
+    return "unknown"
+```
+
+`filter_generation` digests the exclusion predicate's source so that a mirror
+built under a different predicate refuses itself. **`"unknown"` is a CONSTANT**,
+so every mirror built while the source is unreadable carries the same generation
+and **validates against every other one**.
+
+> **The digest stops discriminating at exactly the moment validity becomes
+> unknowable — and reports that as validity.** This is the `[]`-versus-`None`
+> collapse inside the one mechanism that decides whether cached data may be
+> trusted: *unknown* rendered as *equal*, in a comparison whose entire job is to
+> be unequal when anything differs.
+
+**Both now announce at WARNING.** Neither is repaired — `"unknown"` still
+collapses and the `return` still skips — but a run in which either happens is no
+longer indistinguishable from a healthy one.
+
+*Recorded 2026-09-17.*

@@ -381,7 +381,7 @@ def init_db():
     global _db_manager
     db = get_db()
     if _os.environ.get("TABLES_CREATED") == "1":
-        logger.debug("Skipping create_tables — TABLES_CREATED env var set")
+        logger.info("Skipping create_tables — TABLES_CREATED env var set")
         return db
     try:
         db.create_tables()
