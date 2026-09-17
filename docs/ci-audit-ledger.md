@@ -15403,3 +15403,166 @@ previous-cohort constants, where the next reader meets it.
 ρ = 0.42, available 1 October.**
 
 *Recorded 2026-09-17. `tests/` 1055 passed.*
+
+---
+
+# STAGE 26 — H1 DESIGNED, AWAITING RESET
+
+**Order worked in, stated as required:** the invariants gate ran first; the
+control was **queried** before it was registered; the pre-registration was
+written and committed as **`aad0f01`**; Part A's measurements and Part B's
+mechanics were designed **after** it. The measurements below are of the
+*collection apparatus*, not of the phenomenon — **no H1 observation exists to
+have shaped anything**, which the registration establishes by query: **0 series
+with three separated pre-kickoff points, across 0 fixtures.**
+
+**No config changed. No collection begun. No credit spent.**
+
+---
+
+## PART A — THE POLICY CHANGE, ASSESSED
+
+### A1. COHORT VERDICT — neutral today, NOT structurally guaranteed, and cheaply made so
+
+`refresh_imminent` is called from **one place**: `scripts/refresh_and_capture.py`,
+run **only** by `closing-lines.yml`. `daily-picks` calls `theodds.update()`, a
+different method. **But both write the same `odds` table, and `get_daily_picks`
+reads it** — so the separation is temporal, not structural, and had to be
+measured rather than asserted.
+
+| measured 2026-09-17 | |
+| --- | --- |
+| scheduled `daily-picks` runs, **all history** | 223 |
+| …still running after the 10:47 first refresh | **133 (59.6%)** |
+| scheduled runs **under the 03:00 cron** (2026-08-31+) | 18 |
+| **…still running after 10:47** | **0 (0.0%)** |
+| latest observed end, under the current cron | **10:06 UTC** |
+| **margin to the first refresh slot** | **41 minutes** |
+
+> **Cohort-neutral under the current schedule — and by a 41-minute margin on an
+> 18-run base, against a scheduler this project has documented at 0.5–5.7h and
+> once observed at 11h21m.** The 59.6% figure is what the same question answered
+> under the old 09:37 cron, which is what a thin margin looks like after it has
+> been crossed.
+
+**It can be made neutral by construction, and that belongs in the runner:**
+
+> ### The collection refuses to refresh until the day's `daily-picks` run has completed.
+>
+> That converts a timing coincidence into an **enforced precondition**. With it,
+> no pick can ever read a refreshed price, the change is **cohort-neutral by
+> construction, and H1 does not take s5.15.** Without it the verdict rests on 18
+> runs and 41 minutes.
+
+**This is a decision for Niki only if the gate is rejected.** If the gate ships,
+H1 costs credits and not a cohort break.
+
+### A2. CREDIT ARITHMETIC — and the proposed window is the worst available choice
+
+Slots are **120 minutes apart** (10:47, then 11:17 + 2h). A fixture needs to be
+in-window at **three** slots, which needs a window spanning **2×120 = 240
+minutes plus alignment slack**. **300 sits just below where the third slot
+fits.**
+
+| window | league-slots/day | credits/day | fixtures reaching ≥3 slots/day | days for n=39 | **total credits** |
+| --- | --- | --- | --- | --- | --- |
+| **300** *(proposed)* | 30 | 60 | **3** | **13** | **780** |
+| 330 | 35 | 70 | 16 | 3 | 210 |
+| **360** | 42 | 84 | **23** | **2** | **168** |
+| 420 | 46 | 92 | 23 | 2 | 184 |
+
+*(median over 2026-09-01…14; TheOddsAPI-supported leagues only; phantom/corrupt
+excluded; `CREDITS_PER_REQUEST = 2`)*
+
+> ### 300 costs 780 credits and takes 13 days. 360 costs 168 and takes 2. The recommended value is 360, not 300.
+>
+> **780 exceeds the entire 400-credit monthly budget.** The cliff is arithmetic,
+> not empirical: below 2× the slot interval the third observation cannot exist,
+> and the window was proposed at 300 against a 120-minute cadence.
+
+**AND THE 66–78 CREDIT SIZING DOES NOT SURVIVE CONTACT WITH THE BILLING.** It was
+scaled from an anchor of *~100 credits for n=50* — **2 credits per fixture**. The
+provider does not bill per fixture. **It bills per league request per slot, so
+the cost is DAYS × LEAGUES and is almost independent of how many fixtures the
+response contains.**
+
+| | |
+| --- | --- |
+| sized on 2026-09-16 (per-fixture anchor) | **66–78 credits** |
+| **modelled cost at window 360** | **168 credits** |
+| adjusting by the observed/uncapped ratio (~19 observed vs 30 modelled at window 120 → **×0.63**) | **~106 credits** |
+| **defensible bracket** | **≈ 106–168 credits over 2 days** |
+
+**Still affordable — under half the 400-credit monthly budget — and roughly
+double what was registered.** *EFF-1's neighbour: a cost model derived in a unit
+the mechanism does not bill in.*
+
+### A3. WHAT ELSE THE CHANGE TOUCHES
+
+* **more leagues qualify as imminent** — 30 → 42 league-slots/day at 360;
+* **the per-run ceiling does not bind**: `DEFAULT_MAX_CREDITS_PER_RUN = 24` = 12
+  requests/run, and 42 league-slots across 8 slots is **~5.3 requests/slot**;
+* **the barren-league cache suppresses repeatedly-empty leagues**, so every
+  figure above is an **upper bound** — which is the direction that makes the
+  bracket 106–168 rather than a point estimate;
+* **the min-interval must drop to 120** or consecutive slots are suppressed and
+  the third point cannot exist. **The interval is not the binding constraint —
+  the window is — but 180 would block the design outright.**
+
+---
+
+## PART B — BOUNDED-EXPERIMENT MECHANICS, SPECIFIED
+
+Each requirement exists because its absence already produced a defect here.
+
+**1. THE STOP CONDITION LIVES IN THE RUNNER.**
+Collection ends at **n ≥ 39 qualifying trajectories** or at a **credit ceiling of
+200**, whichever comes first, evaluated before each slot's requests and enforced
+in code — not in a comment and not in a calendar reminder. *A temporary change
+without an enforced stop becomes permanent: four instances in this ledger.*
+
+**2. THE REVERT SHIPS IN THE SAME COMMIT THAT RAISES THE VALUES.** The commit
+that sets `odds_refresh_window_minutes: 360` / `min_interval: 120` also contains
+the restore to `120` / `180` and the one-line command that applies it. **Not a
+follow-up, not a note.**
+
+**3. THE DAILY CHECK COUNTS SEPARATED OBSERVATIONS, NEVER RAW ROWS.** A
+trajectory qualifies only when consecutive points are **≥30 minutes apart** and
+the two intervals differ by **<2×**. *Measured failure: fourteen fixtures
+appeared to carry three points and were six-minute pairs written by one run.* **A
+purchase can burn its ceiling producing duplicates and report success.**
+
+**4. THE COLLECTION'S NULL MUST BE DISTINGUISHABLE FROM ITS SUCCESS.** Three
+outcomes, three different lines:
+
+| | reads as |
+| --- | --- |
+| trajectories accumulating | `H1 COLLECTION: n of 39 qualifying trajectories` |
+| **collection ran, produced none** | **`H1 COLLECTION PRODUCED NOTHING — the apparatus is not working`** |
+| collection did not run | `H1 COLLECTION DID NOT RUN` |
+
+*L2 shipped inert and measured as "implemented, 0 saved."* **A collection that
+finds nothing and a collection that collects nothing are different facts**, and
+after LOG-1 all three lines are at INFO or above.
+
+---
+
+## DECLARATION
+
+> ### STAGE 26 — H1 DESIGNED, AWAITING RESET
+
+| | |
+| --- | --- |
+| **registration** | **`aad0f01`** — committed before design detail, before the policy change, before any H1 observation exists |
+| **cohort verdict** | **NEUTRAL, conditionally.** 0 of 18 runs overlap under the current cron, margin 41 minutes. **Neutral by construction if the runner gates on `daily-picks` completion; without that gate it rests on a thin margin.** **No s5.15 required.** |
+| **credit arithmetic** | **≈106–168 credits** at window **360** / interval **120**, ~53–84 credits/day. **The proposed 300 would cost 780 and is not recommended.** |
+| **projected duration** | **2 days** at window 360 (23 qualifying fixtures/day against n=33–39). 13 days at 300. |
+| **invariants** | `tests/test_experiment_invariants.py` **passed**. *The count is not cited: invariants 2 and 3 are known defective, and a passing count is not a guarantee.* |
+
+**Open for Niki, and it is a choice rather than a detail:** the design recommends
+**360, not the ~300 proposed** — 4.6× cheaper and 6.5× faster, because 300 sits
+below the arithmetic threshold at which a third observation can exist. And the
+registered **66–78 credits becomes ≈106–168**, because the provider bills per
+league-request, not per fixture.
+
+*Stage 26 recorded 2026-09-17. No config change, no collection, no credit spent.*
