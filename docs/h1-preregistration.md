@@ -142,5 +142,34 @@ two intervals differ by more than 2× is excluded before analysis.**
 
 ---
 
+## THE REAL COST — this is a TRADE, not a bill
+
+**168 credits is not the whole of it, and quoting only that reads as a cost.**
+
+| | | provenance |
+| --- | --- | --- |
+| measured consumption | **~34.6 credits/day** | `api_budget`: 400 used in September, 437 in August |
+| spendable budget | **400/month** | free tier 500 − safety margin 50, self-imposed budget 400 |
+| **days of pipeline the free tier funds** | **~12/month** | 400 ÷ 34.6 — **which is why OPS-4 opened on the 12th** |
+| H1 collection | **≈106–168 credits** | window 360, 2 days |
+| **what that actually costs** | **≈3–5 days of closing-line capture** | not the 2 days it runs |
+
+> ### H1 costs roughly five days of capture, not two. The collection runs for two days; the credits it spends are five days of the pipeline's oxygen.
+
+**And the trade is still clearly favourable, on reasoning already in the record.**
+Stage 16 established that **lost captures buy precision on a RESOLVED axis**:
+
+* **MODEL's upper bound is +0.107%** against a **+1.85%** requirement — the
+  question of whether the model beats the closing line is answered, and more
+  observations move a bound that is already an order of magnitude inside the
+  threshold;
+* the **500-observation target was over-specified about twenty-nine-fold**.
+
+**H1's question is OPEN. The capture's question is CLOSED.** Spending a closed
+axis's precision to answer an open question is the trade, and it is the right way
+round.
+
+---
+
 *Registered 2026-09-17, before the policy change and before any H1 observation
 exists. No credit spent, no config changed, no collection begun.*

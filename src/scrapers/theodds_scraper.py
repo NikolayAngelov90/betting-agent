@@ -136,6 +136,31 @@ def _persist_credits(remaining: int) -> None:
     except Exception:
         pass
 
+#: The picks cron, and how long after it a run can still be PENDING.
+#:
+#: 03:00 UTC (Stage 21 moved it from 09:37), plus the observed maximum scheduler
+#: delay of 11h21m, plus the p90 run duration of 106 minutes. Outside this
+#: window a picks run cannot still be pending, so the guard below must not
+#: decline — that is precisely what the REVERTED version got wrong: it asked
+#: "have today's picks run" via a `date.today()` marker, which stayed false at
+#: 23:17 and 01:00 and declined every overnight slot. Captures stopped for a
+#: full day and H5's sample rate fell to zero.
+_PICKS_CRON_MINUTE_OF_DAY = 3 * 60
+_PICKS_EXPOSURE_WINDOW_MINUTES = 13 * 60          # 03:00 -> 16:00 UTC
+
+
+def _picks_run_may_be_pending(now) -> bool:
+    """Is `now` inside the window in which a picks run could still be running?
+
+    A TIME BOUND, NOT A DATE MARKER. The reverted guard had no bound at all, so
+    "today's picks have not been written" was true from midnight and again all
+    evening. This returns False outside the window whatever the database says.
+    """
+    mod = now.hour * 60 + now.minute
+    return _PICKS_CRON_MINUTE_OF_DAY <= mod <= (
+        _PICKS_CRON_MINUTE_OF_DAY + _PICKS_EXPOSURE_WINDOW_MINUTES)
+
+
 # ---------------------------------------------------------------------------
 # League key → The Odds API sport key mapping
 # Only leagues that The Odds API supports (romania/liga-1 is excluded).
@@ -1230,6 +1255,54 @@ class TheOddsScraper:
             )
         return {lg for lg, ts in rows if ts is not None}
 
+    def _leagues_a_pending_run_could_price(self, leagues, now) -> dict:
+        """`{league: reason}` for leagues a PENDING picks run could still price.
+
+        Empty when no run is pending — which is the common case and the one the
+        reverted guard got wrong.
+
+        FAILS OPEN, DELIBERATELY. The exposure this prevents is conditional on a
+        scheduler delay past ~7h40m; blocking every capture on a database hiccup
+        costs more than it prevents, and that trade is what the 2026-09-04
+        revert measured. A guard that cannot answer proceeds, loudly.
+        """
+        if not leagues:
+            return {}
+        # 1. TIME BOUND FIRST, and it is cheap. Outside the window no picks run
+        #    can be pending, whatever the database says — this is the condition
+        #    whose absence stopped captures for a full day.
+        if not _picks_run_may_be_pending(now):
+            return {}
+        try:
+            from sqlalchemy import func
+            with self.db.get_session() as session:
+                # 2. Has today's run produced ANY output? One pick anywhere
+                #    means the pass has run; the guard stands down immediately.
+                #    This is data, not a marker, and it cannot go stale.
+                produced = session.query(func.count(SavedPick.id)).filter(
+                    SavedPick.pick_date == now.date()).scalar() or 0
+                if produced:
+                    return {}
+                # 3. PER LEAGUE: does it still hold a fixture this run would
+                #    price — future kickoff, no pick on it yet?
+                rows = session.query(Match.league, func.count(Match.id)).filter(
+                    Match.league.in_(list(leagues)),
+                    Match.match_date > now,
+                    ~Match.id.in_(session.query(SavedPick.match_id)),
+                ).group_by(Match.league).all()
+        except Exception as exc:
+            logger.warning(
+                f"picks-run guard could not evaluate ({exc}) — PROCEEDING. "
+                f"The exposure it prevents is conditional; blocking every "
+                f"capture on a database error is not.")
+            return {}
+        return {
+            lg: (f"a picks run is pending and {lg} still holds {n} unpicked "
+                 f"fixture(s) it would price — refreshing now could change a "
+                 f"price that run reads")
+            for lg, n in rows if n
+        }
+
     async def refresh_imminent(self, window_minutes: int = 120,
                                min_interval_minutes: int = 180,
                                quota=None,
@@ -1279,6 +1352,44 @@ class TheOddsScraper:
                     plan["skipped"][league] = (
                         f"refreshed within the last {min_interval_minutes} min")
                     league_fixtures.pop(league)
+
+        # THE PICKS-RUN GUARD, REDESIGNED. PER-LEAGUE, not a per-day marker.
+        #
+        # A refresh rewrites `odds` for fixtures near kickoff and the picks run
+        # READS `odds`. The crons order them (03:00 against 10:47), but that is
+        # a scheduling coincidence: measured 2026-09-17, 0 of 18 runs under the
+        # current cron overlapped the first refresh — by a margin of 41 minutes,
+        # against a scheduler documented at 0.5-5.7h and observed once at
+        # 11h21m. Under the OLD cron the same question answered 133 of 223.
+        #
+        # THE REVERTED VERSION ASKED THE WRONG QUESTION. It asked "have today's
+        # picks run", keyed on `date.today()`, and declined globally. Those
+        # diverge at every hour outside the picks window, which is where the
+        # overnight declines came from.
+        #
+        # THE RIGHT QUESTION IS "could this refresh change a price a PENDING
+        # picks run will read". A refresh cannot contaminate a pick already
+        # taken — `taken_odds` is persisted at pick time — so the exposure is to
+        # OTHER fixtures in the SAME league that a pending run might still
+        # price. Hence: per-league, conditional on unpicked fixtures remaining.
+        #
+        # Three conditions, ALL required, and the first two are what make the
+        # overnight case impossible:
+        #   1. `now` is inside the bounded exposure window after the cron;
+        #   2. no pick carries today's `pick_date` (the run has produced
+        #      nothing yet — it collapses the moment the run writes anything);
+        #   3. THIS league still holds a future fixture with no pick.
+        if league_fixtures:
+            for league, declined in self._leagues_a_pending_run_could_price(
+                    list(league_fixtures), now).items():
+                plan["skipped"][league] = declined
+                league_fixtures.pop(league, None)
+                # The audit pattern was left in `ci_audit` when the guard was
+                # reverted, deliberately. RULE: a guard and its audit pattern
+                # ship together, or the guard is invisible by construction and
+                # its silence is indistinguishable from health.
+                logger.warning(
+                    f"PICKS-RUN GUARD: DECLINING {league} — {declined}")
 
         # L2: a league that returned an empty event list three runs running is
         # not priced by the provider. Requesting it again cannot produce an

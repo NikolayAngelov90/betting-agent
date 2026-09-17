@@ -15566,3 +15566,105 @@ registered **66–78 credits becomes ≈106–168**, because the provider bills 
 league-request, not per fixture.
 
 *Stage 26 recorded 2026-09-17. No config change, no collection, no credit spent.*
+
+---
+
+# THE PICKS-RUN GUARD, REDESIGNED AND BUILT
+
+**Approved on the reasoning that eighteen days and forty-one minutes is a
+coincidence, not neutrality.** `tests/` **1066 passed**; s5.14 / `00febf`
+unchanged — the guard changes which leagues a *refresh* touches, never which
+fixtures are picked.
+
+## What the reverted version asked, and why it was the wrong question
+
+The revert commit (`e4a104c`) carried its own redesign spec, and it is the
+specification that was built:
+
+> *"The reverted guard asked 'have today's picks run' when the question is 'could
+> this refresh change a price a pending picks run will read'. Those diverge at
+> every hour outside the picks window, which is where the overnight declines came
+> from. A refresh cannot contaminate a pick already taken — `taken_odds` is
+> persisted at pick time — so the exposure is to other fixtures in the same
+> league that a pending run might still price. The predicate is per-league and
+> conditional on unpicked fixtures remaining, not a per-day marker."*
+
+**It keyed on `date.today()` and declined GLOBALLY**, so at 23:17 and 01:00 the
+marker still read "not yet" and every overnight slot declined. **Captures stopped
+for a full day and H5's sample rate fell from ~1.8 fixtures/day to zero.**
+
+## Three conditions, all required
+
+| | condition | what it prevents |
+| --- | --- | --- |
+| **1** | `now` inside a **bounded** window after the 03:00 cron (cron + 11h21m observed max delay + p90 run duration) | **the overnight declines.** Checked FIRST and before any database read, so no database state can reproduce them |
+| **2** | **no pick carries today's `pick_date`** | a normal day is guarded for **minutes, not hours** — the guard stands down the moment the run writes anything. Data, not a marker, so it cannot go stale |
+| **3** | **this league** still holds a future fixture with no pick | the global decline. A league with nothing left to price is not exposed |
+
+**It FAILS OPEN**, and that is the trade the revert measured: *cost daily and
+certain, exposure conditional on a delay past ~7h40m.* A guard that cannot
+evaluate proceeds, loudly.
+
+**11 tests**, including the overnight regression at four separate hours with the
+database seeded to say "pending" — because the point of condition 1 is that no
+database state can bring the failure back.
+
+### And the rule the revert left behind is now enforced
+
+> *"A guard and its audit pattern must ship together, or the guard is invisible
+> by construction and its silence is indistinguishable from health."*
+
+`ci_audit`'s `PICKS-RUN GUARD: DECLINING` pattern was deliberately **kept**
+through the revert. A test now asserts the line the guard emits matches the
+pattern that reads it — the producer/parser pin, applied to a guard.
+
+---
+
+# THE REAL COST, IN THE REGISTRATION
+
+**168 credits is not the whole of it, and quoting only that reads as a bill.**
+
+| | | provenance |
+| --- | --- | --- |
+| measured consumption | **~34.6 credits/day** | `api_budget`: 400 used in September, 437 in August |
+| **days the free tier funds** | **~12/month** | 400 ÷ 34.6 — **which is why OPS-4 opened on the 12th** |
+| H1 collection | ≈106–168 credits over **2 days** | window 360 |
+| **what it actually costs** | **≈3–5 days of closing-line capture** | |
+
+> ### H1 costs roughly five days of capture, not two. The collection runs for two days; the credits are five days of the pipeline's oxygen.
+
+**And the trade is favourable on reasoning already in the record.** Stage 16
+established that lost captures buy precision on a **resolved** axis: **MODEL's
+upper bound is +0.107% against a +1.85% requirement**, and the 500-observation
+target was **over-specified about twenty-nine-fold**.
+
+**H1's question is OPEN. The capture's is CLOSED.** Spending a closed axis's
+precision on an open question is the right way round — and it is now in the
+registration so the decision reads as a trade rather than a cost.
+
+---
+
+# THE NULL'S BOUND IS THE STRONGEST PART OF THE REGISTRATION
+
+At r ≈ 0, the 95% one-sided upper bound is **ρ = 0.267** at n=39, implying
+**1.27% captured gain — below the +1.85% best-line break-even.**
+
+> ### This is the first registration in this project where the LIKELIEST outcome is also a CONCLUSIVE one.
+
+Every previous one had a null that meant *come back with more data*:
+
+| | what its null meant |
+| --- | --- |
+| H5's drift bands | the window was too short — collect longer |
+| the identity-gate replay | the population was too small |
+| the four schedule predictions | fewer runs than expected fell in the window |
+| **H1** | **momentum cannot pay for itself. Timing is retired as a lever.** |
+
+**The difference is that the bound is expressed in the same unit as the
+decision.** A null here does not say "no effect detected"; it says the effect is
+**smaller than the overround**, which is the only quantity that decides whether
+acting is worth anything. That is what separates a study that **ends a line of
+inquiry** from one that **invites a larger sample** — and it is why n = 33–39 is
+enough rather than merely affordable.
+
+*Recorded 2026-09-17.*
