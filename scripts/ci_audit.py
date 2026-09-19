@@ -428,8 +428,38 @@ def extract(log: str) -> Dict[str, object]:
     f["tracebacks"] = len(re.findall(r"Traceback \(most recent call last\)", log))
     f["account_suspended"] = "account suspended" in log
     f["telegram_sent"] = len(re.findall(r"Telegram message sent", log))
-    f["telegram_failed"] = len(re.findall(
-        r"Failed to send Telegram message|alert NOT delivered", log))
+    # A FAILED ATTEMPT IS NOT A LOST MESSAGE — and it was, until DEL-3 added
+    # retry on 2026-09-17. On 09-19 one chunk of five timed out, the retry
+    # recovered it, all five were delivered, and this counter reported
+    # "1 alert failed to deliver". THE COUNTER PREDATES THE MECHANISM IT
+    # COUNTS, which is the third instance here after `af=0` and
+    # `fixtures_zero_active` — and both of those cried wolf for days first.
+    #
+    # Three states, kept apart rather than summed:
+    #   LOST        a part the retry did not recover, or a DEL-1 alert that
+    #               exhausted its attempts. This is the only one that alarms.
+    #   RECOVERED   an attempt failed and a later attempt succeeded.
+    #   UNEXPLAINED a raw failure no REPORT_DELIVERY or ALERT line accounts
+    #               for — reported as UNKNOWN, never silently as either.
+    f["telegram_attempts_failed"] = len(re.findall(
+        r"Failed to send Telegram message", log))
+    f["telegram_alerts_lost"] = len(re.findall(
+        r"ALERT NOT DELIVERED", log, re.I))
+
+    # DERIVED AFTER ITS INPUTS, and the first version was not: this block sat
+    # above the telegram counters, read `telegram_attempts_failed` before it
+    # existed, and silently reported 0 recovered. A derived value computed
+    # ahead of its inputs is a zero that looks like a measurement.
+    _rd_list = f.get("report_deliveries") or []
+    _parts_lost = sum(len(d["failed"]) for d in _rd_list)
+    # Attempts beyond one per chunk ARE retries, and each retry implies a prior
+    # failed attempt the sequence record already accounts for.
+    _retries = sum(max(0, d["attempts"] - d["chunks"]) for d in _rd_list)
+    _raw = f["telegram_attempts_failed"]
+    f["telegram_lost"] = _parts_lost + f["telegram_alerts_lost"]
+    f["telegram_recovered"] = min(_raw, _retries)
+    f["telegram_unexplained"] = max(
+        0, _raw - _retries - _parts_lost - f["telegram_alerts_lost"])
     # Anchored to start with a STEP NAME, not a quote. GitHub echoes each
     # `run:` block into the log, so the workflow's own source line —
     #   msg = ("... step(s) FAILED — " + ", ".join(failed)
@@ -582,8 +612,16 @@ def assertions(facts: Dict[str, object],
         hits.append(f"{facts['tracebacks']} traceback(s) in the log")
     if facts.get("account_suspended"):
         hits.append("API-Football reported the account suspended")
-    if facts.get("telegram_failed"):
-        hits.append(f"{facts['telegram_failed']} alert(s) failed to deliver")
+    if facts.get("telegram_lost"):
+        hits.append(
+            f"{facts['telegram_lost']} message(s) LOST — a report part the "
+            "retry did not recover, or an alert that exhausted its attempts")
+
+    if facts.get("telegram_unexplained"):
+        hits.append(
+            f"{facts['telegram_unexplained']} Telegram failure(s) UNEXPLAINED "
+            "— no REPORT_DELIVERY or ALERT line accounts for them, so whether "
+            "they were recovered is UNKNOWN (not assumed either way)")
 
     # ---- DEL-3, three assertions, each on a DIFFERENT failure shape -------
     #

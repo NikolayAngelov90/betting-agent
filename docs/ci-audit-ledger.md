@@ -15847,3 +15847,144 @@ refused, and that is not the same as passing.** The three 09-16 collisions
 
 *Audited 2026-09-19. Read-only — no code, config, schema or production data
 changed.*
+
+---
+
+# THE DECLINE BRANCH, FORCED — and the counter beneath DEL-3 corrected
+
+`tests/` **1072 passed.** `s5.14` / `00febf` unchanged — an audit-script change
+and a test-scoped exercise; nothing in the pipeline's selection path moved.
+
+---
+
+## 1. THE GUARD'S DECLINE BRANCH HAS NOW EXECUTED
+
+**The practice that worked, applied: the credit gate's first refusal was forced
+before it could fire by itself, and this is the same move.** Test-scoped SQLite
+ledger, `dry_run=True`, no key that resolves, no credit.
+
+**The condition had to be constructed precisely**, and constructing it exposed a
+structural detail worth recording: `_imminent_league_fixtures` requires a
+**pending pick** for a league to be a candidate at all, while the guard declines
+on an **unpicked** fixture. So the decline is only reachable for a league holding
+**both** — a still-pending pick from an earlier day *and* a fixture today's run
+has not priced. **That is the real shape of the exposure**, and it is narrower
+than "a league with unpicked fixtures".
+
+| | |
+| --- | --- |
+| **1. did the decline fire?** | **YES** — at WARNING, visible at production's own sink level |
+| **2. does it name the league?** | **YES** — `england/premier-league` |
+| **3. does `ci_audit` read it?** | **YES** — `picks_run_guard_declined=1` |
+| **4. did the run continue?** | **YES** — `requested=['spain/laliga']` |
+
+```
+PICKS-RUN GUARD: DECLINING england/premier-league — a picks run is pending and
+england/premier-league still holds 1 unpicked fixture(s) it would price —
+refreshing now could change a price that run reads
+TheOddsAPI imminent refresh [DRY RUN]: would request 1 league(s): ['spain/laliga']
+```
+
+> ### The fourth line is the redesign. `spain/laliga` survived — a league with a pending pick and nothing left to price was NOT declined. The reverted version returned early and declined everything; this one declines one league and lets the rest through.
+
+**H1's cohort-neutrality no longer rests on a branch that has never run.** It
+rests on a branch that has now been made to run, deliberately, twelve days before
+the change that depends on it — rather than discovered under that change.
+
+---
+
+## 2. DEL-3's SAVE IS A METHOD RESULT, NOT A RUN DETAIL
+
+```
+Failed to send Telegram message: Timed out
+REPORT_DELIVERY report=daily picks chunks=5 sent=5 failed=none terminator=yes attempts=6
+```
+
+**One chunk of five timed out. The retry recovered it. All five were
+delivered.** Before DEL-3 that is a lost middle chunk in a report that ends
+normally — **the exact shape the position markers and terminator were specified
+to catch**, observed in production on 09-13 and reasoned about ever since.
+
+> ### This is the first time a mechanism built in this project has been observed PREVENTING the failure it was written for.
+>
+> Everything else has been one of two things: **unexercised** — the collision
+> guard, step 2 until 09-17, the picks-run guard until today — or **found
+> defective on first exercise**: the reverted guard, `_is_provisional`'s
+> substring match, the country check's asymmetry, `TEAM_RESOLVE` at DEBUG.
+>
+> **A third category now exists, with one member.**
+
+### And the counter beneath it was corrected while the reason was fresh
+
+`telegram_failed` counted the raw failure line and reported **"1 alert failed to
+deliver"** for a failure that was retried and recovered. **The counter predated
+the mechanism it counts** — third instance after `af=0` and
+`fixtures_zero_active`, and both of those cried wolf for days before anyone
+acted. This one had **one data point and a known cause.**
+
+**Split into three states rather than summed:**
+
+| | |
+| --- | --- |
+| **LOST** | a part the retry did not recover, or a DEL-1 alert that exhausted its attempts. **The only one that alarms.** |
+| **RECOVERED** | an attempt failed and a later attempt succeeded (`attempts > chunks`) |
+| **UNEXPLAINED** | a raw failure no `REPORT_DELIVERY` or `ALERT` line accounts for — **reported as UNKNOWN, never silently as either** |
+
+Replayed against both runs:
+
+| run | attempts failed | lost | recovered | unexplained | finding |
+| --- | --- | --- | --- | --- | --- |
+| **09-19** (post-DEL-3) | 1 | 0 | **1** | 0 | none — correct |
+| **09-13** (the lost chunk) | 1 | 0 | 0 | **1** | **UNKNOWN** |
+
+**The 09-13 row is the point.** The ledger knows that run lost a middle chunk;
+**the log does not carry it**, because the sequence record did not exist yet. So
+the audit reports *unexplained* rather than inventing the loss — and rather than
+the flattering silence. **The third state doing its job on historical data.**
+
+### One defect introduced and caught in the same change
+
+The reconcile block was first placed **above** the counter it reads, so
+`telegram_attempts_failed` was absent and it reported **0 recovered**. **A
+derived value computed ahead of its inputs is a zero that looks like a
+measurement** — pinned now by a source-order test, because the symptom is a
+plausible number rather than an error.
+
+---
+
+## 3. THE UNIT DECIDED IT — FOURTH TIME, SO IT IS THE RULE
+
+Step 2: **9.5% → 9.1% → 9.9%** confirms the prediction. **A raw count reads
+189 → 301 as a rise.** Same observation, opposite verdict, from the denominator
+alone.
+
+| | the unit that decided the answer |
+| --- | --- |
+| the deff predicate | per-key vs per-fixture — design effect ~11 |
+| H5's aggregation | mean across books vs one actionable price — σ 1.05% vs 7.67%, **fifty-fold in n** |
+| H1's cost model | per-fixture vs per-league-request — **66-78 credits vs 106-168** |
+| **step 2's rate** | **per created fixture vs per resolution — a rise vs a flat line** |
+
+> ### UNI-1. Before comparing two measurements, state the unit and confirm the mechanism produces it.
+>
+> Four instances is past anecdote. And the failure is always the same shape:
+> **the natural-seeming unit is the one a human would count, and the billing,
+> the clustering or the call-site uses a different one.** `resolve_team` runs on
+> every fixture UPDATE, so per-created-fixture is not a rate it has — exactly as
+> the provider bills per league-request, not per fixture.
+
+---
+
+## 4. THE CAPTURE TEST IS UNANSWERABLE, AND THAT IS THE VERDICT
+
+The two-point rate hit zero on **09-12**, five days before the guard shipped.
+**It cannot be cleared or convicted by these two days**, and the floor stays at
+zero until the reset.
+
+**Recording that is better than either reading.** The guard is not exonerated —
+it is untested on this axis — and it is not blamed for a fall that preceded it.
+
+> **H5's sample and H1's collection both restart from the same date: 10-01.**
+> One number gates both, and it is the same number that opened OPS-4 on the 12th.
+
+*Recorded 2026-09-19.*
