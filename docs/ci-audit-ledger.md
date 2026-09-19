@@ -15668,3 +15668,182 @@ inquiry** from one that **invites a larger sample** — and it is why n = 33–3
 enough rather than merely affordable.
 
 *Recorded 2026-09-17.*
+
+---
+
+# AUDIT 2026-09-19 — two days, and the guard's decline branch is still untested
+
+| run | workflow | started | verdict | note |
+| --- | --- | --- | --- | --- |
+| **35320820637** | daily-picks | 09-18 07:43 | **DEGRADED** | `disc[fs=31c fdo=7c af=0c]` = 38 created · `resolve[former_name=224 exact_name=2217 strict=23 provider_id=3]` · 8 implausible rows |
+| **35429871254** | daily-picks | 09-19 07:38 | **DEGRADED** | `disc[fs=104c fdo=40c af=12c]` = **156 created** · `resolve[former_name=301 exact_name=2707 strict=24 provider_id=8]` · 8 implausible rows · 1 unpriced · **1 Telegram timeout, RETRIED AND RECOVERED** |
+| **35380110401** | closing-lines | 09-18 18:25 | **UNAUDITABLE** | **0-byte log.** `gh` reports `success`; the log is unretrievable, so there is no evidence either way |
+| 35239380353 · 35357506282 · 35447343534 | paper-trading-report | 09-17/18/19 | CLEAN | |
+| 35239437873 · 35240813492 · 35270033089 · 35287297504 · 35357555304 · 35359468703 · 35397844860 · 35411705462 · 35447354386 · 35448552181 | closing-lines | — | CLEAN | see the guard table below |
+
+---
+
+## 1. THE GUARD RUNS **BEFORE** `claim_requests()` — answered from the code path
+
+```
+refresh_imminent:
+    _imminent_league_fixtures   candidates
+    min-interval filter         line 1349
+    PICKS-RUN GUARD             line 1383   <-- here
+    barren filter               line 1400
+    if not league_fixtures: return          <-- early exit
+    _fetch_and_persist(...)  ->  quota.claim_requests()   line 965
+```
+
+**The credit gate refusing every claim does not prevent the guard from being
+reached.** Both days exercised it, so the rest applies.
+
+---
+
+## 2. THE GUARD WAS REACHED FOUR TIMES, DECLINED NOTHING — AND THE OVERNIGHT SLOTS DID NOT TEST IT
+
+**`PICKS-RUN GUARD: DECLINING` fired ZERO times across all sixteen runs.** What
+matters is *why*, and it is not the same reason in each run:
+
+| run | UTC | leagues reaching the guard | outcome |
+| --- | --- | --- | --- |
+| 35239437873 | 09-17 15:19 | **2** | reached, declined none |
+| 35240813492 | 09-17 15:31 | 0 — **2 skipped by min-interval** | guard had nothing left |
+| 35270033089 | 09-17 20:18 | **0 candidates** | **never reached** |
+| **35287297504** | **09-17 23:32** | **0 candidates** | **never reached** |
+| 35357555304 | 09-18 14:39 | **2** | reached, declined none |
+| 35359468703 | 09-18 14:57 | 0 — 4 skipped by min-interval | nothing left |
+| 35397844860 | 09-18 21:39 | **0 candidates** | **never reached** |
+| **35411705462** | **09-19 01:08** | **0 candidates** | **never reached** |
+| 35447354386 | 09-19 13:59 | **9** | reached, declined none |
+| 35448552181 | 09-19 14:22 | **2** | reached, declined none |
+
+### The four declines-that-didn't-happen were correct; the overnight ones prove nothing
+
+**Reached and correct (4 runs):** every one is an afternoon slot, after the
+07:38/07:43 picks run had written picks — so **condition 2** stood the guard
+down. That is the behaviour that makes it cheap, and it is confirmed.
+
+> ### But the overnight slots — 23:32 on 09-17 and 01:08 on 09-19 — had ZERO imminent fixtures. The guard was never reached there.
+>
+> **It did not decline because there was nothing to decline, not because
+> condition 1 held.** A guard never reached and a guard that passed produce
+> identical silence — **the sixth instance**, and it lands on the exact slots the
+> redesign exists to protect.
+
+**The decline branch has never executed in production.** Condition 1 — the time
+bound that makes the reverted failure impossible — is verified by four tests and
+by no production run. **Same state as the collision guard**, and it goes into
+H1's window that way.
+
+**Producer and reader still agree**: `ci_audit`'s `picks_run_guard_declined`
+pattern is present and its extractor parses the emitted format — pinned by test
+and unchanged. **But it has read zero lines in production, which confirms the
+pin, not the guard.**
+
+---
+
+## 3. CAPTURES — AND THE TEST IS UNANSWERABLE, BECAUSE THEY WERE ALREADY AT ZERO
+
+**Reported first, as required.**
+
+| day | two-point fixtures | |
+| --- | --- | --- |
+| 2026-09-08 | 13 | |
+| 2026-09-09 | 10 | |
+| 2026-09-10 | 5 | pre-guard baseline **≈9/day** |
+| 2026-09-11 | 8 | |
+| **2026-09-12 → 09-19** | **0 every day** | |
+
+> ### The two-point rate hit zero on 09-12 — FIVE DAYS BEFORE the guard shipped on 09-17. The guard did not cause it, and it cannot be blamed or cleared by these two days.
+
+**The cause is OPS-4.** With the credit gate refusing every claim, `refresh_imminent`
+makes no requests, so the only writer is `daily-picks`' own single `update()`
+pass — one observation per series per day, and a second point ≥30 minutes later
+requires a second pass that requires credits. Raw snapshot volume is healthy
+(943 · 2,365 · **4,199** on 09-17/18/19); **separated** points are nil.
+
+**So the regression the redesign exists to prevent is not merely absent — it is
+unmeasurable until 10-01.** The floor is already at zero, and nothing the guard
+does can push it lower. *Third thing in this audit that cannot be distinguished
+from success by its silence.*
+
+---
+
+## 4. THE RAISED LINES — the prediction held, and three became visible
+
+**All six WARNING handlers: SILENT across both days.** Predicted zero, observed
+zero.
+
+**`flashscore:772` specifically** — silent, and `fs=31c` then `fs=104c` of
+fixtures created confirm the scrape ran. **This is the first day that silence
+there has meant anything**: before 09-17 a dead Flashscore and a working one
+produced the same nothing.
+
+**Three of the five INFO lines fired and are now readable where they were not:**
+
+| | 09-18 | 09-19 |
+| --- | --- | --- |
+| `Skipping create_tables` | ×6 | ×6 |
+| `ML models fresh — skipping retrain` | — | ×1 |
+| `xG backfill skipped — no budget left` | — | ×1 |
+
+The other two (`All fixture teams have sufficient…`, `Backfill made no API
+calls…`) did not fire; their conditions did not arise.
+
+---
+
+## 5. STEP 2 HELD, AND THE COLLISION GUARD GOT NO CANDIDATE
+
+**The 39-row merge landed 09-17. The registered prediction was that step-2 hits
+DO NOT FALL.** Measured on **resolutions**, not fixtures — `resolve_team` runs on
+every fixture UPDATE, so the two differ by ~100×:
+
+| day | fixtures | resolutions | `former_name` | **rate** |
+| --- | --- | --- | --- | --- |
+| 09-17 *(pre-merge)* | 138 | 1,991 | 189 | **9.5%** |
+| 09-18 *(post-merge)* | 38 | 2,467 | 224 | **9.1%** |
+| **09-19 *(post-merge)*** | **156** | 3,040 | 301 | **9.9%** |
+
+> ### The rate held across the merge of 39 duplicate rows. The prediction is CONFIRMED, and it confirmed the mechanism rather than the outcome: step 2 keys on the NAME being a former name, not on whether a duplicate row exists.
+>
+> 09-19's card (156 created) is the one comparable to 09-17's 138. **A raw-count
+> comparison would have read 189 → 301 as a rise; the rate says it is flat.**
+
+**The collision guard was given NO candidate on either day** — zero `Historical
+backfill` lines, so the loop that hosts it never ran. **It has still never
+refused, and that is not the same as passing.** The three 09-16 collisions
+(af=563, 620, 3402) remain.
+
+---
+
+## 6. STANDING
+
+| | |
+| --- | --- |
+| **DEL-3 — first real save** | `REPORT_DELIVERY report=daily picks chunks=5 sent=5 failed=none terminator=yes **attempts=6**` beside `Failed to send Telegram message: Timed out`. **One chunk of five timed out, the retry recovered it, all five delivered.** Before DEL-3 that was a lost middle chunk in a report that ends normally — the 09-13 failure exactly. |
+| **and an audit counter now over-reports** | `ci_audit`'s `telegram_failed` counts the raw "Failed to send" line, so it read **"1 alert failed to deliver"** for a failure that was retried and recovered. `REPORT_DELIVERY` distinguishes them; the counter predates the retry and no longer can. Recorded, not fixed. |
+| **OPS-4** | `400/450 used, 0 spendable`. Unchanged. Reset **10-01, twelve days out**; nothing changes before it. |
+| **s5.9** | **0 match rows over cap in 945 live picks** |
+| **CLV** | pairs **129** (frozen since 09-13) · past-kickoff **920** · coverage **14.0%**, down from 15.2% · `deff = 1.00` both, MODEL eff n 110, FINAL 128 |
+| **cohort** | `00febf` **83 picks**, `ee60cd` 28. s5.14 is populated; the next selection-affecting change takes s5.15 under *always bump*. |
+| **identity** | 3 shared-provider-id components (the 09-16 three), **0 live rows whose name is a former name** — the 39-row merge holds |
+| **OPS-3** | daily-picks 07:43 and 07:38 = **283m / 278m** late against the 03:00 cron, both inside the 09:45 deadline |
+| **UNAUDITABLE** | `35380110401` — 0-byte log, `success` per `gh`. No evidence either way; re-listed by `_is_provisional` until resolved. |
+
+---
+
+## WHAT THESE TWO DAYS ESTABLISHED
+
+1. **The guard is reachable and correct where it ran** — four runs, all declined
+   nothing, all for the right reason.
+2. **Its decline branch and the overnight case are still untested in
+   production**, and the slots that would test them had no candidates.
+3. **Its capture-impact cannot be measured until 10-01**, because OPS-4 floored
+   the two-point rate five days before it shipped.
+4. **Step 2's registered prediction is confirmed on the right denominator.**
+5. **DEL-3 saved a five-chunk report**, which is the first time a mechanism built
+   here has been observed preventing the failure it was written for.
+
+*Audited 2026-09-19. Read-only — no code, config, schema or production data
+changed.*
