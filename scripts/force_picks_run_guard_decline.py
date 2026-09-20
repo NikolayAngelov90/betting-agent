@@ -42,7 +42,10 @@ with mgr.get_session() as s:
 
 sc = ts.TheOddsScraper.__new__(ts.TheOddsScraper)
 sc.db = mgr
-sc.api_key = "forced-exercise-not-a-real-key"
+# `fake-` prefix deliberately: test_no_secrets_in_repo's PLACEHOLDER accepts
+# fake.*/dummy/example/test_key and nothing else, and "forced-…" was none of
+# them. That literal failed CI for a full day of picks on 2026-09-20.
+sc.api_key = "fake-key-never-used-dry-run-only"
 sc._remaining_requests = None
 sc._used_requests = None
 sc._last_league_outcomes = {}

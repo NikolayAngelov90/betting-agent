@@ -173,3 +173,91 @@ round.
 
 *Registered 2026-09-17, before the policy change and before any H1 observation
 exists. No credit spent, no config changed, no collection begun.*
+
+---
+
+## COHORT NEUTRALITY — RESTATED 2026-09-20, BECAUSE THE FIRST VERSION RESTED ON A MECHANISM THAT CANNOT EXECUTE
+
+**The claim is unchanged: the H1 collection does not require an `s5.15` cohort
+break. The reason it holds is not the reason first registered.**
+
+### What was registered on 09-17, and why it does not stand
+
+> *"NEUTRAL, conditionally. 0 of 18 runs overlap under the current cron, margin
+> 41 minutes. Neutral by construction if the runner gates on `daily-picks`
+> completion; without that gate it rests on a thin margin."*
+
+The picks-run guard was that gate, and it was approved in part as protection for
+H1's widened 360-minute refresh window. **Measured 2026-09-20 over 231
+closing-lines runs, 08-10 to 09-20, against the same tables the guard reads:**
+
+| | |
+| --- | --- |
+| total runs | **231** |
+| fail condition 1 — outside the 03:00-16:00 window | **143** |
+| fail condition 2 — today's run had already written picks | **76** |
+| **pass 1 AND 2** | **12** |
+| of those, zero candidate leagues | **12** |
+| condition 3 ever evaluated | **0** |
+| **WOULD DECLINE** | **0 / 231 = 0.0%** |
+
+**And the reason is structural, not statistical.** A candidate league needs a
+fixture kicking off within the window that **already carries a pick**;
+condition 2 requires that **no pick was written today**; and the measured
+fixture-ingestion horizon is **11.2-12.0 hours — same-day only**, so any fixture
+kicking off in the next two hours was created today and any pick on it was made
+today. **Conditions 2 and 3 exclude each other by construction.**
+
+> ### An argument resting on a mechanism that cannot execute is not an argument. The guard is recorded as REDUNDANT, not protective, and this registration does not rely on it.
+
+### What the neutrality actually rests on — the candidate rule
+
+**The same measurement that excludes the guard excludes the exposure.**
+
+`_imminent_league_fixtures` yields a candidate league only when a fixture in the
+window **carries a pending pick**. So:
+
+| state | candidates | refresh | exposure |
+| --- | --- | --- | --- |
+| **no picks written today** | **none** — nothing carries a pending pick | **no requests made** | **none: there is nothing to contaminate and nothing is fetched** |
+| picks written today | some | requests made | a pick already taken persists `taken_odds` at pick time, so a refresh cannot alter it |
+
+**A pending picks run and an active refresh cannot coexist**, because the
+predicate that authorises a refresh is the presence of the very output whose
+absence defines "pending". The widened 360-minute window changes **how far ahead**
+a candidate is looked for; it does not change **what makes one a candidate**.
+
+**Three independent statements, and the conclusion needs only the first two:**
+
+1. **The candidate rule** — no picks, no candidates, no requests. Structural,
+   and it is the load-bearing one.
+2. **`taken_odds` is persisted at pick time** — a refresh cannot retroactively
+   change the price a recorded pick was taken at. Structural.
+3. 0 of 231 runs would have declined; 0 of 18 overlap the first refresh under
+   the current cron, margin 41 minutes. **Empirical, and now corroborating
+   rather than load-bearing.**
+
+> ### VERDICT: NEUTRAL, UNCONDITIONALLY — by the candidate rule and `taken_odds`, not by the guard. No `s5.15` required.
+>
+> The 09-17 verdict was *"NEUTRAL, conditionally"* and named the guard as the
+> condition. **The condition is removed rather than satisfied**: the state the
+> guard was meant to police is one in which no refresh happens at all.
+
+### What this does NOT claim
+
+* **Not that the guard is harmful.** It fails open, has declined nothing in
+  production, and costs nothing while unreachable. Removing it is a separate
+  decision and is not proposed here.
+* **Not that the guard was wrong to build.** Its decline branch was forced on
+  09-19 and behaves as specified. **It is correct and unreachable**, which are
+  different properties.
+* **Not that no refresh can ever overlap a picks run.** It claims the overlap
+  requires today's picks to exist, and in that case the exposure is bounded by
+  `taken_odds` rather than by the guard.
+
+**If the fixture-ingestion horizon ever extends beyond same-day, statement 1
+weakens and this argument must be re-derived** — the mutual exclusion of
+conditions 2 and 3 depends on it, and so does the candidate rule's bite. Stated
+here so the dependency is visible rather than assumed.
+
+*Restated 2026-09-20. No credit spent, no config changed, no collection begun.*

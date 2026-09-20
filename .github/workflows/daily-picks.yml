@@ -188,8 +188,14 @@ jobs:
         timeout-minutes: 50
         continue-on-error: true
 
+      # `== 'failure'`, NOT `!= 'success'`. On 2026-09-20 the retrain step was
+      # SKIPPED (the test step above it failed and halted the job), `skipped`
+      # is not `success`, and this delivered "ML training step killed by CI
+      # timeout" for a step that never started. The alert names a timeout; the
+      # condition must name the outcome a timeout produces. `skipped` is
+      # reported by the critical-step alert below as DID NOT RUN.
       - name: Alert on ML training timeout or failure
-        if: always() && steps.retrain_ml.outcome != 'success'
+        if: always() && steps.retrain_ml.outcome == 'failure'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -279,6 +285,20 @@ jobs:
       # crash — a silent no-pick / no-briefing day. This step inspects each step's
       # outcome and sends ONE Telegram alert if any critical step failed, so a
       # real crash is never invisible.
+      #
+      # `outcome` IS THREE-VALUED AND WAS READ AS TWO-VALUED (2026-09-20).
+      # On run 35498465743 `Run tests` — the one core step with no
+      # continue-on-error — failed, so the job halted and every unguarded step
+      # below it was SKIPPED. This script tested only `== "failure"`, found
+      # none, and printed `All critical steps OK` with picks='skipped'. The step
+      # whose entire purpose is to catch "the day produced nothing" reported the
+      # day as healthy, and DEL-2 never reached its branch because its predicate
+      # names `failure` and the picks step had never run.
+      #
+      # FAILED and DID NOT RUN are different events with the same consequence,
+      # so they are counted apart and alerted together. Anything that is none of
+      # success/failure/skipped (`cancelled` at the timeout cap) is reported as
+      # itself rather than folded into either.
       - name: Alert on critical step failure
         if: always()
         env:
@@ -303,11 +323,23 @@ jobs:
               "update-results": os.environ.get("O_RESULTS", ""),
               "settle (post-results)": os.environ.get("O_SETTLE2", ""),
           }
+          # THREE STATES, KEPT APART. `skipped` means an earlier unguarded step
+          # failed and this one never executed — not that it succeeded.
           failed = [n for n, o in steps.items() if o == "failure"]
-          if not failed:
+          not_run = [n for n, o in steps.items() if o == "skipped"]
+          odd = [f"{n}={o!r}" for n, o in steps.items()
+                 if o not in ("success", "failure", "skipped")]
+          if not (failed or not_run or odd):
               print("All critical steps OK:", steps)
               sys.exit(0)
-          msg = ("⚠️ Daily picks: step(s) FAILED — " + ", ".join(failed)
+          parts = []
+          if failed:
+              parts.append("step(s) FAILED — " + ", ".join(failed))
+          if not_run:
+              parts.append("step(s) DID NOT RUN — " + ", ".join(not_run))
+          if odd:
+              parts.append("step(s) in an UNEXPECTED state — " + ", ".join(odd))
+          msg = ("⚠️ Daily picks: " + "; ".join(parts)
                  + ". Logs: " + os.environ.get("RUN_URL", ""))
           subprocess.run([sys.executable, "-m", "scripts.ci_alert", msg], check=False)
 
@@ -328,8 +360,16 @@ jobs:
           # Safe to exit non-zero here: every subsequent step carries
           # `if: always()` (verified, not assumed — including `Save ML models
           # cache`), so a red run still saves its artifacts.
-          if steps["picks (incl. review)"] == "failure":
-              print("::error::Pick generation FAILED — no picks were produced "
+          #
+          # THE PREDICATE IS "PRODUCED NO PICKS", NOT "FAILED". A skipped picks
+          # step is the same day for the reader — nothing was generated — and
+          # it is the state that actually occurred on 2026-09-20 while this
+          # script reported the run healthy.
+          picks = steps["picks (incl. review)"]
+          if picks in ("failure", "skipped"):
+              why = ("FAILED" if picks == "failure" else
+                     "DID NOT RUN (an earlier unguarded step failed)")
+              print(f"::error::Pick generation {why} — no picks were produced "
                     "for today. Failing the job so the run shows red.")
               sys.exit(1)
           EOF

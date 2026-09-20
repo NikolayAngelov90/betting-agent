@@ -6,8 +6,10 @@ repository, and the production Telegram bot token was hardcoded in
 exposed key; this test stops the next one being committed.
 
 Same shape as the bulk-delete ban and the is_fixture filter guard: scan the
-source, fail on the call/value shape, name the offender. Only TRACKED files are
-scanned — gitignored trees (`mcp-servers/`) never reach the remote.
+source, fail on the call/value shape, name the offender. Tracked AND untracked
+files are scanned — anything not gitignored will reach the remote, and scoping
+on staging made the answer depend on when the suite ran (see
+`_tracked_text_files`). Gitignored trees (`mcp-servers/`) stay out.
 
 Never print a matched value. Offenders are reported masked.
 """
@@ -50,8 +52,31 @@ def _mask(value):
 
 
 def _tracked_text_files():
-    out = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
-                         encoding="utf-8", errors="replace")
+    """Every file that WILL reach the remote — tracked and untracked alike.
+
+    `--others --exclude-standard` is the whole point and it was added on
+    2026-09-20 after a plain `git ls-files` cost a day of picks.
+
+    THE SCOPE WAS DERIVED FROM STAGING, SO THE ANSWER DEPENDED ON WHEN IT RAN.
+    A dummy `api_key` literal was written into a new script, the suite was run,
+    **1072 passed**, the file was committed, and CI then ran the same suite at
+    the same commit and reported **1 failed, 1071 passed**. The file was
+    untracked locally and tracked in CI; `git add` changed the test's input
+    set, not the code.
+
+        The count was 1072 both times. An unchanged number reads as
+        confirmation, which is worse than a number that moves.
+
+    Scanning untracked-but-not-ignored files makes the scope depend on what
+    exists rather than on what has been staged, so the check gives the same
+    answer before and after `git add`. Gitignored trees (`mcp-servers/`) stay
+    out — `--exclude-standard` honours .gitignore, and those never reach the
+    remote. This is a superset of the old scope: nothing previously scanned is
+    dropped.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     for name in out.stdout.splitlines():
         if not name:
             continue

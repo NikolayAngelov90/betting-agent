@@ -15554,7 +15554,7 @@ after LOG-1 all three lines are at INFO or above.
 | | |
 | --- | --- |
 | **registration** | **`aad0f01`** — committed before design detail, before the policy change, before any H1 observation exists |
-| **cohort verdict** | **NEUTRAL, conditionally.** 0 of 18 runs overlap under the current cron, margin 41 minutes. **Neutral by construction if the runner gates on `daily-picks` completion; without that gate it rests on a thin margin.** **No s5.15 required.** |
+| **cohort verdict** | ~~**NEUTRAL, conditionally.** 0 of 18 runs overlap under the current cron, margin 41 minutes. **Neutral by construction if the runner gates on `daily-picks` completion; without that gate it rests on a thin margin.**~~ **SUPERSEDED 2026-09-20 — the named gate (the picks-run guard) CANNOT EXECUTE: 0 of 231 runs, conditions 2 and 3 mutually exclusive by construction. Restated on the candidate rule and `taken_odds` in `docs/h1-preregistration.md`; verdict is now NEUTRAL UNCONDITIONALLY.** **No s5.15 required** (unchanged). |
 | **credit arithmetic** | **≈106–168 credits** at window **360** / interval **120**, ~53–84 credits/day. **The proposed 300 would cost 780 and is not recommended.** |
 | **projected duration** | **2 days** at window 360 (23 qualifying fixtures/day against n=33–39). 13 days at 300. |
 | **invariants** | `tests/test_experiment_invariants.py` **passed**. *The count is not cited: invariants 2 and 3 are known defective, and a passing count is not a guarantee.* |
@@ -16250,3 +16250,136 @@ ignoring the field entirely.
 
 *Audited 2026-09-20. Read-only — no code, config, schema, workflow or production
 data changed.*
+
+---
+
+# `skipped` CLOSED IN FOUR PLACES; H1's NEUTRALITY RE-DERIVED; THE STAGING RULE PINNED
+
+`tests/` **1089 passed** — and, for the first time deliberately, **run after
+`git add` rather than before**. `s5.14` / `00febf` unchanged: the alert logic,
+the audit verdict and the test scope are not in the selection path.
+
+---
+
+## 1. A THREE-VALUED FIELD READ AS TWO-VALUED, IN FOUR PLACES
+
+GitHub's `outcome` is `success` / `failure` / `skipped`. Every reader here
+tested two of them, and **the third is the one that occurred.**
+
+| | before | after |
+| --- | --- | --- |
+| **the critical-step alert** | `failed = [... if o == "failure"]` → empty → `exit 0` and `All critical steps OK` | **FAILED**, **DID NOT RUN** and **UNEXPECTED** counted apart, alerted together |
+| **DEL-2's red-run branch** | `if picks == "failure"` | `if picks in ("failure", "skipped")` — the predicate is *produced no picks*, not *failed* |
+| **the ML alert** | `if: always() && outcome != 'success'` — **delivered "killed by CI timeout" for a step that never started** | `== 'failure'`, which is the outcome a timeout actually produces |
+| **`ci_audit.verdict`** | `steps_failed or tracebacks → BROKEN`, else CLEAN | new verdict **`DID_NOT_RUN`**, checked after BROKEN |
+| **`test_red_run_policy`** | `OK` all-`success`, one key overridden with `failure`; **`skipped` never passed** | 6 new cases, including run 35498465743's **real** outcome dict |
+
+> ### `BROKEN` says something exited non-zero. `CLEAN` says the checks ran and found nothing. Neither describes a run whose steps did not execute — nothing crashed and nothing ran.
+
+**Verified against the real bytes.** Feeding run 35498465743's log to the
+changed extractor:
+
+```
+assertions: core step(s) DID NOT RUN: update, settle (pre-picks),
+            picks (incl. review) — nothing crashed and nothing ran
+verdict:    DID_NOT_RUN
+```
+
+**Both log shapes are read** — the new `step(s) DID NOT RUN — …` line and the
+printed outcome dict that every pre-09-20 log carries — because the ledger has
+to stay readable across the change. `DID_NOT_RUN` is **not** provisional: a run
+that did not run will not run again, so it takes its row and stops.
+
+---
+
+## 2. H1's NEUTRALITY RESTED ON A MECHANISM THAT CANNOT EXECUTE
+
+The 09-17 declaration read **"NEUTRAL, conditionally … neutral by construction
+if the runner gates on `daily-picks` completion"**, and the picks-run guard was
+that gate. **It cannot reach its decline branch: 0 of 231 runs, and the reason
+is structural** — a candidate needs a fixture that already carries a pick,
+condition 2 requires that no pick was written today, and the 11-hour ingestion
+horizon makes those mutually exclusive.
+
+> ### An argument resting on a mechanism that cannot execute is not an argument, and it would have been carried into 10-01.
+
+**Re-derived on what the same measurement actually shows.** If no picks exist,
+`_imminent_league_fixtures` yields no candidates, so **no refresh happens
+either**. The predicate that excludes the guard excludes the exposure.
+
+| | load-bearing? |
+| --- | --- |
+| **1. the candidate rule** — no picks → no candidates → no requests | **yes, structural** |
+| **2. `taken_odds` persisted at pick time** — a refresh cannot alter a recorded price | **yes, structural** |
+| 3. 0 of 231 would decline; 0 of 18 overlap, margin 41 min | **corroborating, no longer load-bearing** |
+
+**VERDICT: NEUTRAL, UNCONDITIONALLY — by the candidate rule and `taken_odds`,
+not by the guard.** No `s5.15`. **The condition was removed rather than
+satisfied**, and the guard is recorded as **redundant, not protective**.
+
+**Correct and unreachable are different properties.** The guard fails open, its
+decline branch was forced on 09-19 and behaves as specified, and it costs
+nothing while unreachable. **Removing it is a separate decision and is not
+proposed.** The dependency is stated in the registration: **if the ingestion
+horizon ever extends beyond same-day, statement 1 weakens and this must be
+re-derived.**
+
+The 09-17 row is struck through in place with a pointer, so a reader of the
+declaration cannot pick up the retired argument.
+
+---
+
+## 3. THE SCOPE WAS FIXED, NOT THE MEMORY
+
+`_tracked_text_files()` enumerated `git ls-files`. **1072 passed locally before
+`git add`; 1071 passed and 1 failed in CI at the same commit.** The population
+changed and the code did not.
+
+> ### The other four UNI-1 instances gave DIFFERENT numbers from different units, and a number that moves invites the question. This one gave the SAME number. An unchanged figure reads as confirmation — and it was offered as evidence the commit was clean.
+
+**`git ls-files --cached --others --exclude-standard`.** The scope is now *every
+file that will reach the remote* rather than *every file staged so far*, so the
+check gives the same answer before and after `git add`. Gitignored trees stay
+out; the new scope is a strict superset, pinned as one.
+
+**Demonstrated rather than argued.** An untracked file carrying the original
+literal, written to the working tree and confirmed `??` by `git status`:
+
+```
+E   _proof_untracked.py:1: credential-shaped value forced…al-key
+    1 failed, 5 passed
+```
+
+**That is the defect being caught at the moment it would have been introduced**
+— before `git add`, where the old scope was blind.
+
+**And the general form is pinned**, since there was exactly one call site and
+there will be more: `test_no_check_scopes_itself_on_staged_files_alone` fails on
+any `git ls-files` lacking `--others --exclude-standard`. **Remembering to stage
+first is the alternative, and this project has measured what remembering is
+worth.**
+
+### Two defects caught in this change, both by existing pins
+
+* **The meta-test failed on itself.** It matched its own two deliberate bare
+  `ls-files` calls — the controls that ask "what is staged" on purpose. **A
+  definition is not an occurrence**, the same error `_is_provisional` made on a
+  row whose *note* mentioned a verdict. Self-exclusion, as
+  `test_no_secrets_in_repo` already takes.
+* **`test_every_subprocess_capture_declares_utf8` caught a new
+  `subprocess.run(..., text=True)` with no `encoding`.** Its named failure mode:
+  the reader thread dies, `.stdout` becomes `None`, **which reads as an empty
+  result, which reads as a clean finding** — the same collapse this entry is
+  about, one level down.
+
+---
+
+## THE OPERATIONAL CONSEQUENCE
+
+`force_picks_run_guard_decline.py:45` now reads `"fake-key-never-used-dry-run-
+only"`, which `PLACEHOLDER` accepts. **Tomorrow's 03:00 run is no longer blocked
+by a failing suite**, and the four `skipped` readers no longer report a
+pick-less day as healthy. The card lost on 09-20 is not recoverable — fixture
+ingestion has no forward buffer.
+
+*Recorded 2026-09-20.*

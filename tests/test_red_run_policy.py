@@ -16,6 +16,23 @@ step. Removing it would halt the job at the failure, so `--update-results`, the
 second `--settle` and the cache saves would never run. This changes the run's
 COLOUR, not its execution.
 
+`outcome` IS THREE-VALUED, AND THIS FILE TESTED TWO (found 2026-09-20). `OK`
+below is all-`"success"` and every case overrode one key with `"failure"`. No
+test ever passed `"skipped"` — so nothing here covered run 35498465743, where
+`Run tests` (the one core step with no continue-on-error) failed, the job
+halted, update/settle/picks were SKIPPED, and the script printed
+`All critical steps OK`. The step that exists to catch "the day produced
+nothing" reported the day as healthy, and DEL-2 never reached its branch
+because the branch names `failure` and the picks step had never run.
+
+    failure   it ran and broke
+    skipped   an earlier unguarded step failed and it never started
+    success   it ran
+
+FAILED and DID NOT RUN are different events with the same consequence for the
+reader: no picks. They are counted apart and alerted together, and BOTH turn
+the run red when they land on pick generation.
+
 The axis is the thing to remember: `continue-on-error` on a scraper absorbs a
 routine, recoverable failure — Flashscore times out, results arrive tomorrow. On
 pick generation it converts "the day produced nothing" into a green run. Those
@@ -107,7 +124,67 @@ def test_settlement_failure_is_currently_green_and_that_is_a_known_choice():
 def test_all_success_is_silent():
     code, out = _run({})
     assert code == 0
-    assert "Daily picks: step(s) FAILED" not in out
+    assert "Daily picks:" not in out
+
+
+# ── SKIPPED: the third state, and the one that actually happened ──────────
+
+def test_a_SKIPPED_picks_step_makes_the_run_red():
+    """No picks were produced. How the step failed to produce them is detail.
+
+    This is the case the file did not have on 2026-09-20, and its absence is
+    why `All critical steps OK` was printed on a day with zero picks.
+    """
+    code, out = _run({"O_PICKS": "skipped"})
+    assert code == 1, (
+        "the picks step never ran and the job still reports success — the "
+        "run produced no picks and nothing in the Actions list says so")
+    assert "DID NOT RUN" in out, out
+    assert "::error::" in out
+
+
+def test_the_REAL_2026_09_20_outcomes_are_not_reported_as_healthy():
+    """Run 35498465743, replayed exactly as GitHub reported it.
+
+    `Run tests` failed, so everything above the `always()` barrier was
+    skipped and everything below it ran. Pinned with the real values rather
+    than a constructed case, because the constructed cases all passed.
+    """
+    code, out = _run({"O_UPDATE": "skipped", "O_SETTLE1": "skipped",
+                      "O_PICKS": "skipped", "O_RESULTS": "success",
+                      "O_SETTLE2": "success"})
+    assert "All critical steps OK" not in out, (
+        "the day produced no picks and the alert called it OK — this is the "
+        "exact output of run 35498465743")
+    assert code == 1
+    assert "update" in out and "picks (incl. review)" in out
+
+
+def test_a_skipped_scraper_alerts_but_stays_green():
+    """Same axis as a failed scraper: recoverable, so loud but not red."""
+    code, out = _run({"O_RESULTS": "skipped"})
+    assert code == 0
+    assert "DID NOT RUN" in out, out
+
+
+def test_FAILED_and_DID_NOT_RUN_are_reported_apart_in_one_alert():
+    """Summing them would lose which steps crashed and which never started."""
+    code, out = _run({"O_UPDATE": "failure", "O_PICKS": "skipped"})
+    assert "step(s) FAILED — update" in out, out
+    assert "DID NOT RUN — picks (incl. review)" in out, out
+    assert code == 1
+
+
+def test_an_outcome_that_is_none_of_the_three_is_reported_as_itself():
+    """`cancelled` at the 360-minute cap is not success, failure or skipped.
+
+    Folding it into either would be the same collapse one level down, so it
+    is named and surfaced rather than classified.
+    """
+    code, out = _run({"O_UPDATE": "cancelled"})
+    assert "UNEXPECTED state" in out, out
+    assert "cancelled" in out
+    assert code == 0, "a cancelled update is not pick generation"
 
 
 def test_continue_on_error_is_still_set_on_every_core_step():

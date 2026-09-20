@@ -468,6 +468,25 @@ def extract(log: str) -> Dict[str, object]:
     # called two DEGRADED runs BROKEN. A definition is not an occurrence.
     f["steps_failed"] = re.findall(
         r"step\(s\) FAILED — ([A-Za-z][^\n]{0,120})", log)
+    # SKIPPED IS THE THIRD STATE, and it is the one that occurred. Run
+    # 35498465743 (2026-09-20) halted at `Run tests` — the only core step with
+    # no continue-on-error — so update, settle and picks were SKIPPED, the
+    # workflow printed `All critical steps OK`, and this tool scored the run
+    # CLEAN. A run whose core steps did not execute is neither clean nor
+    # broken; nothing crashed and nothing ran.
+    #
+    # Read from BOTH shapes, because the ledger must stay readable across the
+    # workflow change that introduced the second one:
+    #   old  All critical steps OK: {'picks (incl. review)': 'skipped', ...}
+    #   new  step(s) DID NOT RUN — picks (incl. review), update
+    f["steps_not_run"] = re.findall(
+        r"step\(s\) DID NOT RUN — ([A-Za-z][^\n]{0,120})", log)
+    if not f["steps_not_run"]:
+        for blob in re.findall(r"All critical steps OK: (\{[^\n}]{0,400}\})", log):
+            named = [n for n, o in re.findall(r"'([^']+)':\s*'([^']+)'", blob)
+                     if o == "skipped"]
+            if named:
+                f["steps_not_run"].append(", ".join(named))
     return f
 
 
@@ -655,6 +674,9 @@ def assertions(facts: Dict[str, object],
                 f"went missing without being recorded")
     if facts.get("steps_failed"):
         hits.append(f"core step(s) reported failure: {facts['steps_failed'][-1]}")
+    if facts.get("steps_not_run"):
+        hits.append(f"core step(s) DID NOT RUN: {facts['steps_not_run'][-1]} "
+                    "— nothing crashed and nothing ran")
     return hits
 
 
@@ -748,6 +770,13 @@ def verdict(facts: Dict[str, object], hits: List[str],
         return "UNAUDITABLE"
     if facts.get("steps_failed") or facts.get("tracebacks"):
         return "BROKEN"
+    # FOURTH INSTANCE, and the vocabulary is GitHub's own. `outcome` is
+    # three-valued and every reader here treated it as two. A run whose core
+    # steps were SKIPPED did not crash — nothing to call BROKEN — and did not
+    # work — nothing to call CLEAN. Checked AFTER `steps_failed`, because a run
+    # that both failed and skipped is broken first.
+    if facts.get("steps_not_run"):
+        return "DID_NOT_RUN"
     return "DEGRADED" if hits else "CLEAN"
 
 
