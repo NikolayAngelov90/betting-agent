@@ -15988,3 +15988,265 @@ it is untested on this axis — and it is not blamed for a fall that preceded it
 > One number gates both, and it is the same number that opened OPS-4 on the 12th.
 
 *Recorded 2026-09-19.*
+
+---
+
+# AUDIT 2026-09-20 — the first red run, and it went red for the wrong reason
+
+| run | workflow | started | verdict | note |
+| --- | --- | --- | --- | --- |
+| **35498465743** | daily-picks | 09-20 08:02 | **BROKEN** | **job `failure`.** Step 14 `Run tests` exited 1. Steps 15-22 SKIPPED; 23-31 ran |
+| 35480458431 | closing-lines | 09-20 01:05 | CLEAN | 0 candidates |
+| 35516202151 | paper-trading-report | 09-20 14:20 | CLEAN | 945 paper predictions, unchanged |
+| 35516238265 | closing-lines | 09-20 14:21 | CLEAN | 0 candidates |
+| 35517226167 | closing-lines | 09-20 14:40 | CLEAN | 0 candidates |
+| 35459736660 / 35470444690 | closing-lines | 09-19 17:59 / 21:26 | CLEAN | |
+| 35447343534 / 35357506282 / 35239380353 | paper-trading-report | 09-17/18/19 | CLEAN | |
+| **35380110401** | closing-lines | 09-18 18:25 | **CLEAN — resolved** | the 0-byte log now returns 49,564 bytes. `UNAUDITABLE` cleared |
+
+---
+
+## 1. IT IS NOT DEL-2. IT IS THE ONE STEP THAT WAS NEVER GUARDED
+
+`gh run view`, before any log:
+
+```
+14  Run tests                         completed/failure   08:04:50 -> 08:06:51
+15  Run daily update                  completed/skipped
+16  Settle yesterday's predictions    completed/skipped
+17  Retrain ML models (if stale)      completed/skipped
+22  Generate, review, and send picks  completed/skipped
+```
+
+**`Run tests` is the only core step with no `continue-on-error`** — deliberately,
+since Stage 12.1. It failed, so the job halted there and every unguarded step
+below it was skipped. **DEL-2 did not fire and could not have**, because its
+predicate is `steps.picks.outcome == 'failure'` and the picks step never ran.
+
+### THE POLICY'S OWN ALERT REPORTED THE DAY AS HEALTHY
+
+```
+All critical steps OK: {'update': 'skipped', 'settle (pre-picks)': 'skipped',
+ 'picks (incl. review)': 'skipped', 'update-results': 'success',
+ 'settle (post-results)': 'success'}
+```
+
+> ### The step whose entire purpose is to catch "the day produced nothing" printed `All critical steps OK` on a day that produced nothing.
+
+`failed = [n for n, o in steps.items() if o == "failure"]`. **`skipped` is not
+`failure`**, so the list was empty and the script exited 0 before reaching the
+DEL-2 branch. **Seventh instance of the third-state family** — and the first
+where the collapsed state is the one that actually occurred.
+
+**The run is red anyway, but not because of any of this**: pytest's exit 1 with
+no `continue-on-error` failed the job directly. **Had the test step carried
+`continue-on-error` like every other core step, this would have been a GREEN run
+with zero picks** — exactly the state DEL-2 was written to abolish.
+
+### AND THE TEST THAT PINS THE POLICY NEVER PASSES `skipped`
+
+`test_red_run_policy._run()` builds its environment from
+`OK = {... all "success"}` and overrides one key with `"failure"`. **No test in
+the file passes `"skipped"` for any step.** The policy is pinned across two of
+the three outcomes GitHub can produce.
+
+### A FALSE ALERT WAS DELIVERED FROM THE SAME COLLAPSE
+
+Step 18 is `if: always() && steps.retrain_ml.outcome != 'success'`. `skipped`
+is not `success`, so it fired:
+
+```
+[warn] ML training step killed by CI timeout - model not updated.
+CI alert delivered (attempt 1).
+```
+
+**ML training was not killed by a timeout. It never started.** The condition
+tests `!= success` where the fault it names is `== failure`.
+
+### THE FIVE `always()` STEPS BELOW THE CHECK BEHAVED AS PINNED
+
+| step | condition | outcome |
+| --- | --- | --- |
+| Send weekly performance report | `always()` | success — **Sunday, report sent** |
+| Save ML models cache | `always()` | **success — the saves were NOT skipped** |
+| Save camoufox binary cache | `always() && cache-hit != 'true'` | skipped (cache hit — correct) |
+| Upload logs on failure | `failure()` | success |
+| Notify Telegram on workflow failure | `failure()` | success |
+
+**The risk DEL-2 was built to avoid did not materialise.** But
+`test_every_step_after_the_check_still_runs_when_it_exits_nonzero` pins the
+steps *after step 26*, and **this failure happened at step 14** — the seven
+skipped steps sit in the twelve-step gap the invariant does not cover. **The pin
+held where it was pinned and was silent about everything above it.**
+
+---
+
+## 2. WHAT WAS LOST — measured, not inferred
+
+| | |
+| --- | --- |
+| picks with `pick_date = 2026-09-20` | **0** |
+| odds rows written today | **0** |
+| match rows created today | **0** |
+| picks settled today | **53** (09-19's card) — `--update-results` and the second `--settle` both ran under `always()` |
+| `EXPERIMENT RECORD` | **SENT, twice** — `n=940 cohorts=11 current=...00febf(83)`, on the settlement report and the Sunday performance report |
+| `REPORT_DELIVERY` | 2 lines, `chunks=2 sent=2 attempts=2` and `chunks=1 sent=1 attempts=1` |
+| delivery counter | **LOST 0 / RECOVERED 0 / UNEXPLAINED 0**, `telegram_sent=3`. Clean on the split counter's first red-run reading |
+| failure alert | **delivered, attempt 1** |
+
+### THE LOSS IS LARGER THAN THE PICKS, AND IT IS UNRECOVERABLE
+
+```
+max match_date in matches      : 2026-09-19 19:30
+rows with match_date >= now()  : 0
+```
+
+**The fixture table holds nothing in the future.** Measured ingestion lead, by
+creation day: **max 11.2-12.0 hours, every day.** The daily update ingests the
+**same day's card only** — there is no forward buffer.
+
+| future fixtures known at 14:30 UTC | |
+| --- | --- |
+| 09-13 -> 09-19 | 38 / 20 / 12 / 17 / 12 / 31 / **44** |
+| **09-20** | **0** |
+
+> ### Because the ingestion horizon is same-day, a skipped `--update` is not a delay — it is a permanent hole. 09-20's card was never ingested, so it yields no fixtures, no odds, no picks and no closing lines, ever.
+
+---
+
+## 3. THE GUARD — AND YESTERDAY'S OPEN ITEM IS NOW ANSWERED, 0 OF 231
+
+Both 09-20 captures inside the window reported **`candidate leagues : 0`**. The
+guard was **never reached** — eighth consecutive run. And OPS-4 is unchanged:
+`400/450 used, 0 spendable`, so the credit gate refuses independently. The two
+are distinguishable in the log and neither fired a decline.
+
+**Today was the closest production has come to the reverted version's failure
+mode**: the picks step never ran, so **condition 2 held all day**. It still
+declined nothing — because **the same failure that made condition 2 true made
+condition 3 unreachable**, by leaving the fixture table empty.
+
+### The three-condition predicate, reconstructed over every closing-lines run
+
+231 runs, 2026-08-10 -> 2026-09-20, evaluated against the same tables the guard reads:
+
+| | |
+| --- | --- |
+| total runs | **231** |
+| fail condition 1 — outside the 03:00-16:00 window | **143** |
+| pass 1 | 88 |
+| fail condition 2 — today's run had already written picks | **76** |
+| **pass 1 AND 2** | **12** |
+| of those, zero candidate leagues | **12** |
+| condition 3 ever evaluated | **0** |
+| **WOULD DECLINE** | **0 / 231 = 0.0%** |
+
+> ### The decline branch is not merely untested. Given an 11-hour ingestion horizon it is structurally unreachable.
+>
+> A candidate league needs a fixture kicking off within 120 minutes that
+> **already carries a pick**. Condition 2 requires that **no pick was written
+> today**. Fixtures are only ever ingested same-day — so a fixture kicking off
+> in the next two hours was created today, and any pick on it was made today.
+> **Conditions 2 and 3 exclude each other by construction.**
+
+**This bears directly on H1.** The guard was approved in part as protection for
+H1's widened 360-minute refresh window. **It protects nothing it can reach**, and
+that is now measured rather than assumed. The forced exercise on 09-19 remains
+the only execution of the branch, and constructing it required a league holding
+both a stale pending pick and an unpicked future fixture — **a combination
+production has not produced in 231 runs.**
+
+**MEASUREMENT CAVEAT, stated because it nearly changed the answer.** The first
+pass filtered candidates on `Match.is_fixture`, which is flipped to `False` once
+results arrive and therefore cannot describe historical state. Removing it left
+the funnel **unchanged** — 12 of 12 with no candidate — so the result survives
+the correction rather than depending on it.
+
+---
+
+## 4. DETERMINISTIC, MINE, AND IT WILL RECUR TOMORROW
+
+```
+FAILED tests/test_no_secrets_in_repo.py::test_no_secret_shaped_literals_in_tracked_files
+  scripts/force_picks_run_guard_decline.py:45: credential-shaped value forced...al-key
+1 failed, 1071 passed in 119.49s
+```
+
+`scripts/force_picks_run_guard_decline.py:45` is `sc.api_key =
+"forced-exercise-not-a-real-key"` — a dummy string in the script written on
+09-19 to force the guard's decline branch. It matches `KEY_FIELD` (a 20-char-or-
+longer value assigned to an `api_key` field) and **misses `PLACEHOLDER`**, which
+accepts `fake.*`, `test[_-]?key`, `dummy`, `example` — and not `forced...`.
+
+**Not environmental. Not a timeout, provider error or dependency failure.
+Reproduced locally: `1 failed, 5 passed`. It will fail identically tomorrow, and
+the day after, until the literal changes.**
+
+### WHY IT PASSED LOCALLY AND FAILED IN CI AT THE SAME COMMIT
+
+`_tracked_text_files()` enumerates **`git ls-files`**. The suite ran locally
+**before `git add`**, when the script was untracked and therefore outside the
+test's input set. `git add` changed the scope of the test, not the code.
+
+> ### The count was 1072 both times. A suite whose scope is defined by git state gives no signal when the scope changes — the number that would have warned is the number that stayed the same.
+
+**I reported "1072 pass" as evidence the commit was clean. It was 1072 over a
+different file set.** UNI-1's fifth instance, and the first in which the unit is
+not a denominator but a *file set*.
+
+**Blast radius: exactly one workflow.** `daily-picks` is the only workflow that
+runs `pytest` — which is why closing-lines and paper-trading are green. **The
+gate protects only the workflow it blocks, and it blocks the only one that
+produces picks.**
+
+---
+
+## 5. STANDING
+
+| | |
+| --- | --- |
+| **OPS-4** | ledger **400/450 used, 0 spendable**; provider header `x-requests-remaining: 100`. **500 - 400 = 100 — ledger and provider agree exactly.** Reset **10-01, eleven days out** |
+| **s5.9 — run at the FIXTURE unit for the first time** | **0 groups over cap since the cap-1 change (`bef66ca`, 2026-08-23)**, in 941 undisposed live/paper picks. All-time: 11 groups vs 10 match rows — **the units genuinely differ**, and the one the match-row check cannot see (49496/49520, Sporting, 08-14) predates the cap |
+| **CLV** | pairs **129**, frozen since 09-13 (8 days) / `deff = 1.00` both series / MODEL eff n **110**, FINAL **128** / coverage **13.7%** (129/945), from 14.5% and 15.0% — **falling by denominator growth alone** |
+| **two-point separated series** | **0 every day, 09-12 -> 09-20.** Floor unchanged |
+| **cohort** | `694a60` 303 / `485823` 246 / `32df36` 97 / **`00febf` 83** / `645bac` 66. No picks today, so no cohort moved. Next selection-affecting change takes **s5.15** |
+| **identity** | **0** live rows whose name is a former name of another team / **3** shared-provider-id components (the 09-16 three) |
+| **OPS-3** | daily-picks **302 min** late (03:00 -> 08:02), inside the 09:45 deadline by 103 min / paper-trading **213 min** (10:47 -> 14:20) / closing-lines 09-20: **64 min** (13:17 -> 14:21) and **233 min** (10:47 -> 14:40) |
+
+### THE AUDITOR SCORED THE RED RUN CLEAN
+
+```
+35498465743  daily-picks  2026-09-20T08:02  CLEAN
+```
+
+`steps_failed` is parsed **only** from the workflow's own
+`step(s) FAILED — ...` alert text, which was never printed because every core
+step was `skipped`. `tracebacks` looks for `Traceback (most recent call last)`,
+which `pytest --tb=short` does not emit. So both BROKEN triggers were empty.
+
+**`conclusion` is requested at line 207 and read nowhere.** The docstring says
+*"`conclusion: success` is not evidence"* — true, and the tool generalised it to
+ignoring the field entirely.
+
+> ### A green conclusion proves nothing because every step carries `continue-on-error`. A RED conclusion means something exited non-zero with no guard — that is dispositive, and it is the one piece of evidence the auditor does not read.
+
+**Fourth instance of this collapse in this one tool**, after `[]` vs `None`,
+429-with-credits vs 429-with-zero, and empty-log vs unmeasured.
+
+---
+
+## WHAT THIS RUN ESTABLISHED
+
+1. **The first red run was produced by the one step nobody guarded**, and DEL-2
+   — the mechanism built to make red runs meaningful — **did not participate.**
+2. **`skipped` is the untested third outcome** in the policy, its test file, its
+   ML alert, and the auditor. One false alert was delivered because of it.
+3. **The `always()` ordering held**: settlement, results and both caches saved.
+4. **The loss is the whole day's card, permanently**, because fixture ingestion
+   has no forward buffer.
+5. **The picks-run guard's decline condition has never held in 231 runs**, and
+   conditions 2 and 3 are mutually exclusive under a same-day ingestion horizon.
+6. **The failure is deterministic, self-inflicted on 09-19, and recurs tomorrow.**
+
+*Audited 2026-09-20. Read-only — no code, config, schema, workflow or production
+data changed.*
