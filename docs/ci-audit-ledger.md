@@ -16383,3 +16383,232 @@ pick-less day as healthy. The card lost on 09-20 is not recoverable — fixture
 ingestion has no forward buffer.
 
 *Recorded 2026-09-20.*
+
+---
+
+# AUDIT 2026-09-21 / 09-22 — the fix holds, and the repairs it made possible are now untested
+
+| run | workflow | started | verdict | note |
+| --- | --- | --- | --- | --- |
+| **35577396913** | daily-picks | 09-21 08:20 | **DEGRADED** | `Run tests` **PASSED**; every core step ran. `disc[fs=2c fdo=0c af=86c]` · **2 picks** · 8 implausible rows |
+| **35702692750** | daily-picks | 09-22 08:02 | **DEGRADED** | `Run tests` **PASSED**; every core step ran. `disc[fs=0c fdo=0c af=0c]` · **0 fixtures, 0 picks** · 8 implausible rows |
+| 35528251651 · 35538912946 · 35549608532 · 35626740486 · 35629255812 · 35654729555 · 35670364762 | closing-lines | 09-20 → 09-22 | CLEAN | **0 candidate leagues on all seven** |
+| 35626601540 | paper-trading-report | 09-21 16:35 | CLEAN | |
+
+---
+
+## 1. THE FIX HOLDS — AND FOUR OF THE FIVE REPAIRS ARE NOW UNEXERCISED
+
+**`Run tests` succeeded on both days and no core step was skipped.** Steps 15-17,
+19-22, 24-25 all `success`; the only `skipped` steps are the ML alert (correctly)
+and the three `failure()`-gated ones. `All critical steps OK: {'update':
+'success', ... 'picks (incl. review)': 'success', ...}` on both days.
+
+### The uncomfortable half
+
+**The four `skipped` repairs fire only when a core step is skipped, which is
+exactly what a passing test step prevents.** They shipped on 09-20 and entered
+the never-executed list the same day:
+
+| repair | state |
+| --- | --- |
+| the alert's `DID NOT RUN` branch | **never executed** — `not_run` was empty both days |
+| DEL-2's widened `("failure", "skipped")` | **never executed** — picks succeeded |
+| the ML alert's narrowed `== 'failure'` | **never executed**, and *not* confirmed by its silence: retrain returned `success`, which the OLD `!= 'success'` condition would also have passed over. **The narrowing is untested; only the false-firing input is gone.** |
+| `ci_audit`'s `DID_NOT_RUN` verdict | **EXERCISED — see below** |
+
+> ### This is the same shape as the picks-run guard: a repair whose trigger is a failure cannot be exercised by a healthy day, and shipping it is not the same as knowing it works.
+
+### `ci_audit` is the exception, and it was re-run on the stored bytes
+
+```
+$ python scripts/ci_audit.py --run 35498465743
+35498465743  daily-picks  DID_NOT_RUN  ... core step(s) DID NOT RUN: update, settle (pre-picks), picks (incl. review)
+```
+
+**Verdict `DID_NOT_RUN`, all three steps named**, both through `extract()` on the
+saved log and end-to-end through `gh`. **That one can be exercised on stored
+evidence, and it is the only one of the four that can.** The other three are
+recorded as *shipped and unexercised*, not as fixed.
+
+---
+
+## 2. THE 09-20 HOLE — FILLED FOR THE TRAINING SET, PERMANENTLY EMPTY FOR ODDS
+
+**The next day's `--update` backfilled it.** `_fetch_fixtures_by_date('2026-09-20')`
+returned **1151** fixtures and created **86**.
+
+| 09-20 | |
+| --- | --- |
+| matches now present | **86**, across **23 leagues** |
+| with a result | **85 of 86** |
+| created on | **2026-09-21**, every one — i.e. after kickoff |
+| **carrying any odds row** | **0** |
+
+Neighbouring days carry odds on 12/12, 30/31, 53/117 and 2/2. **09-20 carries
+them on 0 of 86.**
+
+> ### Poisson and Elo fit from `matches` with results. 85 played matches with scores are present, so THERE IS NO HOLE IN THE FITTING DATA. What is permanently missing is every odds row for that day — no implied-probability features, no closing lines, no CLV pairs, and no H5 sample, for any 09-20 fixture, ever.
+
+**The loss is narrower than feared and it is in a different place than the
+question assumed.** The training set self-heals through the previous-day
+backfill; the odds series does not, because nothing re-fetches a price that was
+never taken.
+
+---
+
+## 3. A NEW FINDING: THE MIDWEEK CARD COLLAPSED, AND IT IS NOT THE 09-20 FAILURE
+
+**09-22 produced `No fixtures found for 2026-09-22` and zero picks.** 09-21
+produced 2. Against the four preceding weeks:
+
+| | | | | | |
+| --- | --- | --- | --- | --- | --- |
+| **Mondays** | 08-24 **44** | 08-31 **29** | 09-07 **21** | 09-14 **20** | **09-21 = 2** |
+| **Tuesdays** | 08-25 **24** | 09-01 **29** | 09-08 **21** | 09-15 **12** | **09-22 = 0** |
+
+And the composition, not just the count: **09-07 and 09-14 each drew on 14
+leagues** (Serie A, Primeira Liga, Allsvenskan, Ekstraklasa, Süper Lig, …).
+**09-21 drew on one — `romania/liga-1`.**
+
+### Two independent sources agree, which is what makes this hard
+
+| date | AF fixtures returned GLOBALLY | of those, in the 45 tracked leagues |
+| --- | --- | --- |
+| 09-13 Sun | 1117 | 70 |
+| 09-14 **Mon** | 158-164 | **20** |
+| 09-15 **Tue** | 247 | **12** |
+| 09-20 Sun | 1151 | **86** |
+| 09-21 **Mon** | 146 | **2** |
+| 09-22 **Tue** | 203 | **0** |
+
+**The global slate is the same size as the equivalent day a week earlier — 146
+against 158, 203 against 247 — and our share went from 20 to 2 and from 12 to
+0.** Flashscore agrees independently: 30 leagues scraped, *"111 row(s) on the
+page, none in range"*.
+
+**The league-id mapping is NOT broken**: the same mapping created 86 rows for
+09-20 two days ago. So this is not the ingestion silently narrowing.
+
+### What I can and cannot settle read-only
+
+**Consistent with a genuinely empty midweek:** the 09-19/20 weekend carried
+**203** fixtures, the largest of any weekend measured (187, 189, 189), which is
+what a round completing on the weekend looks like — and it leaves Monday empty.
+
+**Not fully explained by it:** the weekend surplus over the previous weekends is
+~15, against a Mon+Tue deficit of ~30.
+
+> **A provider query would settle it and costs credits, which are at zero until
+> 10-01.** The free discriminator is dated: **if 09-23 backfills to a normal
+> Wednesday (15-22), the round shifted midweek and nothing is wrong. If 09-23 is
+> also near zero, the tracked-league slate has stopped populating and the
+> pipeline has been producing ~0 picks/day since 09-20.**
+
+**Flashscore's `REFUSING fixture row … kickoff time did not parse` is NOT the
+cause** — 621 refusals on both days against 492 and 439 on 09-18 and 09-19, when
+the pipeline was healthy. It is chronic background, and the refusal is the guard
+working: a fixture with a guessed kickoff is the `phantom_kickoff_now_stamp`
+class that cost 510 permanent rows.
+
+---
+
+## 4. THE H1 DAILY CHECK EXISTS NOW — AND WRITING IT FOUND A DEFECT THAT WOULD HAVE BROKEN THE COLLECTION
+
+**It did not exist in any runnable form.** Stage 26 Part B requirement 3 was a
+paragraph in this ledger and nothing else: no script, no function, no test.
+`scripts/h1_collection_check.py`, **31 tests**.
+
+It implements the registered predicate and nothing more — separation **≥30 min**,
+comparability **<2×**, the unit is the **FIXTURE GROUP**, providers **stratified
+never pooled**, the phantom predicate on every query, the overround band
+**(1.005, 1.25)**, and the three outcome lines kept mutually exclusive by test.
+The triple is **searched for** rather than taken in order, so dense noise can
+neither manufacture a trajectory nor destroy one.
+
+### The defect, found by RUNNING it rather than reviewing it
+
+The registration says the overround is computed *"per (fixture, book, market) at
+each observation"*. Implemented literally — keyed on the exact timestamp —
+**measured over 87,380 production rows:**
+
+| 1X2 legs assembled per market-instant | exact timestamp | to the minute |
+| --- | --- | --- |
+| 3 legs (complete, scoreable) | **~0** | **10,735** |
+| 1 leg | **32,279** | — |
+
+**The writer emits Home, Draw and Away seconds apart.** On an exact-timestamp
+key no market is ever complete, every instant scores NOT COMPUTABLE, the band
+drops everything, and the check prints:
+
+```
+H1 COLLECTION PRODUCED NOTHING - the apparatus is not working
+```
+
+> ### …on day one of collection, no matter what was collected. A false alarm that is byte-identical to the real one is worse than no alarm: it either aborts a purchase that was working or trains the reader to ignore the line that matters.
+
+Fixed with an explicit `MARKET_ASSEMBLY_SECONDS = 120` clustering step, and the
+constraint that matters is pinned as a **relationship, not a value**: assembly
+must stay far enough below the 1800-second separation floor that clustering one
+market can never swallow two genuine observations.
+
+**Before / after, on the same 30 days of production data:**
+
+| | in-band observations | kept / out-of-band / not computable |
+| --- | --- | --- |
+| as specified | **32** | 16 / 0 / **87,318** |
+| as fixed | **46,548** | 17,969 / 2,031 / 3,767 |
+
+**Two further defects caught by running it end-to-end:**
+
+* **It fell back to SQLite** when `DATABASE_URL` was unset, and would have
+  answered from a months-stale local file that lacks
+  `training_exclusion_reason`. It now **REFUSES** with exit 2 unless
+  `--allow-sqlite` is passed — *answered from the wrong database must not look
+  like answered*. `.env` is loaded inside `main()`, never at import, because a
+  module-level `load_dotenv` has previously let the test suite reach production.
+* **The credit read printed `UNKNOWN` against a perfectly readable ledger** —
+  wrong table key (`api_budget` is `(day, provider)` with the month in `day`,
+  and the column is `used`). Now reads **400**, and the pre-reset comparison is
+  explicitly declared not comparable to the 200 ceiling, because month-to-date
+  equals collection-to-date only because collection starts on the reset day.
+
+**All three outcome lines verified against real data:** `--days 30` yields
+PRODUCED NOTHING (observations exist, zero trajectories — correct, and matching
+the independent two-point query), the default window yields DID NOT RUN.
+
+---
+
+## 5. STANDING
+
+| | |
+| --- | --- |
+| **ML alert** | **no firing on either day** — but see §1: retrain returned `success`, so the old condition would also have been silent. **Not evidence the narrowing works.** |
+| **s5.9 at the FIXTURE unit** | **0 groups over cap since the cap-1 change**, 943 undisposed picks. All-time 11 groups vs 10 match rows |
+| **CLV** | pairs **129**, frozen since 09-13 — **nine days** · `deff 1.00` both · MODEL eff n **110**, FINAL **128** · coverage **13.7% → falling by denominator alone** |
+| **step 2** | **09-21: 36/688 = 5.23%** on a card of **88 created** · **09-22: 254/2680 = 9.48%** on a card of **0 created**. The 09-22 rate sits on the 9.1-9.9% baseline. **The 09-21 rate is not comparable to it**: its resolutions came mostly from the API-Football backfill path, 09-22's from the Flashscore results scrape. Same metric, different population — the denominator is stated, and so is the mix |
+| **collision guard** | **0 candidates on both days** — zero `Historical backfill` lines. **Still never refused** |
+| **picks-run guard** | **0 declines, 0 candidate leagues on all seven** closing-lines runs. Never reached — **15 consecutive**, consistent with the measured 0-of-231 |
+| **OPS-4** | ledger **400/450, 0 spendable**; provider `x-requests-remaining: 100`. **500 − 400 = 100, agree exactly.** Reset **10-01, nine days out** |
+| **identity** | **0** live rows whose name is a former name · **3** shared-provider-id components · 8 implausible attributions, unchanged |
+| **cohort** | `00febf` **85** (+2 from 09-21). `694a60` 303 · `485823` 246 · `32df36` 97 · `645bac` 66. Next selection-affecting change takes **s5.15** |
+| **two-point separated series** | **ZERO every day.** Floor unchanged since 09-12 |
+| **OPS-3** | daily-picks **320 min** (09-21) and **302 min** (09-22), both inside the 09:45 deadline · paper-trading **348 min** · closing-lines 13-105 min against the odd-hour crons |
+| **`ci_audit` defect** | prints `pattern 'src_apifootball_fixtures' matched but produced no number — NOT COUNTED` on every run. Recorded, not fixed |
+
+---
+
+## WHAT THESE TWO DAYS ESTABLISHED
+
+1. **The literal fix works**; tests pass and the whole pipeline executes.
+2. **Three of the four `skipped` repairs are unexercised and go on the list**,
+   and the ML alert's silence is specifically *not* evidence.
+3. **The 09-20 hole self-healed in the training set and is permanent in the odds
+   series** — a narrower loss than feared, in a different place.
+4. **The midweek card has collapsed to 2 then 0**, both sources agreeing, cause
+   unresolved read-only, with a free dated discriminator on 09-23.
+5. **H1's daily check exists, and building it found a defect that would have
+   made it report a false alarm on the first morning of collection.**
+
+*Audited 2026-09-22. Read-only apart from the H1 check, which was explicitly
+commissioned. No config, schema, workflow or production data changed.*
