@@ -250,9 +250,12 @@ def load_observations(session, since: datetime) -> Tuple[List[dict], dict]:
         "kept": sum(1 for v in verdict.values() if in_band(v)),
     }
 
+    # `odds` and `match_date` ride along so the ANALYSIS reads the same rows
+    # through the same controls. Two implementations of one predicate diverge;
+    # this project has paid for that more than once.
     obs = [
         {"match_id": r[0], "bookmaker": r[1], "market": r[2],
-         "selection": r[3], "ts": r[4]}
+         "selection": r[3], "ts": r[4], "odds": r[5], "match_date": r[6]}
         for r in rows
         if in_band(verdict[(r[0], r[1], r[2],
                             instant_of[(r[0], r[1], r[2], r[4])])])

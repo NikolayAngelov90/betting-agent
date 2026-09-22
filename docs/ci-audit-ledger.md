@@ -16612,3 +16612,201 @@ the independent two-point query), the default window yields DID NOT RUN.
 
 *Audited 2026-09-22. Read-only apart from the H1 check, which was explicitly
 commissioned. No config, schema, workflow or production data changed.*
+
+---
+
+# THE H1 ANALYSIS, DRY-RUN END TO END — and the 86 rows are flagged but not gated
+
+`tests/` **1150 passed**, run after `git add`. `s5.14` / `00febf` unchanged.
+
+---
+
+## 1. THE ANALYSIS RUNS. IT REACHES STEP 2 AND STOPS, AND THAT IS THE RESULT.
+
+`scripts/h1_analysis.py` — **30 tests**, and it **imports** the collection
+check's loader and predicate rather than restating them. *One prose rule, one
+implementation; two diverge silently and the divergence only surfaces when a
+result depends on it.* A test pins the identity of the shared functions.
+
+**Run against 40 days of production data:**
+
+```
+STEP 1  in-band pre-kickoff observations     : 63651
+        market-instants kept/out/uncomputable: 24580 / 2538 / 4619
+STEP 2  qualifying trajectories              : 0
+        separated points per series          : {1: 63381, 2: 135}
+        series with exactly TWO separated pts: 135 across 2 FIXTURE(S)
+STEP 4  picks available to match against     : 1837
+        trajectories on a PICKED selection   : 0
+STATE:  NO DATA
+```
+
+### The ≥1800-second floor MATCHES real data, and that is what the zero means
+
+> ### 135 series clear the separation floor. None reaches a third point. So the query is not broken and the predicate is not vacuous — what is missing is the third observation, which is exactly what the collection buys.
+
+**A floor that matches nothing and a floor that is broken both report zero.**
+The distribution is printed for that reason alone, and it is the difference
+between *"collect"* and *"stop and fix"*.
+
+### And those 135 series span 2 fixtures — the aggregation trap, measured
+
+**Counting series would report n = 135. The registered unit reports n = 2.**
+A factor of **67**, on the real table, in the same shape that cost H5 a factor
+of fifty. The aggregation rule is not a refinement; it is the difference
+between a sample and an illusion.
+
+### What the dry run could NOT exercise, and why that is stated rather than glossed
+
+**No production row can reach steps 3-5 at any floor setting**: every series has
+one or two distinct timestamps, so `build_trajectories` returns empty and the
+stratification, the aggregation and the estimator never receive input.
+
+**They are exercised by injection instead**, which is the only way available
+before 10-01, and each is pinned:
+
+| step | what is pinned |
+| --- | --- |
+| provider as a stratum | both providers appear and are labelled apart; a series **cannot** span two books, because the series key includes the book |
+| **one absent provider** | the stratum simply does not appear — no pooling, no zero-fill |
+| aggregation | five books on one fixture collapse to **ONE** row; the **best available line** is taken, never the mean; an **unpicked** selection is dropped; a fixture with no pick is dropped and **not averaged in** |
+| the estimator | Pearson against known values; **no variance reads as UNDEFINED, not 0.0** |
+| the p-value | one-sided — `p(+0.6) < 0.05` and `p(-0.6) > 0.95` |
+| the null bound | n=33 → **0.292**, n=39 → **0.267**, both below break-even — matching the registration |
+
+### THE MOVE IS A LOG RATIO, AND THAT IS NOT A DETAIL
+
+2.00 → 2.20 → 2.00 must give **+x then −x**. Raw percentages give **+10% then
+−9.09%**, which puts a **spurious negative correlation into every round trip** —
+and H1 would then report mean-reversion that the transform invented. Pinned by
+test.
+
+### SEVEN OUTCOME STATES, AND THE ONE THAT MATTERS MOST
+
+```
+NO DATA   APPARATUS BROKEN   INSUFFICIENT   NULL
+FALSIFIED   SIGNAL NOT ACTIONABLE   SIGNAL ACTIONABLE
+```
+
+> ### NO DATA is not a null, and they are different states with opposite actions: one says collect, the other says stop and fix.
+>
+> **A null says the effect is smaller than a bound. NO DATA says the
+> measurement did not happen.** The collection check failed on exactly this
+> distinction before it was run; the analysis is pinned on it by four tests,
+> including that the set of states has **seven** members and no two collapse.
+
+**`INSUFFICIENT` refuses to interpret r below n = 33** even when it is large and
+significant — reading the rule early is the optional-stopping error the
+registration exists to prevent.
+
+---
+
+## 2. THE CARD COLLAPSE IS A PRECONDITION OF THE COLLECTION, NOT A CURIOSITY
+
+**Measured now, 09-22 12:00 UTC:**
+
+| | |
+| --- | --- |
+| `max(match_date)` in `matches` | **2026-09-21 18:00** |
+| rows with `match_date >= now()` | **0** |
+| picks: 09-20 / 09-21 / 09-22 | **0 / 2 / 0** |
+| against 09-18 / 09-19 | **30 / 53** |
+
+**Three days, two picks.** The forward inventory has been empty on two
+consecutive days.
+
+### The 09-23 run answers two different questions, and both are free
+
+| if tomorrow's run backfills **09-22** to … | reading |
+| --- | --- |
+| **12-29** (a normal Tuesday) | **the SAME-DAY fixture path is broken.** Fixtures exist and arrive only as history — picks are lost every day while results arrive late |
+| **~0** | the tracked slate genuinely was empty, and this is the calendar |
+
+and **09-23's own count** says whether the current day populates at all.
+
+### The budget exposure is smaller than feared, by the same rule that carried the neutrality argument
+
+**No picks → no candidates → no requests.** `_imminent_league_fixtures` requires
+a pending pick, so with a near-empty slate `refresh_imminent` makes no requests
+and **the collection spends approximately nothing.**
+
+> ### So a low slate on 10-01 does not buy a null for 168 credits. It produces NO DATA at near-zero cost — which the analysis now reports as NO DATA rather than as a null, because that distinction was built today.
+>
+> **The exposure is the SCHEDULE, not the budget.** If the low state persists
+> into late September, the collection start date is a decision rather than a
+> constant — and the cost of deferring it is days, not credits.
+
+---
+
+## 3. THE 86 ROWS ARE FLAGGED, THE ENSEMBLE GATES, THE ML MODEL DOES NOT
+
+**Confirmed directly — the feature engineer run on five of the 86, against a
+control from 09-19 that carries odds:**
+
+| | `bookmaker_available` | `home/draw/away_implied_prob` | goals / btts / team_goals |
+| --- | --- | --- | --- |
+| **09-20 rows (52557-52561)** | **0** | **0.3333 / 0.3333 / 0.3333** | 0 · 0 · 0 |
+| 09-19 control (52438) | 1 | 0.4938 / 0.2632 / 0.2430 | 1 · 1 · 1 |
+
+**The ensemble gates on it, on all four markets** — `ensemble.py` guards the
+bookmaker blend behind `bookmaker_available`, `goals_`, `btts_` and
+`team_goals_bookmaker_available`. **With the flag at 0 the 80% bookmaker blend
+does not run.** That half is clean.
+
+### The ML model is a different answer, and this is the third time the answer has differed
+
+**The flag survives feature pruning** — measured on the real training
+population: **257 of 500 recent completed matches carry 1X2 odds**, so
+`bookmaker_available` is **48.6% zeros** against a sparse-prune threshold of
+**80%**. It is retained.
+
+**But nothing gates on it.** `away_implied_prob` is the **top xgboost feature
+(0.025) and second random-forest feature (0.024)** in the model trained
+2026-09-21. The flag and the value both enter the vector, and the model is free
+to learn the interaction — **nothing requires it to.**
+
+> ### And the 1X2 fill is 1/3, not 0. The control's real values are 0.24-0.55, so 0.3333 sits squarely INSIDE the observed distribution. A 0.0 fill is an out-of-band sentinel a tree can split on trivially; a uniform fill is a plausible measurement.
+>
+> The goals, BTTS and team-goals fills **are** 0.0 and are therefore
+> self-identifying. **The 1X2 fill is the one that is indistinguishable**, and
+> it is the market the top feature comes from.
+
+**85 of the 86 sit inside the 500-row training window — 17% of it.**
+
+### A perverse threshold, worth recording before it fires
+
+`bookmaker_available` is pruned as sparse above **80% zeros**. Bookmaker
+coverage is currently 48.6%. **If coverage ever fell below 20%, the flag would
+be dropped exactly when it carries the most information** — the gate
+disappearing at the moment most rows need gating. Recorded, not fixed.
+
+---
+
+## 4. EQV-1
+
+> ### Two predicates are distinguishable only on the inputs where they disagree. A change verified only on inputs where they agree is unverified.
+
+The ML alert now reads `== 'failure'` where it read `!= 'success'`. It stayed
+silent on 09-21 and 09-22 — **and the old predicate would have been silent on
+exactly those inputs too**, because the retrain step returned `success`. The
+observation is consistent with both, so it is evidence for neither.
+
+**This is the same shape as *never-reached and passed produce identical
+silence*, applied to a CHANGE rather than to a BRANCH:**
+
+| | the two things that look alike |
+| --- | --- |
+| a branch | never reached / reached and passed |
+| **a predicate change** | **the new rule / the rule it replaced** |
+| a guard | fired and allowed / never evaluated |
+| a count | measured zero / not measured |
+
+**What would have been evidence:** a run where `retrain_ml` was `skipped` — the
+one input on which the two predicates disagree. That has happened exactly once,
+on 09-20, and it is what produced the false alarm.
+
+---
+
+*Recorded 2026-09-22. Read-only apart from the two H1 scripts and their tests,
+which this directive commissioned. No config, schema, workflow or production
+data changed.*
