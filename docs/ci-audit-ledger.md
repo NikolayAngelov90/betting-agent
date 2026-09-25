@@ -17516,3 +17516,200 @@ the qualifier from §4 doing work on its first use.
 *Recorded 2026-09-25. `scripts/ci_audit.py`, `constraints.txt`,
 `.github/workflows/ci-audit.yml`, three install steps, two test files and this
 entry. No schema, no production data, no prediction-affecting change.*
+
+---
+
+# THE CROSSINGS DATED AGAINST THE COHORTS — the discipline survives, with one gap
+
+---
+
+## 1. NINE CROSSINGS, DATED. EIGHT HISTORICAL, ONE MID-COHORT, AND IT IS NOT A CONFOUND
+
+**The cohort series runs 2026-08-11 → 2026-09-21**, eleven cohorts under the
+`stage5_baseline_20260807` baseline. Everything before 08-11 is the 1,074
+pre-cohort picks (2026-02-28 → 2026-08-10), which carry no `model_version`.
+
+| package | major | released | vs the cohort window |
+| --- | --- | --- | --- |
+| scikit-learn | 1.4.0 | 2024-01-18 | **19 months before** |
+| python-telegram-bot | 21.0 | 2024-03-06 | 17 months before |
+| numpy | 2.0.0 | 2024-06-16 | 14 months before |
+| python-telegram-bot | 22.0 | 2025-03-15 | 5 months before |
+| xgboost | 3.0.0 | 2025-03-15 | 5 months before |
+| pandas | 3.0.0 | 2026-01-21 | **before the baseline (08-07)** |
+| transformers | 5.0.0 | 2026-01-26 | before the baseline |
+| scikit-learn | 1.9.0 | 2026-06-02 | before the baseline |
+| **anthropic** | **1.0.0** | **2026-08-20** | **INSIDE cohort `485823`** |
+
+> ### Eight of nine predate the first cohort, several by more than a year. The qualifier on those is historical: no cohort comparison spans them, because no cohort existed.
+
+**xgboost 3 and pandas 3 were the two the concern named, and both clear it** —
+xgboost 3.0.0 by five months, pandas 3.0.0 by seven. **Every model comparison in
+the `stage5_baseline_20260807` series ran on one xgboost major and one pandas
+major.**
+
+### The one that landed inside a cohort, and it was adopted NOT inferred
+
+Release date is when a version becomes installable; `pip install` runs fresh on
+every scheduled run, so adoption is checkable rather than assumable. **From the
+`Successfully installed` lines:**
+
+| run | date | installed |
+| --- | --- | --- |
+| 32240633728 | 08-19 | `anthropic-0.122.0` |
+| 32357064869 | 08-20 | `anthropic-0.125.0` |
+| **32470865675** | **08-21** | **`anthropic-1.0.0`** |
+| 32566236079 | 08-22 | `anthropic-1.0.0` |
+
+**The major crossed between the 08-20 and 08-21 runs — inside cohort `485823`
+(08-11 → 08-22, 246 picks), the largest early cohort.** The fingerprint cannot
+see it: `TRACKED_KEYS` is config, and a dependency version is not config.
+
+### AND IT IS NOT A CONFOUND, because the SDK never served a pick
+
+`anthropic` is imported at exactly one place — `match_briefing.py:365`,
+`import anthropic  # noqa: F401`, an **availability probe** for the
+`anthropic_api` backend. `_pick_backend()`:
+
+```python
+preferred = self.config.get("briefings.backend", "claude_code")
+if preferred == "claude_code":
+    if has_token:
+        return "claude_code"          # <- silent
+    if has_key:
+        logger.info("... falling back to the Anthropic API ...")
+        return "anthropic_api"        # <- announces itself
+```
+
+**The workflow sets `CLAUDE_CODE_OAUTH_TOKEN`, and the fallback ANNOUNCES ITSELF
+when it fires. No such line appears in the 08-21 or 08-22 logs.**
+
+> ### The inference is sound in the one direction that matters: silence is consistent with `claude_code` chosen OR with `_pick_backend` never reached, and under both the Python SDK served no briefing. The review ran on the Claude Code CLI, installed by npm and versioned separately.
+>
+> **This is the usual trap inverted.** Normally the quiet branch is the failure
+> and silence proves nothing. Here the quiet branch is the DEFAULT and the noisy
+> branch is the exception, so silence discriminates — and it discriminates only
+> because both readings of it lead to the same conclusion. **Stated explicitly,
+> because the shape looks like the one this ledger has rejected six times.**
+
+### SO: THE COHORT DISCIPLINE SURVIVES — with a gap that is not the one we looked for
+
+**No cohort comparison in this project spans a dependency major that touches the
+selection path.** Eight crossings predate the series; the ninth is off the path.
+
+**The gap is that nothing records which backend served a briefing.** The
+`claude_code` path returns silently. If the fallback ever does fire — a missing
+token, an exhausted subscription — **the picks it reviewed would be
+indistinguishable from the others, and `_claude_code_exhausted` exists in the
+same class precisely because exhaustion is expected.** That is a one-line
+observability gap on a selection-affecting switch, and it is a different finding
+from the dependency question that surfaced it.
+
+### THE REMEDY, RECORDED AS A CANDIDATE AND NOT BUILT
+
+> ### `constraints.txt` makes the dependency set hashable, which it was not a week ago. A hash of it in `TRACKED_KEYS` would put "which library versions produced this pick" inside the fingerprint.
+>
+> **Not added now.** It is a Stage 14 candidate beside the data-hashing one, and
+> **both close the same gap from different sides**: the fingerprint currently
+> covers configuration and neither the code's inputs nor its environment. Adding
+> either changes what a cohort break means, which is a decision about the
+> experiment and not a tidy-up.
+>
+> *Before `constraints.txt` the remedy was not available at all — an unpinned
+> `>=` set has no stable hash. Pinning it is what turned this from an
+> impossibility into a candidate.*
+
+---
+
+## 2. SLF-1 CORRECTS A POSITION ARGUED FOR REPEATEDLY — recorded as the reason, not the accident
+
+**The case for self-calibration was made more than once and it was right about
+what it claimed:** no list to hand-maintain, adapts as coverage changes, no
+threshold fitted to twenty cases. **It was silent about failure modes, and SLF-1
+is the failure mode.**
+
+> ### A self-calibrating check compares against history, so it inherits every way history can be wrong — including its own firing. A fixed threshold cannot be silenced by the thing it watches.
+
+**The outage is the case that separates them, and it did so on the same four
+days:**
+
+| assertion | design | 09-22 | 09-23 | 09-24 |
+| --- | --- | --- | --- | --- |
+| per-source discovery | **adaptive** | fired *(batching luck)* | **silent** | **silent** |
+| `N scrape(s) attempted, 0 found` | **absolute** | fired | fired | fired |
+| `NO FIXTURES FOUND for the day` | **absolute** | fired | fired | fired |
+
+**No day scored CLEAN.** Not because the design was right, and not because the
+absolute checks were a happy accident —
+
+> ### THE REDUNDANCY IS THE ANSWER, AND IT IS KEPT ON PURPOSE. Adaptive checks fail SILENT when history is wrong. Absolute checks fail LOUD when the world legitimately changes. Neither dominates; they fail in opposite directions, and only both together keep a four-day outage off a CLEAN verdict.
+
+**Which is a different conclusion from either position that was argued.** The
+maintenance case for adaptive checks stands. The reliability case for them does
+not. **Keeping the absolute pair is now a recorded decision with a measured
+reason, rather than a leftover nobody removed.**
+
+---
+
+## 3. PNC-1 — a producer with no consumer looks exactly like a working feature
+
+**Introduced and caught inside the wiring change.** `alarmed.append(...)` landed;
+`if alarmed: return 1` did not, because the patch pattern missed.
+
+| surface | what it showed |
+| --- | --- |
+| the list | filled correctly |
+| the `::error::` line | *absent, but nothing was asserting on it* |
+| the printed table | **correct** |
+| the verdict | **correct** |
+| **the exit code** | **0 — the only surface that was wrong** |
+
+> ### PNC-1. A value that is produced and never consumed presents as a working feature on every surface except the one the consumer was for.
+>
+> **Caught by testing the exit code rather than the output** — the single place
+> the two diverge. Had the test asserted on the printed lines, it would have
+> passed.
+
+**It belongs beside the reconcile block computed above its inputs.** Both are
+**ordering defects whose symptom is a plausible success**:
+
+| | the defect | what it printed |
+| --- | --- | --- |
+| a derived value before its inputs | consumer runs before the producer | `0 recovered` — a plausible number |
+| **PNC-1** | **producer runs, consumer absent** | **exit 0 — a plausible success** |
+
+**The family now has a name on both sides of the same ordering.** And the test
+that catches either has to assert on the *consumer's* output, never the
+producer's — which is the general form.
+
+---
+
+## 4. THE `headSha` DISCRIMINATOR, AND THE PREDICTION IS STILL OPEN
+
+**07:29 UTC: no daily-picks run for 09-25. Nothing of any kind since 09-24
+23:51** — the 01:17, 03:17 and 05:17 closing-lines slots have not fired either,
+which is now seven-plus hours of silence across all schedules.
+
+The registration stands, and the discriminator is what makes it resolvable
+rather than arguable:
+
+| the run reports | reading |
+| --- | --- |
+| **`c3da9c9` or later** | the pin is in, `Verify database connection` succeeds, the job does not halt — **the three `skipped` repairs stay unexercised.** The trade taken deliberately |
+| **`e8c6f11`** | the push lag persisted, the DB step fails, the job halts — **the repairs fire, and the prediction resolves as registered** |
+
+```
+python scripts/ci_audit.py --since 2026-09-25
+```
+
+> ### One reading separates two worlds that would otherwise be argued about afterwards — and recording the expected `headSha` is the only direction the lag qualifier can be fixed in, because it cannot be applied backwards.
+
+**Adopted from here:** a dated prediction records the `headSha` it expects, and
+resolving one checks the run's `headSha` before reading its verdict. The 09-17
+row already carried `headSha 889f8ba` and the practice was dropped; it is now the
+rule rather than one row's habit.
+
+---
+
+*Recorded 2026-09-25. Ledger only — no code, config, schema, workflow or
+production data changed in this entry. `s5.14` / `00febf` unchanged.*
