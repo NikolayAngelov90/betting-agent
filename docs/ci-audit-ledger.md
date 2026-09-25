@@ -17052,3 +17052,229 @@ exact quantity H1 reports.
 
 *Recorded 2026-09-25. Two H1 test files and the ledger changed; no config,
 schema, workflow, dependency or production data changed.*
+
+---
+
+# THE PIN, AND TWO OF MY OWN READINGS CORRECTED
+
+---
+
+## 1. THE PIN — AND IN `requirements.txt` ALONE IT WOULD HAVE FIXED NOTHING OBSERVABLE
+
+**Applied in THREE places, because two workflows never read `requirements.txt`:**
+
+```
+closing-lines.yml:95        pip install sqlalchemy psycopg2-binary aiohttp ...
+paper-trading-report.yml:74 pip install sqlalchemy psycopg2-binary pyyaml ...
+daily-picks.yml:132         pip install -r requirements.txt
+```
+
+> ### The two workflows that installed `sqlalchemy` bare are the two that actually went red. Pinning the file alone would have fixed `daily-picks` — which had not failed — and left closing-lines resolving 2.1.0 and failing identically.
+>
+> **A fix applied where the failure is not does not look different from a fix.**
+
+`sqlalchemy>=2.0.0,<2.1` resolves to **2.0.54** (2.1.0 is the only 2.1.x). Each
+site carries a comment naming the cause and the condition for removal — *add
+`psycopg[binary]`, or write `postgresql+psycopg2://` into DATABASE_URL, then
+verify against a real Postgres URL, because SQLite never reaches that code path.*
+
+**`tests/test_dependency_bounds.py`, 5 tests**, because the bound is now
+duplicated and duplication drifts: each workflow that installs by name must
+carry it, `daily-picks` is exempt *only while* it installs from the file, and the
+bound is declared stale the moment `psycopg` v3 appears. **Negative control run:
+removing the bound from closing-lines makes the suite fail.** And the first
+version of the staleness test matched the word `psycopg` inside its own
+explanatory comment — *a definition read as an occurrence, third time in my own
+test-writing.*
+
+### THE STRUCTURAL EXPOSURE — reported, not acted on
+
+**30 of 31 specs are unbounded `>=`. There is no lockfile and no staging
+environment.** `pip install` runs fresh on every run, so a release on PyPI
+becomes a production failure the same day with no change in this repository.
+
+**AND IT HAS ALREADY FIRED TWICE, BOTH TIMES DIAGNOSED AS A CODE BUG:**
+
+| | |
+| --- | --- |
+| **numpy 2.x** | `src/data/database.py:18-24` is a shim that exists because numpy 2 changed `repr(np.float64)`, so the literal `np.float64(2.75)` reached SQL and Postgres read it as a schema reference |
+| **scikit-learn** | `fit()` calls `_init_models()` first specifically to avoid a version mismatch against loaded pickles |
+| **sqlalchemy 2.1** | today |
+
+**Ranked by how a bump would present, not by popularity:**
+
+| tier | packages | why |
+| --- | --- | --- |
+| **silent** — mis-deserialises or mis-computes | `scikit-learn` `xgboost` `lightgbm` `numpy` `pandas` | the pipeline persists and reloads `ml_models.pkl` / `goals_model.pkl` across runs. `_init_models()` guards the REFIT path, not the LOAD path. numpy has already done this once |
+| **fatal at import or connect** | `sqlalchemy` *(now bounded)* `alembic` `psycopg2-binary` `pyarrow` | loud, same day, whole pipeline |
+| **fatal in the scraper** | `camoufox` (0.x — minor bumps are breaking by convention) `playwright` `selenium` `undetected-chromedriver` | presents as zero rows with a green run, which is the mode that hid for 88 days |
+| **fatal in an outward call** | `anthropic` (0.x) `python-telegram-bot` (20.x → 22 exists) | the review and the delivery path |
+| low | `requests` `aiohttp` `httpx` `bs4` `lxml` `pyyaml` `loguru` `dotenv` `scipy` `statsmodels` `transformers` `nltk` `vaderSentiment` `apscheduler` `pytest*` | |
+
+**The decision is left.** The cheapest option that changes the class rather than
+one member is a committed `constraints.txt` of resolved versions, refreshed
+deliberately — which converts *"a release breaks production"* into *"a release
+breaks the refresh."*
+
+---
+
+## 2. THE PER-SOURCE ASSERTION FIRED — AND MY DAILY INVOCATION SILENCES IT
+
+**Verbatim, with `--since 2026-09-19` (history present):**
+
+```
+35702692750 daily-picks 09-22  DEGRADED  ... Flashscore fixtures: 0 created AND 0 matched wh
+35835164403 daily-picks 09-23  DEGRADED  ... Flashscore fixtures: 0 created AND 0 matched wh
+35972342260 daily-picks 09-24  DEGRADED  ... Flashscore fixtures: 0 created AND 0 matched wh
+```
+
+**It fires on all three days. The assertion is correct.**
+
+**With `--unaudited`, the path I actually run, 09-23 and 09-24 are SILENT.**
+
+### Why — and it is worse than the off-season list or the lookback window
+
+```python
+by_wf: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+for r in runs:                                  # `runs` = THIS PASS only
+    hits = assertions(facts, by_wf[r["workflow"]])
+    by_wf[r["workflow"]].append(facts)
+```
+
+**`history` is assembled from the runs in the current pass. `--unaudited`
+excludes every run already in the ledger.** So `produced_recently()` cannot see
+09-21, the last day Flashscore produced, and the per-source check is skipped by
+its own *"an empty history means nothing can be said"* branch.
+
+> ### Recording the finding removes the evidence that would fire it again. The alarm fired on 09-22 only because 09-21 happened to be unaudited in the same batch — had I audited 09-21 alone, it would never have fired at all.
+
+**Sixth instance of the silent-channel class, and the first where the silencing
+act is the audit itself.** Not the off-season list, not `LOOKBACK_RUNS` (7, which
+would have covered 09-21 until 09-29), not the first-run-of-day gate — all three
+were live and correct.
+
+### TWO THINGS THAT KEEP THIS FROM BEING THE WHOLE STORY, stated because they are true
+
+1. **The outage was never invisible to the auditor.** Two assertions that are
+   deliberately NOT self-calibrating fired on every one of the three days:
+   `30 fixture scrape(s) attempted, 0 fixtures found in total` and
+   `NO FIXTURES FOUND for the day — nothing was analysed`. Every day was
+   **DEGRADED**, never CLEAN. **The redundancy worked; the self-calibrating
+   member of it did not.**
+2. **`ci_audit` is invoked by no workflow** — `grep -rn ci_audit .github/workflows/`
+   returns nothing. So even a firing assertion reaches nobody until a human
+   audits. **The alarm has no wire to production at all**, which is a larger gap
+   than the history bug and is not new today.
+
+---
+
+## 3. NOT A THIRD MODE — SELECTOR DEATH AGAIN, ONE ELEMENT DEEPER
+
+**And I over-read the evidence last time. Correcting it.**
+
+**What I said:** the pages are static — identical row counts prove a cache.
+**What the page actually shows:**
+
+| | |
+| --- | --- |
+| `https://www.flashscore.com/football/spain/laliga/fixtures/` | **HTTP 200**, `nginx`, 1,159,651 bytes |
+| `<title>` | **`LaLiga Fixtures - Football/Spain`** — correct page, no redirect |
+| consent wall / Cloudflare challenge / "Just a moment" | **absent** |
+| `event__match` in the served HTML | **0** — it is an SPA shell; rows are injected by JS |
+| `/fixtures/` vs `/results/` served bytes | 1,159,651 vs 1,159,633 — **18 bytes apart**, the same shell |
+
+**`src/scrapers/` has not changed since 09-18** — `git log --since=2026-09-18`
+returns nothing — so the URL shape is the one that worked.
+
+**And the production log says the rows DO render:** `self._last_page_rows = 111`
+for laliga comes from `driver.find_elements(By.CLASS_NAME, "event__match")`.
+**The row selector is alive.** What fails is inside each row:
+
+```python
+for selector, by in [("event__time", By.CLASS_NAME),
+                     (".duelParticipant__startTime", By.CSS_SELECTOR)]:
+```
+
+**Both miss, on every row, which is why every message reads
+`raw='<no time element found>'`.**
+
+> ### So this is the FIRST mode — selector death — recurring on the kickoff-time sub-element, not a third mode. The row selector survived and the time selector did not.
+>
+> **The identical row counts do not prove a cache.** They are equally consistent
+> with a forward-fixtures list that did not change while no round completed, and
+> I cannot separate those from a shell fetched by curl. **The diagnosis does not
+> need them**: rows render and the time element does not exist, both from the
+> log.
+
+**What IS different from 2026-05-31, and it is the whole value of the guard:**
+that death stamped `datetime.now()` on every fixture and produced 510 permanent
+phantom rows over 88 days. **This one refuses, 621 times per run, at WARNING.**
+Same failure, opposite visibility.
+
+**All three modes still present as zero usable fixtures with a green run** —
+selector death, timeouts, and now this — and that remains the property worth
+recording.
+
+---
+
+## 4. THE DATED PREDICTION IS NOT YET RESOLVED — and the pin may foreclose it
+
+**As of 07:01 UTC on 09-25 the daily-picks run has not started.** The cron is
+03:00 and it has been landing 07:56-08:20. **No closing-lines run since 09-24
+23:51 either — the 01:17, 03:17 and 05:17 slots have not fired.**
+
+**The prediction stands as registered** and resolves on one command:
+
+```
+python scripts/ci_audit.py --since 2026-09-25
+# expect: DID_NOT_RUN, and "step(s) DID NOT RUN — update, settle (pre-picks), picks (incl. review)"
+```
+
+> ### And applying the pin forecloses the test. If the run picks up this commit, `Verify database connection` succeeds, the job does not halt, and the three repairs stay unexercised. That is the right trade — a lost card is certain, the test is not — but it is a trade and not a free action.
+
+**A deployment lag is in the way of predicting even that:** the 09-23 and 09-24
+runs both ran **`e8c6f11`** (committed 09-20) while local was two commits ahead.
+`origin/main` is now `6009a01`. **So whether today's run carries the pin depends
+on a lag that has been two days wide**, and if it does not, the DID_NOT_RUN
+prediction resolves after all. Either outcome is informative; neither is assumed.
+
+---
+
+## 5. THE FILL — RECORDED, NOT FIXED
+
+**Prediction-affecting, so it needs its own stage. Two facts on the record:**
+
+**1. The flag exists and is unused.** `bookmaker_available` appears **nowhere**
+in `betting_agent.py` or `ml_models.py`. It is computed in the feature engineer,
+survives sparse pruning, enters the feature vector — **and no code reads it.**
+The ensemble gates on it at *prediction* time; **nothing gates on it at training
+time.** Rule 1, in the feature pipeline, on the one signal that separates a
+measurement from a fill.
+
+**2. The threshold inverts.** At the old cap of 200 the fill reaches **74.0%
+against an 80% sparse-prune threshold, and rising** while OPS-4 holds odds
+collection at zero. **The flag would be dropped as sparse exactly as it becomes
+most informative.**
+
+### And the non-monotonicity, measured rather than assumed
+
+| cap | fill | |
+| --- | --- | --- |
+| 200 | **74.0%** | |
+| 500 | 48.6% | *the production model, trained 09-21* |
+| 2000 | 22.9% | |
+| 5000 | 24.8% | |
+
+**All-history is 90.3%** — 2021-2025 are 100% filled, because odds collection
+began in 2026.
+
+> ### I expected the fill to RISE with the cap, because more history means more pre-2026 rows. It falls. Recent coverage is the worst of any window, because OPS-4 stopped odds collection on 09-12 and the 86 zero-odds rows from 09-20 sit at the front of the queue.
+>
+> **The intuition ran the other way and the measurement corrected it** — which
+> is why the cap, not the archive, is what currently keeps the flag alive.
+
+---
+
+*Recorded 2026-09-25. The SQLAlchemy bound in three files, one test file, and
+this entry. No schema, no production data, no prediction-affecting change;
+`s5.14` / `00febf` unchanged.*

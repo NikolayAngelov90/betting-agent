@@ -13,7 +13,24 @@ playwright>=1.40.0
 camoufox>=0.4.0        # Firefox-based anti-fingerprinting browser (Cloudflare bypass)
 
 # Database
-sqlalchemy>=2.0.0
+#
+# UPPER BOUND, 2026-09-25 — REMOVE ONLY DELIBERATELY.
+# SQLAlchemy 2.1.0 changed the DEFAULT DBAPI for a bare `postgresql://` URL from
+# psycopg2 to psycopg (v3). This repo ships psycopg2-binary and does NOT ship
+# psycopg, so on 2.1.0 every `create_engine` against Neon raises
+# `ModuleNotFoundError: No module named 'psycopg'` inside
+# sqlalchemy/dialects/postgresql/psycopg.py.
+#
+# It released between 15:48 and 20:28 UTC on 2026-09-24 and took closing-lines
+# down on the 20:28 and 23:51 runs with no change in this repository — the 15:48
+# run succeeded on 2.0.54. `Verify database connection` carries no
+# continue-on-error, so it also halts daily-picks before its tests and skips
+# every core step.
+#
+# TO LIFT IT: add `psycopg[binary]` (v3) OR write the driver explicitly into
+# DATABASE_URL as `postgresql+psycopg2://`, then verify against a real Postgres
+# URL — not SQLite, which never reaches this code path.
+sqlalchemy>=2.0.0,<2.1
 psycopg2-binary>=2.9.0
 alembic>=1.13.0
 

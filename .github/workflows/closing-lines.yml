@@ -90,9 +90,19 @@ jobs:
       - name: Install dependencies
         # Deliberately minimal: this job never trains, scrapes with a browser or
         # builds features, so it does not need the full requirements set.
+        #
+        # THE BOUND IS REPEATED HERE BECAUSE THIS STEP DOES NOT READ
+        # requirements.txt. Pinning `sqlalchemy<2.1` in that file on 2026-09-25
+        # would have fixed daily-picks and left THIS workflow — the one that
+        # actually failed, on the 20:28 and 23:51 runs of 09-24 — installing
+        # 2.1.0 bare and failing identically. 2.1 changed the default DBAPI for
+        # a bare `postgresql://` URL to psycopg v3, which is not installed here.
+        #
+        # Keep this in step with requirements.txt; the duplication is the cost
+        # of these jobs installing by name instead of from the file.
         run: |
           python -m pip install --upgrade pip
-          pip install sqlalchemy psycopg2-binary aiohttp pyyaml python-dotenv loguru numpy scipy
+          pip install "sqlalchemy>=2.0.0,<2.1" psycopg2-binary aiohttp pyyaml python-dotenv loguru numpy scipy
 
       - name: Create directories
         run: mkdir -p data/models logs

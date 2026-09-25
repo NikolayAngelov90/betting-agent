@@ -69,9 +69,14 @@ jobs:
       - name: Install dependencies
         # Minimal: this job reads the database and computes statistics. It never
         # trains, scrapes or calls an API.
+        #
+        # THE BOUND IS REPEATED HERE BECAUSE THIS STEP DOES NOT READ
+        # requirements.txt — see the same comment in closing-lines.yml.
+        # SQLAlchemy 2.1 resolves a bare `postgresql://` URL to psycopg v3,
+        # which is not installed, so every `create_engine` raises.
         run: |
           python -m pip install --upgrade pip
-          pip install sqlalchemy psycopg2-binary pyyaml python-dotenv loguru numpy scipy
+          pip install "sqlalchemy>=2.0.0,<2.1" psycopg2-binary pyyaml python-dotenv loguru numpy scipy
 
       - name: Create directories
         run: mkdir -p data/models logs
