@@ -288,3 +288,120 @@ def test_the_analysis_shares_the_checks_predicate_rather_than_restating_it():
     assert ha.qualifying_triple is hc.qualifying_triple
     assert ha.MIN_GAP_MINUTES == hc.MIN_GAP_MINUTES
     assert ha.load_observations is hc.load_observations
+
+
+# ── THE NULL-INPUT CONTROL — the positive control's mirror ───────────────────
+#
+# Added 2026-09-25 at Niki's request, to check a claim I had made: that the raw
+# percentage transform "turns every round trip into a spurious negative
+# correlation, which H1 would report as mean-reversion the transform invented".
+#
+#   THE CONTROL REFUTED THE CLAIM. Measured at n = 20,000 with independent
+#   multiplicative moves, the percentage transform's bias at true rho = 0 is
+#   +0.0005 (sigma=0.06), -0.0004 (sigma=0.30) and -0.0018 (sigma=0.60),
+#   against the log transform's +0.0006. It manufactures nothing.
+#
+# What it actually does is ATTENUATE. At a true rho of 0.42 the log transform
+# recovers +0.4238 at every volatility, while the percentage transform gives
+# +0.4145 at sigma=0.30 and +0.3824 at sigma=0.60 — a downward bias of up to
+# 0.04 at H1's own decision boundary. So the error direction is toward a FALSE
+# NULL, not a false signal.
+#
+# The log ratio is still the correct transform, for the two reasons pinned
+# below: exact antisymmetry on a round trip, and unbiased recovery of rho. But
+# the "spurious finding" framing was wrong, and the control is what established
+# that rather than more argument.
+
+import math
+import random
+
+
+def _simulate(n, seed, transform, rho=0.0, vol=0.06):
+    """Independent fixtures with a controllable TRUE serial correlation."""
+    rng = random.Random(seed)
+    xs, ys = [], []
+    for _ in range(n):
+        p0 = rng.uniform(1.5, 6.0)
+        u1 = rng.gauss(0, vol)
+        u2 = rho * u1 + math.sqrt(max(0.0, 1 - rho * rho)) * rng.gauss(0, vol)
+        p1, p2 = p0 * math.exp(u1), p0 * math.exp(u1 + u2)
+        xs.append(transform(p0, p1))
+        ys.append(transform(p1, p2))
+    return ha.pearson(xs, ys)
+
+
+_LOG = lambda a, b: math.log(b / a)
+_PCT = lambda a, b: (b - a) / a
+
+
+def test_NULL_INPUT_CONTROL_zero_true_correlation_reports_zero():
+    """THE CONTROL. Feed the estimator noise; it must not find a signal.
+
+    The positive controls above confirm the pipeline reports a correlation
+    that IS there. This confirms it does not report one that is not, which is
+    the only direction that can produce a false finding.
+    """
+    r = _simulate(20000, 11, _LOG, rho=0.0)
+    assert abs(r) < 0.01, f"noise produced r = {r:+.4f}"
+
+
+def test_the_null_input_control_reaches_a_NULL_state_not_a_SIGNAL():
+    """End of the chain: the decision rule must call this nothing."""
+    r = _simulate(400, 11, _LOG, rho=0.0)
+    p = ha.one_sided_p(r, 400)
+    state, _ = ha.interpret(400, r, p)
+    assert state == "NULL", f"noise was reported as {state} (r={r:+.4f}, p={p:.4f})"
+
+
+def test_the_estimator_RECOVERS_a_planted_correlation():
+    """The mirror. A control that only ever says NULL is not a control."""
+    r = _simulate(20000, 11, _LOG, rho=0.42)
+    assert abs(r - 0.42) < 0.02, f"planted 0.42, recovered {r:+.4f}"
+    state, _ = ha.interpret(400, r, ha.one_sided_p(r, 400))
+    assert state == "SIGNAL ACTIONABLE"
+
+
+def test_the_percentage_transform_does_NOT_manufacture_a_signal():
+    """THE CLAIM THIS CONTROL WAS BUILT TO CHECK, AND IT FAILED.
+
+    I asserted the percentage transform would produce a spurious negative
+    correlation out of nothing. At true rho = 0 it does not, at any volatility
+    this market shows. Pinned so the wrong claim cannot come back.
+    """
+    for vol in (0.06, 0.30, 0.60):
+        r = _simulate(20000, 11, _PCT, rho=0.0, vol=vol)
+        assert abs(r) < 0.01, (
+            f"at vol={vol} the percentage transform gave r={r:+.4f} from pure "
+            f"noise — if this ever fires, the spurious-finding claim was right "
+            f"after all and the log transform is load-bearing for that reason")
+
+
+def test_what_the_percentage_transform_ACTUALLY_does_is_attenuate():
+    """It biases rho DOWNWARD, so its error points at a false NULL.
+
+    Measured: 0.4238 under log at every volatility; 0.4145 and 0.3824 under
+    percentages at sigma 0.30 and 0.60. At H1's 0.42 boundary that is enough
+    to move a true signal below the actionable line.
+    """
+    log_hi = _simulate(20000, 11, _LOG, rho=0.42, vol=0.60)
+    pct_hi = _simulate(20000, 11, _PCT, rho=0.42, vol=0.60)
+    assert pct_hi < log_hi, "no attenuation observed"
+    assert log_hi - pct_hi > 0.02, (log_hi, pct_hi)
+    assert abs(log_hi - 0.42) < 0.01, "the log transform should be unbiased"
+
+
+def test_the_log_transform_is_EXACTLY_antisymmetric_on_a_round_trip():
+    """The reason the transform choice is still correct.
+
+    p2 == p0 must give r = -1 exactly. Percentages give -0.9414 on the same
+    data: both find mean-reversion, but only one is exact.
+    """
+    rng = random.Random(3)
+    xl, yl, xp, yp = [], [], [], []
+    for _ in range(500):
+        p0 = rng.uniform(1.5, 6.0)
+        p1 = p0 * math.exp(rng.gauss(0, 0.25))
+        xl.append(_LOG(p0, p1)); yl.append(_LOG(p1, p0))
+        xp.append(_PCT(p0, p1)); yp.append(_PCT(p1, p0))
+    assert ha.pearson(xl, yl) == pytest.approx(-1.0, abs=1e-9)
+    assert ha.pearson(xp, yp) > -0.99, "percentages are not exact here"

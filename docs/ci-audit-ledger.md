@@ -16810,3 +16810,245 @@ on 09-20, and it is what produced the false alarm.
 *Recorded 2026-09-22. Read-only apart from the two H1 scripts and their tests,
 which this directive commissioned. No config, schema, workflow or production
 data changed.*
+
+---
+
+# 09-25 — TWO OUTAGES, AND THE NULL-INPUT CONTROL REFUTED MY OWN CLAIM
+
+`tests/` **1156 passed**. `s5.14` / `00febf` unchanged.
+
+---
+
+## 0. THE HEADLINE IS NOT ON THE LIST: SQLALCHEMY 2.1 HAS BROKEN EVERY POSTGRES CONNECTION
+
+| run | started | outcome |
+| --- | --- | --- |
+| 36022849777 closing-lines | 09-24 **15:48** | **success** — `sqlalchemy-2.0.54` |
+| 36055130676 closing-lines | 09-24 **20:28** | **FAILURE** — `sqlalchemy-2.1.0` |
+| 36074834054 closing-lines | 09-24 **23:51** | **FAILURE** — `sqlalchemy-2.1.0` |
+
+```
+File ".../sqlalchemy/dialects/postgresql/psycopg.py", line 497, in import_dbapi
+    import psycopg
+ModuleNotFoundError: No module named 'psycopg'
+```
+
+**`requirements.txt` pins `sqlalchemy>=2.0.0` and `psycopg2-binary>=2.9.0`.
+SQLAlchemy 2.1.0 released between 15:48 and 20:28 UTC on 09-24 and changed the
+default DBAPI for a bare `postgresql://` URL from psycopg2 to psycopg (v3),
+which is not installed.** Nothing in this repository changed; an unpinned
+transitive default did.
+
+### IT WILL TAKE TODAY'S PICKS RUN DOWN, AND THE BLAST RADIUS IS KNOWN EXACTLY
+
+`Verify database connection` is **step 12**, and — verified from the workflow,
+not assumed — it carries **no `continue-on-error`**. So the job halts there,
+before `Run tests`, and every core step below is **skipped**.
+
+> ### That is the DID_NOT_RUN scenario, and it means the three repairs that shipped on 09-20 and have been unexercised ever since are about to fire today, for real: the alert's DID NOT RUN branch, DEL-2's widened predicate, and `ci_audit`'s DID_NOT_RUN verdict.
+>
+> **A dated prediction, on the record before the run:** 09-25's daily-picks
+> should go **red**, alert **"step(s) DID NOT RUN — update, settle (pre-picks),
+> picks (incl. review)"**, and audit as **DID_NOT_RUN**. If it instead reports
+> `All critical steps OK`, the 09-20 repair did not work.
+
+**The fix is one line** — `sqlalchemy>=2.0.0,<2.1` in `requirements.txt`, or add
+`psycopg[binary]`. **Not applied**: a dependency pin changes every workflow at
+once, and that has been Niki's call each time. Ready on a word.
+
+---
+
+## 1. THE 09-23 DISCRIMINATOR ANSWERED, AND IT IS NEITHER BRANCH I NAMED
+
+I offered two readings: *09-22 backfills to a normal Tuesday* (same-day path
+broken) or *stays near zero* (empty calendar). **Neither. Nothing backfilled at
+all.**
+
+```
+max(match_date) in matches : 2026-09-21 18:00     [UNCHANGED since 09-22]
+rows with match_date >= now(): 0
+```
+
+| day | matches | picks |
+| --- | --- | --- |
+| 09-19 Sat | 117 | 53 |
+| 09-20 Sun | 86 *(backfilled 09-21)* | **0** |
+| 09-21 Mon | 2 | 2 |
+| **09-22 → 09-24** | **0 · 0 · 0** | **0 · 0 · 0** |
+
+**Three daily-picks runs succeeded on 09-22, 09-23 and 09-24 and created zero
+match rows between them.** Four consecutive days with no picks. And the
+previous-day backfill that recovered 09-20 now recovers nothing:
+
+```
+API-Football: 204 fixtures on 2026-09-23  ->  0 created, 0 updated
+API-Football:  93 fixtures on 2026-09-24  ->  0 created, 0 updated
+```
+
+### AND THE FLASHSCORE FIXTURE PAGES ARE STATIC — this is the mechanism
+
+| run | leagues scraping fixtures | rows seen | refusals | leagues with a result |
+| --- | --- | --- | --- | --- |
+| 09-18 | — | **119 126 117 112 84 106 72 116 126 108** *(varying)* | 492 | **20** |
+| 09-19 | — | — | 439 | **26** |
+| **09-21** | 30 | **3183** | **621** | **0** |
+| **09-22** | 30 | **3183** | **621** | **0** |
+| **09-24** | 30 | **3183** | **621** | **0** |
+
+**Identical totals AND identical per-league counts on three days spanning four
+days** — `spain/laliga=111`, `premier-league=117`, `bundesliga=117`,
+`serie-a=120`, `ligue-1=117`, `eredivisie=108`. On 09-18 the same counts
+*varied*.
+
+> ### A live league page's row count changes as results fill in. Three identical readings four days apart is a static page, and every row is refused with `raw='<no time element found>'` — the kickoff element is absent, not misformatted.
+
+**Flashscore is the only source of forward fixtures**, so this is the outage.
+**The refusals themselves are not the fault** — 492 and 439 on the healthy days
+— and the refusal is the guard working: a guessed kickoff is the
+`phantom_kickoff_now_stamp` class that cost 510 permanent rows.
+
+**One hypothesis checked and REJECTED:** that league prioritisation had become a
+filter, shrinking the scrape as the table emptied. `_ordered_leagues =
+_priority + _rest` — it is ordering only, and all 30 leagues were scraped. No
+feedback loop.
+
+---
+
+## 2. THE FILL IS 90.3% OF ALL HISTORY, AND THE SAMPLE CAP IS THE ONLY THING SAVING THE FLAG
+
+**The eligible training population — completed, non-excluded — by year:**
+
+| year | matches | with 1X2 odds | **FILLED at 1/3** | fill % |
+| --- | --- | --- | --- | --- |
+| 2021 | 13 | 0 | 13 | **100.0%** |
+| 2022 | 3,707 | 0 | 3,707 | **100.0%** |
+| 2023 | 9,617 | 0 | 9,617 | **100.0%** |
+| 2024 | 11,738 | 0 | 11,738 | **100.0%** |
+| 2025 | 9,063 | 0 | 9,063 | **100.0%** |
+| 2026 | 7,096 | 3,998 | 3,098 | 43.7% |
+| **ALL** | **41,234** | **3,998** | **37,236** | **90.3%** |
+
+**Odds collection began in 2026. Every match before it carries the fill.** At
+90.3% the flag would be **pruned as sparse** (threshold 80% zeros).
+
+### What actually reaches the model, and the inversion
+
+| cap | n | filled | fill % | flag at the 80% threshold | reaches back to |
+| --- | --- | --- | --- | --- | --- |
+| **200** *(the old cap)* | 200 | 148 | **74.0%** | retained — **by 6 points** | 09-19 |
+| **500** *(`--train`)* | 500 | 243 | **48.6%** | retained | 09-11 |
+| **2000** *(`daily_update`)* | 2000 | 459 | 22.9% | retained | 07-07 |
+| 5000 | 5000 | 1,240 | 24.8% | retained | 03-06 |
+
+**The fill is NOT monotone in the cap** — recent coverage is the worst, because
+OPS-4 stopped odds collection on 09-12 and the 86 zero-odds rows from 09-20 sit
+at the front. *I expected the opposite and the measurement corrected it.*
+
+> ### The production model (trained 09-21 via `--train`, cap 500) learned from rows where 48.6% carry 0.3333 on `away_implied_prob` — its TOP xgboost feature and SECOND random-forest feature.
+>
+> And **nothing gates on it**: `bookmaker_available` appears **nowhere** in
+> `betting_agent.py` or `ml_models.py`. The flag is computed, survives pruning,
+> enters the vector — **and no code consumes it.** Rule 1, in the feature
+> pipeline, on the one signal that distinguishes real from filled.
+
+**The inversion, quantified:** at cap 200 the fill is **74.0% against an 80%
+prune threshold**, and the recent-window fill is *rising* while OPS-4 holds. The
+flag would be dropped as sparse **precisely when most rows are filled.**
+
+### A CANDIDATE, framed as one
+
+**This is the first mechanism found by which the model is fed values it cannot
+distinguish from measurements, on the feature it relies on most.** Roughly half
+the training rows carry a constant there.
+
+**It is a candidate explanation for the ML classifier's inertness. It is not an
+explanation of the blend sweep.** The 2026-08-07 audit found the model inert
+three independent ways, and the sweep's monotone-to-w=1.0 result was later
+measured clean of the two-way trap. **A corrupted ML feature explains the
+classifier; it does not explain why the ensemble adds nothing over the price.**
+Testing it needs a refit on odds-carrying rows only, which is a model change and
+is not proposed here.
+
+---
+
+## 3. THE NULL-INPUT CONTROL WAS BUILT, AND IT REFUTED THE CLAIM IT WAS BUILT FROM
+
+**I said the percentage transform "turns every round trip into a spurious
+negative correlation, which H1 would report as mean-reversion the transform
+invented", and proposed that as a new and more dangerous class. The control says
+I was wrong.**
+
+Measured at n = 20,000, independent multiplicative moves, **true ρ = 0**:
+
+| σ | log transform | percentage transform |
+| --- | --- | --- |
+| 0.06 | +0.0006 | **+0.0005** |
+| 0.30 | +0.0006 | **−0.0004** |
+| 0.60 | +0.0006 | **−0.0018** |
+
+**It manufactures nothing.** The largest bias at ρ = 0 is 0.0024, against a
+decision boundary of 0.42.
+
+### What it actually does is ATTENUATE — and that points the other way
+
+| true ρ = 0.42 | log | percentage |
+| --- | --- | --- |
+| σ = 0.06 | +0.4238 | +0.4238 |
+| σ = 0.30 | +0.4238 | +0.4145 |
+| σ = 0.60 | +0.4238 | **+0.3824** |
+
+> ### The percentage transform biases ρ̂ DOWNWARD by up to 0.04 at H1's own decision boundary. Its error direction is a FALSE NULL, not a false signal — the opposite of what I claimed.
+
+**The log ratio is still correct**, for the two reasons now pinned: **exact
+antisymmetry** on a round trip (−1.0000 against −0.9414) and **unbiased recovery
+of ρ at every volatility**. The code does not change. **The claim does.**
+
+**So the proposed new shape is withdrawn.** A defect class that produces a
+spurious finding rather than an invisible failure is conceivable and would
+indeed survive every check built here — but **this was not an instance of it**,
+and filing a shape on an unverified example is the error MB-1 already names.
+
+**The control is what settled it**, in one run, after two rounds of argument had
+not. Six tests: the null input reaching `NULL` and not `SIGNAL`; the planted
+0.42 recovered to ±0.02; the refuted claim pinned so it cannot return; the
+attenuation measured; the antisymmetry exact.
+
+---
+
+## 4. UNI-1's SIXTH INSTANCE — and the first where the unit was in force beforehand
+
+**135 series across 2 fixtures.** A factor of **67**, on the real table, in the
+exact quantity H1 reports.
+
+| | the unit that decided the answer |
+| --- | --- |
+| the deff predicate | per-key vs per-fixture — design effect ~11 |
+| H5's aggregation | mean across books vs one actionable price — **fifty-fold in n** |
+| H1's cost model | per-fixture vs per-league-request — 66-78 vs 106-168 credits |
+| step 2's rate | per created fixture vs per resolution — a rise vs a flat line |
+| the secrets scan | tracked files vs files that will reach the remote — **1072 both times** |
+| **H1's trajectory count** | **series vs FIXTURE — n = 135 vs n = 2** |
+
+> ### The first five were learned after the count was taken. This one was caught because the registration had already written the unit down — the floor would have been passed by sixty-six otherwise.
+>
+> **That is the difference between the rule being known and the rule being in
+> force.** UNI-1 did not prevent the other five; the registration prevented this
+> one.
+
+---
+
+## 5. STANDING
+
+| | |
+| --- | --- |
+| **picks** | **0 on 09-20, 09-22, 09-23, 09-24**; 2 on 09-21. Four of five days empty |
+| **closing-lines** | 2 of 4 runs on 09-24 **FAILED** on `psycopg`; the 09-22/23 runs were clean with 0 candidate leagues |
+| **picks-run guard** | 0 declines, 0 candidates on every run. Never reached — consistent with the measured 0 of 231 |
+| **OPS-4** | 400/450, 0 spendable. Reset **10-01, six days out** |
+| **H1 precondition** | **NOT MET.** Zero forward fixtures for four days. If the slate is still empty on 10-01 the collection produces NO DATA — at near-zero credit cost, by the candidate rule, so the exposure remains the schedule |
+| **cohort** | `00febf` 85, unchanged — no picks to move it. Next selection-affecting change takes **s5.15** |
+
+---
+
+*Recorded 2026-09-25. Two H1 test files and the ledger changed; no config,
+schema, workflow, dependency or production data changed.*
