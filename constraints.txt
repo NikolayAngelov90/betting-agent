@@ -1,0 +1,116 @@
+# CONSTRAINTS — the last resolution KNOWN to have worked in production.
+#
+# Captured 2026-09-25 from the `Successfully installed` line of run
+# 35972342260 (daily-picks, 2026-09-24 07:56 UTC), the most recent run whose
+# 1120-test suite passed in CI. It predates SQLAlchemy 2.1.0 by ~8 hours.
+#
+# WHY THIS FILE EXISTS
+# -------------------
+# 30 of 31 specs in requirements.txt are unbounded `>=`, there is no lockfile,
+# and there is no staging environment. `pip install` runs fresh on every
+# scheduled run, so a release on PyPI becomes a production failure the same day
+# with no change in this repository.
+#
+# That is not hypothetical. It has fired three times, and the first two were
+# each repaired as a code bug:
+#
+#   numpy 2.x        changed `repr(np.float64)`, so the literal
+#                    `np.float64(2.75)` reached SQL and Postgres read it as a
+#                    schema reference. The shim is src/data/database.py:18.
+#   scikit-learn     version drift against pickles written by an earlier
+#                    version. The guard is `_init_models()` at the top of
+#                    `fit()` — which protects the REFIT path, not the LOAD path.
+#   sqlalchemy 2.1   changed the default DBAPI for a bare `postgresql://` URL to
+#                    psycopg v3, which this repo does not ship. 2026-09-24.
+#
+# The classes that matter are not the popular packages but the ones whose
+# failure is QUIET:
+#
+#   silent      scikit-learn xgboost lightgbm numpy pandas — the pipeline
+#               persists and reloads ml_models.pkl / goals_model.pkl across
+#               runs, so a format change mis-deserialises rather than raising.
+#   zero rows,  camoufox playwright selenium undetected-chromedriver — this is
+#   green run   the presentation that hid Flashscore's death for 88 days.
+#
+# HOW FAR THE DRIFT HAD ALREADY GONE before this file existed: requirements.txt
+# asks for `pandas>=2.1.0` and production was running 3.0.6; `anthropic>=0.69.0`
+# against 1.8.0; `python-telegram-bot>=20.0` against 22.8; `xgboost>=2.0.0`
+# against 3.2.0; `transformers>=4.35.0` against 5.17.0. Five major versions
+# crossed with no decision recorded anywhere.
+#
+# WHAT THIS FILE DOES AND DOES NOT DO
+# -----------------------------------
+# It converts "a release breaks production" into "a release breaks the refresh".
+# It does NOT touch the `>=` specs in requirements.txt: those still express the
+# minimum the code needs, and this file expresses what was last verified. Only
+# DIRECT dependencies are listed — transitives stay free, because pinning them
+# turns a constraints file into a lockfile that breaks on any platform
+# difference and needs a resolver to maintain.
+#
+# TO REFRESH, DELIBERATELY:
+#   1. take the `Successfully installed` line from a green daily-picks run
+#   2. rewrite the versions here for the direct dependencies only
+#   3. note in docs/ci-audit-ledger.md which run it came from
+# A refresh that is not recorded is indistinguishable from drift.
+#
+# TO BYPASS FOR ONE RUN: drop `-c constraints.txt` from the install step. It is
+# referenced from all three workflows; `tests/test_dependency_bounds.py` pins
+# that they all still use it.
+#
+# NOTE ON sqlalchemy: the `<2.1` bound in requirements.txt is kept as well as
+# the pin here. The bound carries the REASON and survives a refresh of this
+# file; the pin carries the exact version. Removing one does not remove the
+# other, which is deliberate.
+
+# Scraping
+selenium==4.49.0
+undetected-chromedriver==3.5.5
+beautifulsoup4==4.15.0
+lxml==6.1.3
+requests==2.34.2
+aiohttp==3.14.3
+httpx==0.28.1
+playwright==1.62.0
+camoufox==0.5.6
+
+# Database
+sqlalchemy==2.0.54
+psycopg2-binary==2.9.13
+alembic==1.20.0
+
+# Data processing
+pandas==3.0.6
+pyarrow==25.0.1
+numpy==2.4.6
+
+# Machine learning — the pickle-compatibility set
+scikit-learn==1.9.1
+xgboost==3.2.0
+lightgbm==4.7.0
+
+# Statistics
+scipy==1.17.1
+statsmodels==0.15.0
+
+# NLP
+transformers==5.17.0
+nltk==3.10.3
+vaderSentiment==3.3.2
+
+# Scheduling
+apscheduler==3.11.3
+
+# Notifications
+python-telegram-bot==22.8
+
+# LLM briefings
+anthropic==1.8.0
+
+# Utilities
+pyyaml==6.0.3
+python-dotenv==1.2.3
+loguru==0.7.3
+
+# Testing
+pytest==9.1.1
+pytest-asyncio==1.4.0

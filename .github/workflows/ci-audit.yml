@@ -1,0 +1,97 @@
+name: CI Audit
+
+# WHY THIS EXISTS. `scripts/ci_audit.py` has been invoked only by hand since it
+# was written. On 2026-09-25 that was measured: Flashscore created zero fixtures
+# for four consecutive days, every run reported `success`, and the per-source
+# discovery assertion — the one written after Flashscore's 88-day silent death —
+# fired correctly but into a terminal nobody was reading.
+#
+#     An alarm with no wire to production is a definition, not an alarm.
+#
+# WHY A SEPARATE RUN AND NOT A STEP. `gh run view --log` returns nothing until a
+# run completes, so a workflow cannot audit itself from the inside. This is not
+# a preference; it is why the step could not be added to daily-picks.
+#
+# WHY `workflow_run` AND NOT A CRON. daily-picks fires at 03:00 and has landed
+# between 07:56 and 08:20, but GitHub's scheduler has delivered 0.5h to 11h21m
+# of delay (OPS-3). Any fixed hour is a guess that a late run defeats;
+# `workflow_run: completed` fires exactly when the log becomes readable. The
+# daily cron below is a backstop for a `workflow_run` event that is dropped.
+
+on:
+  workflow_run:
+    workflows:
+      - Daily Betting Picks
+      - Closing Line Capture
+      - Paper Trading Report
+    types: [completed]
+  schedule:
+    # Backstop only. 12:00 UTC is after daily-picks' observed completion window
+    # with margin; a run delayed past it is picked up by the next day's pass,
+    # because `--unaudited` keys on the ledger and not on a time window.
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+# One audit at a time. Three workflows completing within minutes of each other
+# would otherwise run three passes over the same unaudited set.
+concurrency:
+  group: ci-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read          # `gh run view --log` needs this and nothing more
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        # The ledger IS the history. `produced_recently()` reads
+        # `docs/ci-audit-ledger.md`, so a shallow checkout of the default branch
+        # is both necessary and sufficient.
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+        # No pip install: ci_audit imports the standard library only.
+
+      - name: Audit unaudited runs
+        id: audit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONIOENCODING: utf-8
+        # THE POLICY, STATED RATHER THAN INHERITED.
+        #
+        # `--fail-on BROKEN,DID_NOT_RUN` and NOT DEGRADED. DEGRADED is this
+        # pipeline's ordinary state — eight implausible-attribution rows on
+        # every daily-picks run — and failing on it would make red mean nothing,
+        # which is the noise DEL-2 was deliberately narrowed to avoid. BROKEN
+        # and DID_NOT_RUN say the pipeline did not do its job, which is the same
+        # axis DEL-2 chose for the picks step.
+        #
+        # So: this job REPORTS everything and goes RED only when a run crashed
+        # or did not execute. A DEGRADED finding still reaches Telegram below.
+        run: python scripts/ci_audit.py --unaudited --fail-on BROKEN,DID_NOT_RUN
+        continue-on-error: true
+
+      - name: Alert on an audit finding
+        # `always()` so a crash in the audit itself is not silence. The alert
+        # fires on ANY non-success, including DEGRADED, because reporting and
+        # failing are separated above: red is narrow, the alert is not.
+        if: always() && steps.audit.outcome != 'success'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          python -m scripts.ci_alert "⚠️ CI audit: a run scored BROKEN or DID_NOT_RUN, or the audit itself failed. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Fail the job when the audit alarmed
+        # Separated from the audit step so the alert above always gets to run
+        # first. A red run whose alert never sent is the shape Stage 12.1 found.
+        if: always() && steps.audit.outcome == 'failure'
+        run: |
+          echo "::error::CI audit alarmed — see the audit step for the run ids."
+          exit 1

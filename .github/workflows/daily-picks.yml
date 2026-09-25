@@ -129,7 +129,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt -c constraints.txt
           # Remove GPU libraries pulled as XGBoost transitive deps on CPU-only runner
           pip uninstall -y nvidia-nccl-cu12 2>/dev/null || true
           python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"

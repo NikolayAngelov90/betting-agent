@@ -103,3 +103,63 @@ def test_psycopg_v3_is_still_absent_so_the_bound_is_still_load_bearing():
         f"genuinely installed, the sqlalchemy<2.1 bound is no longer needed. "
         f"Remove the bound and this test together, after verifying against a "
         f"real Postgres URL.")
+
+
+# ── CONSTRAINTS: every install site must use it ──────────────────────────────
+#
+# Added 2026-09-25 with constraints.txt. The file converts "a release breaks
+# production" into "a release breaks the refresh", and it does that only for
+# the install steps that actually reference it. One step left unwired is the
+# same shape as pinning requirements.txt while two workflows install by name.
+
+CONSTRAINTS = pathlib.Path("constraints.txt")
+ALL_WORKFLOWS = [DAILY] + WORKFLOWS
+
+
+def test_constraints_file_exists_and_pins_the_silent_set():
+    """The packages whose failure mis-deserialises rather than raising.
+
+    The pipeline reloads ml_models.pkl / goals_model.pkl across runs, and
+    `_init_models()` guards the refit path rather than the load path — so a
+    format change in these is quiet.
+    """
+    assert CONSTRAINTS.is_file(), "constraints.txt is gone"
+    text = CONSTRAINTS.read_text(encoding="utf-8")
+    for pkg in ("scikit-learn", "xgboost", "lightgbm", "numpy", "pandas"):
+        assert re.search(rf"^{re.escape(pkg)}==", text, re.M), (
+            f"{pkg} is not pinned — it is in the silent-failure set")
+
+
+def test_constraints_pins_the_zero_rows_green_run_set():
+    """camoufox/playwright/selenium — the presentation that hid for 88 days."""
+    text = CONSTRAINTS.read_text(encoding="utf-8")
+    for pkg in ("camoufox", "playwright", "selenium", "undetected-chromedriver"):
+        assert re.search(rf"^{re.escape(pkg)}==", text, re.M), f"{pkg} unpinned"
+
+
+def test_every_direct_requirement_is_constrained():
+    """A requirement with no constraint is the gap the file was written to close."""
+    def names(path, pattern):
+        out = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            m = re.match(pattern, line)
+            if m:
+                out.append(m.group(1).lower().replace("_", "-"))
+        return set(out)
+
+    required = names(REQUIREMENTS, r"([A-Za-z0-9_.+-]+)\s*[><=!]")
+    pinned = names(CONSTRAINTS, r"([A-Za-z0-9_.+-]+)\s*==")
+    missing = sorted(required - pinned)
+    assert not missing, f"direct requirements with no constraint: {missing}"
+
+
+@pytest.mark.parametrize("wf", ALL_WORKFLOWS, ids=lambda p: p.name)
+def test_every_install_step_uses_the_constraints_file(wf):
+    text = wf.read_text(encoding="utf-8")
+    installs = [l for l in text.splitlines()
+                if "pip install" in l and "--upgrade pip" not in l]
+    for line in installs:
+        assert "-c constraints.txt" in line, (
+            f"{wf.name} installs without the constraints file:\n  {line.strip()}\n"
+            f"that step resolves freely and a release breaks it the same day")

@@ -17278,3 +17278,241 @@ began in 2026.
 *Recorded 2026-09-25. The SQLAlchemy bound in three files, one test file, and
 this entry. No schema, no production data, no prediction-affecting change;
 `s5.14` / `00febf` unchanged.*
+
+---
+
+# THE SELF-SILENCING FIXED, THEN WIRED; CONSTRAINTS SHIPPED; THE LAG BOUNDED
+
+`tests/` **1178 passed**, run after `git add`. `s5.14` / `00febf` unchanged —
+nothing here touches the selection path.
+
+---
+
+## 1. FIXED FIRST, THEN WIRED — in that order, and the order was load-bearing
+
+### SLF-1 — an audit whose output destroys its own input
+
+```python
+by_wf = defaultdict(list)
+for r in runs:                                  # `runs` = THIS PASS
+    hits = assertions(facts, by_wf[r["workflow"]])
+    by_wf[r["workflow"]].append(facts)
+```
+
+`--unaudited` excludes every run the ledger holds, so **the last day a source
+produced went invisible the moment it was recorded.** The check fired on 09-22
+only because 09-21 happened to be unaudited in the same batch; audited alone, it
+would never have fired.
+
+> ### Wiring it in that state would have produced a daily silent pass — strictly worse than not wiring it, because silence from a wired alarm reads as coverage.
+
+**`history` now means WHAT IS KNOWN, not what is in this pass.** `ledger_history()`
+parses `disc[...]` out of `docs/ci-audit-ledger.md` — the durable record — and
+the caller seeds `by_wf` from it before the loop.
+
+**Two formats parse, because the format changed mid-project:**
+`disc[fs=2c fdo=0c af=86c]` and `disc[fs=17c/-m fdo=4c/5m af=0c/29m]`. **A parser
+that read only the current shape would treat every older row as no history —
+the same failure with a different cause.** And **`-` reads as `None`, not `0`**:
+*did not report* must not satisfy a check about *produced nothing*.
+
+**Verified, which is the point of doing it in this order:**
+
+```
+$ python scripts/ci_audit.py --unaudited
+!! no ledger history for closing-lines: per-source discovery checks are UNEVALUATED for it, not passed
+35835164403  daily-picks  09-23  DEGRADED  ... Flashscore fixtures: 0 created AND 0 matched wh
+35972342260  daily-picks  09-24  DEGRADED  ... Flashscore fixtures: 0 created AND 0 matched wh
+```
+
+**Both days now fire on the daily path.** And a workflow with no ledger history
+is announced **UNEVALUATED, not passed** — the third state, named, because
+silence there was the whole defect.
+
+### Then the wiring — `.github/workflows/ci-audit.yml`
+
+**It cannot be a step inside `daily-picks`.** `gh run view --log` returns nothing
+until a run completes, so a workflow cannot audit itself. *The obvious design is
+the impossible one*, and a test pins that `ci_audit` never appears in
+`daily-picks.yml`.
+
+**`workflow_run: [completed]` on all three workflows, not a cron.** daily-picks
+lands between 07:56 and 08:20 but the scheduler has delivered 0.5h to 11h21m of
+delay — any fixed hour is a guess a late run defeats. A 12:00 UTC cron remains
+as a backstop for a dropped event.
+
+**THE `continue-on-error` QUESTION, ANSWERED EXPLICITLY:**
+
+| | |
+| --- | --- |
+| **red** | **`--fail-on BROKEN,DID_NOT_RUN` only** |
+| **alerted** | **any non-success, DEGRADED included** |
+
+> ### DEGRADED is this pipeline's ordinary state — eight implausible-attribution rows every single day. Failing on it would make red mean nothing, which is exactly the noise DEL-2 was narrowed to avoid. BROKEN and DID_NOT_RUN say the pipeline did not do its job, which is the axis DEL-2 already chose.
+>
+> **Reporting and failing are separated, so the alert is wider than red.** The
+> alert step carries `always()` and runs *before* the failing step, because a
+> red run whose alert never sent is the shape Stage 12.1 found.
+
+`--fail-on` defaults to empty — **report only** — and was verified across four
+verdicts: DID_NOT_RUN → exit 1, the same run without the flag → 0, CLEAN → 0,
+**DEGRADED → 0.**
+
+**A defect introduced and caught in this change:** the `alarmed.append(...)` landed
+but the `if alarmed: return 1` did not — my patch pattern missed. It was caught
+by *testing the exit code* rather than trusting the edit, and it is the same
+shape as the reconcile block computed above its inputs: **a producer with no
+consumer, which looks exactly like a working feature.**
+
+### SELF-CALIBRATION HAS A FAILURE MODE THE FIXED CHECKS DO NOT
+
+**This is why the outage was visible at all.** Three assertions saw the same four
+days:
+
+| assertion | design | 09-22 | 09-23 | 09-24 |
+| --- | --- | --- | --- | --- |
+| per-source discovery | **self-calibrating** | fired *(by batching luck)* | **silent** | **silent** |
+| `N fixture scrape(s) attempted, 0 found` | **absolute** | fired | fired | fired |
+| `NO FIXTURES FOUND for the day` | **absolute** | fired | fired | fired |
+
+> ### No day scored CLEAN. The redundancy worked, and it worked because the two members that cannot self-silence are not self-calibrating.
+>
+> **A self-calibrating check compares against history, so it inherits every way
+> history can be wrong — and its own firing is one of them.** A fixed threshold
+> cannot be silenced by the thing it is watching. **Having both is not
+> belt-and-braces; the two fail in different directions**, and this outage is
+> the case that separates them.
+
+---
+
+## 2. `constraints.txt` — SHIPPED
+
+**Captured from run 35972342260 (09-24 07:56 UTC), the most recent run whose
+1120-test suite passed in CI — and it predates SQLAlchemy 2.1.0 by ~8 hours.**
+31 direct dependencies pinned; transitives left free, because pinning them makes
+a lockfile that breaks on any platform difference. Wired into **all three**
+install steps with `-c constraints.txt`, pinned by test.
+
+### HOW FAR THE DRIFT HAD ALREADY GONE — measured, and it is the argument
+
+| requirements.txt asks | production was running |
+| --- | --- |
+| `pandas>=2.1.0` | **3.0.6** |
+| `anthropic>=0.69.0` | **1.8.0** |
+| `python-telegram-bot>=20.0` | **22.8** |
+| `xgboost>=2.0.0` | **3.2.0** |
+| `transformers>=4.35.0` | **5.17.0** |
+| `numpy>=1.26.0` | **2.4.6** |
+| `scikit-learn>=1.3.0` | **1.9.1** |
+
+> ### Seven major versions crossed with no decision recorded anywhere. The file did not describe what production was running; it described the minimum the code once needed.
+
+**And a hypothesis excluded while building it.** If a scraper package had bumped
+around 09-20, that — not a Flashscore markup change — would be the outage.
+Measured across 09-19 (working), 09-21 and 09-24 (broken):
+
+```
+beautifulsoup4-4.15.0  camoufox-0.5.6  lxml-6.1.3
+playwright-1.62.0  selenium-4.49.0  undetected-chromedriver-3.5.5
+```
+
+**Identical on all three days.** The scraper stack did not move. **The selector
+diagnosis stands, and it stands on a check that could have overturned it.**
+
+---
+
+## 3. THE SECOND OBSERVED SAVE — the category has two members
+
+**The fail-closed kickoff parse caught the recurrence of the failure it was
+written for.**
+
+| | 2026-05-31 | 2026-09-20 onward |
+| --- | --- | --- |
+| failure | `event__match` selector died | `event__time` / `.duelParticipant__startTime` died |
+| what the code did | **stamped `datetime.now()`** | **REFUSED, 621 times per run at WARNING** |
+| cost | **510 permanent phantom rows over 88 days** | 0 corrupt rows; 4 days of cards lost |
+| how it was found | 88 days later | same day, in the log |
+
+> ### SAVES OBSERVED IN PRODUCTION — the category had one member and now has two.
+>
+> | | |
+> | --- | --- |
+> | **1. DEL-3's chunk retry** | 09-19 — one chunk of five timed out, the retry recovered it, all five delivered |
+> | **2. fail-closed kickoff parsing** | 09-20 onward — the same selector class recurred and produced refusals instead of phantoms |
+>
+> **Both were found in production, not in a test.** Against the standing list of
+> mechanisms that were *unexercised* or *defective on first exercise*, two is
+> still the smaller number — but it is no longer one, and both members earned
+> it on a recurrence rather than a first outing.
+
+**The loss is real and is not diminished by the save:** four days of cards have
+no fixtures, no odds and no CLV pair, and never will. **What the guard bought is
+that the record is empty rather than wrong** — and the 510 phantoms are the
+measure of what wrong costs.
+
+---
+
+## 4. THE DEPLOYMENT LAG — measured, and it does NOT qualify past registrations
+
+**Every scheduled run, 09-18 to 09-24, by the commit it ran:**
+
+```
+09-18 21:39 .. 09-19 14:22   df6f6d2
+09-19 17:59 .. 09-20 14:40   5da4f26        <- 5da4f26 committed 09-19
+09-20 18:11 .. 09-24 23:51   e8c6f11        <- e8c6f11 committed 09-20 15:12 UTC
+```
+
+**Propagation through 09-20 was under three hours** — `e8c6f11` was committed at
+15:12 UTC and the 18:11 UTC run used it. **Then `e8c6f11` stuck for five days**,
+while `6f4031c` and `9de2e45` existed locally from 09-22 11:40 and 12:00 UTC.
+There are **no git hooks**; `c3da9c9`, committed 15 minutes ago, is already on
+`origin/main`. So the lag was a gap in pushing, not a standing condition.
+
+### It closes, and here is why
+
+**The two lagged commits touched only:**
+
+```
+6f4031c  docs/ci-audit-ledger.md  scripts/h1_collection_check.py  tests/...
+9de2e45  docs/ci-audit-ledger.md  scripts/h1_analysis.py          tests/...
+```
+
+> ### Neither contains anything CI executes in production. The H1 scripts are invoked by no workflow, and the commit that DID matter — `e8c6f11`, carrying the four `skipped` repairs — reached CI the same evening and ran on 09-21, 09-22, 09-23 and 09-24.
+>
+> **So no dated prediction in this project was resolved against the wrong code.
+> The qualifier is PROSPECTIVE, not retrospective.**
+
+**One real consequence, stated rather than waved off:** the 09-23 and 09-24 runs
+ran a **test suite missing ~57 tests** (the two H1 files), so their "tests
+passed" covered less than the local figure quoted beside them.
+
+**And it costs one line to close for good.** The 09-17 ledger row already carries
+`headSha 889f8ba` — the practice exists and was not kept. **From here a dated
+prediction records the `headSha` it expects, and resolving it checks the run's
+`headSha` before reading its verdict.**
+
+---
+
+## 5. THE PREDICTION IS STILL OPEN
+
+**07:19 UTC: the 09-25 daily-picks run has not started.** Last run of any kind is
+09-24 23:51. The 01:17, 03:17 and 05:17 closing-lines slots have not fired.
+
+The prediction stands as registered. **It resolves with**
+
+```
+python scripts/ci_audit.py --since 2026-09-25
+```
+
+and it now has a second, sharper reading: **whichever `headSha` that run
+reports.** If it carries `c3da9c9` or later, the pin is in and the DID_NOT_RUN
+branch stays unexercised — the trade taken deliberately. If it carries
+`e8c6f11`, the lag persisted, the DB step fails, and the three repairs fire.
+**Either outcome is informative and the `headSha` distinguishes them**, which is
+the qualifier from §4 doing work on its first use.
+
+---
+
+*Recorded 2026-09-25. `scripts/ci_audit.py`, `constraints.txt`,
+`.github/workflows/ci-audit.yml`, three install steps, two test files and this
+entry. No schema, no production data, no prediction-affecting change.*

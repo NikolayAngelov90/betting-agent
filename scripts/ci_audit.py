@@ -112,6 +112,80 @@ def audited_run_ids() -> set:
     return out
 
 
+#: `disc[fs=2c/-m fdo=0c/0m af=86c/2m]`, and the older `disc[fs=2c fdo=0c af=86c]`.
+_LEDGER_DISC = re.compile(
+    r"disc\[\s*fs=([\-0-9]+)c(?:/([\-0-9]+)m)?\s+"
+    r"fdo=([\-0-9]+)c(?:/([\-0-9]+)m)?\s+"
+    r"af=([\-0-9]+)c(?:/([\-0-9]+)m)?\s*\]")
+
+_LEDGER_WORKFLOW = re.compile(
+    r"^\|\s*\**\s*(\d{9,})\s*\**\s*\|\s*\**\s*([a-z-]+)\s*\**\s*\|(.*)$", re.M)
+
+
+def _n(text: Optional[str]) -> Optional[int]:
+    """`'86'` -> 86; `'-'` and absent -> None. `-` means NOT REPORTED."""
+    if text is None or text == "-":
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def ledger_history(workflow: str, limit: int = None) -> List[Dict[str, object]]:
+    """Per-source figures for this workflow's PAST runs, read from the ledger.
+
+    THE AUDIT WAS DESTROYING ITS OWN INPUT. `history` was assembled only from
+    the runs in the current pass:
+
+        by_wf = defaultdict(list)
+        for r in runs:
+            hits = assertions(facts, by_wf[r["workflow"]])
+            by_wf[r["workflow"]].append(facts)
+
+    and `--unaudited` excludes every run the ledger already holds. So
+    `produced_recently()` could not see the last day a source produced the
+    moment that day was recorded, and the per-source discovery check —
+    the one written after Flashscore's 88-day silent death — was skipped by its
+    own "an empty history means nothing can be said" branch.
+
+    FOUND 2026-09-25, on an outage in its fourth day. It fired on 09-22 only
+    because 09-21 happened to be unaudited in the same batch; had 09-21 been
+    audited alone it would never have fired at all. An alarm that works once per
+    outage, by coincidence of batching, is not an alarm.
+
+        Recording the finding removed the evidence that would fire it again.
+
+    The ledger is the durable record, so history comes from there. Rows are
+    returned oldest-first to match the in-pass convention, and `-` is read as
+    None — NOT REPORTED is not zero, and conflating them is the collapse this
+    file has closed four times already.
+    """
+    if not LEDGER.exists():
+        return []
+    rows: List[Dict[str, object]] = []
+    for rid, wf, rest in _LEDGER_WORKFLOW.findall(LEDGER.read_text(encoding="utf-8")):
+        if wf != workflow:
+            continue
+        m = _LEDGER_DISC.search(rest)
+        if not m:
+            continue
+        fs_c, fs_m, fdo_c, fdo_m, af_c, af_m = m.groups()
+        facts: Dict[str, object] = {}
+        for ckey, mkey, cval, mval in (
+                ("src_flashscore_fixtures", "src_flashscore_matched", fs_c, fs_m),
+                ("src_footballdataorg_fixtures", "src_footballdataorg_matched", fdo_c, fdo_m),
+                ("src_apifootball_fixtures", "src_apifootball_matched", af_c, af_m)):
+            c, mm = _n(cval), _n(mval)
+            if c is not None:
+                facts[ckey] = c
+            if mm is not None:
+                facts[mkey] = mm
+        if facts:
+            rows.append(facts)
+    return rows[-limit:] if limit else rows
+
+
 def _is_provisional(row_rest: str) -> bool:
     """True when a ledger row's VERDICT CELL is provisional.
 
@@ -790,6 +864,15 @@ def main() -> int:
     ap.add_argument("--until")
     ap.add_argument("--run", help="one run id")
     ap.add_argument("--limit", type=int, default=250)
+    # REPORTING AND FAILING ARE DIFFERENT POLICIES, so the flag is explicit and
+    # the default is REPORT. DEGRADED is this pipeline's ordinary state — eight
+    # implausible-attribution rows every day — and failing on it would make red
+    # mean nothing, which is precisely the noise DEL-2 was narrowed to avoid.
+    # BROKEN and DID_NOT_RUN are different: they say the pipeline did not do its
+    # job, which is the same axis DEL-2 chose.
+    ap.add_argument("--fail-on", default="",
+                    help="comma-separated verdicts that exit non-zero "
+                         "(e.g. BROKEN,DID_NOT_RUN). Default: report only.")
     a = ap.parse_args()
 
     if a.run:
@@ -827,7 +910,23 @@ def main() -> int:
                  "query, not an empty window.)" if listing_warning else ""))
         return 0
 
+    # HISTORY IS WHAT IS KNOWN, NOT WHAT IS IN THIS PASS. Seeded from the
+    # ledger before the loop, so recording a finding no longer erases the
+    # evidence that would fire it again. See `ledger_history`.
+    fail_on = {v.strip().upper() for v in (a.fail_on or "").split(",") if v.strip()}
+    alarmed: List[str] = []
+
     by_wf: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+    for _wf in {r["workflow"] for r in runs}:
+        seed = ledger_history(_wf, LOOKBACK_RUNS)
+        if seed:
+            by_wf[_wf] = list(seed)
+        else:
+            # NOT a pass. The per-source checks below will be skipped for this
+            # workflow, and silence there would read as coverage.
+            print(f"!! no ledger history for {_wf}: per-source discovery checks "
+                  f"are UNEVALUATED for it, not passed\n")
+
     print(f"{'run':<12} {'workflow':<14} {'started':<17} {'verdict':<10} findings")
     print("-" * 100)
     seen_days: set = set()
@@ -856,6 +955,8 @@ def main() -> int:
         disc = discovery_summary(facts)
         res = resolution_summary(facts)
         _pre = "  ".join(x for x in (disc, res) if x)
+        if v in fail_on:
+            alarmed.append(f"{rid} {r['workflow']} {v}")
         print(f"{rid:<12} {r['workflow']:<14} {(r.get('startedAt') or '')[:16]:<17} "
               f"{v:<10} {((_pre + '  ') if _pre else '') + '; '.join(hits)}"[:190])
         for h in hits[1:]:
@@ -866,6 +967,11 @@ def main() -> int:
         # truncation qualifies.
         print(f"\n!! {listing_warning}")
         print(f"!! {len(runs)} run(s) listed above is a LOWER BOUND.")
+    if alarmed:
+        # `::error::` so a workflow annotates, and a non-zero exit so it can
+        # go red — but only for the verdicts the caller named.
+        print("\n::error::audit alarm — " + "; ".join(alarmed))
+        return 1
     return 0
 
 
