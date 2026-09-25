@@ -28,6 +28,7 @@ The fix: history comes from the ledger, which is the durable record.
 
 import importlib.util
 import pathlib
+import sys
 
 import pytest
 
@@ -184,3 +185,68 @@ def test_the_alert_fires_on_ANY_finding_even_though_red_does_not():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "steps.audit.outcome != 'success'" in text
     assert "ci_alert" in text
+
+
+# ── WORKFLOW STATE: the one thing no run-based check can see ─────────────────
+#
+# FOUND 2026-09-25 after 7h48m with nothing running. Every check in this tool
+# reads RUNS; a disabled workflow produces none, so "disabled" and "nothing was
+# scheduled" were the same observation. The answer that day was `active` for all
+# four — and it was obtained by a command OUTSIDE the tool, which is the gap
+# regardless of the answer.
+
+def test_a_disabled_workflow_alarms_even_with_ZERO_runs(monkeypatch, capsys):
+    """THE CASE IT EXISTS FOR, and the case the first version could not reach.
+
+    The check was first placed AFTER `if not runs: return 0`. A disabled
+    workflow produces no runs, so that branch printed "No runs to audit." and
+    exited 0 before the check ran — the check was unreachable in precisely the
+    situation it was written for. Found by simulating it, not by reading it.
+    """
+    monkeypatch.setattr(ci, "workflow_states",
+                        lambda: {"Daily Betting Picks": "disabled_inactivity",
+                                 "Closing Line Capture": "active"})
+    monkeypatch.setattr(sys, "argv", ["ci_audit", "--since", "2030-01-01"])
+    code = ci.main()
+    out = capsys.readouterr().out
+    assert code == 1, "a disabled workflow exited 0"
+    assert "disabled_inactivity" in out
+    assert "not active" in out
+    assert "audit alarm" in out
+
+
+def test_it_is_NOT_behind_fail_on(monkeypatch, capsys):
+    """Not self-calibrating. A disabled scheduled workflow is wrong on the
+    FIRST occurrence, like a spent credit that returned no rows — so it alarms
+    without the caller opting in."""
+    monkeypatch.setattr(ci, "workflow_states",
+                        lambda: {"X": "disabled_manually"})
+    monkeypatch.setattr(sys, "argv", ["ci_audit", "--since", "2030-01-01"])
+    assert ci.main() == 1          # no --fail-on given
+    assert "disabled_manually" in capsys.readouterr().out
+
+
+def test_all_active_is_SILENT(monkeypatch, capsys):
+    """The normal case must add no noise, or it will be tuned out."""
+    monkeypatch.setattr(ci, "workflow_states", lambda: {"A": "active", "B": "active"})
+    monkeypatch.setattr(sys, "argv", ["ci_audit", "--since", "2030-01-01"])
+    ci.main()
+    out = capsys.readouterr().out
+    assert "not active" not in out
+    assert "state UNKNOWN" not in out
+
+
+def test_an_unreadable_gh_is_UNKNOWN_and_says_so(monkeypatch, capsys):
+    """`None`, never `{}`. "Could not look" is not "found nothing" — the fifth
+    time this file has had to separate those two."""
+    monkeypatch.setattr(ci, "_sh", lambda *a: "")
+    assert ci.workflow_states() is None
+    monkeypatch.setattr(ci, "_sh", lambda *a: "}{ not json")
+    assert ci.workflow_states() is None
+
+    monkeypatch.setattr(ci, "workflow_states", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["ci_audit", "--since", "2030-01-01"])
+    ci.main()
+    out = capsys.readouterr().out
+    assert "state UNKNOWN" in out
+    assert "indistinguishable from a quiet one" in out

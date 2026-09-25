@@ -17496,7 +17496,10 @@ prediction records the `headSha` it expects, and resolving it checks the run's
 ## 5. THE PREDICTION IS STILL OPEN
 
 **07:19 UTC: the 09-25 daily-picks run has not started.** Last run of any kind is
-09-24 23:51. The 01:17, 03:17 and 05:17 closing-lines slots have not fired.
+09-24 23:51. ~~The 01:17, 03:17 and 05:17 closing-lines slots have not fired.~~
+**WRONG, corrected 2026-09-25: those crons do not exist.** closing-lines runs at
+`47 10` and `17 11,13,15,17,19,21,23` — there is NO slot between 23:17 and 10:47,
+an 11h30m gap BY DESIGN. No slot was missed.
 
 The prediction stands as registered. **It resolves with**
 
@@ -17687,8 +17690,11 @@ producer's — which is the general form.
 ## 4. THE `headSha` DISCRIMINATOR, AND THE PREDICTION IS STILL OPEN
 
 **07:29 UTC: no daily-picks run for 09-25. Nothing of any kind since 09-24
-23:51** — the 01:17, 03:17 and 05:17 closing-lines slots have not fired either,
-which is now seven-plus hours of silence across all schedules.
+23:51.** ~~the 01:17, 03:17 and 05:17 closing-lines slots have not fired either,
+which is now seven-plus hours of silence across all schedules.~~ **WRONG,
+corrected 2026-09-25: no slot was missed.** The overnight gap from 23:17 to 10:47
+is 11h30m by design, and the 03:00 daily-picks slot lands 07:26-08:20. See the
+workflow-state entry below.
 
 The registration stands, and the discriminator is what makes it resolvable
 rather than arguable:
@@ -17713,3 +17719,143 @@ rule rather than one row's habit.
 
 *Recorded 2026-09-25. Ledger only — no code, config, schema, workflow or
 production data changed in this entry. `s5.14` / `00febf` unchanged.*
+
+---
+
+# ALL FOUR WORKFLOWS ACTIVE — AND NO SLOT WAS MISSED. MY CLAIM WAS WRONG.
+
+---
+
+## 1. `gh workflow list --all`, VERBATIM
+
+```
+CI Audit	active	366747847
+Closing Line Capture	active	331163294
+Daily Betting Picks	active	234546263
+Paper Trading Report	active	331163295
+```
+
+**All four `active`. No `disabled_manually`, no `disabled_inactivity`.** Nothing
+to re-enable, and no outage window to record.
+
+*Incidental confirmation: `CI Audit` has a workflow id, so GitHub has picked up
+the file committed an hour ago. It has not run yet.*
+
+---
+
+## 2. AND IT IS NOT THE SCHEDULER EITHER — THE THIRD ANSWER, WHICH NEITHER BRANCH ANTICIPATED
+
+**Both branches were conditioned on something being wrong. Nothing is.**
+
+```
+daily-picks           0 3 * * *
+closing-lines        47 10 * * *   and   17 11,13,15,17,19,21,23 * * *
+paper-trading        47 10 * * *
+ci-audit              0 12 * * *   (plus workflow_run on the other three)
+```
+
+> ### There is NO closing-lines slot between 23:17 and 10:47. That is an 11h30m gap BY DESIGN, and I invented three crons — 01:17, 03:17, 05:17 — that do not exist.
+
+| | |
+| --- | --- |
+| last run of any kind | **09-24 23:51:57** — the 23:17 slot, **34m57s late** |
+| gap at the time of checking | **7h53m** |
+| **designed overnight gap** | **11h30m** (23:17 → 10:47) |
+| next closing-lines / paper-trading slot | **10:47 today — not yet due** |
+| daily-picks 03:00 slot | **due; observed landings 07:26 → 08:20 over 14 days** |
+| at 07:45 | **INSIDE that window** |
+| **slots actually missed** | **ZERO** |
+
+**So OPS-3 takes no entry. There is no gap to record, because 7h53m of overnight
+quiet is shorter than the gap the crons specify.**
+
+### The two entries that carried the wrong claim are struck through in place
+
+Entry §5 of `714b54c` and §4 of `8eed01c` both asserted that three closing-lines
+slots had failed to fire. **Both are corrected in the ledger itself**, not only
+here, so a reader of those sections cannot carry the error forward.
+
+> ### Second over-read of an absence in two days. The first was calling the Flashscore pages static from identical row counts; this one was calling a designed gap a missed schedule. Both had the same form: **I treated "I expected something here" as "something is missing here", without reading what was actually specified.**
+>
+> **The cheap check in both cases was to look at the thing rather than at its
+> output** — the page, and the cron lines. Four lines of YAML would have
+> prevented this one, and I had already read that file twice this week for other
+> reasons.
+
+---
+
+## 3. THE STANDING CHECK IS BUILT ANYWAY, BECAUSE THE GAP WAS REAL
+
+The directive put this under *"if any is disabled"*. **It is built regardless,
+because the reason given for it is unconditional and today proves it:**
+
+> ### Every check in this tool reads RUNS. A disabled workflow produces none, so "disabled" and "nothing was scheduled" are the same observation. Today's answer came from a command OUTSIDE the apparatus — which is the gap, whatever the answer was.
+
+**Fifth instance of that shape, now applied to the scheduler itself** rather than
+to anything it schedules.
+
+`workflow_states()` reads `gh workflow list --all --json name,state`, and
+`ci_audit` now:
+
+| | |
+| --- | --- |
+| any state ≠ `active` | **`::error::` and exit 1, NOT behind `--fail-on`** |
+| `gh` unreadable or malformed | **`None` → prints `state UNKNOWN`**, never `{}` |
+| all active | **silent**, so the normal case adds no noise to tune out |
+
+**Not behind `--fail-on` deliberately:** a disabled scheduled workflow is wrong
+on the *first* occurrence, like a spent credit that returned no rows. It is not
+self-calibrating and there is no history it could be compared against.
+
+### AND THE FIRST VERSION WAS UNREACHABLE IN EXACTLY THE CASE IT EXISTS FOR
+
+I placed the check **after** `if not runs: return 0`.
+
+> ### A disabled workflow produces no runs. So the branch it arrives on is the early return — which printed "No runs to audit." and exited 0 before the check could run. The check was correct, alarmed properly in isolation, and could never fire in production.
+>
+> **Found by simulating a disabled workflow with zero runs, not by reading the
+> code.** It is the same ordering family as **PNC-1**, filed an hour earlier:
+> the producer ran, the consumer was unreachable, and every surface looked
+> right.
+
+Moved above the early return, and the early return now carries the alarm.
+**Four tests, including the zero-runs case** — which is the one the first version
+failed — and one asserting that all-active stays silent.
+
+---
+
+## 4. THE 09-25 PREDICTION STAYS OPEN, DISCRIMINATOR UNCHANGED
+
+At **07:45 UTC** the daily-picks run has not appeared, and that is **normal**: the
+03:00 slot lands between 07:26 and 08:20.
+
+| the run reports | reading |
+| --- | --- |
+| **`c3da9c9` or later** | the pin is in, the DB step succeeds, **the three `skipped` repairs stay unexercised** — the trade taken deliberately |
+| **`e8c6f11`** | the push lag persisted, the DB step fails, **the repairs fire and the prediction resolves as registered** |
+
+```
+python scripts/ci_audit.py --since 2026-09-25
+```
+
+**And the run that resolves it will now also be the first to exercise the
+workflow-state check and the wired audit**, since `CI Audit` triggers on
+`workflow_run: completed`. Three mechanisms shipped today get their first live
+exercise on the same run.
+
+---
+
+## WHAT THIS CHECK ESTABLISHED
+
+1. **All four workflows are `active`** — the question was worth asking and the
+   answer is benign.
+2. **No slot was missed**, and my claim that three had been was wrong, from
+   inventing crons instead of reading them. **Corrected in both entries that
+   carried it.**
+3. **OPS-3 takes no entry.** 7h53m is inside an 11h30m designed gap.
+4. **The blind spot was real regardless**, so the standing check is built — and
+   its first version was unreachable in the one case it exists for, caught by
+   simulation.
+
+*Recorded 2026-09-25. `scripts/ci_audit.py`, one test file, and two in-place
+corrections to earlier entries. `s5.14` / `00febf` unchanged.*

@@ -297,6 +297,35 @@ def list_runs(since: Optional[str], until: Optional[str],
                       truncated)
 
 
+def workflow_states() -> Optional[Dict[str, str]]:
+    """`{workflow name: state}` from GitHub, or None when it cannot be asked.
+
+    THE ONE FAILURE MODE THIS TOOL COULD NOT SEE. Every check here reads RUNS.
+    A disabled workflow produces none, so "disabled" and "nothing was
+    scheduled" were the same observation — the fifth instance of that shape,
+    applied to the scheduler itself rather than to anything it runs.
+
+    Found 2026-09-25 after nothing had run for 7h48m. The answer that day was
+    `active` for all four, and it was obtained by a command OUTSIDE this tool —
+    which is the gap, independently of the answer.
+
+    `None`, NOT `{}`. An empty mapping would read as "no workflows exist", and
+    conflating "could not look" with "found nothing" is the collapse this file
+    has now closed five times.
+    """
+    raw = _sh("gh", "workflow", "list", "--all", "--json", "name,state")
+    if not raw.strip():
+        return None
+    try:
+        rows = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    return {str(r.get("name")): str(r.get("state")) for r in rows
+            if isinstance(r, dict) and r.get("name")}
+
+
 def fetch_log(run_id: str) -> str:
     """Full log of every step. Cached under ci_logs/ so a re-audit is free."""
     d = LOGS / f"run_{run_id}"
@@ -902,19 +931,49 @@ def main() -> int:
     if listing_warning:
         print(f"!! {listing_warning}\n")
 
+    fail_on = {v.strip().upper() for v in (a.fail_on or "").split(",") if v.strip()}
+    alarmed: List[str] = []
+
+    # WORKFLOW STATE, CHECKED BEFORE THE EARLY RETURN.
+    #
+    # IT WAS FIRST PLACED AFTER IT, WHICH MADE IT UNREACHABLE IN THE ONE
+    # CASE IT EXISTS FOR: a disabled workflow produces NO RUNS, so
+    # `if not runs: return 0` printed "No runs to audit." and exited 0
+    # before the check ran. Found by simulating a disabled workflow rather
+    # than by reading the code — the same ordering family as PNC-1. Not self-calibrating and
+    # not behind `--fail-on`: a scheduled workflow that is not `active` is wrong
+    # on the FIRST occurrence, the way a spent credit returning no rows is. It
+    # also cannot be inferred from runs, which is the whole reason it is here.
+    _states = workflow_states()
+    if _states is None:
+        print("!! workflow state UNKNOWN: `gh workflow list` could not be read. "
+              "A disabled workflow is indistinguishable from a quiet one here.\n")
+    else:
+        _off = {n: s for n, s in _states.items() if s.lower() != "active"}
+        for _name, _state in sorted(_off.items()):
+            alarmed.append(f"workflow {_name!r} state={_state}")
+            print(f"::error::workflow {_name!r} is {_state}, not active — it "
+                  f"produces no runs, so every run-based check below is blind "
+                  f"to it. Re-enable with `gh workflow enable`.")
+        if _off:
+            print()
+
     if not runs:
         # "No runs" is the reading most changed by a truncated query, so the
         # warning is repeated rather than assumed to have been read above.
         print("No runs to audit."
               + ("  (SEE THE TRUNCATION WARNING — this may be a cut-off "
                  "query, not an empty window.)" if listing_warning else ""))
+        # A state alarm must survive the early return: a disabled workflow
+        # produces no runs, so this is the branch it arrives on.
+        if alarmed:
+            print("\n::error::audit alarm — " + "; ".join(alarmed))
+            return 1
         return 0
 
     # HISTORY IS WHAT IS KNOWN, NOT WHAT IS IN THIS PASS. Seeded from the
     # ledger before the loop, so recording a finding no longer erases the
     # evidence that would fire it again. See `ledger_history`.
-    fail_on = {v.strip().upper() for v in (a.fail_on or "").split(",") if v.strip()}
-    alarmed: List[str] = []
 
     by_wf: Dict[str, List[Dict[str, object]]] = defaultdict(list)
     for _wf in {r["workflow"] for r in runs}:
