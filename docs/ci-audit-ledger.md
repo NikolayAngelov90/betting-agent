@@ -18073,3 +18073,170 @@ next began 09-26, and the configured 27 domestic leagues had nothing between.
 *Recorded 2026-09-26. `.github/workflows/ci-audit.yml` (scope only) and one test
 file; three claims withdrawn in this entry. No config, schema, dependency or
 production-data change; `s5.14` / `00febf` unchanged.*
+
+---
+
+# CLR-2, AND THE `outcome`/`conclusion` SCAN — the repository is clean and the trap is in the triage
+
+---
+
+## 1. CLR-2 — an alarm must be clearable by the remedy it prompts
+
+> ### CLR-2. Before shipping an alarm, state what action clears it and confirm that action changes the predicate. An alarm whose scope is defined by a condition its own remedy cannot end will fire forever.
+
+**This is sharper than "measure the firing rate", and it explains the timing.**
+The previous three instances all needed a *recurrence* to keep crying wolf. This
+one needed only a **historical condition that nothing could retire** — so it
+reached cry-wolf in three days, faster than any of them.
+
+| instance | what cleared it |
+| --- | --- |
+| `fixtures_zero_active` | a league having fixtures |
+| `af=0` | the source creating rows |
+| `fixtures_zero_active` (2nd) | same |
+| **the wired audit** | **nothing.** `--unaudited` keys on the ledger; the workflow writes no ledger rows; so no action available to anyone changed the predicate |
+
+**And it is why the fix was SCOPE rather than threshold.** A threshold change
+would have moved which conditions alarm; the defect was that the alarming set
+could never shrink. `--since` gives it a floor that time moves.
+
+**The check is cheap and mechanical: name the clearing action, then confirm it
+touches the predicate.** For `--since`, the clearing action is "a day passes with
+no BROKEN run", and it changes the predicate directly. For `--unaudited`, the
+clearing action was "write a ledger row", which the workflow cannot do.
+
+---
+
+## 2. THE SCAN: ZERO PLACES READ `conclusion` WHERE THEY MEAN `outcome`
+
+**Every `steps.*` reference in every workflow — all eight — uses `.outcome`:**
+
+```
+ci-audit.yml:106      steps.audit.outcome != 'success'
+ci-audit.yml:117      steps.audit.outcome == 'failure'
+daily-picks.yml:198   steps.retrain_ml.outcome == 'failure'
+daily-picks.yml:307   O_UPDATE:   steps.update.outcome
+daily-picks.yml:308   O_SETTLE1:  steps.settle1.outcome
+daily-picks.yml:309   O_PICKS:    steps.picks.outcome
+daily-picks.yml:310   O_RESULTS:  steps.results.outcome
+daily-picks.yml:311   O_SETTLE2:  steps.settle2.outcome
+```
+
+**`ci_audit` reads run-level `status`** (correct — that is what separates
+in-flight from complete) and **fetches run-level `conclusion` without reading
+it**, which is the separate gap already recorded on 09-20. **A run has no
+`outcome`; `conclusion` is the right field there.**
+
+### So the three "instances" were NOT one bug, and I conflated them yesterday
+
+| | what it actually was |
+| --- | --- |
+| the 09-20 false ML-timeout alert | **`skipped` third state** — `!= 'success'` on `.outcome`, where the fault it names is `== 'failure'` |
+| DEL-2's widened predicate | **`skipped` third state** — `== 'failure'` where the reader's day is the same for `skipped` |
+| **yesterday's triage of the audit** | **`outcome`/`conclusion` — and it was MINE, not the repository's** |
+
+> ### Two of the three belong to the `skipped` family, already filed. The third is in the diagnostic command a human runs, not in any file this project ships. Calling it "the third appearance of `outcome` vs `conclusion`" was wrong.
+
+### THE STRUCTURAL FACT, verified against the API rather than assumed
+
+```
+$ gh api repos/.../actions/runs/<id>/jobs
+  step fields exposed: ['completed_at', 'conclusion', 'name', 'number',
+                        'started_at', 'status']
+  "outcome" present: False
+```
+
+> ### A step's `outcome` is not exposed by the REST API at all. `outcome` is a workflow-expression concept; only `conclusion` survives into the record. So for ANY step under `continue-on-error`, post-hoc triage from the API alone cannot separate success from absorbed failure — `conclusion` is `success` either way.
+
+**Sized across the repository:**
+
+| workflow | steps | `continue-on-error` | outcomes echoed to the log |
+| --- | --- | --- | --- |
+| **daily-picks** | 30 | **9** | **5** — `O_UPDATE O_SETTLE1 O_PICKS O_RESULTS O_SETTLE2` |
+| **ci-audit** | 5 | **1** | 0 |
+| closing-lines | 11 | **0** | — |
+| paper-trading-report | 9 | **0** | — |
+
+**Ten absorbed-capable steps, nine of them in one workflow. And closing-lines and
+paper-trading have none at all, so `conclusion` is faithful there** — which is
+worth stating, because the instinct after a finding like this is to assume the
+whole repository is affected.
+
+### THE RECOVERABILITY LADDER — the blind spot is smaller than it looked
+
+| | mechanism | covers |
+| --- | --- | --- |
+| 1 | **echoed into an `env:` block** → in the log verbatim | 5 of daily-picks' 9 |
+| 2 | **consumed by a later step's `if:`** → inferable from whether that step ran | `retrain_ml`; the audit step — *this is how yesterday's triage was actually settled* |
+| 3 | **`##[error]` in the log** → emitted for any failing step, absorbed or not | the remaining 3: camoufox download, Claude Code CLI install, weekly report |
+| 4 | nothing | **none** |
+
+> ### So every absorbed failure in this repository is recoverable — and the remedy sits in a log `ci_audit` already downloads. `grep -n 'error\]' scripts/ci_audit.py` returns nothing: **the annotation that closes the blind spot is the one signal the auditor does not parse.** That is the concrete candidate, and it is one pattern.
+
+### AND USING IT SETTLED A LIVE QUESTION
+
+Two of the three unechoed steps are consequential, not cosmetic: **`Download
+camoufox Firefox binary`** (the Flashscore browser) and **`Install Claude Code
+CLI`** (the pick review). Both reported `conclusion: success` on every day of the
+fixture gap — which is exactly the unrecoverable reading.
+
+**`##[error]` count on 09-22, 09-24, 09-25, 09-26: zero, on all four.** Also zero
+on 09-19, the last healthy day before the gap.
+
+> ### So no step failed on any of those days, absorbed or otherwise. camoufox and the Claude CLI both genuinely succeeded, and **the fourth candidate explanation for the four-day fixture gap is excluded.**
+>
+> The calendar reading now survives a test that could have overturned it —
+> which is the first time in this episode that one of my Flashscore hypotheses
+> was checked *before* being written down rather than after.
+
+---
+
+## 3. THE UNPLANNED PROTECTION — first time an unexamined interaction has helped
+
+`continue-on-error: true` on the audit step was added for one reason: so the
+alert step below it could run before the job went red.
+
+> ### Its side effect was that the audit's failing exit did not suppress its own output. The full table printed on all eight red triggers, so the audit's red did not hide the two mechanisms it had been shipped to report on.
+
+**A dependency nobody registered, protected by a setting chosen for something
+else.** Every prior instance of an unexamined interaction in this ledger cost
+something — the reverted guard's global decline, the 40-run listing cap, the
+reconcile block above its inputs, `--unaudited` keying on a ledger the workflow
+cannot write. **This is the first that paid.**
+
+**It is luck, and recording it as luck is the point.** The general form is not
+"continue-on-error is good"; it is that **a step's failure mode and its output
+visibility are independent, and this repository had them coupled the helpful way
+by accident.** Had the audit step been unguarded, the job would have halted at it
+and printed nothing further — and yesterday's triage would have had no table to
+read.
+
+---
+
+## 4. THE CALENDAR — H1 starts from a standing zero
+
+| | |
+| --- | --- |
+| **OPS-4 reset** | **10-01 — five days out.** `400/450 used, 0 spendable`; provider header 100 = 500−400, agree exactly |
+| **CLV pairs** | **129, frozen since 09-13 — thirteen days** |
+| **two-point separated series** | **ZERO every day since 09-12 — fourteen days** |
+| **three-point series ever produced in production** | **0** |
+
+> ### H1's collection starts on 10-01 from a standing zero, and the apparatus has still never produced a three-point series. The dry run established that the analysis reaches step 2 and stops; the collection is the first thing that will take it further.
+
+**What that means for the first morning, stated now so it is not argued then:**
+the analysis will read `NO DATA` until a series carries three separated points,
+and **`NO DATA` is not a null** — that distinction was built on 09-22 precisely
+for this. The collection check will read `H1 COLLECTION DID NOT RUN` before the
+first slot and `PRODUCED NOTHING` if slots run and produce no separated
+trajectory. **Three outcome lines, and the first two are expected in order.**
+
+**The one thing still unexercised on that path:** every step of the analysis past
+step 2. No production row has ever reached stratification, aggregation or the
+estimator — they are covered by injection only, and that was stated when they
+shipped rather than discovered later.
+
+---
+
+*Recorded 2026-09-26. Ledger only — no code, config, schema, workflow or
+production data changed in this entry. `s5.14` / `00febf` unchanged.*
