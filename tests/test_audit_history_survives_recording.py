@@ -250,3 +250,62 @@ def test_an_unreadable_gh_is_UNKNOWN_and_says_so(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "state UNKNOWN" in out
     assert "indistinguishable from a quiet one" in out
+
+
+# ── THE ALARM'S SCOPE: recent, not "never recorded" ──────────────────────────
+#
+# MEASURED 2026-09-26, three days after the workflow shipped. 8 of 8 triggers
+# alarmed and every one named the SAME two run ids — the two psycopg failures of
+# 09-24 that the sqlalchemy pin had already fixed.
+#
+#     Firing rate 100%. Distinct conditions: 1. Actionable: 0.
+#
+# `--unaudited` means "every run with no ledger row", and this workflow does not
+# WRITE ledger rows. So a remediated historical failure stays in scope forever
+# and the alarm can never clear by itself. That is `fixtures_zero_active` for the
+# fourth time, reached in three days.
+
+def _code_lines(path):
+    """The file with its COMMENTS STRIPPED.
+
+    Every assertion below needs this, because a test that greps for the
+    ABSENCE of a flag will match the comment explaining why the flag is absent.
+    That is a definition read as an occurrence, and it has caught me FOUR times
+    in one session: `_is_provisional` on a ledger note, the `ls-files` meta-test
+    on its own controls, the psycopg staleness test on its own docstring, and
+    this one on the comment directly above the change it checks.
+    """
+    return [l for l in path.read_text(encoding="utf-8").splitlines()
+            if not l.strip().startswith("#")]
+
+
+def test_the_wired_audit_is_WINDOWED_not_unaudited():
+    """Alarming and record-keeping are different jobs with different scopes.
+
+    If this fails because someone put `--unaudited` back, the alarm will pin
+    itself to the oldest unrecorded failure and never clear.
+    """
+    joined = "\n".join(_code_lines(WORKFLOW))
+    assert "--since" in joined, (
+        "the wired audit is not windowed — with `--unaudited` a fixed "
+        "historical failure alarms on every trigger, forever")
+    assert "--unaudited" not in joined, (
+        "the wired audit uses --unaudited, which cannot clear because this "
+        "workflow writes no ledger rows")
+
+
+def test_the_window_is_relative_and_not_a_hardcoded_date():
+    """A frozen date would silently stop covering new runs."""
+    text = "\n".join(_code_lines(WORKFLOW))
+    assert "date -u -d 'yesterday'" in text or "date -u --date=yesterday" in text, (
+        "the window is not computed at run time")
+    import re as _re
+    assert not _re.search(r"--since\s+[\"']?20\d\d-\d\d-\d\d", text), (
+        "a literal date is pinned into the alarm's window")
+
+
+def test_the_fail_on_policy_survived_the_scope_change():
+    """Narrow red is the half that was already argued; it must not drift."""
+    text = "\n".join(_code_lines(WORKFLOW))
+    assert "--fail-on BROKEN,DID_NOT_RUN" in text
+    assert "DEGRADED" not in text.split("--fail-on")[1].split("\n")[0]

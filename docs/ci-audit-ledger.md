@@ -17859,3 +17859,217 @@ exercise on the same run.
 
 *Recorded 2026-09-25. `scripts/ci_audit.py`, one test file, and two in-place
 corrections to earlier entries. `s5.14` / `00febf` unchanged.*
+
+---
+
+# THE AUDIT'S FAILURE IS A VERDICT — AND THREE OF MY OWN CLAIMS COME DOWN WITH IT
+
+`tests/` **1185 passed**. `s5.14` / `00febf` unchanged.
+
+---
+
+## 1. VERDICT, NOT MACHINERY — and the step list said otherwise
+
+```
+4  Audit unaudited runs                 -> success
+5  Alert on an audit finding            -> success
+6  Fail the job when the audit alarmed  -> failure
+```
+
+**Step 4 reads `success` and its outcome was `failure`.** `gh run view --json
+jobs` reports `conclusion`, and step 4 carries `continue-on-error: true`, which
+sets `conclusion: success` over a failing `outcome`.
+
+> ### THIRD APPEARANCE OF `outcome` vs `conclusion`. It produced the false ML-timeout alert on 09-20, it is why DEL-2's predicate had to be widened, and here it made a failing step look like a passing one in the very listing used to triage it.
+
+**The audit ran to completion.** 85 runs listed, logs fetched, ledger history
+read, the workflow-state check reached and silent, `UNEVALUATED` announced for
+two workflows. It exited 1 on:
+
+```
+36055130676  closing-lines  2026-09-24T20:28  BROKEN  2 traceback(s) in the log
+36074834054  closing-lines  2026-09-24T23:51  BROKEN  2 traceback(s) in the log
+::error::audit alarm — 36055130676 closing-lines BROKEN; 36074834054 closing-lines BROKEN
+```
+
+**Those are the two psycopg failures of 09-24, already fixed by the pin.**
+
+### The consequence that had to be checked: nothing has been recorded
+
+**The CI audit writes no ledger rows — by design, only the manual pass does.**
+So:
+
+| | |
+| --- | --- |
+| runs unaudited right now | **85 (lower bound)** |
+| ledger rows written by CI Audit | **0** |
+| the ledger's only writer | the manual pass; last row at `6207fbc` |
+
+**But nothing was blocked.** The audit printed its full table on every trigger;
+only the *job* went red. **The instrument reported correctly — the verdict was
+the noise.**
+
+---
+
+## 2. EVERY MACHINERY CANDIDATE EXCLUDED, WITH EVIDENCE
+
+| candidate | verdict |
+| --- | --- |
+| **`GH_TOKEN`** | **fine** — 85 runs listed and their logs fetched |
+| **`permissions: actions: read`** | **fine** — reading other workflows' logs worked |
+| **the self-audit exclusion** | **holds by construction.** `WORKFLOWS = ("daily-picks.yml", "closing-lines.yml", "paper-trading-report.yml")` — CI Audit is not in it, and no CI Audit run appeared in the listing. It also is not in its own `workflow_run` trigger list |
+| **the early-return ordering** | **no second instance.** The state check ran first, found all four `active`, and was silent. It did not exit 1 on a non-fault |
+
+---
+
+## 3. THE POLICY IS WRONG AT THE SCOPE, NOT THE THRESHOLD — firing rate first
+
+**Every CI Audit run since wiring:**
+
+```
+09-25 08:52  failure    09-25 20:29  failure
+09-25 15:34  failure    09-25 23:56  failure
+09-25 15:35  failure    09-26 08:52  failure
+09-25 15:48  failure
+09-25 16:57  failure
+```
+
+**8 of 8.** And sampling three of them at random — 09-25 08:52, 09-25 16:57,
+09-25 23:56 — each printed the **identical** line:
+
+```
+audit alarm — 36055130676 closing-lines BROKEN; 36074834054 closing-lines BROKEN
+```
+
+| | |
+| --- | --- |
+| firing rate | **100% (8/8)** |
+| distinct conditions | **1** |
+| actionable | **0** |
+| Telegram alerts sent | **8, all identical** |
+
+> ### `--unaudited` means "every run with no ledger row", and this workflow writes none. So a remediated failure stays in scope FOREVER and the alarm cannot clear by itself. It is not a threshold problem; the scope was permanent by construction.
+
+**`fixtures_zero_active` for the fourth time, and it reached that state in three
+days** — faster than any previous instance, because the previous ones needed a
+recurring condition and this one needed only a historical one.
+
+### The repair — scope, not policy
+
+**The invocation moves from `--unaudited` to `--since $(date -u -d 'yesterday')`.**
+The two jobs were conflated and now are not:
+
+| | scope |
+| --- | --- |
+| **alarm on what is RECENT** | `--since` — the wired workflow |
+| **record EVERYTHING once** | `--unaudited` — the manual pass |
+
+**`--fail-on BROKEN,DID_NOT_RUN` is untouched** — narrow red was argued on its
+own merits and survives.
+
+**Verified on today's data: exit 0**, 7 runs in window, no BROKEN. A new BROKEN
+still fires. Three tests pin it, and the **negative control** — putting
+`--unaudited` back — fails the suite.
+
+**And writing those tests caught me a fourth time on the same trap:** each
+assertion matched the *comment explaining the change* rather than the change. A
+`_code_lines()` helper now strips comments, with the four instances named in its
+docstring — `_is_provisional`, the `ls-files` meta-test, the psycopg staleness
+test, and this one.
+
+---
+
+## 4. THE AUDIT — THE PIN WORKED, AND I WAS WRONG ABOUT FLASHSCORE
+
+### The pin, confirmed explicitly
+
+| run | resolved |
+| --- | --- |
+| daily-picks 09-25 08:19 | **`sqlalchemy-2.0.54`** |
+| daily-picks 09-26 08:05 | **`sqlalchemy-2.0.54`** |
+
+**And closing-lines is green again** — 15:34, 15:47, 20:28, 23:56 on 09-25 and
+23:56, all `success`, against two `failure` runs on 09-24.
+
+### The 09-25 prediction RESOLVES — the registered branch, confirmed by `headSha`
+
+```
+36112257088  daily-picks  2026-09-25T08:19  headSha 6207fbc  success
+```
+
+**`6207fbc` is later than `c3da9c9`, so the pin was in.** Per the registration:
+
+> ### The DB step succeeded, the job did not halt, and THE THREE `skipped` REPAIRS STAY UNEXERCISED. That is the branch registered as the deliberate trade — a certain lost card against an uncertain test — and the `headSha` decided it without argument, on its first use.
+
+### The workflow-state check's first live result
+
+**Reached, ran, silent.** All four `active`, so no output — which is the designed
+behaviour and the reason a test pins that all-active adds no noise.
+
+### FLASHSCORE HAS RECOVERED, AND IT RETIRES TWO OF MY EXPLANATIONS
+
+| | rows on pages | refusals | leagues yielding fixtures | picks |
+| --- | --- | --- | --- | --- |
+| 09-21 / 09-22 / 09-24 | **3183** each | **621** each | **0** | 0 |
+| **09-25** | **3062** | 621 | **1** | **1** |
+| **09-26** | **2812** | **611** | **3** | **17** |
+
+**Matches: 09-22/23/24 = 0 · 09-25 = 1 · 09-26 = 25**, with **25 future rows** and
+`max(match_date) = 2026-09-26 16:30`. `00febf` grew **85 → 103**.
+
+> ### WITHDRAWN 1 — "the pages are static, a cache". Already withdrawn on 09-25 as unsupported; now positively refuted. The row counts moved: 3183 → 3062 → 2812.
+>
+> ### WITHDRAWN 2 — "selector death on the kickoff-time sub-element". 611 refusals on 09-26 ALONGSIDE 18 fixtures created proves the time selector works. The refusals are past rows — a played match shows a score, not a kickoff time. I called them "chronic background" correctly on 09-22 and then promoted them to the cause on 09-25.
+>
+> ### WITHDRAWN 3 — "the second observed save". It rested entirely on (2). With no recurrence there was nothing to catch, so the fail-closed parse was doing its ordinary job. **The category of mechanisms observed preventing the failure they were built for returns to ONE member: DEL-3's chunk retry.**
+
+**Nothing backfilled 09-22, 09-23 or 09-24 across two further days of
+opportunity, and both sources reported zero tracked-league fixtures on each.**
+With the scraper stack byte-identical throughout and no repository change, the
+parsimonious reading is **the calendar**: a full round completed 09-19/20, the
+next began 09-26, and the configured 27 domestic leagues had nothing between.
+
+> ### THE DISCRIMINATOR WAS RIGHT AND I MIS-READ MY OWN ANSWER. The 09-22 registration offered two branches; I reported "neither — nothing backfilled at all". But nothing backfilling is exactly what an empty slate looks like. **That WAS the second branch, and I called it a third option.**
+>
+> **Three mechanistic explanations for an absence the calendar explains.** Same
+> shape as inventing three crons that did not exist: reaching for structure to
+> explain an absence instead of reading the specification or waiting one day for
+> the next data point. **Waiting was free both times.**
+
+### Standing
+
+| | |
+| --- | --- |
+| **s5.9 at the fixture unit** | **0 over cap since the cap-1 change**, n=961 undisposed. All-time 11 groups vs 10 match rows |
+| **CLV** | pairs **129**, frozen since 09-13 — **thirteen days** |
+| **two-point separated series** | **ZERO every day** |
+| **odds volume** | 09-19 4199 · 09-21 155 · 09-25 79 · **09-26 1321** |
+| **OPS-4** | `400/450 used, 0 spendable`; provider header **100** = 500−400, agree exactly. Reset **10-01, five days out** |
+| **picks-run guard** | 0 declines, **0 candidate leagues**. Never reached |
+| **identity** | 0 name-is-former-name · 3 shared-provider-id · 8 implausible rows |
+| **cohort** | `00febf` **103** (09-18 → 09-26). Next selection-affecting change takes **s5.15** |
+| **OPS-3** | daily-picks **319 min** (09-25) and **305 min** (09-26), both inside the deadline |
+
+---
+
+## 5. THE THREE MECHANISMS OF 09-25 — all three observed, and the dependency did NOT bite
+
+| shipped 09-25 | first live result |
+| --- | --- |
+| **the sqlalchemy pin** | **WORKED.** `2.0.54` resolved on both days; closing-lines green after two failures |
+| **the workflow-state check** | **REACHED and silent** — all four `active`. Correct behaviour, first exercise |
+| **the ledger-history fix (SLF-1)** | **WORKED.** The per-source check fired today on `football-data.org fixtures: 0 created AND 0 matched` — a different source, on the daily path, which is exactly what the fix restored |
+
+> ### The registered worry was that the audit's own failure would prevent the other two being observed. It did not. The audit step ran to completion and printed everything on every trigger; only the job's colour was wrong.
+>
+> **So the dependency was real but inert:** the instrument that would report the
+> other two is the one that went red, and it reported them anyway — because
+> `continue-on-error` on the audit step meant the failing exit did not stop the
+> output. **A mechanism whose design for one reason happened to protect a
+> different one**, which is worth recording precisely because it was not planned.
+
+---
+
+*Recorded 2026-09-26. `.github/workflows/ci-audit.yml` (scope only) and one test
+file; three claims withdrawn in this entry. No config, schema, dependency or
+production-data change; `s5.14` / `00febf` unchanged.*

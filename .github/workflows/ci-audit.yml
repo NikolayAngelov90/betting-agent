@@ -73,7 +73,30 @@ jobs:
         #
         # So: this job REPORTS everything and goes RED only when a run crashed
         # or did not execute. A DEGRADED finding still reaches Telegram below.
-        run: python scripts/ci_audit.py --unaudited --fail-on BROKEN,DID_NOT_RUN
+        #
+        # `--since`, NOT `--unaudited`. Measured 2026-09-26, three days after
+        # this workflow shipped: 8 of 8 triggers alarmed, and every one named
+        # the SAME two run ids — 36055130676 and 36074834054, the two psycopg
+        # failures of 09-24 that the sqlalchemy pin had already fixed.
+        #
+        #     Firing rate 100%. Distinct conditions: 1. Actionable: 0.
+        #
+        # `--unaudited` means "every run with no ledger row", and this workflow
+        # does not WRITE ledger rows — only the manual pass does. So a
+        # remediated historical failure stays in scope forever and the alarm can
+        # never clear by itself. Eight identical Telegram alerts in three days,
+        # which is `fixtures_zero_active` for the fourth time: a check that
+        # cries wolf until it is ignored, reaching that state in three days.
+        #
+        # A windowed scope ages a fixed failure out on its own. The two jobs are
+        # different and now have different scopes:
+        #
+        #     alarm on what is RECENT      --since  (here)
+        #     record EVERYTHING once       --unaudited  (the manual pass)
+        run: |
+          python scripts/ci_audit.py \
+            --since "$(date -u -d 'yesterday' +%Y-%m-%d)" \
+            --fail-on BROKEN,DID_NOT_RUN
         continue-on-error: true
 
       - name: Alert on an audit finding
