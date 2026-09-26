@@ -18240,3 +18240,149 @@ shipped rather than discovered later.
 
 *Recorded 2026-09-26. Ledger only — no code, config, schema, workflow or
 production data changed in this entry. `s5.14` / `00febf` unchanged.*
+
+---
+
+# THE `##[error]` PATTERN SHIPPED — and REF-1, the distinction the four Flashscore readings needed
+
+`tests/` **1197 passed**. `s5.14` / `00febf` unchanged — an audit-script change
+and a test file; nothing in the selection path.
+
+---
+
+## 1. THE LAST OPAQUE SLICE IS CLOSED
+
+**Rule 1, in the tool, on the gap the tool exists for:** the auditor could not
+read the one signal that recovers an absorbed failure.
+
+```
+f["steps_nonzero_exit"]  = count of  ##[error]Process completed with exit code N
+f["error_annotations"]   = every other ##[error]
+```
+
+**Two kinds, kept apart, and conflating them would have broken it.** A step
+exiting non-zero and a script *deliberately* annotating an error are different
+facts, and this pipeline emits the second on purpose — DEL-2's
+`::error::Pick generation FAILED` and the audit's own `::error::audit alarm` both
+render as `##[error]`. **Counting them together would make every red run look
+like it had an absorbed failure.** A test pins that the two counts partition the
+annotations exactly.
+
+### The positive control, which the fix was required to have
+
+| | verdict |
+| --- | --- |
+| a padded log | **CLEAN** |
+| **the same log plus one `##[error]Process completed with exit code 1.`** | **DEGRADED** |
+
+> ### The same log with and without the annotation does not audit the same. Had the verdict been unchanged, the pattern would have been decoration — which is PNC-1, filed two days ago, and the reason this control was demanded rather than offered.
+
+### AND THE FIRST VERSION DOUBLE-REPORTED, caught on the real logs
+
+It fired on the 09-24 closing-lines psycopg failures. **`closing-lines` carries
+ZERO `continue-on-error` steps, so nothing there was absorbed and the word was
+simply wrong** — and the failure was already BROKEN on its two tracebacks.
+
+**The claim is about a failure that is OTHERWISE INVISIBLE**, so every other way
+the audit already sees one disqualifies it:
+
+| guard | because |
+| --- | --- |
+| `steps_failed` | the workflow's own alert named a failed core step |
+| `steps_not_run` | a step was skipped, so the job halted visibly |
+| **`tracebacks`** | **the failure printed a traceback and is already BROKEN** |
+
+**The third guard is the one the synthetic tests did not need and the real logs
+did.** Re-verified afterwards across five cached production logs — 09-20,
+09-22, 09-24, 09-26 and the 09-24 psycopg run — **absorbed fires on none of
+them**, and the live windowed audit exits 0.
+
+**Not self-calibrating**, deliberately: one absorbed failure is wrong on the
+first occurrence, like a spent credit that returned no rows. A test passes it an
+empty history and confirms it still fires.
+
+### The blind spot, now fully accounted for
+
+| recovery route | covers |
+| --- | --- |
+| echoed into an `env:` block | **5** of daily-picks' 9 |
+| consumed by a later step's `if:` | **2** |
+| **`##[error]`, as of today** | **3** — camoufox download, Claude CLI install, weekly report |
+| unrecoverable | **0** |
+
+**Three-ninths opaque yesterday; nothing opaque today.** And a test pins the
+premise itself — *step `outcome` is not exposed by the REST API* — so a future
+reader learns that from the test rather than re-deriving it, and can delete the
+whole pattern if GitHub ever adds the field.
+
+---
+
+## 2. REF-1 — survived-a-refuting-test is not the same state as not-yet-contradicted
+
+> ### REF-1. A claim that has survived a test capable of refuting it is in a different state from one that has merely not been contradicted. Label which, because in a list they look identical.
+
+**This episode produced four readings of the same four-day gap, and only the
+last one is of the second kind:**
+
+| reading | state | how it ended |
+| --- | --- | --- |
+| "the pages are static / a cache" | **not contradicted** | **fell** — row counts moved 3183 → 3062 → 2812 |
+| "selector death on the kickoff-time element" | **not contradicted** | **fell** — 611 refusals *alongside* 18 fixtures created |
+| "the second observed save" | **not contradicted** | **fell** — it rested entirely on the one above |
+| **"the calendar"** | **SURVIVED A REFUTING TEST** | **stands** — `##[error]` zero on all five days excludes a silent camoufox or Claude-CLI failure, which would have refuted it |
+
+**All three that fell were consistent with the evidence when written.** That is
+the trap: consistency is cheap, and three mutually exclusive explanations were
+each consistent with the same logs. **What separates the fourth is not that it
+fits better but that a specific, available observation would have killed it and
+did not.**
+
+### And the sequence is the actual change, not a better guess
+
+**The camoufox check could have been run on 09-22, on 09-25, or on any day in
+between. It was run before the fourth reading was written down.** The first three
+were written and then tested; the fourth was tested and then written.
+
+> ### That is the only difference in method across four attempts at one question, and it is the one that produced a claim still standing.
+
+**Both installs reported `conclusion: success` on every gap day, which under the
+unrecoverable reading proves nothing** — so the test was only possible because
+the `##[error]` route existed. **The instrument built in §1 is what made §2's
+test available**, which is why they are in the same entry.
+
+---
+
+## 3. CLR-2 AND THE LUCK — filed, and the parts that will be used
+
+**The clearing table is the operative half of CLR-2:**
+
+| alarm | what cleared it |
+| --- | --- |
+| `fixtures_zero_active` | a league having fixtures |
+| `af=0` | a source creating rows |
+| **the wired audit** | **nothing** |
+
+**Three alarms, three answers, and only the third was unanswerable — which is
+exactly the check the rule asks for, applied retrospectively to the three cases
+that motivated it.** The rule is cheap because the table is: name the clearing
+action, then confirm it touches the predicate.
+
+**And the luck is recorded as luck**, with the general form stated: *a step's
+failure mode and its output visibility are independent, and here they were
+coupled the helpful way by accident.* **That sentence is there so the next person
+to remove `continue-on-error` from the audit step knows what they are removing** —
+not a guard, but the reason the audit's table survives its own red run.
+
+---
+
+## STANDING, UNCHANGED FROM THIS MORNING
+
+| | |
+| --- | --- |
+| **OPS-4** | reset **10-01, five days out**. `400/450`, ledger and provider agree |
+| **CLV** | 129 pairs, frozen **thirteen days** |
+| **two-point series** | zero for fourteen days · three-point series ever: **0** |
+| **`ci_audit` defect, still open** | `pattern 'src_apifootball_fixtures' matched but produced no number — NOT COUNTED`, printed on every pass. Recorded 09-22, not fixed |
+
+*Recorded 2026-09-26. `scripts/ci_audit.py` and one test file. No config, schema,
+workflow or production-data change.*

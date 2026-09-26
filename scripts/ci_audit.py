@@ -590,6 +590,30 @@ def extract(log: str) -> Dict[str, object]:
                      if o == "skipped"]
             if named:
                 f["steps_not_run"].append(", ".join(named))
+
+    # AN ABSORBED FAILURE, WHICH WAS THE LAST OPAQUE SLICE OF THIS BLIND SPOT.
+    #
+    # A step's `outcome` is NOT exposed by the REST API — the fields are
+    # completed_at, conclusion, name, number, started_at, status. Under
+    # `continue-on-error` a failing step therefore reports `conclusion: success`
+    # and post-hoc triage from the API alone cannot tell it from a passing one.
+    # `daily-picks` has NINE such steps. Five echo their outcome into an `env:`
+    # block, two are inferable from a later step's `if:`, and THREE — the
+    # camoufox download, the Claude Code CLI install and the weekly report —
+    # were recoverable only from this annotation, which this tool did not parse.
+    #
+    # Rule 1 again, in the tool, on the gap the tool exists for.
+    #
+    # TWO KINDS OF `##[error]`, KEPT APART. A step exiting non-zero and a script
+    # deliberately annotating an error are different facts, and this pipeline
+    # emits the second on purpose — DEL-2's `::error::Pick generation FAILED`
+    # and this tool's own `::error::audit alarm` both render as `##[error]`.
+    # Counting them together would make every red run look like it had an
+    # absorbed failure.
+    f["steps_nonzero_exit"] = len(re.findall(
+        r"##\[error\]Process completed with exit code \d+", log))
+    f["error_annotations"] = len(re.findall(r"##\[error\]", log)) - \
+        f["steps_nonzero_exit"]
     return f
 
 
@@ -780,6 +804,34 @@ def assertions(facts: Dict[str, object],
     if facts.get("steps_not_run"):
         hits.append(f"core step(s) DID NOT RUN: {facts['steps_not_run'][-1]} "
                     "— nothing crashed and nothing ran")
+
+    # ABSORBED FAILURE. A step exited non-zero and NOTHING ELSE in this audit
+    # accounts for it — not the workflow's own failure alert, not the skip
+    # detection. Under `continue-on-error` that step reports
+    # `conclusion: success` to the API, so this annotation is the only record.
+    #
+    # NOT self-calibrating: a step exiting non-zero is wrong on the first
+    # occurrence, like a spent credit that returned no rows.
+    #
+    # THE GUARDS EXIST BECAUSE THE FIRST VERSION DOUBLE-REPORTED. It fired on
+    # the 09-24 closing-lines psycopg failures — and `closing-lines` carries
+    # ZERO continue-on-error steps, so nothing there was absorbed and the word
+    # was simply wrong. The claim is about a failure that is OTHERWISE
+    # INVISIBLE, so every other way the audit already sees one disqualifies it:
+    #
+    #   steps_failed    the workflow's own alert named a failed core step
+    #   steps_not_run   a step was skipped, so the job halted visibly
+    #   tracebacks      the failure printed a traceback and is already BROKEN
+    #
+    # Found by running it against the real logs rather than the synthetic ones.
+    if (facts.get("steps_nonzero_exit")
+            and not facts.get("steps_failed")
+            and not facts.get("steps_not_run")
+            and not facts.get("tracebacks")):
+        hits.append(
+            f"{facts['steps_nonzero_exit']} step(s) exited NON-ZERO and were "
+            "ABSORBED by continue-on-error — the API reports them as "
+            "conclusion: success, so this annotation is the only record")
     return hits
 
 
