@@ -1347,7 +1347,12 @@ class TestEmptyLeagueFixtureAlert:
                 asyncio.run(scraper.scrape_league_fixtures("germany/bundesliga"))
         finally:
             _lu.remove(sink_id)
-        assert any("0 fixtures" in m and "germany/bundesliga" in m for m in messages), \
+        # WORDING UPDATED 2026-09-27, INTENT UNCHANGED. The three zero-reporting
+        # phrasings were consolidated into one `FS_DISCOVERY` line so the finding
+        # could carry its league; this test's subject — a WARNING that names the
+        # league when it returns nothing — is exactly what still has to hold.
+        assert any("germany/bundesliga" in m and "state=no-rows" in m
+                   and "kept=0" in m for m in messages), \
             f"Expected WARNING for 0 fixtures, got: {messages}"
 
     def test_check_logs_empty_leagues(self):

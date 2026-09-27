@@ -649,6 +649,22 @@ def extract(log: str) -> Dict[str, object]:
     # WHICH LEAGUES REPORTED A ZERO. The suppressible findings are run-level or
     # source-level and name no league, so the third condition cannot be read
     # from the finding text — it is read from the log, which does name them.
+    # PER-LEAGUE DISCOVERY, from the single `FS_DISCOVERY` line. Carries the
+    # league, so a finding built from it is league-scoped and condition 3 can be
+    # applied PER FINDING instead of per run.
+    f["league_discovery"] = [
+        {"league": lg, "state": st, "rows": rows,
+         "earliest": None if e == "None" else e,
+         "cutoff": None if c == "None" else c, "kept": int(k)}
+        for lg, st, rows, e, c, k in re.findall(
+            r"FS_DISCOVERY ([a-z0-9/-]+): state=(\S+) rows=(\S+) "
+            r"earliest_parsed=(\S+) cutoff=(\S+) kept=(\d+)", log)]
+
+    # RETAINED FOR HISTORICAL LOGS ONLY. Every log written before 2026-09-27
+    # carries the three old phrasings and no `FS_DISCOVERY` line, and the ledger
+    # has to stay readable across that change — the same reason `ledger_history`
+    # parses two `disc[...]` formats. New runs populate `league_discovery`
+    # instead; this is dead for them and deliberately kept.
     f["zero_fixture_leagues"] = sorted(set(
         re.findall(r"Scraped 0 fixtures from ([a-z0-9/-]+)", log)
     ) | set(
@@ -708,6 +724,10 @@ EMPTY_CARD_COVERED_LEAGUES = frozenset({
     "netherlands/eredivisie", "portugal/primeira-liga",
 })
 
+#: Pulls the league out of a league-scoped finding, so condition 3 reads the
+#: finding rather than the run.
+_LEAGUE_IN_FINDING = re.compile(r"^discovery: ([a-z0-9/-]+) found 0 fixtures")
+
 EMPTY_CARD_FROM = _dt.date(2026, 9, 21)
 EMPTY_CARD_UNTIL = _dt.date(2026, 10, 9)      #: exclusive; the card returns here
 
@@ -749,16 +769,28 @@ def partition_empty_card(hits, run_date, today=None, zero_leagues=None):
         return list(hits), []
     if not empty_card_window_active(today):
         return list(hits), []
-    # Condition 3. An empty set is not licence either: with no league named,
-    # nothing is attributable to the reference.
-    if not zero_leagues:
-        return list(hits), []
-    _uncovered = sorted(set(zero_leagues) - EMPTY_CARD_COVERED_LEAGUES)
-    if _uncovered:
-        return list(hits), []
     kept, supp = [], []
     for h in hits:
-        if any(m in h for m in EMPTY_CARD_SUPPRESSIBLE):
+        # CONDITION 3, PER FINDING. A league-scoped finding carries its own
+        # league, so it is cleared on its own evidence. Before 2026-09-27 the
+        # findings were run-level and this could only be applied to the whole
+        # run — which meant one unreferenced league in a set of 29 left
+        # everything unexplained.
+        _m = _LEAGUE_IN_FINDING.search(h)
+        if _m:
+            if _m.group(1) in EMPTY_CARD_COVERED_LEAGUES:
+                supp.append(f"{h}  [SUPPRESSED: reference openfootball 2026-27 "
+                            f"shows 0 fixtures for this league on {run_date}; "
+                            f"card returns {EMPTY_CARD_UNTIL}]")
+            else:
+                kept.append(h)          # unreferenced league -> still alarms
+            continue
+        # RUN-LEVEL findings keep the old all-or-nothing rule: they name no
+        # league, so they are only clearable when EVERY zero-reporting league is
+        # covered. `None` or `[]` suppresses nothing — fail closed.
+        if not zero_leagues or (set(zero_leagues) - EMPTY_CARD_COVERED_LEAGUES):
+            kept.append(h)
+        elif any(m in h for m in EMPTY_CARD_SUPPRESSIBLE):
             supp.append(f"{h}  [SUPPRESSED: reference openfootball 2026-27 shows "
                         f"0 fixtures in all 8 covered leagues on {run_date}; "
                         f"card returns {EMPTY_CARD_UNTIL}]")
@@ -951,6 +983,17 @@ def assertions(facts: Dict[str, object],
                 f"went missing without being recorded")
     if facts.get("steps_failed"):
         hits.append(f"core step(s) reported failure: {facts['steps_failed'][-1]}")
+    # PER-LEAGUE DISCOVERY FINDINGS. One per league that found nothing, so a
+    # mixed day is PARTIALLY explained rather than wholly unexplained. `kept`
+    # and `off-season` produce no finding — a league that delivered fixtures and
+    # a league the config calls dormant are both expected.
+    for d in (facts.get("league_discovery") or []):
+        if d["state"] in ("none-in-range", "no-rows"):
+            hits.append(
+                f"discovery: {d['league']} found 0 fixtures "
+                f"(state={d['state']}, rows={d['rows']}, "
+                f"earliest_parsed={d['earliest']}, cutoff={d['cutoff']})")
+
     if facts.get("steps_not_run"):
         hits.append(f"core step(s) DID NOT RUN: {facts['steps_not_run'][-1]} "
                     "— nothing crashed and nothing ran")

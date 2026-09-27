@@ -19353,3 +19353,176 @@ defect with a size, separate from the break, and it has been running since
 *Recorded 2026-09-27. `scripts/ci_audit.py`, `tests/test_empty_card_suppression.py`,
 and two in-place amendments to the 09-27 declaration. No config, schema,
 workflow, dependency or production-data change. `s5.14` / `00febf` unchanged.*
+
+---
+
+# FINDING LEAGUE-SCOPED — 8 suppressed, 21 alarmed. Part A held: the 09-28 run has not happened.
+
+`tests/` **1229 passed, 2 skipped**. Invariants **passed** — count not cited.
+`cohort_status`: `s5.14` / `00febf`, 108 stamped. **No bump — logging shape and
+alarm scope, not which fixtures resolve.** Stage 26 **SUSPENDED**; option 1 and
+`EMPTY_CARD_UNTIL` stand.
+
+---
+
+## PART A — HELD. IT IS STILL 2026-09-27.
+
+**11:30 UTC on 09-27. The 09-28 run does not exist yet.** The latest daily-picks,
+`36307004104` at 09-27 08:41, ran **`8ca91d6`** — and the instrumentation landed
+in **`236225a`**, three commits later.
+
+**Confirmed absent from that log rather than assumed:** `AF_LEAGUE_FILTER: 0`,
+`FS_WINDOW: 0` *(measured 2026-09-27)*.
+
+> ### Reporting a zero from either line today would be a zero with nothing behind it — which is the whole reason both were built with positive controls.
+
+**AND THE PUSH LAG IS LIVE AGAIN.** `origin/main` is at **`9225cb8`**, one commit
+behind local; `b903733` has not reached the remote. **Whether the 09-28 run
+carries the instrumentation depends on that lag closing** — and the lag has
+previously held at five days. **The `headSha` discriminator applies: if 09-28
+reports `8ca91d6` or `9225cb8`, the lines are not in it and Part A holds again.**
+
+---
+
+## PART B — THE FINDING IS NOW LEAGUE-SCOPED
+
+### One definition, and the three collapse into it
+
+```python
+DISCOVERY_STATES = ("kept", "none-in-range", "no-rows", "off-season")
+
+def discovery_outcome(league, rows, earliest, cutoff, kept, off_season):
+    """(log_level, message) for one league's fixture scrape. The ONLY emitter."""
+    ...
+    return level, (f"FS_DISCOVERY {league}: state={state} rows={rows} "
+                   f"earliest_parsed=... cutoff=... kept={kept}")
+```
+
+**Three phrasings became one field.** `FS_WINDOW` (added this morning) and the two
+zero-branch messages —
+
+```
+"Flashscore returned 0 fixtures for {league} — NO ROWS AT ALL"      (WARNING)
+"Flashscore: {league} has no fixtures within the requested window"  (INFO)
+```
+
+— are gone from the code, and **`ci_audit` needed three regexes to recover one
+fact**. A test asserts the file contains exactly **one** `FS_DISCOVERY` and
+neither old phrasing, so a fourth cannot be added.
+
+**Sixth instance of the habit, and the first outside the data layer.** `state` is
+a field rather than a branch, and the emitter is a **pure function**, which made
+the unconditional-emission test stronger: it now asserts **all four states
+produce a message** rather than asserting where one call sits. *The position was
+only ever a proxy for that.*
+
+**`Scraped N fixtures from {league}` is retained deliberately** — it is the count
+line, not a zero-phrasing, and `src_flashscore_fixtures` consumes it.
+
+### The extractor is kept, and why is stated
+
+`zero_fixture_leagues` still parses the two retired phrasings. **Every log written
+before today carries them and no `FS_DISCOVERY` line**, and the ledger must stay
+readable across the change — the same reason `ledger_history` parses two
+`disc[...]` formats. **It is dead for new runs and deliberately kept.**
+
+### Condition 3 now applies PER FINDING
+
+| finding shape | rule |
+| --- | --- |
+| **league-scoped** (`discovery: <league> found 0 fixtures …`) | cleared on **its own** league's evidence |
+| run-level (the four older findings) | unchanged: clearable only when **every** zero-reporting league is covered |
+
+**The two rules cannot leak into each other** — a test asserts an uncovered
+league's own finding still alarms even when every zero-reporting league in the
+run is covered.
+
+### THE 09-27 REPLAY — the number the directive named
+
+| | |
+| --- | --- |
+| `FS_DISCOVERY` lines replayed | **30** |
+| per-league discovery findings | **29** |
+| **SUPPRESSED (covered eight)** | **8** |
+| **ALARMED (uncovered)** | **21** |
+| `spain/laliga2`, which produced 5, has a finding | **no** |
+
+> ### 8 and 21. The extractor and the emitter agree, and a mixed day is now PARTIALLY explained rather than wholly unexplained.
+>
+> *(measured 2026-09-27 — the replay synthesises each league's `FS_DISCOVERY`
+> line from that log's own per-league row and kept counts, so the inputs are the
+> run's, not invented.)*
+
+### Every fail-closed property held
+
+`None` and `[]` suppress nothing · an unparseable run date suppresses nothing ·
+`rows is None` fails closed into `no-rows` · `EMPTY_CARD_COVERED_LEAGUES` remains
+a pinned `frozenset` with **`len == 8`** asserted.
+
+**Positive control for the EMITTER, not only the extractor:** a league at zero
+produces a finding; **`spain/laliga2` with 5 kept produces none**; an off-season
+league produces none; and `no-rows` and `none-in-range` are asserted to be
+*different states in the finding text*, because they are identical zeros in the
+tracked count and have nothing else in common.
+
+### Two tests changed rather than deleted, and both are named
+
+| test | change |
+| --- | --- |
+| `test_scraper_warns_on_zero_fixtures` (**pre-existing**, AC1) | asserted the literal `"0 fixtures"`. **Intent unchanged** — a WARNING naming the league at zero — so it now asserts `state=no-rows` and `kept=0` |
+| `test_FS_line_is_emitted_UNCONDITIONALLY` (mine, this morning) | asserted the call sat outside an `elif`. Now asserts all four states emit |
+
+---
+
+## PART C — THE GRANULARITY RULE
+
+> ### GRN-1. The granularity of an alarm sets the coverage required of its justification. A run-level alarm cannot be cleared by league-level evidence unless that evidence covers every league. Before requiring a predicate on a dimension, confirm the data carries that dimension.
+
+### And the sequence, because it is the cost
+
+| | |
+| --- | --- |
+| specified | 2026-09-27 |
+| built | 2026-09-27 |
+| narrowed to its evidence | 2026-09-27 |
+| **disabled by the narrowing** | 2026-09-27 |
+| **re-enabled by re-shaping the finding** | 2026-09-27 |
+
+**Five states in one day.** And both facts that made it unimplementable as first
+written were available before the first line:
+
+| fact | known since |
+| --- | --- |
+| the reference covers **8 of 30** leagues | **stated in the same entry that introduced the suppression** |
+| the discovery findings are **run-level** | in `ci_audit` since Stage 19 — three regexes for one fact |
+
+> ### Neither needed discovering. The first I had written down myself, in the paragraph immediately above the one that applied it to 30 leagues; the second was visible in the code the suppression was being added to. **The cost was not a missing measurement — it was not checking the shape of the thing being suppressed against the shape of the evidence.**
+
+**That is what GRN-1 is for**, and it is cheap in the same way CLR-2 is: one
+question asked before the first line, not after the fifth state.
+
+---
+
+## DECLARATION
+
+> ### FINDING LEAGUE-SCOPED
+>
+> | | |
+> | --- | --- |
+> | one definition | `discovery_outcome()` → `FS_DISCOVERY <league>: state=…` |
+> | states | `kept` · `none-in-range` · `no-rows` · `off-season` |
+> | **09-27 replay** | **30 lines → 29 findings → 8 suppressed, 21 alarmed** |
+> | retired | two phrasings, pinned gone by test |
+> | retained | `Scraped N` (the count) and the historical extractor, both with reasons |
+>
+> ### DISCOVERY — RESIDUAL STILL UNMEASURED (22/30, −93%)
+>
+> **Neither `RESIDUAL EXPLAINED` nor `RESIDUAL IS A DEFECT`.** Part A is the only
+> thing that can decide between them and it has not run. **Outcome 4 holds**, and
+> the 21 alarmed findings are now the shape that will carry the answer: each names
+> its league, its state, and its earliest parsed date against the cutoff.
+
+*Recorded 2026-09-27. `src/scrapers/flashscore_scraper.py`, `scripts/ci_audit.py`,
+`tests/test_empty_card_suppression.py`, `tests/test_discovery_instrumentation.py`,
+`tests/test_models.py`. No config, schema, workflow, dependency or
+production-data change. `s5.14` / `00febf` unchanged.*

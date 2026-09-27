@@ -159,10 +159,14 @@ def _emit(fs, league, log):
     Pinned against the source rather than re-implemented, so the test cannot
     pass while the real line drifts.
     """
+    # RENAMED 2026-09-27: `FS_WINDOW` was consolidated into `FS_DISCOVERY`, which
+    # carries the same four fields plus the state, and the emitter moved to module
+    # level as the single definition. The FIELDS are the subject here, not where
+    # they live.
     import inspect
     import src.scrapers.flashscore_scraper as m
-    src = inspect.getsource(m.FlashscoreScraper.scrape_league_fixtures)
-    assert "FS_WINDOW" in src, "the window line is gone from the real path"
+    src = inspect.getsource(m.discovery_outcome)
+    assert "FS_DISCOVERY" in src, "the discovery line is gone from the real path"
     assert "earliest_parsed=" in src and "cutoff=" in src and "kept=" in src
     return src
 
@@ -175,25 +179,30 @@ def test_FS_line_exists_in_the_real_path_with_all_four_fields():
     """
     src = _emit(None, None, None)
     for field in ("rows=", "earliest_parsed=", "cutoff=", "kept="):
-        assert field in src, f"{field} missing from FS_WINDOW"
+        assert field in src, f"{field} missing from FS_DISCOVERY"
 
 
 def test_FS_line_is_emitted_UNCONDITIONALLY():
-    """It must not sit inside the `not matches` branch.
+    """Every state returns a line, so an absent line means the scrape did not run.
 
-    The whole point is that it prints when rows ARE kept too, so a later reader
-    can compare a working day against a rejecting one.
+    STRONGER THAN THE ORIGINAL BRANCH-POSITION CHECK, which asserted the call
+    sat outside an `elif`. The emitter is now a pure function over the four
+    states, so this asserts ALL FOUR produce a message — the property the
+    position was only a proxy for.
     """
-    import inspect
+    import datetime as _d
     import src.scrapers.flashscore_scraper as m
-    src = inspect.getsource(m.FlashscoreScraper.scrape_league_fixtures)
-    win = src.index("FS_WINDOW")
-    # the unconditional tail begins after the elif branch; assert the line is
-    # at the same indentation as the `Scraped N fixtures` line that follows it
-    scraped = src.index("Scraped {len(matches)} fixtures")
-    assert win < scraped, "FS_WINDOW moved after the Scraped line"
-    before = src[:win].rsplit("\n", 1)[0]
-    assert not before.strip().startswith("elif"), "FS_WINDOW is inside a branch"
+    seen = set()
+    for c in (dict(rows=100, earliest=_d.datetime(2026, 10, 10), kept=3, off_season=False),
+              dict(rows=100, earliest=_d.datetime(2026, 10, 10), kept=0, off_season=False),
+              dict(rows=None, earliest=None, kept=0, off_season=False),
+              dict(rows=0, earliest=None, kept=0, off_season=True)):
+        lvl, msg = m.discovery_outcome(
+            league="a/b", cutoff=_d.datetime(2026, 9, 28), **c)
+        assert msg.startswith("FS_DISCOVERY a/b: state="), msg
+        assert lvl in ("info", "warning")
+        seen.add(msg.split("state=")[1].split()[0])
+    assert seen == set(m.DISCOVERY_STATES), seen
 
 
 def test_the_earliest_is_recorded_on_the_REJECTION_path_too():
@@ -218,7 +227,7 @@ def test_None_and_a_date_are_different_facts_in_the_format():
     """`earliest_parsed=None` vs an ISO date — the line must not print 0 or ''."""
     import inspect
     import src.scrapers.flashscore_scraper as m
-    src = inspect.getsource(m.FlashscoreScraper.scrape_league_fixtures)
-    assert "_e.isoformat() if _e else None" in src, (
+    src = inspect.getsource(m.discovery_outcome)
+    assert "earliest.isoformat() if earliest else None" in src, (
         "a missing earliest kickoff is not rendered as None — 'nothing parsed' "
         "and 'parsed but beyond the window' would read the same")

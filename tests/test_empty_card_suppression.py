@@ -248,3 +248,136 @@ def test_the_extractor_finds_the_zero_leagues_in_a_real_log_shape():
     assert got == ["england/premier-league", "italy/serie-a",
                    "sweden/allsvenskan"], got
     assert "spain/laliga2" not in got, "a league that DID produce was counted as zero"
+
+
+# ── THE FINDING IS LEAGUE-SCOPED, AND SO IS CONDITION 3 ──────────────────────
+#
+# BEFORE 2026-09-27 the discovery-zero findings were run-level, and a run-level
+# finding CANNOT BE PARTIALLY CLEARED: one unreferenced league among 29 left the
+# whole finding unexplained, so the suppression fired nowhere. That was a
+# property of the FINDING, not of the reference.
+#
+# `FS_DISCOVERY` carries the league, so a finding built from it is cleared on its
+# own evidence: a covered league's zero is suppressed, an uncovered league's zero
+# alarms, and a mixed day is partially explained.
+
+import src.scrapers.flashscore_scraper as _fs
+
+CUT = dt.datetime(2026, 9, 28, 8, 52)
+FAR = dt.datetime(2026, 10, 10, 14, 0)
+
+
+def _fs_line(league, rows=100, earliest=FAR, kept=0, off=False):
+    return _fs.discovery_outcome(league=league, rows=rows, earliest=earliest,
+                                 cutoff=CUT, kept=kept, off_season=off)[1]
+
+
+def _hits_from(*lines):
+    log = "x\n" * 200 + "\n".join(lines) + "\n"
+    f = ci.extract(log)
+    return f, ci.assertions(f, [])
+
+
+# ── POSITIVE CONTROL FOR THE EMITTER, not just the extractor ─────────────────
+
+def test_the_emitter_produces_a_finding_for_a_league_at_ZERO():
+    """A test for absence must first prove it can observe presence.
+
+    The extractor already had this test; the emitter needs its own, because a
+    line that is never emitted and a league that is never at zero produce the
+    same empty finding list.
+    """
+    _, hits = _hits_from(_fs_line("austria/bundesliga"))
+    disc = [h for h in hits if h.startswith("discovery: ")]
+    assert len(disc) == 1, hits
+    assert "austria/bundesliga found 0 fixtures" in disc[0]
+    assert "state=none-in-range" in disc[0]
+
+
+def test_the_emitter_produces_NO_finding_for_spain_laliga2_which_produced_5():
+    """THE MIRROR. `laliga2` delivered 5 fixtures on 09-27 and must be silent."""
+    _, hits = _hits_from(_fs_line("spain/laliga2", kept=5))
+    assert not [h for h in hits if h.startswith("discovery: ")], hits
+
+
+def test_an_OFF_SEASON_league_produces_no_finding():
+    """The config calls it dormant; that is expected, not a discovery zero."""
+    _, hits = _hits_from(_fs_line("world/fifa-world-cup", rows=0, off=True))
+    assert not [h for h in hits if h.startswith("discovery: ")]
+
+
+def test_NO_ROWS_and_NONE_IN_RANGE_are_different_states_in_the_finding():
+    """Identical zeros in the tracked count, nothing else in common.
+
+    `no-rows` means the page yielded nothing at all; `none-in-range` means it
+    yielded rows whose kickoffs all lay beyond the cutoff. Collapsing them is
+    what made the residual unreadable.
+    """
+    _, hits = _hits_from(_fs_line("a/b", rows=None, earliest=None),
+                         _fs_line("c/d", rows=90, earliest=FAR))
+    disc = sorted(h for h in hits if h.startswith("discovery: "))
+    assert "state=no-rows" in disc[0] and "earliest_parsed=None" in disc[0]
+    assert "state=none-in-range" in disc[1]
+    assert "earliest_parsed=2026-10-10" in disc[1]
+
+
+def test_an_unknown_row_count_FAILS_CLOSED_into_no_rows():
+    """`rows is None` cannot claim the league is merely quiet."""
+    assert "state=no-rows" in _fs_line("a/b", rows=None, earliest=None)
+
+
+# ── CONDITION 3 PER FINDING: a mixed day is PARTIALLY explained ──────────────
+
+def test_a_mixed_day_is_PARTIALLY_explained():
+    """THE POINT OF THE GRANULARITY CHANGE.
+
+    Under the run-level finding, one uncovered league left everything
+    unexplained. Now the covered league's zero clears and the uncovered one
+    does not.
+    """
+    f, hits = _hits_from(_fs_line("italy/serie-a"),
+                         _fs_line("sweden/allsvenskan"))
+    kept, supp = ci.partition_empty_card(
+        hits, IN_WINDOW, today=IN_WINDOW,
+        zero_leagues=f.get("zero_fixture_leagues"))
+    assert len(supp) == 1 and "italy/serie-a" in supp[0]
+    assert len([h for h in kept if h.startswith("discovery: ")]) == 1
+    assert any("sweden/allsvenskan" in h for h in kept)
+
+
+def test_the_09_27_REPLAY_yields_8_suppressed_and_21_alarmed():
+    """The number the directive named, on the real league set of 2026-09-27.
+
+    29 leagues reported zero, 8 of them covered by the reference. If this is
+    anything other than 8 and 21, the extractor and the emitter disagree.
+    """
+    covered = sorted(ci.EMPTY_CARD_COVERED_LEAGUES)
+    uncovered = [f"unc{i}/league" for i in range(21)]
+    lines = [_fs_line(lg) for lg in covered + uncovered]
+    f, hits = _hits_from(*lines)
+    kept, supp = ci.partition_empty_card(
+        hits, IN_WINDOW, today=IN_WINDOW,
+        zero_leagues=f.get("zero_fixture_leagues"))
+    assert len(supp) == 8, f"expected 8 suppressed, got {len(supp)}"
+    assert len([h for h in kept if h.startswith("discovery: ")]) == 21
+
+
+def test_a_league_scoped_finding_is_NOT_cleared_by_the_run_level_rule():
+    """Even with every zero-reporting league covered, an uncovered league's own
+    finding must alarm. The two rules must not leak into each other."""
+    f, hits = _hits_from(_fs_line("sweden/allsvenskan"))
+    kept, supp = ci.partition_empty_card(
+        hits, IN_WINDOW, today=IN_WINDOW,
+        zero_leagues=sorted(ci.EMPTY_CARD_COVERED_LEAGUES))
+    assert supp == []
+    assert any("sweden/allsvenskan" in h for h in kept)
+
+
+def test_ONE_definition_only__no_fourth_phrasing():
+    """One definition, and a guard. The three collapsed to one in this stage."""
+    src = pathlib.Path("src/scrapers/flashscore_scraper.py").read_text(encoding="utf-8")
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert code.count("FS_DISCOVERY") == 1, "more than one emitter"
+    for gone in ("has no fixtures within the requested",
+                 "returned 0 fixtures for"):
+        assert gone not in code, f"an old phrasing survived: {gone}"

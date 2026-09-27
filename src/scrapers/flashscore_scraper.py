@@ -74,6 +74,52 @@ logger = get_logger()
 
 FLASHSCORE_BASE_URL = "https://www.flashscore.com"
 
+
+#: THE FOUR STATES A LEAGUE'S FIXTURE SCRAPE CAN END IN, and the one line that
+#: reports them. SIXTH INSTANCE OF THE HABIT and the first outside the data
+#: layer: three separate phrasings said the same thing in different words —
+#:
+#:     "Flashscore returned 0 fixtures for {league} — NO ROWS AT ALL"
+#:     "Flashscore: {league} has no fixtures within the requested window"
+#:     "Scraped {n} fixtures from {league}"
+#:
+#: — so `ci_audit` needed three regexes to recover one fact, and the fact it
+#: recovered was run-level because nothing tied the three together per league.
+#:
+#: WHY THE GRANULARITY MATTERED. A run-level finding cannot be PARTIALLY
+#: cleared. The empty-card suppression's evidence covers 8 of 30 leagues, so a
+#: run-level discovery-zero finding could never be suppressed — one unreferenced
+#: league in a set of 29 left the whole finding unexplained. That is a property
+#: of the FINDING, not of the reference.
+#:
+#: One definition, one call site, and the state is a field rather than a branch.
+DISCOVERY_STATES = ("kept", "none-in-range", "no-rows", "off-season")
+
+
+def discovery_outcome(league, rows, earliest, cutoff, kept, off_season):
+    """`(log_level, message)` for one league's fixture scrape. The ONLY emitter.
+
+    UNCONDITIONAL by construction: every state produces a line, so an absent
+    line means the scrape did not run — not that it had nothing to say.
+
+    `rows is None` FAILS CLOSED into `no-rows`: an unknown row count cannot
+    claim the league is merely quiet, and on 2026-08-27 the assumption that it
+    could fired for 21 leagues that were all simply quiet.
+    """
+    if kept:
+        state, level = "kept", "info"
+    elif off_season:
+        state, level = "off-season", "info"
+    elif not rows:
+        state, level = "no-rows", "warning"
+    else:
+        state, level = "none-in-range", "info"
+    return level, (
+        f"FS_DISCOVERY {league}: state={state} rows={rows} "
+        f"earliest_parsed={earliest.isoformat() if earliest else None} "
+        f"cutoff={cutoff.isoformat() if cutoff else None} kept={kept}")
+
+
 #: How long to wait for a fixtures page to render before giving up. One
 #: definition, used by both the initial attempt and the retry. See the comment
 #: at the first call site for the measurement behind the value.
@@ -709,27 +755,13 @@ class FlashscoreScraper(BaseScraper):
         # know is the whole failure this project keeps cataloguing. Only a
         # POSITIVE, KNOWN row count suppresses the warning.
         page_rows = getattr(self, "_last_page_rows", None)
-        if not matches and not page_rows:
-            off_season = set(self.config.get("scraping.off_season_leagues", []))
-            if league not in off_season:
-                logger.warning(
-                    f"Flashscore returned 0 fixtures for {league} — the page "
-                    f"yielded NO ROWS AT ALL, expected ≥1 for active season"
-                )
-        elif not matches:
-            logger.info(
-                f"Flashscore: {league} has no fixtures within the requested "
-                f"window ({page_rows} row(s) on the page, none in range)"
-            )
-        # UNCONDITIONAL, so its absence is not confusable with "nothing to say".
-        # `earliest=None` means no row carried a parseable kickoff at all, which
-        # is a different fact from "the earliest is beyond the window".
         _e = getattr(self, "_earliest_parsed", None)
         _c = getattr(self, "_last_cutoff", None)
-        logger.info(
-            f"FS_WINDOW {league}: rows={getattr(self, '_last_page_rows', None)} "
-            f"earliest_parsed={_e.isoformat() if _e else None} "
-            f"cutoff={_c.isoformat() if _c else None} kept={len(matches)}")
+        off_season = set(self.config.get("scraping.off_season_leagues", []))
+        _level, _msg = discovery_outcome(
+            league=league, rows=page_rows, earliest=_e, cutoff=_c,
+            kept=len(matches), off_season=league in off_season)
+        getattr(logger, _level)(_msg)
         logger.info(f"Scraped {len(matches)} fixtures from {league}")
         return matches
 
