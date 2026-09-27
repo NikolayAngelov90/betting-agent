@@ -18386,3 +18386,221 @@ not a guard, but the reason the audit's table survives its own red run.
 
 *Recorded 2026-09-26. `scripts/ci_audit.py` and one test file. No config, schema,
 workflow or production-data change.*
+
+---
+
+# CI AUDIT 2026-09-27 — DEFECTS FOUND (4) · H1 NOT READY
+
+`tests/test_experiment_invariants.py` **passed** — the count is not cited, because
+invariants 2 and 3 are known defective and a passing count is not a guarantee.
+`cohort_status.py`: `s5.14` / `00febf`, **108 picks stamped**, verdict `BUMP` —
+the *standing* state meaning the next selection-affecting change takes `s5.15`.
+**Part E bumped nothing: it changed no file.**
+
+---
+
+## PART A — SCOPE
+
+14 runs in scope, **all `success`**: daily-picks `36307004104`; closing-lines
+`36249538149` `36250290447` `36263062824` `36274620547` `36285430640`;
+paper-trading `36249494876`; ci-audit ×8.
+
+**OPS-3: daily-picks 341 min late** (03:00 → 08:41), the largest recorded, inside
+the 09:45 deadline by 64 min. Duration 41m08. *(measured 2026-09-27)*
+
+### DEFECT 1 — the audit cannot audit itself, at any window
+
+The three CI Audit failures of 09-25/26 sit outside `--since yesterday`. **But no
+`--since` value reaches them:** `WORKFLOWS = ("daily-picks.yml",
+"closing-lines.yml", "paper-trading-report.yml")` excludes `ci-audit.yml` by
+construction.
+
+> ### Eight red ci-audit runs would have gone unrecorded had I not read them by hand. The windowing fixed the 100%-firing-rate failure and left the opposite one: the auditor's own failures are structurally unreachable, not merely out of window.
+
+---
+
+## PART B — THE TWO MECHANISMS, FIRST LIVE EXPOSURE
+
+### B1 — the `##[error]` pattern: a NULL exposure
+
+| across all seven in-scope pipeline runs | |
+| --- | --- |
+| `Process completed with exit code N` | **0** |
+| deliberate annotations | **0** |
+| partition | **EXACT, on the empty case only** |
+| `steps_failed` / `steps_not_run` / `tracebacks` | **0 / 0 / 0 everywhere** |
+
+**The zero is genuine, not an extraction failure:** today's log carries 77 `##[`
+lines, of which one is `##[warning]` and none is `##[error]`, against **2** in the
+known-positive control (`cl_fail.txt`, the 09-24 psycopg run).
+
+> ### There was nothing to partition and nothing to disagree about. The premise held trivially; the mechanism is shipped and still unexercised. The three guards agree only because all three are zero — **a real disagreement, which is the informative result, has not happened.**
+
+### B2 — the audit's verdict: a clean zero, separated from machinery
+
+**Steps 5 and 6 are `skipped` on all eight runs.** Their `if:` conditions read
+`steps.audit.outcome`, so *skipped* proves the outcome was `success` — **verdict
+distinguished from machinery without the field the REST API does not expose**,
+which is the same inference route as yesterday's triage, run in reverse.
+
+---
+
+## PART C — `src_apifootball_fixtures`: NOISE, AND DEFECT 2
+
+**What it fires on:** `PATTERNS["src_apifootball_fixtures"] =
+r"API-Football: creating new fixture"` has **zero capture groups**, so the generic
+loop's `int(ms[-1])` raises and prints `NOT COUNTED` — and then lines 479-480 set
+the key correctly with `len(re.findall(...))`.
+
+| log | warned | raw matches | key value |
+| --- | --- | --- | --- |
+| 09-19 | 1 | 12 | **12** |
+| 09-21 | 1 | 86 | **86** |
+| 09-26 | 1 | 7 | **7** |
+| 09-22 · 09-24 · 09-25 · 09-27 | 0 | 0 | 0 |
+
+**Every firing is the same cause**, and the condition is exactly *"the log
+contains ≥1 such line"* — **3 of 7 logs, and they are the three where
+API-Football created fixtures.** *(measured 2026-09-27)*
+
+> ### It has never coincided with a missed fixture and cannot: the warned value is the value the summary prints. It fires precisely when discovery is WORKING, which is the opposite of an alarm.
+
+**CLR-2 applied before silencing:** the clearing action is *add the key to the
+count-style list, or give the pattern a capture group*, and that **does** change
+the predicate — the `try/except` stops raising. **So it is clearable and it is a
+legitimate developer warning that has gone unacted-on for five days.** Not
+silenced; recorded as **DEFECT 2**, one line, unfixed because today is read-only
+outside Part E.
+
+---
+
+## PART D — COVERAGE, AND DEFECT 3 IS THE SERIOUS ONE
+
+**Measured against the calendar, not the pipeline's own report:**
+
+| weekday | four prior weeks | this week |
+| --- | --- | --- |
+| **Sat** | 107 · 116 · 116 · 117 | **25** |
+| **Sun** | 81 · 71 · 73 · 86 | **5** |
+| Fri | 26 · 27 · 31 | **1** |
+| Mon | 29 · 21 · 20 | **2** |
+
+**09-27 saw ONE league: `spain/laliga2`, 5 fixtures.** API-Football returned
+**872 fixtures globally → 0 created, 5 updated.** Flashscore reported *"no
+fixtures within the requested window"* for premier-league, laliga, bundesliga and
+serie-a — **on a Sunday morning, with a 1-day window covering their kickoffs.**
+
+| | |
+| --- | --- |
+| picks created | 09-25 **1** · 09-26 **17** · 09-27 **5** |
+| matches carrying >1 pick | **0** |
+| `fixtures_zero_active` firings | **0** |
+| identity-gate refusals | the standing 8 implausible rows; no new class |
+| REFUSING (kickoff parse) | 611 — unchanged, and 5 fixtures still scraped alongside |
+
+### The calendar reading is contradicted, and the third outcome is registered
+
+> ### It predicted the weekend would recover. Saturday is down 78% and Sunday 94%. REF-1 cuts both ways: that reading survived the camoufox test and has now failed this one.
+
+**THIRD OUTCOME, REGISTERED BEFORE ANY DIAGNOSIS — `PARTIAL AND SUSTAINED`:**
+non-zero but **78–95% down on every weekday since 09-21**, with the league set
+collapsing to one. **Last normal card: 2026-09-19** (117 matches, 104 Flashscore
+fixtures).
+
+**No mechanism is proposed.** Three hypotheses died here by being written before
+they were tested, and the one that survived a test has now failed another. **What
+would discriminate:** whether `premier-league` genuinely has no in-window rows on
+a Sunday — a question about the page, answerable by looking at it, which I have
+not done.
+
+---
+
+## PART E — H1: THE ANALYSIS IS VERIFIED, THE COLLECTION IS NOT
+
+### The synthetic run — `simulated 2026-09-27` throughout, zero API credits
+
+Realistic book behaviour: all three 1X2 legs re-priced each observation to hold
+the overround at 1.05.
+
+| scenario | obs | in-band | traj | **check n** | **analysis n** | r | STATE |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **A. ρ=0.42 planted, 39 fixtures** | 1053 | 1053 | 351 | **39** | **39** | **+0.5021** | **SIGNAL ACTIONABLE** |
+| **B. ρ=0, null-input control** | 1053 | 1053 | 351 | 39 | 39 | +0.0075 | **NULL**, bound 0.267 → 1.27% |
+| C. n=12, below the floor | 324 | 324 | 108 | 12 | 12 | +0.6513 | **INSUFFICIENT**, refuses to interpret |
+| D. six-minute spacing | 1053 | 1053 | **0** | 0 | 0 | None | **NO DATA** |
+| E. lopsided 30 / 300 min | 1053 | 1053 | **0** | 0 | 0 | None | **NO DATA** |
+| F. exactly 33 fixtures | 891 | 891 | 297 | **33** | **33** | +0.5707 | SIGNAL ACTIONABLE at the floor |
+
+**Every step executed. Nothing crashed. `NO DATA` is emitted as NO DATA and never
+as a null** — D and E both reach it, by the separation floor and by the interval
+ratio respectively.
+
+**And a property verified that would have broken the experiment if it did not
+hold: `check n == analysis n` in every case** (39/39, 33/33, 12/12, and 32/32 ·
+34/34 · 37/37 under attrition). **The stop condition's unit and the estimator's
+unit agree.** *(simulated)*
+
+### The defect was MINE, and rule 2 caught it
+
+My first harness held Draw/Away fixed while Home moved, so the overround drifted
+out of the band: **22 of 351 instants dropped, and n fell 39 → 32 — below the
+registered floor of 33.** I nearly recorded that as a pipeline defect.
+
+| all legs re-priced | out-of-band | check n | analysis n |
+| --- | --- | --- | --- |
+| **no** (my artefact) | 22 · 17 · 8 | 32 · 34 · 37 | 32 · 34 · 37 |
+| **yes** (real books) | **0 · 0 · 0** | **39 · 39 · 39** | **39 · 39 · 39** |
+
+> ### A single anomalous result is evidence about the measurement first. It was, and the measurement was mine. Checked before being written down — REF-1's sequence, applied.
+
+**The residual risk it exposed IS real and is registered:** if a live book moves
+one leg and leaves the others, its instants leave the band and the observation is
+dropped. **That is correct behaviour — a one-legged move is a stale market — but
+real attrition is an empirical unknown**, and its observable is the
+`out_of_band` count the collection check already prints.
+
+### H1 NOT READY — two independent grounds
+
+| Stage 26 Part B requirement | state |
+| --- | --- |
+| **1. stop condition enforced IN THE RUNNER** | **NOT MET.** `TARGET_N=39` / `CREDIT_CEILING=200` live in `h1_collection_check.py`, which is a *check*. `grep` for them in `refresh_and_capture.py`, `theodds_scraper.py` and `closing-lines.yml` returns **nothing** |
+| 2. revert ships in the raising commit | **n/a** — `git log -S"odds_refresh_window_minutes: 360"` is empty; the raising commit does not exist, so neither can its paired revert |
+| window / interval today | **120 / 180** — the correct pre-collection values |
+| 3. daily separated check | **MET** — `h1_collection_check.py`, 31 tests |
+| 4. null distinguishable from success | **MET** — three lines, verified again above |
+
+**And DEFECT 3 is the second ground.** The collection needs ~23 qualifying
+fixtures/day to reach n=39 in two days. **This Sunday produced 5 tracked fixtures
+in one league.** A collection starting 10-01 against a card 78–95% down cannot
+reach the registered n at the registered cost, whatever the window.
+
+**DEFECT 4: requirement 1 is unmet four days out.**
+
+---
+
+## DECLARATION
+
+> ### CI AUDIT 2026-09-27 — DEFECTS FOUND (4)
+>
+> 1. **the audit cannot audit itself at any window** — 8 red runs structurally unreachable
+> 2. **`src_apifootball_fixtures` warns when discovery WORKS** — noise, clearable, five days unacted
+> 3. **discovery down 78–95% on every weekday since 09-21**, one league on 09-27 · *third outcome registered, no mechanism proposed*
+> 4. **H1's stop condition is not in the runner**, four days from collection
+
+> ### H1 NOT READY
+>
+> The **analysis** path is verified end to end on realistic synthetic data, all
+> six scenarios, with `check n == analysis n`. The **collection** is not: its
+> stop condition does not exist in the runner, and the card it would collect
+> from is 78–95% down.
+
+| standing | |
+| --- | --- |
+| OPS-4 | reset **10-01, four days out**. `400/450`, ledger and provider agree |
+| CLV | 129 pairs, frozen **fourteen days** |
+| two-point separated series | zero for fifteen days · three-point ever: **0** |
+| s5.9 at the fixture unit | 0 over cap since the cap-1 change |
+| cohort | `00febf` **108**; next selection-affecting change takes **s5.15** |
+
+*Audited 2026-09-27. Ledger only — Parts A–E changed no code, config, schema,
+workflow or production data; `git status` empty before this row.*
