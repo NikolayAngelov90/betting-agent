@@ -46,8 +46,15 @@ def _run(log):
     return ci.verdict(f, hits, log), f, hits
 
 
+#: The finding's marker. It was "ABSORBED" until 2026-09-27, when the message
+#: was corrected on its first real firing: the count is of NON-ZERO EXITS, and
+#: whether each was absorbed depends on that step's continue-on-error, which the
+#: API does not expose. Claiming absorption for all of them over-attributed.
+MARKER = "exited NON-ZERO"
+
+
 def _absorbed(hits):
-    return [h for h in hits if "ABSORBED" in h]
+    return [h for h in hits if MARKER in h]
 
 
 # ── THE POSITIVE CONTROL ─────────────────────────────────────────────────────

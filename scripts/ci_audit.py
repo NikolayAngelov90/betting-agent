@@ -44,7 +44,32 @@ from typing import Dict, List, Optional
 
 LEDGER = pathlib.Path("docs/ci-audit-ledger.md")
 LOGS = pathlib.Path("ci_logs")
-WORKFLOWS = ("daily-picks.yml", "closing-lines.yml", "paper-trading-report.yml")
+WORKFLOWS = ("daily-picks.yml", "closing-lines.yml", "paper-trading-report.yml",
+             "ci-audit.yml")
+
+#: Workflows that are LISTED and LEDGERED but never ALARMED on.
+#:
+#: `ci-audit.yml` was added to WORKFLOWS on 2026-09-27. It had been absent, and
+#: THE ABSENCE WAS NOT DELIBERATE — `WORKFLOWS` was last edited 2026-08-24 and
+#: `ci-audit.yml` was created 2026-09-25, a month later. There was no reason and
+#: no rationale to preserve; the workflow simply did not exist. Eight of its red
+#: runs survived unrecorded because a human happened to read them.
+#:
+#: BUT THE LOOP IS REAL AND MUST NOT BE REINTRODUCED. If the audit alarms on its
+#: own verdicts: run N fails -> N+1 sees N's failure, alarms, fails -> N+2 sees
+#: N+1's failure -> perpetual red, self-sustaining, with nothing able to clear
+#: it. That is CLR-2 exactly: an alarm whose scope is defined by a condition its
+#: own remedy cannot end.
+#:
+#: A one-run lag does not break it — it only delays each link in the chain. What
+#: breaks it is the split this file already uses everywhere else: REPORTING and
+#: FAILING are different policies. The audit's own runs are reported and take a
+#: ledger row; they never enter `alarmed`.
+#:
+#: The cost is stated rather than hidden: a genuinely broken ci-audit will not
+#: alarm about itself. Its failures are visible in the ledger and in the Actions
+#: list, which is where the eight were found by hand.
+NEVER_ALARM_WORKFLOWS = ("ci-audit",)
 
 #: How far back "recently produced data" looks. Not a threshold on the metric —
 #: a window on the pipeline's own history.
@@ -440,7 +465,17 @@ def extract(log: str) -> Dict[str, object]:
         ms = re.findall(pat, log)
         if not ms:
             continue
+        # `src_apifootball_fixtures` added 2026-09-27. The warning offered two
+        # remedies; this is the right one. Its pattern —
+        # "API-Football: creating new fixture" — carries NO NUMBER, because the
+        # line is emitted once per fixture, so the count IS the occurrence count.
+        # Inventing a capture group would mean inventing a number. The key was
+        # already being set correctly 40 lines below; the warning fired only
+        # because the generic loop reached it first and `int()` raised on a
+        # whole-match string. It was an inverted indicator: it printed
+        # NOT COUNTED exactly when API-Football WAS creating fixtures.
         if key in ("fixtures_created", "reviews", "no_rows",
+                   "src_apifootball_fixtures",
                    "decisions_discarded", "fixtures_zero_active",
                    "no_fixtures_at_all", "unpriced_check_dead",
                    "implausible_check_dead",
@@ -828,10 +863,17 @@ def assertions(facts: Dict[str, object],
             and not facts.get("steps_failed")
             and not facts.get("steps_not_run")
             and not facts.get("tracebacks")):
+        # WORDING CORRECTED 2026-09-27, on its first real firing. It said the
+        # steps "were ABSORBED", and on the eight ci-audit runs that is true of
+        # one of the two exits and false of the other — the second exit IS the
+        # job's red. The count is of NON-ZERO EXITS; whether each was absorbed
+        # depends on that step's continue-on-error, which the API does not
+        # expose. Claiming absorption for all of them over-attributes.
         hits.append(
-            f"{facts['steps_nonzero_exit']} step(s) exited NON-ZERO and were "
-            "ABSORBED by continue-on-error — the API reports them as "
-            "conclusion: success, so this annotation is the only record")
+            f"{facts['steps_nonzero_exit']} step(s) exited NON-ZERO with no "
+            "traceback and no named failed step — any of them under "
+            "continue-on-error reports conclusion: success, so this annotation "
+            "is the only record")
     return hits
 
 
@@ -1066,7 +1108,9 @@ def main() -> int:
         disc = discovery_summary(facts)
         res = resolution_summary(facts)
         _pre = "  ".join(x for x in (disc, res) if x)
-        if v in fail_on:
+        # The audit reports on itself and never alarms on itself — see
+        # NEVER_ALARM_WORKFLOWS for why a one-run lag would not break the loop.
+        if v in fail_on and r["workflow"] not in NEVER_ALARM_WORKFLOWS:
             alarmed.append(f"{rid} {r['workflow']} {v}")
         print(f"{rid:<12} {r['workflow']:<14} {(r.get('startedAt') or '')[:16]:<17} "
               f"{v:<10} {((_pre + '  ') if _pre else '') + '; '.join(hits)}"[:190])

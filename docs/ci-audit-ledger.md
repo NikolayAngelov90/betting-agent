@@ -18604,3 +18604,237 @@ reach the registered n at the registered cost, whatever the window.
 
 *Audited 2026-09-27. Ledger only — Parts A–E changed no code, config, schema,
 workflow or production data; `git status` empty before this row.*
+
+---
+
+# DISCOVERY — DEATH POINT LOCATED. Two filters, and no mechanism named.
+
+`tests/` **1197 passed**. Experiment invariants **passed** — count not cited.
+`cohort_status`: `s5.14` / `00febf`, 108 stamped. **No bump: nothing changed here
+affects which fixtures resolve.** Stage 26 remains **SUSPENDED**; the runner,
+`TARGET_N`, `CREDIT_CEILING` and the window were not touched.
+
+---
+
+## PART B FIRST — the outcomes, registered before measuring, then selected
+
+| | registered outcome |
+| --- | --- |
+| 1 | dies at a filter whose inputs are **wrong** — a defect, with a literal |
+| 2 | dies at a filter whose inputs are **right** — correctly excluding real football; a config fact for Niki |
+| 3 | **never dies; 872 were never candidates** — the count is mismeasured |
+| 4 | none of the above — funnel, then stop |
+
+### OUTCOME 3 IS IN, FOR THE 872 SPECIFICALLY, AND THE FRAMING WAS MINE
+
+`self._api_get("/fixtures", {"date": date_str})` sends **no league parameter**.
+**872 is every fixture in API-Football's database for 2026-09-27** — all
+countries, all divisions, youth and reserve included. The first statement of the
+loop is the league filter. **And there is no date/window filter in this path at
+all**: `max_days_ahead` is a Flashscore concept and does not appear here.
+
+> ### So "872 returned → 0 created" was never a funnel. I supplied that observation in yesterday's audit and it is a mismeasurement. The correct denominator is tracked-league fixtures in the response, which the log does not print — it prints only `created` and `updated`.
+
+**But outcome 3 does not dissolve the collapse**, because the same instrument
+read the same way on both sides of the boundary shows a real fall.
+
+---
+
+## PART A1 — THE FUNNEL, with the right denominator
+
+**`created + updated` IS the tracked-league count**: every fixture that passes
+`if league_id not in self._tracked_league_ids: continue` reaches either the
+`updated += 1` or the `created += 1` branch, and the only exits between them are
+missing-name, youth-side, unparsed-date and identity refusal. *(measured
+2026-09-27, from the logs)*
+
+| date | global returned | **TRACKED** | share |
+| --- | --- | --- | --- |
+| 09-18 | 435 | **31** | **7.1%** |
+| 09-19 | 1,555 | **116** | **7.5%** |
+| 09-20 | 1,151 | **86** | **7.5%** |
+| 09-21 | 146 | 2 | 1.4% |
+| 09-22 | 203 | **0** | 0.0% |
+| 09-23 | 204 | **0** | 0.0% |
+| 09-24 | 93 / 95 | **0** | 0.0% |
+| 09-25 | 265 / 266 | 1 | 0.4% |
+| **09-26** | **1,188** | **25** | **2.1%** |
+| 09-27 | 872 | 5 | 0.6% |
+
+> ### 09-26's global count is 1,188 — the same order as 09-19's 1,555 and 09-20's 1,151 — while the tracked share fell from 7.5% to 2.1%. The provider's worldwide slate is normal-sized and our share of it is 3.5× smaller.
+
+### The death point, and the literal predicate
+
+**Stage 1 of the loop:**
+
+```python
+league_id = fix.get("league", {}).get("id")
+if league_id not in self._tracked_league_ids:
+    continue          # <-- the number goes to zero here
+```
+
+**Side 1 of the comparison, measured:** `_tracked_league_ids` has **30** members,
+from `ID_TO_LEAGUE` (45 entries) ∩ `flashscore_leagues` (30 configured), with
+**zero configured-but-unmapped**:
+
+```
+[2, 3, 39, 40, 41, 42, 61, 62, 78, 79, 88, 94, 103, 106, 113, 119,
+ 135, 136, 140, 141, 144, 172, 179, 197, 203, 207, 218, 244, 283, 848]
+```
+
+> ### Side 2 — the `league_id` values actually returned — is NOT LOGGED. That is the funnel's boundary. One log line would close it and costs no credit.
+
+---
+
+## PART A2 — FLASHSCORE: the fourth category, per league, verbatim
+
+| league | fetched | rows | refused | parsed | scraped | classification |
+| --- | --- | --- | --- | --- | --- | --- |
+| **england/premier-league** | yes | **117** | **0** | **117** | **0** | **rows parsed, WINDOW rejected 117** |
+| **italy/serie-a** | yes | **105** | **0** | **105** | **0** | **WINDOW rejected 105** |
+| spain/laliga | yes | 111 | 10 | 101 | 0 | WINDOW rejected 101 |
+| germany/bundesliga | yes | 117 | 27 | 90 | 0 | WINDOW rejected 90 |
+| france/ligue-1 | yes | 117 | 36 | 81 | 0 | WINDOW rejected 81 |
+| spain/laliga2 | yes | — | 0 | — | **5** | rows parsed and accepted |
+
+**All 30 league pages were fetched.** *(measured 2026-09-27)*
+
+> ### Premier League and Serie A parsed 117 of 117 and 105 of 105 rows with ZERO refusals. The parser is not the death point, and this retires "selector death" on evidence rather than on argument.
+
+**The literal predicate, and it is ONE-SIDED:**
+
+```python
+cutoff = datetime.now() + timedelta(days=max_days_ahead)   # max_days_ahead = 1
+...
+if match_data["match_date"] > cutoff:
+    continue          # "skip far-future fixtures" — no lower bound exists
+```
+
+**`max_days_ahead` is applied against the run's WALL CLOCK** — `datetime.now()`,
+not the run's date and not a stored value — **and that has not changed.** The run
+started 08:41 UTC, so the literal window was approximately
+**`[2026-09-27 08:5x, 2026-09-28 08:5x] UTC`**.
+
+**117 of 117 Premier League rows were `> cutoff`.** A same-day 13:00–16:30 kickoff
+would be inside that window and kept; none was.
+
+> ### So the page carried no fixture inside the next 24 hours for four of the top five leagues. Whether that is because those leagues had none, or because the page did not list them, is the ONE quantity I cannot measure: the rows' kickoff times are not logged, and the page is JS-rendered so a fetch returns a shell.
+
+---
+
+## PART A3 — WHAT CHANGED ON OR BEFORE 09-21: nothing in this path
+
+| | |
+| --- | --- |
+| commits touching scrapers, the league set, the gate or the window, 09-15→09-27 | **all dated 09-16 and 09-17** — `098a368`, `97a38a1`, `64b9e25`, `cfa5806`, `87e784c`, `df6f6d2` |
+| and 09-18 / 09-19 ran **after** them | **31 and 116 tracked — normal** |
+| the boundary sha | 09-20 `5da4f26` (86, normal) → **09-21 `e8c6f11` (2)**. `e8c6f11` touched workflows, `ci_audit` and tests — **no scraper** |
+| `ID_TO_LEAGUE` last edited | `40d1561`, long before the window |
+| `flashscore_leagues` edits since 09-01 | **none** |
+| cron effective start, 09-14 → 09-27 | **07:38 – 08:41 throughout; no shift at the boundary** |
+
+**Correlation only. Nothing in the discovery path changed at the boundary.**
+
+---
+
+## THE DECLARATION
+
+> ### DISCOVERY — DEATH POINT LOCATED
+>
+> **Two filters, and at both the measurable inputs are correct and unchanged:**
+>
+> | path | dies at | literal | classification |
+> | --- | --- | --- | --- |
+> | **API-Football** | `league_id not in _tracked_league_ids` | side 1 = the 30-id set above; **side 2 not logged** | **unclassifiable** — the funnel stops one stage short of the comparison |
+> | **Flashscore** | `match_date > cutoff` | `cutoff = now + 1 day`, wall clock, unchanged; 117/117 PL rows exceeded it | **outcome 2 for the predicate** — it is correctly excluding fixtures more than 24 h out |
+>
+> ### And at BOTH paths the single unmeasured quantity is the same thing: what the provider actually offered for these leagues on these dates. No mechanism is named.
+
+**`PARTIAL AND SUSTAINED` is held.** Four Flashscore explanations have fallen;
+this entry adds none.
+
+### The two log lines that would close it, and neither costs a credit
+
+1. **API-Football:** log the distinct `league_id` values *rejected* by the
+   tracked filter, per date. Turns side 2 into a measurement on the next run.
+2. **Flashscore:** log the **earliest parsed `match_date`** per league beside
+   `(N row(s) on the page, none in range)`. Distinguishes *"the league's next
+   fixture is six days away"* from *"the page omitted today's fixtures"* — the
+   exact question A2 leaves open.
+
+**Not built in this stage**, because rule 2 says no fix without a reproduction
+and these *are* the reproduction; they are instrumentation, and instrumenting is
+the next stage's first act.
+
+---
+
+## PART C — DEFECT 1 CLOSED, AND THE SELF-EXCLUSION WAS NEVER DELIBERATE
+
+| | |
+| --- | --- |
+| `WORKFLOWS` last edited | **2026-08-24** (`a709f24`) |
+| `ci-audit.yml` created | **2026-09-25** (`714b54c`) |
+
+> ### The tuple predates the workflow by a month. There was no reason and no rationale to preserve — the workflow did not exist. Eight red runs survived unrecorded because a human happened to read them.
+
+**But the loop is real, and a one-run lag does not break it.** Run N fails → N+1
+reports N's failure, alarms, fails → N+2 reports N+1's → perpetual red that
+nothing can clear. **That is CLR-2 exactly.** A lag only delays each link.
+
+**What breaks it is the split this file already uses everywhere: REPORTING and
+FAILING are different policies.** `ci-audit.yml` is now in `WORKFLOWS`, and
+`NEVER_ALARM_WORKFLOWS = ("ci-audit",)` keeps its verdicts out of `alarmed`.
+**Verified: all eight appear, and `exit=0`.**
+
+**The cost is stated rather than hidden:** a genuinely broken ci-audit will not
+alarm about itself. Its failures are now in the ledger and in the Actions list —
+which is where these eight were found by hand.
+
+### BACKFILLED 2026-09-27, from logs already read
+
+| run | workflow | started | verdict | note |
+| --- | --- | --- | --- | --- |
+| 36115274504 | ci-audit | 09-25 08:52 | DEGRADED | `backfilled` · 2 non-zero exits · alarmed on the two 09-24 psycopg BROKEN runs |
+| 36155111557 | ci-audit | 09-25 15:34 | DEGRADED | `backfilled` · same two run ids |
+| 36155178674 | ci-audit | 09-25 15:35 | DEGRADED | `backfilled` · same |
+| 36156674060 | ci-audit | 09-25 15:48 | DEGRADED | `backfilled` · same |
+| 36164109925 | ci-audit | 09-25 16:57 | DEGRADED | `backfilled` · same · the only `schedule` trigger of the eight |
+| 36186033438 | ci-audit | 09-25 20:29 | DEGRADED | `backfilled` · same |
+| 36202954357 | ci-audit | 09-25 23:56 | DEGRADED | `backfilled` · same |
+| 36231105686 | ci-audit | 09-26 08:52 | DEGRADED | `backfilled` · same · last before the `--since` scope fix |
+
+**AND B1's NULL EXPOSURE BECAME A REAL ONE.** The `##[error]` pattern had nothing
+to partition on the seven pipeline logs. **It is what classified all eight of
+these** — two non-zero exits each, invisible to the API because step 4 carries
+`continue-on-error`.
+
+> ### Two mechanisms shipped this week and each made the other's finding possible: Part C brought the runs into scope, and the pattern is the only thing that could read them.
+
+**A precision defect in my own message, caught on its first real firing.** It said
+the steps *"were ABSORBED"*; on these runs that is true of step 4 and false of
+step 6, whose exit **is** the job's red. The count is of non-zero exits, and
+whether each was absorbed depends on a `continue-on-error` the API does not
+expose. **Corrected to say what is measured**, and the test's marker moved with
+it.
+
+---
+
+## PART D — DEFECT 2 CLOSED, and the warning's own advice had two halves
+
+**The right half was the count list, not a capture group.** The pattern
+`r"API-Football: creating new fixture"` **carries no number** — the line is
+emitted once per fixture, so the count *is* the occurrence count. **Inventing a
+capture group would have meant inventing a number.**
+
+`src_apifootball_fixtures` added to the count-style keys. **Verified: the warning
+is gone and every value is unchanged** — 09-19 **12**, 09-21 **86**, 09-26 **7**,
+09-27 **0**. *(measured 2026-09-27)*
+
+**It was an inverted indicator**: it printed `NOT COUNTED` on exactly the three
+logs where API-Football *was* creating fixtures.
+
+---
+
+*Audited 2026-09-27. `scripts/ci_audit.py` and one test file. No config, schema,
+workflow, dependency or production-data change; the runner, window and stop
+condition untouched. `s5.14` / `00febf` unchanged.*
