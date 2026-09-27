@@ -851,9 +851,16 @@ class APIFootballScraper(BaseScraper):
             ).all() if _batch_afids else []
         _afid_to_match_id = {row.apifootball_id: row.id for row in existing_rows}
 
+        # SIDE 2 OF THE PREDICATE, WHICH HAD NEVER BEEN LOGGED.
+        # Established 2026-09-27: the funnel's death point is the line below,
+        # and only side 1 (`_tracked_league_ids`, 30 ids) was measurable. What
+        # the provider actually returned was invisible, so a defect here and a
+        # genuinely absent card were the same observation.
+        _rejected: Dict[object, int] = {}
         for fix in fixtures:
             league_id = fix.get("league", {}).get("id")
             if league_id not in self._tracked_league_ids:
+                _rejected[league_id] = _rejected.get(league_id, 0) + 1
                 continue  # Skip leagues not in configured flashscore_leagues
 
             league_key = ID_TO_LEAGUE[league_id]
@@ -1038,6 +1045,16 @@ class APIFootballScraper(BaseScraper):
                 created += 1
 
         logger.info(f"API-Football fixtures {date_str}: {created} created, {updated} updated")
+        # Emitted UNCONDITIONALLY, including when nothing was rejected, so that
+        # "nothing was rejected" and "the line never ran" are distinguishable.
+        # A log line that only prints in the interesting case is a line whose
+        # absence means nothing.
+        _top = sorted(_rejected.items(), key=lambda kv: -kv[1])[:12]
+        logger.info(
+            f"AF_LEAGUE_FILTER {date_str}: rejected {sum(_rejected.values())} "
+            f"fixture(s) across {len(_rejected)} untracked league id(s); "
+            f"tracked={len(self._tracked_league_ids)}; "
+            f"top={[(k, v) for k, v in _top]}")
         if target_date == date.today():
             # Track how many tracked fixtures are on today's slate so odds and
             # xG backfill steps can allocate budget dynamically.

@@ -721,6 +721,15 @@ class FlashscoreScraper(BaseScraper):
                 f"Flashscore: {league} has no fixtures within the requested "
                 f"window ({page_rows} row(s) on the page, none in range)"
             )
+        # UNCONDITIONAL, so its absence is not confusable with "nothing to say".
+        # `earliest=None` means no row carried a parseable kickoff at all, which
+        # is a different fact from "the earliest is beyond the window".
+        _e = getattr(self, "_earliest_parsed", None)
+        _c = getattr(self, "_last_cutoff", None)
+        logger.info(
+            f"FS_WINDOW {league}: rows={getattr(self, '_last_page_rows', None)} "
+            f"earliest_parsed={_e.isoformat() if _e else None} "
+            f"cutoff={_c.isoformat() if _c else None} kept={len(matches)}")
         logger.info(f"Scraped {len(matches)} fixtures from {league}")
         return matches
 
@@ -882,11 +891,22 @@ class FlashscoreScraper(BaseScraper):
             # warning below used to report them identically — 21 times on a
             # normal day, every one a false positive.
             self._last_page_rows = len(match_elements)
+            # THE ONE VALUE THAT DECIDES THIS FILTER, recorded on the REJECTION
+            # path as well as the acceptance path. Established 2026-09-27: all
+            # 117 Premier League rows parsed and every one exceeded the cutoff,
+            # and "the next round is 19 days away" was indistinguishable from
+            # "the parsed dates are wrong" because the dates were never logged.
+            self._last_cutoff = cutoff
+            self._earliest_parsed = None
             for el in match_elements:
                 try:
                     match_data = self._parse_fixture_element(el)
                     if match_data:
-                        if match_data.get("match_date") and match_data["match_date"] > cutoff:
+                        _md = match_data.get("match_date")
+                        if _md and (self._earliest_parsed is None
+                                    or _md < self._earliest_parsed):
+                            self._earliest_parsed = _md
+                        if _md and _md > cutoff:
                             continue  # skip far-future fixtures
                         matches.append(match_data)
                 except Exception as e:

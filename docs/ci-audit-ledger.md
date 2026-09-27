@@ -18838,3 +18838,195 @@ logs where API-Football *was* creating fixtures.
 *Audited 2026-09-27. `scripts/ci_audit.py` and one test file. No config, schema,
 workflow, dependency or production-data change; the runner, window and stop
 condition untouched. `s5.14` / `00febf` unchanged.*
+
+---
+
+# DISCOVERY — CARD ABSENT. The break runs to 10-08, and H1's start condition is 10-09.
+
+`tests/` **1202 passed, 2 skipped**. Invariants **passed** — count not cited.
+`cohort_status`: `s5.14` / `00febf`, 108 stamped. **No bump — Part B is two log
+lines and changes nothing about which fixtures resolve.** Stage 26 remains
+**SUSPENDED**; runner, `TARGET_N`, `CREDIT_CEILING`, window untouched.
+
+---
+
+## PART C — the outcomes, registered before the grid was read
+
+1. **GAP IS OURS** — card real, discovery defective, size measured
+2. **CARD ABSENT** — leagues idle, filters correct; `max_days_ahead=1` becomes a config question
+3. **MIXED BY LEAGUE** — report the split, do not average
+4. **REFERENCE CANNOT ANSWER** — say so, and say what it would take
+
+---
+
+## PART A — THE EXTERNAL GRID
+
+**Source, named: `openfootball/football.json`, season `2026-27`, one file per
+league.** Independent of both Flashscore and API-Football. *(measured 2026-09-27)*
+
+**Two candidates were tried and rejected before it:** TheSportsDB's free key
+returns **3 events for 2026-09-27, all American USL Championship** — it cannot
+serve as a reference and saying so is part of the record. `openfootball` answers
+for **8 of the 30 configured leagues**; the other 22 return HTTP 404 for this
+season.
+
+**Coverage stated first, because it bounds the conclusion:** the 8 are
+`en.1 en.2 es.1 de.1 it.1 fr.1 nl.1 pt.1` — **and they include all four leagues
+that reported "no fixtures in window"** on 09-27, plus Ligue 1. They account for
+**31 of the 86 fixtures** on 09-20, the last normal day.
+
+### The grid — league × date, reference / ours. SAME POPULATION BOTH SIDES.
+
+| league | 09-18 | 09-19 | 09-20 | 09-21 | 09-22 | 09-23 | 09-24 | 09-25 | 09-26 | 09-27 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| england/premier-league | 1/1 | 5/5 | 4/4 | **0/0** | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | **0/0** |
+| england/championship | 1/1 | 9/9 | 2/2 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 |
+| spain/laliga | 1/1 | 4/4 | 5/5 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | **0/0** |
+| germany/bundesliga | 1/1 | 5/5 | 3/3 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | **0/0** |
+| italy/serie-a | 1/1 | 4/4 | 5/5 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | **0/0** |
+| france/ligue-1 | 1/1 | 5/5 | 3/3 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 |
+| netherlands/eredivisie | 1/1 | 4/4 | 4/4 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 |
+| portugal/primeira-liga | 0/0 | **4/5** | 5/5 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 | 0/0 |
+
+| | 09-18 | 09-19 | 09-20 | 09-21 → 09-27 |
+| --- | --- | --- | --- | --- |
+| **reference (8 leagues)** | 7 | 40 | 31 | **0 on every date** |
+| **ours (8 leagues)** | 7 | 41 | 31 | **0 on every date** |
+| **seen** | **100%** | **102%** | **100%** | — |
+
+> ### DISCOVERY IS NOT DEFECTIVE. Across the collapse the same-population ratio is 100%, 102%, 100% — and then the reference says ZERO on every date from 09-21 to 09-27, for all eight leagues including the four that "reported no fixtures in window".
+>
+> **Every filter behaved correctly. The 117 parsed Premier League rows that all
+> exceeded the cutoff were correct to exceed it: there was no Premier League
+> fixture to find.**
+
+**The one discrepancy is reported rather than rounded away:** 09-19
+portugal/primeira-liga, **reference 4, ours 5** — one extra row. It is the only
+cell where the two disagree, and it is an excess on our side, not a miss. Cause
+not investigated; recorded.
+
+### AND THE GRID ANSWERS THE QUESTION NOBODY ASKED
+
+| league | last fixture before | next fixture after | gap |
+| --- | --- | --- | --- |
+| england/premier-league | **2026-09-20** | **2026-10-10** | **20 days** |
+| england/championship | 2026-09-20 | 2026-10-09 | 19 |
+| spain/laliga | 2026-09-20 | 2026-10-09 | 19 |
+| germany/bundesliga | 2026-09-20 | 2026-10-09 | 19 |
+| italy/serie-a | 2026-09-20 | 2026-10-10 | 20 |
+| france/ligue-1 | 2026-09-20 | 2026-10-09 | 19 |
+| netherlands/eredivisie | 2026-09-20 | 2026-10-09 | 19 |
+| portugal/primeira-liga | 2026-09-20 | 2026-10-09 | 19 |
+
+> ### Eight independent domestic leagues stop on the SAME day and resume within 24 hours of each other, nineteen days later. Distinct resumption dates: 2026-10-09 and 2026-10-10.
+>
+> **The gap is not over. It runs another twelve days, to 10-08 inclusive.**
+
+---
+
+## THE DECLARATION
+
+> ### DISCOVERY — CARD ABSENT
+>
+> **Outcome 2, for the 8 leagues the reference covers (100% / 102% / 100%
+> before, zero on both sides throughout).** Discovery is not defective and there
+> is nothing to fix.
+>
+> **Outcome 4 for the remaining 22 leagues.** `openfootball` has no 2026-27 file
+> for them. What it would take: a reference with wider coverage, or Part B's two
+> log lines, which answer it for free on the next run.
+
+### AND IT MOVES H1's START CONDITION
+
+**OPS-4's credit reset is 10-01. The card returns 10-09.**
+
+> ### Starting the collection on 10-01 would have spent credits into an empty card for EIGHT DAYS. The suspension was correct and now it has a date: H1's start condition is 2026-10-09, not the credit reset.
+
+*This is the first time in this project that a date was set by an external
+reference rather than by a provider's own report.*
+
+### `max_days_ahead=1` IS NOT IMPLICATED
+
+The config question registered as outcome 2's consequence **does not arise**. A
+one-day window would be blind to a sparse week — but there was no sparse week to
+be blind to: the reference says zero, not "a few we missed". **The window's value
+is untested by this episode and should not be changed on its evidence.**
+
+---
+
+## PART B — THE TWO LOG LINES, WITH POSITIVE CONTROLS
+
+**`AF_LEAGUE_FILTER`** — side 2 of the predicate that had never been written
+down. Emitted **unconditionally** after the create/update line:
+
+```
+AF_LEAGUE_FILTER 2026-09-27: rejected N fixture(s) across M untracked league
+id(s); tracked=30; top=[(id, count), ...]
+```
+
+**`FS_WINDOW`** — the earliest parsed kickoff, recorded **before** the cutoff
+`continue` so it exists on the rejection path, and emitted unconditionally:
+
+```
+FS_WINDOW england/premier-league: rows=117 earliest_parsed=2026-10-10T14:00:00
+cutoff=2026-09-28T08:52:00 kept=0
+```
+
+**Seven tests, each asserting on the rejection path**, because that is the only
+path that mattered:
+
+| | |
+| --- | --- |
+| AF fires with every fixture rejected | `rejected 3`, `2 untracked league id(s)`, `(61, 2)`, `(78, 1)` |
+| AF fires when **nothing** is rejected | `rejected 0 fixture(s) across 0` — so silence never means "the line never ran" |
+| AF does not count tracked leagues as rejections | the two counts partition |
+| FS line exists in the real path | all four fields, asserted against the source |
+| FS line is **unconditional** | pinned as not inside the `elif not matches` branch |
+| **the earliest is recorded BEFORE the `continue`** | source-order assertion — otherwise a rejecting league logs `None`, which already means *nothing parsed*, and the two facts collapse |
+| `None` renders as `None` | not `0`, not `''` |
+
+### Three defects in my own test file, caught by running it
+
+1. **`pytest.mark.asyncio` is not configured here** — the repo drives async with
+   `asyncio.run`. Converted.
+2. **`ApiFootballScraper` is `APIFootballScraper`** — and my `sed` fix replaced
+   only the first occurrence on the line, so it failed twice with the same
+   message.
+3. **`caplog` captured nothing**, because this project logs through **loguru**.
+   Every assertion failed on an empty list.
+
+> ### The third is the one worth recording: an empty `caplog` reads exactly like "the line does not fire", which is the PNC-1 conclusion this file exists to rule out. **A test whose capture mechanism is wrong produces the same output as the defect it is testing for.** And the trap is already documented in `test_credit_gate_first_refusal` and `test_logging_regime` — I had it in the tree and did not reach for it.
+
+---
+
+## THE METHOD FINDING — the price of the deferral, stated as one
+
+**Stage 19 proposed an external reference and it was not built.**
+
+| | |
+| --- | --- |
+| explanations written for an unconfirmed absence | **five** — static pages, selector death, the second observed save, the calendar, and the tracked-share fall |
+| of those, later withdrawn | **all five** |
+| days from the first zero-fixture day to confirmation | **nine** (09-18 → 09-27) |
+| cards permanently lost in that window | **the 09-20 odds, and every 09-21→09-27 price** |
+| cost of actually doing it | **~15 minutes, zero credits, two `curl` calls** |
+
+> ### The reference would have answered on day one. Every one of the five explanations was an attempt to infer an absence from the instruments that could not see it — and each was consistent with the evidence, which is why consistency was never enough.
+>
+> **The deferral's price was not the nine days. It was that four of the five were
+> written before they were tested**, and the fifth — the calendar — was right and
+> was withdrawn yesterday **because I could not confirm it.** It was correct all
+> along, and the reference is what would have let me keep it.
+
+**And a second-order cost, recorded because it compounded:** two ratios in this
+investigation had different populations in numerator and denominator — my
+`872 → 0` and the `tracked / global` share. **Both produced apparent 3.5×–∞
+effects that vanished under a same-population control.** The grid above is the
+first ratio in this episode with one population on both sides.
+
+---
+
+*Recorded 2026-09-27. `src/scrapers/apifootball_scraper.py` and
+`src/scrapers/flashscore_scraper.py` gain one log line each;
+`tests/test_discovery_instrumentation.py` is new. No config, schema, workflow or
+production-data change; `s5.14` / `00febf` unchanged.*
