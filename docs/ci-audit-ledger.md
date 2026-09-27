@@ -18841,7 +18841,10 @@ condition untouched. `s5.14` / `00febf` unchanged.*
 
 ---
 
-# DISCOVERY — CARD ABSENT. The break runs to 10-08, and H1's start condition is 10-09.
+# DISCOVERY — CARD ABSENT (8/30) · RESIDUAL UNMEASURED (22/30, −93%)
+*Title amended 2026-09-27: it read `CARD ABSENT` without qualification, which
+applied a conclusion measured on 8 leagues to all 30. The break runs to 10-08
+and H1's start condition is 10-09 — both measured on the covered eight only.*
 
 `tests/` **1202 passed, 2 skipped**. Invariants **passed** — count not cited.
 `cohort_status`: `s5.14` / `00febf`, 108 stamped. **No bump — Part B is two log
@@ -18926,7 +18929,14 @@ not investigated; recorded.
 
 ## THE DECLARATION
 
-> ### DISCOVERY — CARD ABSENT
+> ### DISCOVERY — CARD ABSENT (8/30) · RESIDUAL UNMEASURED (22/30, −93%)
+>
+> **AMENDED 2026-09-27.** The original line said `CARD ABSENT` and nothing
+> else. The residual across the uncovered 22 is large and unreferenced:
+> **09-19 → 75 fixtures, 09-26 → 25, 09-27 → 5** *(measured; tracked minus the
+> covered eight, one population on both sides)* — **−93%**, with no mechanism
+> and no reference. It is outcome 4 and stays there until the `AF_LEAGUE_FILTER`
+> and `FS_WINDOW` lines report on the 09-28 run.
 >
 > **Outcome 2, for the 8 leagues the reference covers (100% / 102% / 100%
 > before, zero on both sides throughout).** Discovery is not defective and there
@@ -19186,3 +19196,160 @@ none.
 *Recorded 2026-09-27. `scripts/ci_audit.py` and `tests/test_empty_card_suppression.py`.
 No config, schema, workflow, dependency or production-data change; the runner,
 window and stop condition untouched. `s5.14` / `00febf` unchanged.*
+
+---
+
+# SUPPRESSION NARROWED — and the narrowing disables it on every observed run
+
+`tests/` **1220 passed, 2 skipped**. Invariants **passed** — count not cited.
+`cohort_status`: `s5.14` / `00febf`, 108 stamped. **No bump — narrowing an alarm
+changes nothing about which fixtures resolve.** Stage 26 **SUSPENDED**; option 1
+and `EMPTY_CARD_UNTIL` stand.
+
+---
+
+## PART A — THE THIRD CONDITION
+
+### It was not directly implementable, and saying why is the first result
+
+**None of the four suppressible findings is league-scoped:**
+
+| finding | scope |
+| --- | --- |
+| `NO FIXTURES FOUND for the day` | **run-level** |
+| `N fixture scrape(s) attempted, 0 fixtures found in total` | **run-level** |
+| `0 created AND 0 matched` | **source-level** |
+| `N active-season league(s) returned 0 fixtures` | a count, unnamed |
+
+**There is no league in the finding text to test against the covered eight.** So
+the condition could not be read where the other two are read.
+
+**But the LOG names every league that reported a zero**, in three phrasings, and
+on 09-27 it does so **29 times**:
+
+```
+Scraped 0 fixtures from <league>                                   29
+Flashscore: <league> has no fixtures within the requested window   29
+Flashscore returned 0 fixtures for <league>                         0
+```
+
+So `f["zero_fixture_leagues"]` is extracted from the log, and condition 3 tests
+**that set** against the literal. *(measured 2026-09-27)*
+
+### The covered eight, as a literal
+
+```python
+EMPTY_CARD_COVERED_LEAGUES = frozenset({
+    "england/premier-league", "england/championship", "spain/laliga",
+    "germany/bundesliga", "italy/serie-a", "france/ligue-1",
+    "netherlands/eredivisie", "portugal/primeira-liga"})
+```
+
+**Pinned as a literal for the same reason `EMPTY_CARD_UNTIL` is** — a set read
+from config is a switch, and the pin also asserts **`len == 8`**, so the scope
+cannot widen without the grid being re-measured.
+
+### Three conditions, all required, and all three fail closed
+
+| | |
+| --- | --- |
+| 1 | the RUN's date is inside the measured empty window |
+| 2 | the suppression has not expired — gates on **TODAY** |
+| **3** | **EVERY league reporting a zero is one the reference COVERS** |
+
+**`zero_leagues` of `None` or `[]` suppresses nothing.** With no league named,
+nothing is attributable to the reference — and **one uncovered league is enough
+to suppress nothing at all**, because the findings are run-level and cannot be
+split. Seven covered zeros plus one uncovered is not seven-eighths explained.
+
+### THE NARROWING DOES NOT TRIM THE SUPPRESSION. IT DISABLES IT.
+
+**On the real 09-27 log:**
+
+| | |
+| --- | --- |
+| leagues reporting zero | **29** |
+| of those, covered by the reference | **8** |
+| **uncovered** | **21** |
+| **suppression applies** | **FALSE** |
+
+> ### The suppression I shipped an hour ago now suppresses nothing on any observed run. That is the correct outcome, not a regression: 21 of the 29 zero-reporting leagues are outside the evidence, and I cannot suppress what I have not measured.
+>
+> **So the daily discovery noise continues for eleven days**, and the remedy is
+> not a wider suppression — it is a wider reference, or Part C's two lines. **A
+> known blind spot was the alternative on offer; a suppression that fires only
+> where it is justified is better, even when that turns out to be nowhere.**
+
+**Three new tests**, matching the two existing conditions' coverage:
+
+| test | asserts |
+| --- | --- |
+| `test_a_zero_from_a_COVERED_league_is_suppressed` | the positive case still works |
+| `test_a_zero_from_an_UNCOVERED_league_ALARMS` | an unreferenced zero survives |
+| `test_the_covered_set_is_a_LITERAL_not_a_config_read` | `frozenset`, no `config.get`, **and `len == 8`** |
+
+plus `test_ONE_uncovered_league_is_enough_to_suppress_NOTHING`,
+`test_no_leagues_determined_suppresses_NOTHING`, and
+`test_the_extractor_finds_the_zero_leagues_in_a_real_log_shape` — which also
+asserts that a league that **did** produce (`spain/laliga2`, 5 fixtures) is not
+counted as a zero.
+
+---
+
+## PART B — THE DECLARATION'S SCOPE, AMENDED IN PLACE
+
+**Both the entry title and the declaration block now read:**
+
+> ### DISCOVERY — CARD ABSENT (8/30) · RESIDUAL UNMEASURED (22/30, −93%)
+
+**The residual, one population on both sides** — tracked minus the covered eight:
+
+| date | tracked (30) | covered 8 | **uncovered 22** |
+| --- | --- | --- | --- |
+| 09-19 | 116 | 41 | **75** |
+| 09-26 | 25 | 0 | **25** |
+| 09-27 | 5 | 0 | **5** |
+
+**75 → 5 is −93%**, across the same 22 leagues at both ends. *(measured
+2026-09-27)*
+
+**No mechanism.** Outcome 4, and it stays there until Part C reports.
+
+> ### The original line said `CARD ABSENT` and nothing else — a conclusion measured on 8 leagues applied to 30. Third instance this week of a claim outrunning its population, and the first inside a declaration line, where it is hardest to notice because the qualification belongs in the same breath as the verdict.
+
+---
+
+## PART C — HELD FOR THE 09-28 RUN
+
+`AF_LEAGUE_FILTER` and `FS_WINDOW` are committed and proven on the rejection
+path. **The question they must answer separately, for each uncovered league with
+zero fixtures:**
+
+| observed | means |
+| --- | --- |
+| **earliest parsed date beyond the cutoff** | the break signature the covered eight show |
+| **no parsed date at all** | a different failure entirely |
+
+> ### Both produce an identical zero in the tracked count and have nothing else in common. Reported together, the run buys nothing.
+
+**And if any of the 22 shows a provider offering fixtures we reject, that is a
+defect with a size, separate from the break, and it has been running since
+09-21.**
+
+---
+
+## DECLARATION
+
+> ### SUPPRESSION NARROWED
+>
+> | | |
+> | --- | --- |
+> | **covered-set literal** | `EMPTY_CARD_COVERED_LEAGUES` — the 8 above, `frozenset`, `len == 8` pinned |
+> | **new tests** | `test_a_zero_from_a_COVERED_league_is_suppressed` · `test_a_zero_from_an_UNCOVERED_league_ALARMS` · `test_the_covered_set_is_a_LITERAL_not_a_config_read` |
+> | **amended row** | `DISCOVERY — CARD ABSENT (8/30) · RESIDUAL UNMEASURED (22/30, −93%)` |
+> | **observed effect** | **the suppression fires on no run in the record** — 21 of 29 zero leagues are unreferenced |
+> | **Part C** | **held for the 09-28 run** |
+
+*Recorded 2026-09-27. `scripts/ci_audit.py`, `tests/test_empty_card_suppression.py`,
+and two in-place amendments to the 09-27 declaration. No config, schema,
+workflow, dependency or production-data change. `s5.14` / `00febf` unchanged.*

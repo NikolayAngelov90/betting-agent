@@ -646,6 +646,16 @@ def extract(log: str) -> Dict[str, object]:
     # and this tool's own `::error::audit alarm` both render as `##[error]`.
     # Counting them together would make every red run look like it had an
     # absorbed failure.
+    # WHICH LEAGUES REPORTED A ZERO. The suppressible findings are run-level or
+    # source-level and name no league, so the third condition cannot be read
+    # from the finding text — it is read from the log, which does name them.
+    f["zero_fixture_leagues"] = sorted(set(
+        re.findall(r"Scraped 0 fixtures from ([a-z0-9/-]+)", log)
+    ) | set(
+        re.findall(r"Flashscore: ([a-z0-9/-]+) has no fixtures within", log)
+    ) | set(
+        re.findall(r"Flashscore returned 0 fixtures for ([a-z0-9/-]+)", log)
+    ))
     f["steps_nonzero_exit"] = len(re.findall(
         r"##\[error\]Process completed with exit code \d+", log))
     f["error_annotations"] = len(re.findall(r"##\[error\]", log)) - \
@@ -679,6 +689,25 @@ def extract(log: str) -> Dict[str, object]:
 #: which arrives by CALENDAR rather than by repair. This is the first
 #: suppression in this project cleared by time rather than by a fix — which is
 #: exactly why it needs the expiry test and not a judgement call.
+#: THE EIGHT LEAGUES THE REFERENCE ACTUALLY COVERS. A LITERAL, for the same
+#: reason `EMPTY_CARD_UNTIL` is: a set read from config is a switch, and a
+#: switch is what someone forgets.
+#:
+#: THE THIRD CONDITION EXISTS BECAUSE THE SUPPRESSION EXCEEDED ITS EVIDENCE.
+#: `openfootball/football.json` 2026-27 answers for these eight and returns 404
+#: for the other 22 of the 30 configured leagues. Suppressing a discovery zero
+#: across all 30 on the strength of a grid covering 8 would have recorded a
+#: genuine failure in the other 22 as "expected" for eleven days, when nothing
+#: established that it was.
+#:
+#: The residual is large and unmeasured: on 09-19 the uncovered 22 produced 75
+#: of 116 tracked fixtures, on 09-26 all 25, and on 09-27 all 5.
+EMPTY_CARD_COVERED_LEAGUES = frozenset({
+    "england/premier-league", "england/championship", "spain/laliga",
+    "germany/bundesliga", "italy/serie-a", "france/ligue-1",
+    "netherlands/eredivisie", "portugal/primeira-liga",
+})
+
 EMPTY_CARD_FROM = _dt.date(2026, 9, 21)
 EMPTY_CARD_UNTIL = _dt.date(2026, 10, 9)      #: exclusive; the card returns here
 
@@ -699,17 +728,33 @@ def empty_card_window_active(today: _dt.date = None) -> bool:
     return (today or _dt.date.today()) < EMPTY_CARD_UNTIL
 
 
-def partition_empty_card(hits, run_date, today=None):
+def partition_empty_card(hits, run_date, today=None, zero_leagues=None):
     """`(kept, suppressed)`. Suppressed carry the reference cell that excuses them.
 
-    Returns everything as `kept` unless the RUN's date is inside the measured
-    empty window AND the suppression itself has not expired. Two conditions, so
-    an old run audited after 10-09 is not retroactively re-alarmed, and a run
-    inside the window is not suppressed forever.
+    THREE conditions, all required:
+
+      1. the RUN's date is inside the measured empty window
+      2. the suppression itself has not expired (gates on TODAY, so an old run
+         audited after 10-09 is not retroactively re-alarmed)
+      3. EVERY league that reported a zero is one the reference COVERS
+
+    The third was added the same day as the first two, because the suppression
+    was applied to 30 leagues on the strength of a grid covering 8. A discovery
+    zero from any of the other 22 is unreferenced and must still alarm.
+
+    `zero_leagues=None` means the leagues were not determined — which FAILS
+    CLOSED and suppresses nothing, rather than assuming the benign case.
     """
     if not (run_date and EMPTY_CARD_FROM <= run_date < EMPTY_CARD_UNTIL):
         return list(hits), []
     if not empty_card_window_active(today):
+        return list(hits), []
+    # Condition 3. An empty set is not licence either: with no league named,
+    # nothing is attributable to the reference.
+    if not zero_leagues:
+        return list(hits), []
+    _uncovered = sorted(set(zero_leagues) - EMPTY_CARD_COVERED_LEAGUES)
+    if _uncovered:
         return list(hits), []
     kept, supp = [], []
     for h in hits:
@@ -1175,7 +1220,8 @@ def main() -> int:
             _rd = _dt.date.fromisoformat((r.get("startedAt") or "")[:10])
         except ValueError:
             _rd = None
-        hits, _suppressed = partition_empty_card(hits, _rd)
+        hits, _suppressed = partition_empty_card(
+            hits, _rd, zero_leagues=facts.get("zero_fixture_leagues"))
         v = verdict(facts, hits, log)
         # STAGE 19 item 2: per-source discovery figures are printed on EVERY
         # daily-picks row, verdict or not, and belong in the ledger note.
