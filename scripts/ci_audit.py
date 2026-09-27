@@ -34,6 +34,7 @@ a snapshot are noise generators.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import pathlib
 import re
@@ -652,6 +653,75 @@ def extract(log: str) -> Dict[str, object]:
     return f
 
 
+
+# ───────────────────────────────── the empty-card suppression, WITH AN EXPIRY
+
+#: The international break, MEASURED from an external reference on 2026-09-27:
+#: `openfootball/football.json` 2026-27 shows ZERO fixtures in all eight covered
+#: leagues from 2026-09-21 through 2026-10-08, and the card returns on 10-09
+#: with 7 fixtures, then 41 on 10-10. Every one of the eight has its last
+#: fixture on 09-20 and its next on 10-09 or 10-10 — a 19-20 day gap.
+#:
+#: So "zero fixtures" is the EXPECTED state for these dates, and the discovery
+#: alarms would fire daily with a known cause until they were tuned out.
+#:
+#: SUPPRESSING THEM IS SUP-1 UNLESS IT EXPIRES. A guard that silences the alarms
+#: about its own subject would make the first real collapse after 10-09
+#: invisible. So:
+#:
+#:   * the window is a literal date pair, not a flag anyone must remember
+#:   * suppressed findings are still PRINTED, tagged, with the grid cell that
+#:     justifies each — suppressed is not unobserved
+#:   * `test_empty_card_suppression_has_expired` FAILS from 10-09 onward, so
+#:     the suppression deletes itself rather than becoming permanent
+#:
+#: CLR-2: the action that clears the suppressed condition is THE CARD RETURNING,
+#: which arrives by CALENDAR rather than by repair. This is the first
+#: suppression in this project cleared by time rather than by a fix — which is
+#: exactly why it needs the expiry test and not a judgement call.
+EMPTY_CARD_FROM = _dt.date(2026, 9, 21)
+EMPTY_CARD_UNTIL = _dt.date(2026, 10, 9)      #: exclusive; the card returns here
+
+#: Findings whose cause is the measured empty card. Matched as substrings of the
+#: assertion text, and DELIBERATELY NARROW: only the discovery-zero family. A
+#: traceback, a lost message or a skipped step is not explained by an empty card
+#: and must still alarm.
+EMPTY_CARD_SUPPRESSIBLE = (
+    "NO FIXTURES FOUND for the day",
+    "fixture scrape(s) attempted, 0 fixtures found in total",
+    "0 created AND 0 matched",
+    "returned 0 fixtures",
+)
+
+
+def empty_card_window_active(today: _dt.date = None) -> bool:
+    """True while the suppression is live. False from 10-09 — by date, not flag."""
+    return (today or _dt.date.today()) < EMPTY_CARD_UNTIL
+
+
+def partition_empty_card(hits, run_date, today=None):
+    """`(kept, suppressed)`. Suppressed carry the reference cell that excuses them.
+
+    Returns everything as `kept` unless the RUN's date is inside the measured
+    empty window AND the suppression itself has not expired. Two conditions, so
+    an old run audited after 10-09 is not retroactively re-alarmed, and a run
+    inside the window is not suppressed forever.
+    """
+    if not (run_date and EMPTY_CARD_FROM <= run_date < EMPTY_CARD_UNTIL):
+        return list(hits), []
+    if not empty_card_window_active(today):
+        return list(hits), []
+    kept, supp = [], []
+    for h in hits:
+        if any(m in h for m in EMPTY_CARD_SUPPRESSIBLE):
+            supp.append(f"{h}  [SUPPRESSED: reference openfootball 2026-27 shows "
+                        f"0 fixtures in all 8 covered leagues on {run_date}; "
+                        f"card returns {EMPTY_CARD_UNTIL}]")
+        else:
+            kept.append(h)
+    return kept, supp
+
+
 # ───────────────────────────────────────────────── self-calibrating assertions
 
 def assertions(facts: Dict[str, object],
@@ -1099,6 +1169,13 @@ def main() -> int:
         seen_days.add(_day)
         hits = assertions(facts, by_wf[r["workflow"]])
         by_wf[r["workflow"]].append(facts)
+        # The empty card is MEASURED, not assumed, and the suppression expires
+        # on 2026-10-09 by date. Suppressed findings are printed below.
+        try:
+            _rd = _dt.date.fromisoformat((r.get("startedAt") or "")[:10])
+        except ValueError:
+            _rd = None
+        hits, _suppressed = partition_empty_card(hits, _rd)
         v = verdict(facts, hits, log)
         # STAGE 19 item 2: per-source discovery figures are printed on EVERY
         # daily-picks row, verdict or not, and belong in the ledger note.
@@ -1116,6 +1193,9 @@ def main() -> int:
               f"{v:<10} {((_pre + '  ') if _pre else '') + '; '.join(hits)}"[:190])
         for h in hits[1:]:
             print(f"{'':<56} {h[:60]}")
+        # RECORDED, not hidden. Suppressed is not unobserved.
+        for h in _suppressed:
+            print(f"{'':<56} ~ {h[:150]}")
     if listing_warning:
         # Printed AGAIN under the table: the number a reader carries away is
         # the one at the bottom of a long listing, and that is the number the

@@ -19030,3 +19030,159 @@ first ratio in this episode with one population on both sides.
 `src/scrapers/flashscore_scraper.py` gain one log line each;
 `tests/test_discovery_instrumentation.py` is new. No config, schema, workflow or
 production-data change; `s5.14` / `00febf` unchanged.*
+
+---
+
+# EMPTY-CARD OPS — SET. Option 1, suppression expires 2026-10-09.
+
+`tests/` **1214 passed, 2 skipped**. Invariants **passed** — count not cited.
+`cohort_status`: `s5.14` / `00febf`, 108 stamped. **No bump — option 1 changes
+nothing, and the suppression is an audit-side annotation.** Stage 26 remains
+**SUSPENDED**; runner, `TARGET_N`, `CREDIT_CEILING`, window untouched.
+
+---
+
+## THE RETRACTION, FIRST — a retraction is a claim
+
+> ### The calendar reading was correct. I withdrew it on 2026-09-26 on the strength of a ratio whose numerator and denominator ranged over different populations — `tracked / global`, our 30 leagues over world football. It is restored, with a second survival: the external grid, and the 19–20 day gap in all eight covered leagues.
+>
+> **A retraction carries the same burden of proof as the assertion it removes,
+> and mine did not meet it.** The withdrawal was itself an inference from an
+> instrument that could not see the question — the same error as the four
+> explanations it was meant to correct, committed in the act of correcting them.
+
+**REF-1 gains its sharpest instance.** The calendar reading survived the camoufox
+test on 09-26, was retracted the same day on the mismatched ratio, and has now
+survived a second and stronger test. **Two survivals and one unfounded
+retraction — and the retraction is the only one of the three that was never
+tested.**
+
+---
+
+## PART A — OPTION 1: LEAVE IT RUNNING
+
+### And my first arithmetic was wrong, corrected by the grid
+
+I was about to record **0 credits** on the reasoning *no fixtures → no picks →
+no candidates*. **The grid refutes it:** the eight covered leagues are at zero on
+09-26 and 09-27, yet the database holds **25 and 5** matches on those dates.
+**Every one came from the 22 uncovered leagues, and we saw them.** The 22 are not
+idle, so candidates are not zero and neither is the spend.
+
+### The measurement, over all 26 runs in the window
+
+| | | provenance |
+| --- | --- | --- |
+| closing-lines runs, 09-21 → 09-27 | **26** | measured 2026-09-27 |
+| candidate league-requests, summed | **2** — one run, 09-26 14:44 | measured |
+| credits at `CREDITS_PER_REQUEST = 2` | **4** | measured |
+| per day | **≈0.6** | measured |
+| **against H1's 106–168** | **2.4% – 3.8% for the whole 8-day window** | measured |
+| Odds API credits actually claimed | **0 on all 26** — OPS-4's gate refused | measured |
+| API-Football | **52–63 requests/run, every run**, ~50 of it xG backfill on *historical* matches | measured |
+
+**The 4 credits is the COUNTERFACTUAL** — what those runs would have spent after
+the reset, not what they spent. Stated as such because the observed zero comes
+from a gate that will be open on 10-01.
+
+> ### Option 1. The exposure is ~4 credits against a 106–168 requirement. Options 2 and 3 buy under 4% and cost, respectively, trust in a grid covering 8 of 30 leagues, and eleven days of no signal followed by a cold start on the day H1 begins.
+
+**Option 2's specific defect, since it was the tempting one:** skipping discovery
+on reference-empty dates would have skipped **09-26 and 09-27** — the two days the
+22 leagues produced 30 fixtures and 22 picks. **The grid says empty and the card
+was not.** For the 8 leagues it is right; as a gate over 30 it would have
+suppressed real football.
+
+**Nothing to revert. No dated restore needed.**
+
+---
+
+## PART B — THE SUPPRESSION, AND IT DELETES ITSELF
+
+**The measurement it rests on** *(measured 2026-09-27, `openfootball/football.json`
+2026-27)*: zero fixtures in all eight covered leagues from **09-21 through
+10-08**; the card returns **10-09** with 7, then **41** on 10-10.
+
+| requirement | how it is met |
+| --- | --- |
+| explicit end date, expires by itself | `EMPTY_CARD_UNTIL = _dt.date(2026, 10, 9)`, a **literal**. A test pins that it is not read from config — *a switch left on is how SUP-1 happens* |
+| a test that fails after the end date | **`test_the_suppression_has_EXPIRED`** — asserts `today < EMPTY_CARD_UNTIL`. Verified: on 10-08 it passes, on **10-09 it fails** |
+| suppressed findings still recorded | printed as `~ <finding>  [SUPPRESSED: reference openfootball 2026-27 shows 0 fixtures in all 8 covered leagues on <run date>; card returns 2026-10-09]` |
+| the original text survives | asserted — a reader can still grep the ledger for it |
+
+**Its failure message names every symbol to delete and forbids the easy move:**
+*"DELETE the suppression rather than moving the date. If the break was genuinely
+extended, re-measure it against openfootball and record the new grid before
+changing anything."*
+
+### It is deliberately narrow, and that is the safety argument
+
+**Only the discovery-zero family** — `NO FIXTURES FOUND`, `N scrape(s)
+attempted, 0 found`, `0 created AND 0 matched`, `returned 0 fixtures`. **A
+traceback, a lost message or a skipped step is not excused by the calendar**, and
+three tests assert they survive inside the window.
+
+**Two conditions, both required:** the RUN's date must fall in the window *and*
+TODAY must precede the expiry. So a 09-27 run re-audited in November is neither
+re-alarmed nor silently suppressed. **An unparseable run date suppresses nothing
+— fail closed.**
+
+**Live confirmation:** today's and yesterday's daily-picks rows now carry
+`~ football-data.org fixtures: 0 created AND 0 matched … [SUPPRESSED: …]`, while
+`8 team row(s) carry fixtures from more than one DOMESTIC country` stays in the
+verdict — correctly, since an empty card does not explain it.
+
+### CLR-2 — and this one is a first
+
+> ### The action that clears the suppressed condition is THE CARD RETURNING, which arrives by CALENDAR rather than by repair. Every other suppression and alarm in this project cleared when something was fixed or something produced data. This is the first cleared by time.
+>
+> **Which is exactly why it cannot be left to judgement.** An alarm cleared by a
+> fix has someone watching for the fix. An alarm cleared by a date has nobody —
+> so the date is written into a test that fails on it.
+
+---
+
+## PART C — THE 22, DUE ON THE 09-28 RUN
+
+**Both lines are built and both are proven to fire on the rejection path** —
+`AF_LEAGUE_FILTER` and `FS_WINDOW`, seven tests, committed in `236225a`.
+
+**Their results cannot be reported today.** The next daily-picks run is 09-28
+~08:00 UTC; AF's side cannot be exercised locally without spending credits, and
+FS's needs a browser over 30 league pages. **Reporting a zero from either before
+the run would be a zero with no evidence behind it.**
+
+**What they will answer, per league:** which ids the provider returned and we
+rejected, and the earliest parsed kickoff against the cutoff. **If any of the 22
+shows a provider offering fixtures we reject, that is outcome 1 for that league —
+a defect with a size, separate from the break.**
+
+**And the 22 are now known NOT to be uniformly idle**, which raises the prior:
+they produced **25 fixtures on 09-26 and 5 on 09-27** while the covered 8 produced
+none.
+
+### The positive-control rule, third instance
+
+> **A test for absence must first show it can observe presence.** The loguru
+> capture defect demonstrated it two commits ago: `caplog` returned an empty list,
+> which reads identically to *"the line does not fire"*. **Both lines were proven
+> on the rejection path before any zero from them is trusted** — and that is now
+> a precondition of reading Part C's result, not a step already behind us.
+
+---
+
+## DECLARATION
+
+> ### EMPTY-CARD OPS — SET
+>
+> | | |
+> | --- | --- |
+> | **chosen option** | **1 — leave it running** |
+> | **arithmetic** | 2 candidate league-requests over 26 runs = **4 credits**, ≈0.6/day, **2.4–3.8% of H1's 106–168** |
+> | **suppression expiry** | **2026-10-09** |
+> | **expiry test** | **`test_the_suppression_has_EXPIRED`** in `tests/test_empty_card_suppression.py` |
+> | **H1 start condition** | **2026-10-09**, by external reference — not the 10-01 reset |
+
+*Recorded 2026-09-27. `scripts/ci_audit.py` and `tests/test_empty_card_suppression.py`.
+No config, schema, workflow, dependency or production-data change; the runner,
+window and stop condition untouched. `s5.14` / `00febf` unchanged.*
