@@ -19526,3 +19526,230 @@ question asked before the first line, not after the fifth state.
 `tests/test_empty_card_suppression.py`, `tests/test_discovery_instrumentation.py`,
 `tests/test_models.py`. No config, schema, workflow, dependency or
 production-data change. `s5.14` / `00febf` unchanged.*
+
+---
+
+# DISCOVERY — RESIDUAL EXPLAINED. 29 of 30 `none-in-range`, zero `no-rows`.
+
+`cohort_status`: `s5.14` / `00febf`, 108 stamped — **read-only stage, no bump.**
+Stage 26 **SUSPENDED**; option 1 and `EMPTY_CARD_UNTIL` stand.
+
+---
+
+## PART 0 — THE PUSH LANDED, AND THE LAG WAS INCIDENTAL
+
+| | |
+| --- | --- |
+| `origin/main` at 09-27 11:30 | `9225cb8` |
+| runs from 09-27 **15:39** onward | **`aaf43fd`** |
+| `origin/main` now | **`aaf43fd`** — lag fully closed, local == remote |
+| **lag duration** | **≈4 hours** |
+| does `aaf43fd` contain both lines? | **YES** — `git grep -c` **on the sha**: `AF_LEAGUE_FILTER` 1, `FS_DISCOVERY` 1 |
+
+> ### Not structural. The five-day hold on `e8c6f11` was the outlier, not the rule: this one closed in four hours, and the mechanism is simply that pushes happen when they happen. The `headSha` check is what makes the difference observable, and it is now cheap enough to run every time.
+
+**But no production log carries the lines yet.** Today's `daily-picks` had not
+started at 07:22 UTC — the latest is 09-27 08:41 on `8ca91d6` — and
+`AF_LEAGUE_FILTER` / `FS_DISCOVERY` are emitted only by `--update`, which only
+`daily-picks` runs. **Closing-lines and CI Audit produce neither.**
+
+---
+
+## PART A — MEASURED LOCALLY INSTEAD, WITH THE REAL CODE
+
+**Rather than read absent lines as zeros, the measurement was taken directly.**
+`_scrape_fixtures_page()` — the real page scraper — called for each of the 30
+configured leagues, its recorded state passed to `discovery_outcome()` — the real
+emitter. *(measured 2026-09-28 07:29 UTC)*
+
+**Read-only by construction:** `scrape_league_fixtures` is never called, so
+`_save_match` is not reached and **nothing is written to the database**. **Zero
+API credits** — Flashscore is a public page.
+
+**And the harness is validated against the production run**, not trusted:
+`england/premier-league` returns **rows=117**, the same count CI's own log
+recorded on 09-27. *Two false starts got there: `__new__` bypassed `__init__`, so
+`_get_driver()` returned `None` and every league read `rows=None → no-rows`. That
+zero was my harness, and reporting it would have been precisely the
+absent-instrumentation-as-zero the directive forbids.*
+
+### THE STATE GROUPING — the answer to `RESIDUAL UNMEASURED`
+
+| state | count | reading |
+| --- | --- | --- |
+| **`none-in-range`** | **29** | **the break signature the covered eight show** |
+| `kept` | **1** | `spain/laliga2` — not at zero |
+| **`no-rows`** | **0** | — |
+| `off-season` | 0 | (`off_season_leagues` is empty) |
+| ERROR | 0 | |
+
+> ### Not one league is `no-rows`. Every one of the 29 has rows on the page — 27 to 126 of them — and a parseable earliest kickoff in the future. The residual is the same mechanism as the covered eight, measured on the uncovered 22 directly rather than inferred.
+
+**Per league, `earliest_parsed` against a cutoff of 2026-09-29 07:2x:**
+
+| league | rows | earliest | | league | rows | earliest |
+| --- | --- | --- | --- | --- | --- | --- |
+| england/premier-league ★ | 117 | 10-10 | | sweden/allsvenskan | 64 | 10-09 |
+| spain/laliga ★ | 111 | 10-09 | | norway/eliteserien | 72 | 10-09 |
+| germany/bundesliga ★ | 117 | 10-09 | | denmark/superliga | 78 | 10-09 |
+| italy/serie-a ★ | 105 | 10-10 | | **finland/veikkausliiga** | 27 | **10-07** |
+| france/ligue-1 ★ | 117 | 10-09 | | poland/ekstraklasa | 111 | 10-09 |
+| netherlands/eredivisie ★ | 108 | 10-09 | | **romania/liga-1** | 113 | **10-08** |
+| portugal/primeira-liga ★ | 117 | 10-09 | | bulgaria/efbet-league | 112 | 10-10 |
+| england/championship ★ | 109 | 10-09 | | **england/league-one** | 119 | **10-03** |
+| belgium/jupiler-pro-league | 117 | 10-09 | | **england/league-two** | 117 | **10-03** |
+| turkey/super-lig | 117 | 10-09 | | **spain/laliga2** | 122 | **09-28 21:30 · kept=1** |
+| greece/super-league | 112 | 10-10 | | germany/2-bundesliga | 117 | 10-09 |
+| austria/bundesliga | 90 | 10-10 | | italy/serie-b | 120 | 10-09 |
+| switzerland/super-league | 78 | 10-10 | | france/ligue-2 | 117 | 10-09 |
+| scotland/premiership | 106 | 10-10 | | europe/champions-league | 126 | 10-13 |
+| | | | | europe/europa-league | 126 | 10-15 |
+| | | | | europe/conference-league | 108 | 10-15 |
+
+★ = covered by the openfootball reference.
+
+### TWO INDEPENDENT INSTRUMENTS AGREE ON ALL EIGHT
+
+| covered league | openfootball reference | live scraper |
+| --- | --- | --- |
+| premier-league | **10-10** | **10-10** |
+| championship · laliga · bundesliga · ligue-1 · eredivisie · primeira-liga | **10-09** | **10-09** |
+| serie-a | **10-10** | **10-10** |
+
+> ### 8 of 8, from a static JSON reference and a live browser scrape taken a day apart. Neither was available when the four withdrawn explanations were written.
+
+**No defect found.** No uncovered league shows the provider offering fixtures we
+reject: every zero is a page full of future fixtures correctly excluded by a
+one-day window.
+
+---
+
+## AND IT CORRECTS THE H1 START CONDITION — AGAIN, DOWNWARD
+
+**The card does not return on 10-09.** *(measured 2026-09-28)*
+
+| date | first leagues back |
+| --- | --- |
+| **2026-09-28, tonight 21:30** | **`spain/laliga2` — one fixture, already inside the window** |
+| **2026-10-03** | **`england/league-one`, `england/league-two`** |
+| 2026-10-07 | `finland/veikkausliiga` |
+| 2026-10-08 | `romania/liga-1` |
+| 2026-10-09 / 10-10 | everything else, including all eight covered |
+
+> ### "Zero fixtures 09-28 → 10-08" was correct for the eight leagues it was measured on and I then used it as the window for all thirty. Fourth instance this week of a conclusion outrunning its population — and this time the correction came from the 22 I had labelled unmeasured, which is what measuring them was for.
+
+**The suppression's window is nonetheless still correct**, and only because of
+yesterday's narrowing: condition 3 restricts it to the covered eight, whose
+earliest kickoffs are **10-09 and 10-10** — now confirmed by a second, independent
+instrument. **Had the suppression still applied to all 30, `spain/laliga2` playing
+tonight and league-one/two on 10-03 would each have been suppressed as
+"expected".**
+
+**H1's start condition, restated:** first fixtures **10-03**; first card large
+enough to matter **10-09/10-10** (41 fixtures on 10-10 per the reference). The
+requirement is ~23 qualifying fixtures/day, so **10-09 remains the operative date**
+— but it is now a floor with evidence under it rather than the only date in view.
+
+---
+
+## PART B — THE SUPPRESSION WAS NEVER REACHED, AND THAT LOOKS IDENTICAL TO SUPPRESSING NOTHING
+
+**Six CI Audit runs on 09-27 ran `aaf43fd`** — the suppression was live in
+production all day. **It suppressed nothing, and it examined nothing.**
+*(measured 2026-09-28 from run `36359896003`, `--since 2026-09-26`)*
+
+The only `daily-picks` run in scope, `36307004104`:
+
+| | |
+| --- | --- |
+| verdict | **DEGRADED** |
+| `disc` | **`fs=5c/-m fdo=0c/0m af=0c/30m`** |
+| findings printed | **2** — `football-data.org fixtures: 0 created AND …` · `8 team row(s) carry fixtures from more than one DOMESTIC cou…` |
+| **`~` suppressed lines** | **0** |
+| **per-league discovery findings** | **0** |
+
+**Why zero, exactly — two independent reasons, neither of them the suppression:**
+
+1. **`assertions()` builds per-league findings only from `league_discovery`**
+   (`ci_audit.py:990`), which is populated only by `FS_DISCOVERY`
+   (`ci_audit.py:655`). That log was written by `8ca91d6`. **No lines, no
+   findings.**
+2. **`fs=5c` — Flashscore created 5 fixtures.** The source was not at zero, so
+   the source-level discovery assertions did not fire either.
+
+`zero_fixture_leagues`, the retained historical extractor, **generates no
+finding**; it is only condition 3's input at `ci_audit.py:1267`. So
+`partition_empty_card` received a `hits` list containing **no discovery finding at
+all**, iterated it, and returned `(hits, [])`.
+
+> ### And the output for that is byte-identical to the output for "examined 29 findings and suppressed none". Both print zero `~` lines. The instrument cannot tell me which of the two happened — I had to read `assertions()` and the `disc` field to find out.
+
+### VAC-1 — a filter that examined nothing reports what a filter that rejected everything reports
+
+> **A suppression's "0 suppressed" is not evidence that it discriminated.**
+> Ninth instance of the third-state family, and the first found **in the
+> verification step itself**: the check built to confirm the suppression works
+> returns the same answer whether it works, whether it is inert, or whether its
+> input never arrived. **Count the candidates, not just the rejections** — a
+> partition should report the size of the set it was handed.
+
+**Not fixed.** Read-only stage, and it is a defect in the audit's reporting, not
+in the suppression's logic — which the 09-27 replay did exercise at 8 / 21.
+
+### AND THE COUNTER-EVIDENCE WAS IN THE LEDGER LINE THE DAY THE WINDOW WAS DECLARED
+
+| run | date | Flashscore created |
+| --- | --- | --- |
+| `36228748355` | 09-26 | **`fs=18c`** |
+| `36307004104` | 09-27 | **`fs=5c`** |
+
+> ### The source was never at zero. "Empty card 09-28 → 10-08" was written while the audit's own `disc[]` field, on the two runs immediately preceding it, read 18 and 5. **The refutation was not missing — it was in the field built to carry exactly this, printed on every daily-picks row, and I read past it.** GRN-1 said to check the shape of the evidence against the shape of the claim; this is the same failure one level down, on evidence already in hand.
+
+**The narrowing is what saves the suppression.** Restricted to the eight covered
+leagues, whose earliest kickoffs are 10-09/10-10 and now confirmed twice, it is
+correct. **Applied to 30 as first written, it would have suppressed the 18 and the
+5 as "expected".**
+
+---
+
+## DECLARATION
+
+> ### DISCOVERY — RESIDUAL EXPLAINED
+>
+> | | |
+> | --- | --- |
+> | **`none-in-range`** | **29 of 30** — rows 27–126 present, earliest kickoff future |
+> | **`no-rows`** | **0** |
+> | **`kept`** | **1** — `spain/laliga2`, playing tonight |
+> | **`off-season`** | 0 |
+> | defects found **in discovery** | **none** — no provider fixture is being rejected |
+> | cross-validation | **8 of 8** covered leagues' resumption dates agree with openfootball |
+>
+> **The −93% residual is the international break, measured on the 22 directly.**
+> Outcome 4 is closed. `PARTIAL AND SUSTAINED` is retired — it held for two days
+> and was retired by measurement rather than by argument.
+
+> ### PART B — SUPPRESSION UNEXERCISED, AND ONE DEFECT IN THE AUDIT
+>
+> | | |
+> | --- | --- |
+> | CI Audit runs on `aaf43fd` | **6**, all 09-27 |
+> | candidates examined | **0** |
+> | suppressed | **0** |
+> | **distinguishable in the output?** | **NO — VAC-1** |
+>
+> **The suppression is still untested in production**, for the same reason as
+> yesterday: no `daily-picks` log carries `FS_DISCOVERY`. Today's has not started
+> at 07:34 UTC.
+>
+> **Two corrections, both from evidence already held:** the card returns **10-03**,
+> not 10-09; and Flashscore created **18** and **5** fixtures on 09-26/09-27, so
+> the 30-league empty-card premise was refuted by the audit's own `disc[]` field
+> before it was written.
+
+**Provenance:** every figure in Part A is `measured 2026-09-28 07:29 UTC` from the
+real scraper and the real emitter, locally, with **no credits spent and no
+database writes**, validated at one point against CI's own 09-27 log.
+
+*Recorded 2026-09-28. Ledger only. No code, config, schema, workflow, dependency
+or production-data change. `s5.14` / `00febf` unchanged.*
