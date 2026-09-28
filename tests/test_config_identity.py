@@ -51,6 +51,33 @@ def test_ci_builds_its_config_from_the_example():
         "identity must be re-derived")
 
 
+def test_the_config_copy_PRECEDES_the_test_run():
+    """THE ORDERING, pinned. Found 2026-09-28 while checking whether the two
+    gated tests run in CI at all.
+
+    `test_ci_builds_its_config_from_the_example` asserts only that the copy
+    appears SOMEWHERE in SOME workflow. That is not enough: if the copy step
+    ever moved after the pytest step, or pytest were added to a workflow with no
+    copy, the two gated tests would start skipping in CI silently — a guard
+    going quiet with no failure anywhere. Same shape as the workflow-state check
+    placed after `if not runs: return 0`: correct code, unreachable position.
+
+    So for every workflow that runs pytest, the copy must exist and come first.
+    """
+    for wf in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+        text = wf.read_text(encoding="utf-8")
+        if "pytest" not in text:
+            continue
+        i_pytest = text.index("pytest")
+        assert "cp config/config.example.yaml config/config.yaml" in text, (
+            f"{wf.name} runs pytest but never creates config/config.yaml — the "
+            f"local-vs-example tests will SKIP there, silently")
+        i_copy = text.index("cp config/config.example.yaml config/config.yaml")
+        assert i_copy < i_pytest, (
+            f"{wf.name} copies the config AFTER running pytest — the "
+            f"local-vs-example tests skip, and the skip looks like a pass")
+
+
 def test_local_config_is_not_tracked_and_carries_no_authority():
     """`config/config.yaml` is gitignored. It is a convenience file, never a
     specification — which is exactly why letting it define the frozen model was
@@ -66,11 +93,29 @@ def test_example_and_local_agree_on_every_tracked_key():
     exercising a different model from the one production runs and the one the
     experiment measures.
 
-    Skipped rather than failed when there is no local config — a fresh clone or
-    a CI checkout legitimately has none, and there is nothing to diverge.
+    Skipped rather than failed when there is no local config — a fresh clone
+    legitimately has none, and there is nothing to diverge.
+
+    CORRECTED 2026-09-28: this comment used to say "or a CI checkout", which is
+    FALSE. `daily-picks.yml` creates `config/config.yaml` by `cp` from the
+    example at step "Create config from example", 22 lines before it runs
+    pytest in the SAME JOB — so the skip never fires in CI and this test always
+    runs there. It cannot fail there either, because the file it compares
+    against was manufactured from the file it compares to seconds earlier:
+    `example == cp of example` is a tautology. That is VAC-1 in a test — a pass
+    carrying no information, indistinguishable from a pass that verified
+    something.
+
+    THE GUARD IS STILL CORRECTLY PLACED, which is why it is not being changed:
+    the hazard is a developer's divergent local config, and the test runs
+    exactly when a local config exists — that is, exactly when the hazard
+    exists. In CI there is no hazard because CI eliminates it by construction.
+    What must never happen is CITING the CI pass, or a byte-copy local pass, as
+    evidence of agreement. See `test_the_config_copy_PRECEDES_the_test_run`,
+    which pins the ordering this rests on.
     """
     if not pathlib.Path(LOCAL).exists():
-        pytest.skip("no local config/config.yaml (fresh clone or CI)")
+        pytest.skip("no local config/config.yaml (fresh clone)")
 
     a = fingerprint_inputs(Config(LOCAL))
     b = fingerprint_inputs(_example())

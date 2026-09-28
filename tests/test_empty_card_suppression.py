@@ -96,13 +96,13 @@ def test_the_window_closes_by_DATE_and_not_by_anything_else():
 # ── REQUIREMENT 3: suppressed is not unobserved ──────────────────────────────
 
 def test_suppressed_findings_are_RETURNED_not_dropped():
-    kept, supp = ci.partition_empty_card(ZERO_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=COVERED)
+    kept, supp, _cen = ci.partition_empty_card(ZERO_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=COVERED)
     assert kept == []
     assert len(supp) == len(ZERO_HITS), "a finding vanished instead of being tagged"
 
 
 def test_each_suppressed_finding_CARRIES_ITS_JUSTIFICATION():
-    _, supp = ci.partition_empty_card(ZERO_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=COVERED)
+    _, supp, _cen = ci.partition_empty_card(ZERO_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=COVERED)
     for s in supp:
         assert "[SUPPRESSED:" in s
         assert "openfootball 2026-27" in s, "no reference named"
@@ -111,7 +111,7 @@ def test_each_suppressed_finding_CARRIES_ITS_JUSTIFICATION():
 
 
 def test_the_original_finding_text_SURVIVES_inside_the_tag():
-    _, supp = ci.partition_empty_card(
+    _, supp, _cen = ci.partition_empty_card(
         ["NO FIXTURES FOUND for the day — nothing was analysed"],
         IN_WINDOW, today=IN_WINDOW, zero_leagues=COVERED)
     assert supp[0].startswith("NO FIXTURES FOUND for the day"), (
@@ -128,13 +128,13 @@ def test_a_REAL_failure_inside_the_window_is_NOT_suppressed():
     calendar, and suppressing one would be the SUP-1 this design exists to
     avoid.
     """
-    kept, supp = ci.partition_empty_card(REAL_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=COVERED)
+    kept, supp, _cen = ci.partition_empty_card(REAL_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=COVERED)
     assert kept == REAL_HITS, f"a real failure was suppressed: {supp}"
     assert supp == []
 
 
 def test_a_mixed_run_keeps_the_real_and_tags_the_expected():
-    kept, supp = ci.partition_empty_card(
+    kept, supp, _cen = ci.partition_empty_card(
         ZERO_HITS + REAL_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=COVERED)
     assert kept == REAL_HITS
     assert len(supp) == len(ZERO_HITS)
@@ -144,12 +144,12 @@ def test_a_mixed_run_keeps_the_real_and_tags_the_expected():
 
 def test_a_run_BEFORE_the_window_is_not_suppressed():
     """09-20 was the last normal day, with 31 fixtures. Nothing to excuse."""
-    kept, supp = ci.partition_empty_card(ZERO_HITS, BEFORE, today=IN_WINDOW, zero_leagues=COVERED)
+    kept, supp, _cen = ci.partition_empty_card(ZERO_HITS, BEFORE, today=IN_WINDOW, zero_leagues=COVERED)
     assert kept == ZERO_HITS and supp == []
 
 
 def test_a_run_AFTER_the_window_is_not_suppressed():
-    kept, supp = ci.partition_empty_card(ZERO_HITS, AFTER, today=IN_WINDOW, zero_leagues=COVERED)
+    kept, supp, _cen = ci.partition_empty_card(ZERO_HITS, AFTER, today=IN_WINDOW, zero_leagues=COVERED)
     assert kept == ZERO_HITS and supp == []
 
 
@@ -158,7 +158,7 @@ def test_an_in_window_run_audited_AFTER_the_expiry_is_not_re_alarmed():
     eleven days of alarms that were correct to suppress at the time — nor
     suppress them silently, which is why `empty_card_window_active` gates on
     TODAY and the window gates on the RUN's date. Both are required."""
-    kept, supp = ci.partition_empty_card(
+    kept, supp, _cen = ci.partition_empty_card(
         ZERO_HITS, IN_WINDOW, today=dt.date(2026, 11, 1), zero_leagues=COVERED)
     assert kept == ZERO_HITS, "the expired suppression still applied"
     assert supp == []
@@ -166,7 +166,7 @@ def test_an_in_window_run_audited_AFTER_the_expiry_is_not_re_alarmed():
 
 def test_a_run_with_no_parseable_date_is_NOT_suppressed():
     """Fail closed. An unknown date cannot license a suppression."""
-    kept, supp = ci.partition_empty_card(ZERO_HITS, None, today=IN_WINDOW, zero_leagues=COVERED)
+    kept, supp, _cen = ci.partition_empty_card(ZERO_HITS, None, today=IN_WINDOW, zero_leagues=COVERED)
     assert kept == ZERO_HITS and supp == []
 
 
@@ -181,7 +181,7 @@ def test_a_run_with_no_parseable_date_is_NOT_suppressed():
 # 116 tracked fixtures, on 09-26 all 25, and on 09-27 all 5.
 
 def test_a_zero_from_a_COVERED_league_is_suppressed():
-    kept, supp = ci.partition_empty_card(
+    kept, supp, _cen = ci.partition_empty_card(
         ZERO_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=COVERED)
     assert kept == [] and len(supp) == len(ZERO_HITS)
 
@@ -192,7 +192,7 @@ def test_a_zero_from_an_UNCOVERED_league_ALARMS():
     The reference says nothing about Allsvenskan. A zero there is unexplained,
     and suppressing it would be exactly the blind spot this condition removes.
     """
-    kept, supp = ci.partition_empty_card(
+    kept, supp, _cen = ci.partition_empty_card(
         ZERO_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=UNCOVERED)
     assert kept == ZERO_HITS, "an unreferenced zero was suppressed"
     assert supp == []
@@ -202,7 +202,7 @@ def test_ONE_uncovered_league_is_enough_to_suppress_NOTHING():
     """Fail closed on the mixture. Seven covered zeros plus one uncovered is
     not seven-eighths explained — the finding is run-level and cannot be split,
     so the whole of it alarms."""
-    kept, supp = ci.partition_empty_card(
+    kept, supp, _cen = ci.partition_empty_card(
         ZERO_HITS, IN_WINDOW, today=IN_WINDOW,
         zero_leagues=COVERED + ["poland/ekstraklasa"])
     assert kept == ZERO_HITS and supp == []
@@ -228,7 +228,7 @@ def test_no_leagues_determined_suppresses_NOTHING():
     """`None` and `[]` both fail closed: with no league named, nothing is
     attributable to the reference."""
     for z in (None, []):
-        kept, supp = ci.partition_empty_card(
+        kept, supp, _cen = ci.partition_empty_card(
             ZERO_HITS, IN_WINDOW, today=IN_WINDOW, zero_leagues=z)
         assert kept == ZERO_HITS and supp == []
 
@@ -337,7 +337,7 @@ def test_a_mixed_day_is_PARTIALLY_explained():
     """
     f, hits = _hits_from(_fs_line("italy/serie-a"),
                          _fs_line("sweden/allsvenskan"))
-    kept, supp = ci.partition_empty_card(
+    kept, supp, _cen = ci.partition_empty_card(
         hits, IN_WINDOW, today=IN_WINDOW,
         zero_leagues=f.get("zero_fixture_leagues"))
     assert len(supp) == 1 and "italy/serie-a" in supp[0]
@@ -355,7 +355,7 @@ def test_the_09_27_REPLAY_yields_8_suppressed_and_21_alarmed():
     uncovered = [f"unc{i}/league" for i in range(21)]
     lines = [_fs_line(lg) for lg in covered + uncovered]
     f, hits = _hits_from(*lines)
-    kept, supp = ci.partition_empty_card(
+    kept, supp, _cen = ci.partition_empty_card(
         hits, IN_WINDOW, today=IN_WINDOW,
         zero_leagues=f.get("zero_fixture_leagues"))
     assert len(supp) == 8, f"expected 8 suppressed, got {len(supp)}"
@@ -366,7 +366,7 @@ def test_a_league_scoped_finding_is_NOT_cleared_by_the_run_level_rule():
     """Even with every zero-reporting league covered, an uncovered league's own
     finding must alarm. The two rules must not leak into each other."""
     f, hits = _hits_from(_fs_line("sweden/allsvenskan"))
-    kept, supp = ci.partition_empty_card(
+    kept, supp, _cen = ci.partition_empty_card(
         hits, IN_WINDOW, today=IN_WINDOW,
         zero_leagues=sorted(ci.EMPTY_CARD_COVERED_LEAGUES))
     assert supp == []
@@ -381,3 +381,102 @@ def test_ONE_definition_only__no_fourth_phrasing():
     for gone in ("has no fixtures within the requested",
                  "returned 0 fixtures for"):
         assert gone not in code, f"an old phrasing survived: {gone}"
+
+
+# ── VAC-1: THE CENSUS. A zero from a filter must say WHICH zero it is ────────
+#
+# The defect this closes, measured 2026-09-28 on production run 36307004104:
+# the suppression printed no `~` lines and was reported as "fires nowhere". The
+# same output is produced by a filter that evaluated 29 findings and cleared
+# none. Only reading `assertions()` and the `disc` field separated them, which
+# means the report could not answer its own question.
+#
+# Every test below asserts the three cases are DISTINGUISHABLE, not that any
+# particular one occurred.
+
+def _census(hits, run_date, today=IN_WINDOW, zero_leagues=COVERED):
+    return ci.partition_empty_card(
+        hits, run_date, today=today, zero_leagues=zero_leagues)[2]
+
+
+def test_examined_nothing_and_cleared_nothing_are_DIFFERENT_CENSUSES():
+    """THE VAC-1 PROPERTY, stated directly.
+
+    Handed nothing vs handed real findings and clearing none: `suppressed` is 0
+    in both, so `suppressed` alone cannot be the report.
+    """
+    handed_nothing = _census([], IN_WINDOW)
+    handed_real = _census(REAL_HITS, IN_WINDOW)
+
+    assert handed_nothing.suppressed == handed_real.suppressed == 0
+    assert handed_nothing.examined == 0
+    assert handed_real.examined == len(REAL_HITS)
+    assert str(handed_nothing) != str(handed_real), (
+        "the two cases print identically — VAC-1 is not closed")
+
+
+def test_the_census_counts_CANDIDATES_separately_from_examined():
+    """`examined` alone still cannot say the filter had anything to work on.
+
+    The 09-27 production case exactly: two findings examined, NEITHER of them
+    suppressible, so the filter's zero says nothing about the calendar.
+    """
+    c = _census(REAL_HITS, IN_WINDOW)
+    assert c.examined == 3
+    assert c.candidates == 0, "a traceback is not a suppression candidate"
+    assert c.alarmed == 3
+
+    c2 = _census(ZERO_HITS, IN_WINDOW)
+    assert c2.candidates == len(ZERO_HITS)
+    assert c2.suppressed == len(ZERO_HITS)
+    assert c2.alarmed == 0
+
+
+def test_a_filter_that_NEVER_ENGAGED_names_the_reason():
+    """Out of window, expired, and unparseable date are three separate states.
+
+    All three previously returned the same `[]` as an engaged filter.
+    """
+    assert _census(ZERO_HITS, BEFORE).reason == "window"
+    assert _census(ZERO_HITS, None).reason == "run-date-unparseable"
+    assert _census(ZERO_HITS, IN_WINDOW, today=AFTER).reason == "expired"
+    for r in (BEFORE, None):
+        assert _census(ZERO_HITS, r).examined == 0, (
+            "a short-circuit reported findings as examined")
+
+
+def test_an_ENGAGED_filter_carries_no_not_engaged_reason():
+    """The positive control for the reason field: it must be empty when the
+    filter really did run, or `NOT-ENGAGED` becomes decoration."""
+    c = _census(ZERO_HITS, IN_WINDOW)
+    assert c.reason == ""
+    assert "NOT-ENGAGED" not in str(c)
+    assert c.examined == len(ZERO_HITS)
+
+
+def test_engaged_but_handed_nothing_is_its_OWN_state():
+    """`no-findings` is not `window`. The run had nothing to say, which is
+    different from the suppression declining to look."""
+    c = _census([], IN_WINDOW)
+    assert c.reason == "no-findings"
+    assert c.examined == 0 and c.candidates == 0
+
+
+def test_alarmed_plus_suppressed_ACCOUNTS_for_every_examined_finding():
+    """No finding may be counted twice or lost between the two buckets."""
+    for hits in ([], REAL_HITS, ZERO_HITS, REAL_HITS + ZERO_HITS):
+        c = _census(hits, IN_WINDOW)
+        assert c.suppressed + c.alarmed == c.examined, (
+            f"census does not balance for {hits!r}: {c}")
+        assert c.candidates <= c.examined
+
+
+def test_the_census_is_PRINTED_unconditionally_at_the_call_site():
+    """A line that appears only when something was suppressed is a line whose
+    absence means nothing — the AF_LEAGUE_FILTER lesson, applied here."""
+    src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
+    body = src.split("for h in _suppressed:")[1][:400]
+    assert "print(f\"{'':<56} {_census}\")" in body, (
+        "the census is not printed after the suppressed block")
+    assert "if _census" not in body and "if _suppressed" not in body, (
+        "the census print is gated — then its absence is ambiguous again")

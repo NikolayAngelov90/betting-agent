@@ -19753,3 +19753,216 @@ database writes**, validated at one point against CI's own 09-27 log.
 
 *Recorded 2026-09-28. Ledger only. No code, config, schema, workflow, dependency
 or production-data change. `s5.14` / `00febf` unchanged.*
+
+---
+
+# PRODUCTION READ — BLOCKED. Suppression EXECUTED, and yesterday's Part B was wrong.
+
+`tests/` **1239 passed, 0 skipped** (+8). Invariants **passed** — count not cited.
+`cohort_status`: `s5.14` / `00febf`, 108 stamped, **fingerprint unchanged, no bump**
+— a reporting counter, two comments and three tests. Stage 26 **SUSPENDED**.
+
+---
+
+## PART A — BLOCKED. THERE IS NO 09-28 RUN.
+
+*(measured 2026-09-28 08:01 UTC)*
+
+| | |
+| --- | --- |
+| latest `daily-picks` | **`36307004104`, 09-27 08:41, `8ca91d6`** |
+| a 09-28 run | **does not exist** |
+| cron | **`0 3 * * *`** — 03:00 UTC |
+| **lag** | **5h01m and counting** |
+
+**And that lag is this pipeline's normal delivery, not an anomaly:**
+
+| run date | started | late by |
+| --- | --- | --- |
+| 09-25 | 08:19 | 5h19m |
+| 09-26 | 08:05 | 5h05m |
+| 09-27 | 08:41 | 5h41m |
+
+> ### `AF_LEAGUE_FILTER` for the 30 is still unmeasured in production, and that is the one side of the boundary that has never been measured there. **It is not a zero.** The probe cannot substitute: it bypasses `scrape_league_fixtures`, and API-Football is credit-bearing, so the comparison the directive asks for requires the run.
+
+---
+
+## PART B — SUPPRESSION EXECUTED. THE COUNTER REFUTED MY OWN CONCLUSION.
+
+### The three numbers, measured on the real runs
+
+*(measured 2026-09-28, `ci_audit --since 2026-09-26 --until 2026-09-28`)*
+
+| run | date | census |
+| --- | --- | --- |
+| `36228748355` | 09-26 | **`examined=2 candidates=1 suppressed=0 alarmed=2`** |
+| `36307004104` | 09-27 | **`examined=2 candidates=1 suppressed=0 alarmed=2`** |
+
+**The filter engaged. It was handed two findings. One was a suppression
+candidate. It evaluated condition 3 against it and DECLINED** — correctly,
+because 21 uncovered leagues reported zeros.
+
+> ### Yesterday I declared the suppression "was never reached" and "examined nothing". **That was wrong: `candidates=1`, not 0.** I had just finished establishing that the output could not distinguish "examined 29, cleared none" from "examined nothing" — and then resolved that ambiguity by reading the code and asserting an answer, instead of building the counter. **The inference was wrong in exactly the direction the missing counter would have corrected.**
+>
+> **VAC-1 applied to itself.** Naming an ambiguity does not resolve it, and the
+> reading that follows the naming is not more reliable for having named it.
+
+### The fix, shipped — one counter, one source of truth
+
+```python
+class SuppressionCensus(NamedTuple):
+    examined: int      # findings the partition evaluated; 0 on short-circuit
+    candidates: int    # of those, the ones ELIGIBLE for suppression
+    suppressed: int
+    alarmed: int
+    reason: str = ""   # why examined is 0, when it is
+```
+
+`partition_empty_card` now returns `(kept, suppressed, census)`.
+`_is_suppression_candidate()` is used **by** the partition, so the census cannot
+drift from the decision it describes — **a second implementation of that
+predicate would be the three-phrasings habit again.**
+
+**Five states, now distinct where all five printed `[]` before:**
+
+| state | printed |
+| --- | --- |
+| out of window | `NOT-ENGAGED:window` |
+| expired | `NOT-ENGAGED:expired` |
+| run date unparseable | `NOT-ENGAGED:run-date-unparseable` |
+| engaged, handed nothing | `NOT-ENGAGED:no-findings` |
+| engaged | no reason — `examined>0` |
+
+**`candidates` is the number that mattered**, and neither `examined` nor
+`suppressed` would have caught my error: `examined=2` alone still reads as "the
+filter saw only unrelated findings".
+
+**8 new tests.** The central one asserts the two cases **print differently**
+rather than asserting either occurred. Plus: the census balances
+(`suppressed + alarmed == examined`) on every input, an engaged filter carries
+**no** `NOT-ENGAGED` reason (the positive control for the reason field), and the
+print is **ungated** at the call site.
+
+**One cost, recorded rather than traded away:** the census prints on every run,
+so a clean audit now carries ~15 `NOT-ENGAGED:no-findings` lines. **Kept
+unconditional deliberately** — the `AF_LEAGUE_FILTER` lesson is that a line
+appearing only in the interesting case is a line whose absence means nothing, and
+tidiness is not worth reopening that.
+
+---
+
+## PART C — CONFIG GUARD COVERED. THE PREMISE WAS INVERTED.
+
+**The two tests do not skip in CI. They run, and they cannot fail.**
+
+| | |
+| --- | --- |
+| `daily-picks.yml:147` | `cp config/config.example.yaml config/config.yaml` |
+| `daily-picks.yml:171` | `python -m pytest tests/ -v --tb=short` |
+| same job, sequential steps | **yes** — 22 lines apart |
+
+So `Path(LOCAL).exists()` is **True** in CI, the skip never fires, and the
+comparison is **`example` against a `cp` of `example`** — a tautology.
+
+- **the skip is file-presence based:** confirmed,
+  `if not pathlib.Path(LOCAL).exists(): pytest.skip(...)`
+- **its stated reason was false and is corrected in place.** It read "a fresh
+  clone **or a CI checkout** legitimately has none". The CI clause is wrong, and
+  it is what made "never runs in CI" plausible to both of us.
+- **the mechanism has real power** — positive control: `betting.kelly_fraction`
+  0.25 → 0.99 moves the fingerprint **`00febf` → `65fea1`** and
+  `fingerprint_inputs` names the differing key. A genuine divergence is caught.
+
+### AND MY OWN CITATION YESTERDAY WAS VACUOUS
+
+My local `config/config.yaml` is **sha256-identical** to
+`config.example.yaml` — `B10DFCA2…04EB24`, both 398 lines *(measured
+2026-09-28)*. So in `0d1c68b` I wrote that the two tests "PASSED: the local file
+does not diverge on any TRACKED_KEY, so the probe read the same model production
+runs" — **true, and a tautology presented as a measurement.** VAC-1 again, in
+the ledger, one commit old.
+
+### NO FIXTURE CONFIG IS NEEDED, AND NOTHING SHOULD BE COMMITTED
+
+**The guard is correctly placed.** The hazard is a developer's divergent local
+config — the Stage 10.1 defect. The test runs **exactly when a local config
+exists**, which is exactly when the hazard exists. CI's vacuity is harmless
+because **CI eliminates the hazard by construction** rather than by testing for
+it. Committing a fixture config would add a third configuration to a project
+whose defect was having two.
+
+**And model identity IS guarded in CI, by an ungated test:**
+`test_the_deployed_config_produces_the_frozen_model_version` reads the *example*,
+never skips, and pins `00febf`.
+
+### THE REAL GAP, AND IT IS CLOSED
+
+`test_ci_builds_its_config_from_the_example` asserted only that the copy appears
+**somewhere in some workflow**. Nothing pinned that it happens **before** pytest.
+Move that step down, or add pytest to a workflow without it, and the two gated
+tests **start skipping in CI silently** — a guard going quiet with no failure
+anywhere.
+
+> ### Same shape as the workflow-state check placed after `if not runs: return 0`: correct code, unreachable position. Third instance.
+
+`test_the_config_copy_PRECEDES_the_test_run` added, with the positive control
+run on all three failure modes: reversed order **FAILS**, pytest-without-copy
+**FAILS**, no-pytest **skips**.
+
+---
+
+## PART D — THE TWO RULES
+
+> ### A claim contradicted by a field in your own output has no measurement cost and no discovery step. It fails only on READING, which makes it more expensive than a missing measurement, not less.
+>
+> `disc[fs=18c]` and `disc[fs=5c]` were printed on the two runs immediately
+> preceding the entry that declared the card absent across 30 leagues.
+
+> ### VAC-1 — ninth instance of the third-state family and the first INSIDE the verification step. The audit carries the defect class it exists to find. A conclusion drawn from a vacuous filter is not weak evidence; it is NO evidence, and it reads identically to strong evidence.
+
+**Both rules were violated again inside this stage**, which is the argument for
+writing them down: the vacuous-local-config citation is rule 2, and "the
+suppression was never reached" is rule 1 — `candidates` would have contradicted
+it, and I wrote the claim before building the field.
+
+### AMENDMENTS TO YESTERDAY'S ENTRY (`0d1c68b`)
+
+| claim | status |
+| --- | --- |
+| "the narrowing disabled the suppression" | **supported by the replay, unsupported in production** — the signal could not distinguish disabled from unreached |
+| "the suppression was never reached / examined nothing" | **REFUTED** — `examined=2 candidates=1` on both 09-26 and 09-27 |
+| "they PASSED, so the local file does not diverge" | **VACUOUS** — the local file is a byte-copy of the example |
+
+**A retraction is a claim and carries the same burden as the assertion it
+removes** — so all three are recorded here with the measurement, not quietly
+dropped.
+
+---
+
+## DECLARATION
+
+> ### PRODUCTION READ — BLOCKED
+> No 09-28 `daily-picks` run exists at 08:01 UTC. **Lag 5h01m** against a 03:00
+> cron, consistent with 5h05m–5h41m on the three preceding days. **Not CLEAN and
+> not DEFECTS FOUND — unrun.** `AF_LEAGUE_FILTER` for the 30 stays unmeasured.
+
+> ### SUPPRESSION EXECUTED
+> `examined=2 candidates=1 suppressed=0 alarmed=2` on both 09-26 and 09-27. It
+> engaged, evaluated a candidate, and declined for cause. **Yesterday's
+> "never reached" is refuted by the counter built to test it.**
+
+> ### CONFIG GUARD COVERED
+> The two tests run in CI and cannot fail there; the guard's coverage is on
+> developer machines, where the hazard is. **Premise inverted, skip rationale
+> corrected, ordering pinned. No fixture config needed.**
+
+> ### DEFECTS FOUND — 3, all closed
+> 1. **VAC-1 in `ci_audit`** — no counter for what the filter examined → census
+> 2. **false CI clause** in the skip rationale → corrected
+> 3. **copy/pytest ordering unpinned** → test added with positive control
+>
+> Plus **two self-corrections** in `0d1c68b`, both recorded above.
+
+*Recorded 2026-09-28. `scripts/ci_audit.py`, `tests/test_empty_card_suppression.py`,
+`tests/test_config_identity.py`. No config, schema, migration, workflow,
+dependency or production-data change. `s5.14` / `00febf` unchanged.*

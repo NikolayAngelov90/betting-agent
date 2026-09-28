@@ -41,7 +41,7 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 LEDGER = pathlib.Path("docs/ci-audit-ledger.md")
 LOGS = pathlib.Path("ci_logs")
@@ -748,8 +748,58 @@ def empty_card_window_active(today: _dt.date = None) -> bool:
     return (today or _dt.date.today()) < EMPTY_CARD_UNTIL
 
 
+class SuppressionCensus(NamedTuple):
+    """VAC-1's counter. The OUTCOME of a filter cannot report that it ran.
+
+    `suppressed=0` was byte-identical for "evaluated 29 findings and cleared
+    none" and "was handed nothing and evaluated nothing" — the 09-27 production
+    run printed the second and read as the first, and only reading
+    `assertions()` and the `disc` field separated them.
+
+    So the census reports the SIZE OF THE SET THE FILTER WAS HANDED, not just
+    what it rejected:
+
+      examined    findings the partition evaluated; 0 when it short-circuited
+      candidates  of those, the ones ELIGIBLE for suppression (a league-scoped
+                  discovery finding, or a run-level suppressible one). This is
+                  the number that says whether the filter had anything to work
+                  on at all.
+      suppressed  cleared
+      alarmed     examined - suppressed
+      reason      why `examined` is 0, when it is: the filter did not engage
+                  (window/expired) or was handed no findings
+
+    PRINTED UNCONDITIONALLY, for the AF_LEAGUE_FILTER reason: a line that
+    appears only in the interesting case is a line whose absence means nothing.
+    """
+
+    examined: int
+    candidates: int
+    suppressed: int
+    alarmed: int
+    reason: str = ""
+
+    def __str__(self) -> str:
+        return (f"suppression[examined={self.examined} "
+                f"candidates={self.candidates} suppressed={self.suppressed} "
+                f"alarmed={self.alarmed}"
+                + (f" NOT-ENGAGED:{self.reason}]" if self.reason else "]"))
+
+
+def _is_suppression_candidate(h: str) -> bool:
+    """Eligible for suppression at all — league-scoped, or run-level suppressible.
+
+    Kept next to the partition and used BY it, so the census cannot drift from
+    the decision it describes. A second implementation of this predicate would
+    be the three-phrasings habit again.
+    """
+    return bool(_LEAGUE_IN_FINDING.search(h)) or \
+        any(m in h for m in EMPTY_CARD_SUPPRESSIBLE)
+
+
 def partition_empty_card(hits, run_date, today=None, zero_leagues=None):
-    """`(kept, suppressed)`. Suppressed carry the reference cell that excuses them.
+    """`(kept, suppressed, census)`. Suppressed carry the reference cell that
+    excuses them; the census reports what was EXAMINED — see `SuppressionCensus`.
 
     THREE conditions, all required:
 
@@ -765,10 +815,15 @@ def partition_empty_card(hits, run_date, today=None, zero_leagues=None):
     `zero_leagues=None` means the leagues were not determined — which FAILS
     CLOSED and suppresses nothing, rather than assuming the benign case.
     """
+    # SHORT-CIRCUITS EXAMINE NOTHING, and say so. Before the census these
+    # returned the same `[]` as a filter that evaluated every finding and
+    # cleared none.
+    _cand = sum(1 for h in hits if _is_suppression_candidate(h))
     if not (run_date and EMPTY_CARD_FROM <= run_date < EMPTY_CARD_UNTIL):
-        return list(hits), []
+        return list(hits), [], SuppressionCensus(
+            0, _cand, 0, 0, "window" if run_date else "run-date-unparseable")
     if not empty_card_window_active(today):
-        return list(hits), []
+        return list(hits), [], SuppressionCensus(0, _cand, 0, 0, "expired")
     kept, supp = [], []
     for h in hits:
         # CONDITION 3, PER FINDING. A league-scoped finding carries its own
@@ -796,7 +851,12 @@ def partition_empty_card(hits, run_date, today=None, zero_leagues=None):
                         f"card returns {EMPTY_CARD_UNTIL}]")
         else:
             kept.append(h)
-    return kept, supp
+    return kept, supp, SuppressionCensus(
+        examined=len(hits), candidates=_cand, suppressed=len(supp),
+        alarmed=len(kept),
+        # ENGAGED BUT HANDED NOTHING is its own state, and it is the one the
+        # 09-27 run was in. Distinguished from `examined>0, suppressed=0`.
+        reason="" if hits else "no-findings")
 
 
 # ───────────────────────────────────────────────── self-calibrating assertions
@@ -1263,7 +1323,7 @@ def main() -> int:
             _rd = _dt.date.fromisoformat((r.get("startedAt") or "")[:10])
         except ValueError:
             _rd = None
-        hits, _suppressed = partition_empty_card(
+        hits, _suppressed, _census = partition_empty_card(
             hits, _rd, zero_leagues=facts.get("zero_fixture_leagues"))
         v = verdict(facts, hits, log)
         # STAGE 19 item 2: per-source discovery figures are printed on EVERY
@@ -1285,6 +1345,10 @@ def main() -> int:
         # RECORDED, not hidden. Suppressed is not unobserved.
         for h in _suppressed:
             print(f"{'':<56} ~ {h[:150]}")
+        # VAC-1. UNCONDITIONAL: printed whether or not anything was suppressed,
+        # so that "the filter cleared nothing" and "the filter was handed
+        # nothing" are different lines rather than the same absence.
+        print(f"{'':<56} {_census}")
     if listing_warning:
         # Printed AGAIN under the table: the number a reader carries away is
         # the one at the bottom of a long listing, and that is the number the
