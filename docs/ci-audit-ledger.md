@@ -20888,3 +20888,273 @@ recurrence it threatened, not the day it took.
 `timeout-minutes` + the rationale), `src/models/model_version.py` (`CODE_REVISION`
 + its entry), `tests/experiment_pins.py` (both pins), `tests/test_schedule_margin.py`
 (new). No predicate relaxed, no schema, migration or production-data change.*
+
+---
+
+# CONTAMINATION SIZED — 510 rows, one unguarded consumer, and it is the evidence bar
+
+`tests/` **1636 passed, 0 failed** (1619 → 1636; +17). Invariants **passed** —
+count not cited. `cohort_status`: **`s5.15` / `8da2fd`, 0 picks stamped, no bump**
+— Part A changed **no predicate**, deliberately. Stage 26 **SUSPENDED**.
+
+---
+
+## PART A1 — THE POPULATION. 510, and the sets are equal.
+
+*(measured 2026-10-01, PostgreSQL, dialect asserted)*
+
+| | |
+| --- | --- |
+| rows with the sub-second signature | **510** |
+| Stage 19's marked count | **510** — **the sets are EQUAL** |
+| carrying `training_exclusion_reason` | **510 / 510**, all `phantom_kickoff_now_stamp` |
+| `match_date` span | 2026-02-28 09:09 → **2026-08-26 10:33** |
+| already have a result | **503** |
+| still `is_fixture` | 7 — **all in the past** |
+| largest concentration | `finland/veikkausliiga` **117**, then efbet-league 39, liga-1 32 |
+
+**The marking is complete.** No sub-second row is unmarked, and no marked row
+lacks the signature.
+
+### Is the signature sufficient? The dangerous direction, tested independently
+
+A phantom is `datetime.now()` at scrape time, so its `match_date` should sit
+beside its `created_at` — **a detector that does not use microseconds at all.**
+
+| | |
+| --- | --- |
+| phantoms within 24h of `created_at` | **510 / 510** (median gap **8 min**, min 0.03h, max 24h) |
+| rows near `created_at` with **whole-second** `match_date` | **0** |
+| sub-second rows that are **not** phantoms | **0** |
+
+> ### The two detectors agree on all 510, and the independent one finds NO whole-second phantom. **That bounds the dangerous direction; it does not eliminate it.** A phantom that was both whole-second *and* far from its `created_at` would be invisible to both tests, and nothing here can rule that out — `datetime.now()` lands on a whole second about once in a million calls, which is a probability, not a proof.
+
+**Mark, never delete:** the 510 stay as evidence of the defect.
+
+---
+
+## PART A2 — THE CENSUS. One consumer needs it, and it is the wrong one.
+
+**The single predicate already exists:** `MatchHistory._base_filter()`
+([match_history.py:116-118](src/data/match_history.py#L116-L118)), and it already
+carries a documented convention for paths that deliberately do *not* gate:
+
+```
+# training-exclusion: NOT GATED (<populates|repairs|resolves>)
+```
+
+| class | consumers | applies? | would contamination change the result? |
+| --- | --- | --- | --- |
+| **via the shared accessor** | `poisson_model`, `elo_system`, `feature_engineer:285` — all through `get_completed_matches` | **YES** | **no** |
+| **inline predicate** | `feature_engineer` ×7, `team_features` ×3, `h2h_features`, `clean_dataset`, `betting_agent:954/3592`, `apifootball_scraper:2510`, `match_history`, `history_mirror`, `fixture_plausibility`, `h1_collection_check:231`, `mark_implausible_attributions` | **YES** | **no** |
+| **ungated, MARKED** | `betting_agent:2670` (resolves), `apifootball_scraper` ×4 (populates), `flashscore_scraper:659` (populates) | **NO, by design** | **correctly not** — you must be able to find a phantom row in order to repair it |
+| **future-fixture operational** | `theodds_scraper`, Flashscore discovery, `injury_scraper`, `weather_service`, `preload_cache`, `capture_closing_lines`, `match_briefing`, `value_calculator`, `candidate_io` | NO | **NO — BOUNDED.** Every phantom is in the past (latest 2026-08-26), so no future-window query can see one |
+| **no DB access** | `baseline.py`, `clv.py` — take rows from the caller | n/a | gating is the caller's job |
+| **gated by inheritance** | `run_clean_baseline.py` → `clean_dataset.load_from_db` | **YES** | **no** |
+| **unmarked but bounded** | `coverage_checks.py:68-76` — forward window | NO | no, but it **should carry the marker** |
+| **THE GAP** | **`scripts/run_baseline.py:50-58`** | **NO, and unmarked** | **YES** |
+
+> ### THE BOUND THAT SETTLES MOST OF THE LIST: every phantom's `match_date` is in the past, so the entire operational path — pricing, picks, discovery, closing-line capture, injury and weather preload, briefings — **cannot see one.** That is measured, not argued: 0 of 510 have `match_date >= 2026-10-01`.
+
+### The gap, and why it is the worst possible one
+
+`run_baseline.py` filters `is_fixture`, `home_goals`, `away_goals` and
+`match_date` — **and not `training_exclusion_reason`**, with no NOT-GATED marker.
+It is the script the project's own standing rule makes **the evidence bar every
+model parameter change must clear.**
+
+| `since` | population | phantoms | corrupt-identity | **excluded admitted** |
+| --- | --- | --- | --- | --- |
+| 2022-01-01 | 41,830 | 503 | 81 | **1.40%** |
+| 2026-01-01 | 7,639 | 503 | 15 | **6.78%** |
+| **2026-06-01** | 2,600 | 448 | 2 | **17.31%** |
+
+> ### And it is not merely noise. `walk_forward` sorts and splits train/test **by `match_date`** ([baseline.py:230-237](src/evaluation/baseline.py#L230-L237)), so a fabricated date does not add a bad row to the right fold — **it puts a real match in the wrong fold.** On a recent window that is up to one row in six.
+
+**NOT FIXED, and the reason is not caution.** Adding the predicate makes every
+baseline figure recorded to date non-comparable with every figure recorded after.
+That is a decision about the experimental record eight days before H1, not a bug
+fix. A test now **pins the gap as a known defect** and fails when it is closed,
+so it can neither be carried silently nor forgotten.
+
+### PART A4 — no new predicate, and the count is one
+
+**A4's condition is not met.** Exactly **one** consumer needs the exclusion added
+(`run_baseline.py`) and one needs a marker (`coverage_checks.py`). The single
+definition already exists, so building another would be **THE HABIT's seventh
+instance** — which is what A4 exists to prevent. The fix, when taken, is a
+one-line import of `_base_filter`, not a new abstraction.
+
+---
+
+## PART A3 — WHAT WAS MEASURED ON CONTAMINATED DATA
+
+**Independent source for every re-measured figure: `openfootball/football.json`
+2026-27 — fetched live, free, and not the data that produced any of these
+numbers.**
+
+| figure | verdict | evidence |
+| --- | --- | --- |
+| **earliest kickoff** | **CHANGED 10:04 → 10:15** | `Sparta Rotterdam v Feyenoord` 2026-08-09: **12:15 CEST** in openfootball, **10:15 UTC** here — exactly −2h, and it is **openfootball's own earliest eredivisie kickoff of the season**. The PL matchdays 2026-08-22 and 09-12 agree **fixture-for-fixture at −1h** (BST). |
+| **latest kickoff** | **CHANGED 19:30 → 19:45** | Mon 09-14, Wed 09-16 |
+| **weekday distribution** | **CHANGED** | Sat/Sun earliest **10:15**; **Mon–Fri 14:30–15:00**. The contaminated rows flattened every weekday toward ~10:1x and hid that **the deadline is weekend-only** |
+| `FS_DISCOVERY` cutoff comparisons | **UNCHANGED** | the scraper parses the page and compares to `datetime.now()`; **it never reads `matches`**, so DB contamination cannot reach it |
+| **Stage 17's 53.5% created-after-kickoff** | **CHANGED, but NOT by phantoms** | now **91.8%, mean +638 days**. Excluding phantoms moves it **−0.06 pp** |
+| the 510 rows' **true** kickoff times | **CANNOT BE RECOMPUTED** | never recorded; unrecoverable without re-scraping. They stay marked, as evidence |
+
+> ### Stage 19 suspected the 53.5% was "partly this defect" and never separated the two. **It is separated now, and the suspicion is refuted: the phantoms account for 0.06 of the 38.3 percentage points.** The figure moved because the POPULATION grew — historical backfill loads 2022-24 matches years after their kickoff, which is also why the mean went +14 days → +638. The comment at [models.py:241](src/data/models.py#L241) is **stale, not wrong about its own population.**
+
+**And the figure I "verified exactly" last stage was verified against the
+contamination that produced it.** Rule 1, in its own words. The margins in the
+`CLOCK MOVED` entry already used **10:15** and are unaffected.
+
+---
+
+## PART B — TRIGGER MEASURED
+
+`2026-11-06` is now **never reportable alone**. The audit computes the margin
+from the live series **every day**, printed whether it alarms or not.
+
+```
+schedule_margin[n=… window=28d delay max=… mean+3sd=…
+                | margin max=…m 3sd=…m binding=…m threshold=30m]
+```
+
+| | |
+| --- | --- |
+| deadline | **10:15 UTC**, the **weekend** earliest kickoff, measured and independently verified |
+| trailing window | **28 days**, stated not fitted |
+| margin reported | **`max` AND `mean+3sd`**; `binding` is the **worse** of the two |
+| **threshold** | **30 minutes** |
+| remedy on file | **weekend-specific cron** — Mon–Fri binds at 14:30, not 10:15 |
+
+**The threshold is justified on its own terms, not fitted to the current value:
+30 min is LESS THAN ONE SD of the observed delay (36.7 min), so at the threshold
+a single one-sigma-late day already misses the card.** Declared with the current
+margin known to be +94, and deliberately not derived from it.
+
+**The candidate instrument is recorded now so the decision has an option when it
+fires.** The deadline is weekend-only, so **a weekend-specific schedule is far
+cheaper than splitting a 31-step workflow**, and Mon–Fri margin is currently
+being spent against a constraint that does not exist on those days. The split is
+the second option, not the first.
+
+**Live output today:**
+
+```
+schedule_margin[UNEVALUATED: no runs under the current cron yet]
+```
+
+**Which is correct and is the point** — see Part D.
+
+---
+
+## PART C — TOOL RECONCILED
+
+**The ledger is unambiguous and the tool was the stale one.** `s5.14`'s own entry
+retired the rule: *"It evaluates a MUTABLE COUNT — s5.13 held 0 picks at the
+amend and 16 within the hour, so ee60cd labels two configurations. Always
+bump."* `cohort_status.py` went on printing `VERDICT: AMEND` for **two weeks**.
+
+> ### An executable giving retired advice is a stale reason string that RUNS — worse than a stale comment, because it is consulted at the moment the decision is made and it answers with authority. Found while taking the s5.15 bump, by reading the output I had just relied on.
+
+**Corrected:** one verdict, **BUMP**. The member count is still measured and still
+reported — it is useful context — but it no longer selects anything. A test pins
+the tool's vocabulary against the documented retirement so the two cannot diverge
+silently again.
+
+**And a second defect in the same tool, fixed with it:** it fingerprinted
+`config/config.yaml` — **the gitignored local file that carries no authority.**
+That is the Stage 10.1 defect sitting in the tool that gates cohort decisions. It
+now reads `config.example.yaml`, the config CI deploys. Byte-identical today, so
+no reported value changes; the point is that it stays so **by construction rather
+than by luck.**
+
+---
+
+## PART D — THE SERIES SPLIT, CAUGHT PROSPECTIVELY
+
+| series | cron | **n** |
+| --- | --- | --- |
+| **closed** | `0 3 * * *` | **32** |
+| **open** | `0 0 * * *` | **0** — first run lands tomorrow |
+
+Membership is by **each run's own `headSha`**, and a run under a different cron is
+**excluded, never rescaled**. The collector says so in code and names why:
+
+```python
+if by_sha[sha] != cron_now:
+    continue                      # a different schedule: NOT comparable
+```
+
+Today's audit prints `UNEVALUATED: no runs under the current cron yet` rather
+than reporting the 32 runs from the retired schedule as if they measured the new
+one.
+
+> ### THE FIRST TIME IN THIS PROJECT A KNOWN ERROR CLASS WAS PREVENTED INSTEAD OF CORRECTED. `390a4be` was a 09:37 run read as an 11h30m outlier of a 03:00 series, and it was caught *after* the figure had been published. This time the guard was written before the two populations could touch — and the first thing it did was refuse to answer.
+
+**A refusal is the right first output.** The margin is `UNEVALUATED`, which is
+not `safe`: the workflow carrying no single `m h * * *` cron also reports
+UNEVALUATED, and an empty series never sets `alarm`.
+
+---
+
+## CARRY-OVERS
+
+| item | status |
+| --- | --- |
+| credit balance | stays **`assumed`**; **not closed** until a run with `--update` measures it |
+| `closing-lines` | stays **`CENSORED`**; not compared to the daily crons |
+| `TARGET_N` / `CREDIT_CEILING` | unchanged — **no enforced stop in the runner**. Eight days out |
+| `run_baseline.py`'s exclusion | **OPEN, pinned by a failing-on-fix test** |
+| `coverage_checks.py` marker | **OPEN** — ungated and bounded, but unmarked |
+| the 510 phantoms | **retained**, marked, never deleted |
+
+---
+
+## DECLARATION
+
+> ### CONTAMINATION SIZED
+> **510 rows**, equal to Stage 19's marked set, all carrying
+> `phantom_kickoff_now_stamp`, spanning 2026-02-28 → 2026-08-26. An independent
+> `created_at`-proximity detector finds **0** whole-second phantoms — the
+> dangerous direction is **bounded, not eliminated**.
+>
+> **Census: ONE consumer needs the exclusion and it is
+> `scripts/run_baseline.py`** — the evidence bar for every model change —
+> admitting **1.40% / 6.78% / 17.31%** excluded rows by window, with
+> `walk_forward` assigning folds **by the fabricated date**. Not fixed: closing
+> it invalidates every baseline figure to date. **Pinned by a test that fails
+> when it is closed.**
+>
+> **No new predicate.** `MatchHistory._base_filter()` already is the single
+> definition, and one consumer does not meet A4's condition.
+>
+> **Figures that change:** earliest kickoff 10:04 → **10:15**, latest 19:30 →
+> **19:45**, the weekday distribution (the deadline is **weekend-only**).
+> **Unchanged:** `FS_DISCOVERY`, which never reads the DB. **Changed but not by
+> phantoms:** Stage 17's 53.5% → 91.8%, of which phantoms are **−0.06 pp** —
+> the rest is population growth, and Stage 19's suspicion is **refuted**.
+> **Unrecomputable:** the 510 rows' true kickoff times.
+
+> ### TRIGGER MEASURED
+> Margin to the **weekend** 10:15 deadline, from the live series, **28-day**
+> trailing window, `max` **and** `mean+3sd`, binding = the worse. **Threshold 30
+> minutes — below one sd (36.7), declared on its own terms.** Printed daily,
+> alarm or not. `2026-11-06` survives only as **`simulated, R²=0.451`**. Remedy
+> on file: **weekend-specific cron**.
+
+> ### TOOL RECONCILED
+> `cohort_status.py` now has **one verdict, BUMP**; AMEND was retired by s5.14
+> and the tool had been contradicting it for two weeks. It also now fingerprints
+> **the deployed config**, not the gitignored local one.
+
+> ### THE TWO SERIES
+> `0 3 * * *` **closed at n=32**; `0 0 * * *` **open at n=0**. Membership by
+> `headSha`; a foreign cron is excluded, not rescaled. **Prevented, not
+> corrected** — a first.
+
+*Recorded 2026-10-01. `scripts/ci_audit.py`, `scripts/cohort_status.py`,
+`tests/test_contamination_and_margin.py` (new). No predicate changed, no model
+input altered, no schema, migration or production-data change. `s5.15` /
+`8da2fd` unchanged.*

@@ -5,14 +5,27 @@ configurations being pooled. **Pooling cannot happen in a cohort with no
 members**, so a revision that has never been stamped on a pick guarantees
 nothing and costs a history entry.
 
-THE RULE:
+THE RULE, AS RETIRED BY s5.14 (2026-09-17) AND RECONCILED HERE 2026-10-01:
+
+    ALWAYS BUMP.
+
+The rule this file shipped with was:
 
     While `saved_picks` holds ZERO rows at the current fingerprint, a further
     prediction- or selection-affecting change AMENDS the current revision.
-    If any pick carries it, BUMP.
 
-The guarantee is untouched: no two configurations ever share a cohort that
-contains anything.
+and `s5.14`'s history entry retired it, in these words: "It evaluates a MUTABLE
+COUNT — s5.13 held 0 picks at the amend and 16 within the hour, so ee60cd labels
+two configurations. Always bump."
+
+THIS TOOL KEPT PRINTING `VERDICT: AMEND` FOR TWO WEEKS AFTER THAT. An executable
+giving retired advice is a stale reason string that RUNS — worse than a stale
+comment, because it is consulted precisely when the decision is being made, and
+it answers with authority. Found 2026-10-01 while taking the s5.15 bump.
+
+So the member count is still measured and still reported — it is useful context —
+but it no longer selects a verdict. Emptiness at the moment of the check is not
+emptiness at the moment of the next pick.
 
 WHY THIS FILE EXISTS RATHER THAN A NOTE. "Verify emptiness at commit time, not
 from memory" is the standard applied to every other claim in this project, and a
@@ -47,7 +60,13 @@ def main() -> int:
     from src.models.model_version import CODE_REVISION, model_version
     from src.utils.config import Config
 
-    version = model_version(Config("config/config.yaml"))
+    # THE DEPLOYED CONFIG, not the local one. `config/config.yaml` is gitignored
+    # and carries no authority — Stage 10.1 found the experiment audited against
+    # a configuration production has never run, and CI builds its copy from the
+    # example anyway. Reading the example is what makes this fingerprint the one
+    # production stamps. (Byte-identical today; the point is that it stays so by
+    # construction rather than by luck.)
+    version = model_version(Config("config/config.example.yaml"))
     with get_db().get_session() as session:
         n = session.query(SavedPick).filter(
             SavedPick.model_version == version).count()
@@ -57,16 +76,18 @@ def main() -> int:
     print(f"model_version : {version}")
     print(f"picks stamped : {n}   (of {total} saved picks)")
     print()
+    # ONE VERDICT. The count is context, never the decision — see the module
+    # docstring for why s5.14 retired the AMEND branch.
+    print("VERDICT: BUMP")
     if n == 0:
-        print("VERDICT: AMEND")
-        print("  This cohort has no members, so nothing can be pooled with")
-        print("  anything. A prediction- or selection-affecting change may")
-        print("  amend this revision's history entry in place.")
+        print("  This cohort has no members YET, and that is not a licence to")
+        print("  amend: the count is mutable between this check and the next")
+        print("  pick. s5.13 held 0 here and 16 within the hour, and ee60cd")
+        print("  ended up labelling two configurations.")
     else:
-        print("VERDICT: BUMP")
-        print(f"  {n} pick(s) already carry this fingerprint. A further")
-        print("  prediction- or selection-affecting change MUST take a new")
-        print("  revision, or two configurations share a populated cohort.")
+        print(f"  {n} pick(s) already carry this fingerprint.")
+    print("  A prediction- or selection-affecting change MUST take a new")
+    print("  revision, or two configurations share one cohort label.")
     return 0
 
 

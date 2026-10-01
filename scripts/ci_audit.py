@@ -751,6 +751,153 @@ EMPTY_CARD_COVERED_LEAGUES = frozenset({
 #: finding rather than the run.
 _LEAGUE_IN_FINDING = re.compile(r"^discovery: ([a-z0-9/-]+) found 0 fixtures")
 
+# ───────────────────────────── the schedule margin, MEASURED daily (Stage 23)
+#
+# `2026-11-06` came out of a linear fit with R^2 = 0.451 — half the variance
+# unexplained — and a fitted date cited bare becomes a measurement within two
+# weeks. That class has already cost this project three errors in one week, so
+# the date is kept ONLY as `simulated, R^2=0.451` beside a number computed from
+# the live series every day.
+
+#: Weekend earliest kickoff, UTC minutes. The deadline is WEEKEND-ONLY: Sat/Sun
+#: kick off from 10:15 while Mon-Fri start 14:30-15:00, so this is the binding
+#: case and weekday runs carry four hours more slack.
+#:
+#: MEASURED 2026-10-01 on 1666 rows with real kickoff times — the 419
+#: sub-second-precision rows are `datetime.now()` phantoms, not kickoffs, and
+#: 10:04 was one of them. INDEPENDENTLY VERIFIED against openfootball, which is
+#: not the data that produced it: Sparta Rotterdam v Feyenoord on 2026-08-09
+#: reads 12:15 CEST there and 10:15 UTC here, and it is openfootball's own
+#: earliest eredivisie kickoff of the season.
+SCHEDULE_DEADLINE_MIN = 10 * 60 + 15
+
+#: Time from run start to picks complete on a FULL card (>=40 fixtures).
+#: MEASURED 2026-10-01, n=4: 67.4-88.1 min, mean 76.4, sd 10.2.
+FULL_CARD_PICKS_MAX = 88.1
+FULL_CARD_PICKS_3SD = 107.0
+
+#: The trailing window the delay series is computed over. STATED, not fitted —
+#: 28 days is four weeks of crons, long enough to hold the weekly pattern and
+#: short enough to follow a drift rather than average it away.
+MARGIN_TRAILING_DAYS = 28
+
+#: THE DECISION FIRES BELOW THIS. Chosen on its own terms, not fitted to the
+#: current value: 30 minutes is LESS THAN ONE SD of the observed delay
+#: (36.7 min), so at the threshold a single one-sigma-late day already misses
+#: the card. Declared here with the current margin known to be +94 min, and
+#: deliberately not derived from it.
+MARGIN_ALARM_MIN = 30
+
+#: The instrument to reach for when it fires, recorded now so the decision has
+#: an option rather than a scramble. The deadline is weekend-only, so a
+#: weekend-specific schedule is far cheaper than splitting a 31-step workflow,
+#: and Mon-Fri margin is currently being spent against a constraint that does
+#: not exist on those days.
+MARGIN_REMEDY = ("weekend-specific cron (Sat/Sun earlier); Mon-Fri binds at "
+                 "14:30 not 10:15, so the split is the second option not the first")
+
+
+def schedule_margin(series, cron_minutes: int):
+    """`dict` of the margin to the weekend deadline, from a measured lag series.
+
+    `series` is `[(date, lag_minutes), ...]` for runs whose OWN headSha carries
+    the cron in force — the `390a4be` rule, because a lag is only comparable
+    within one schedule.
+
+    Returns both the `max` and the `mean+3sd` margin. Never the mean alone: the
+    mean is what hid a negative margin for a month.
+    """
+    if not series:
+        return {"n": 0, "reason": "no runs under the current cron yet"}
+    lags = [l for _, l in series]
+    n = len(lags)
+    mean = sum(lags) / n
+    sd = (sum((x - mean) ** 2 for x in lags) / (n - 1)) ** 0.5 if n > 1 else 0.0
+    out = {"n": n, "min": min(lags), "max": max(lags), "mean": mean, "sd": sd,
+           "mean_plus_3sd": mean + 3 * sd, "cron": cron_minutes}
+    for key, delay, picks in (("margin_max", max(lags), FULL_CARD_PICKS_MAX),
+                              ("margin_3sd", mean + 3 * sd, FULL_CARD_PICKS_3SD)):
+        out[key] = SCHEDULE_DEADLINE_MIN - (cron_minutes + delay + picks)
+    # FAIL CLOSED on the worse of the two.
+    out["binding"] = min(out["margin_max"], out["margin_3sd"])
+    out["alarm"] = out["binding"] < MARGIN_ALARM_MIN
+    return out
+
+
+def current_cron_minutes(sha: str = None):
+    """The cron in `daily-picks.yml`, as UTC minutes. `None` if not a single cron.
+
+    Read from the SHA when given, so membership is decided by what the run
+    actually carried rather than by what the worktree carries now.
+    """
+    path = ".github/workflows/daily-picks.yml"
+    text = (_sh("git", "show", f"{sha}:{path}") if sha
+            else pathlib.Path(path).read_text(encoding="utf-8"))
+    crons = re.findall(r"^\s*- cron:\s*'([^']+)'", text, re.M)
+    if len(crons) != 1:
+        return None
+    m = re.match(r"^(\d+)\s+(\d+)\s+\*\s+\*\s+\*$", crons[0].strip())
+    return int(m.group(2)) * 60 + int(m.group(1)) if m else None
+
+
+def collect_lag_series(today: _dt.date = None, limit: int = 120):
+    """`(series, cron_minutes)` for runs under the CURRENT cron only.
+
+    MEMBERSHIP BY EACH RUN'S OWN headSha. Pooling two cron regimes is the
+    `390a4be` error — a 09:37 run read as an 11h30m outlier of a 03:00 series —
+    and it is prevented here rather than corrected later.
+    """
+    today = today or _dt.date.today()
+    cron_now = current_cron_minutes()
+    if cron_now is None:
+        return [], None
+    raw = _sh("gh", "run", "list", "--workflow", "daily-picks.yml",
+              "--limit", str(limit), "--json",
+              "databaseId,event,createdAt,headSha")
+    try:
+        runs = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return [], cron_now
+    by_sha: Dict[str, Optional[int]] = {}
+    series = []
+    for r in runs:
+        if r.get("event") != "schedule":
+            continue
+        try:
+            c = _dt.datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        c = c.replace(tzinfo=None)
+        if (today - c.date()).days > MARGIN_TRAILING_DAYS:
+            continue
+        sha = r.get("headSha") or ""
+        if sha not in by_sha:
+            by_sha[sha] = current_cron_minutes(sha)
+        if by_sha[sha] != cron_now:
+            continue                      # a different schedule: NOT comparable
+        sched = c.replace(hour=cron_now // 60, minute=cron_now % 60,
+                          second=0, microsecond=0)
+        if c < sched:
+            sched -= _dt.timedelta(days=1)
+        series.append((c.date(), (c - sched).total_seconds() / 60.0))
+    return series, cron_now
+
+
+def format_schedule_margin(m) -> str:
+    """One line, printed EVERY day whether it alarms or not."""
+    if not m.get("n"):
+        return f"schedule_margin[UNEVALUATED: {m.get('reason', 'no series')}]"
+    def hm(v):
+        s = "-" if v < 0 else ""
+        v = abs(v)
+        return f"{s}{int(v)//60}h{int(v)%60:02d}m"
+    return (f"schedule_margin[n={m['n']} window={MARGIN_TRAILING_DAYS}d "
+            f"delay max={hm(m['max'])} mean+3sd={hm(m['mean_plus_3sd'])} "
+            f"| margin max={m['margin_max']:+.0f}m 3sd={m['margin_3sd']:+.0f}m "
+            f"binding={m['binding']:+.0f}m threshold={MARGIN_ALARM_MIN}m"
+            + ("  ** DECISION FIRES **]" if m["alarm"] else "]"))
+
+
 EMPTY_CARD_FROM = _dt.date(2026, 9, 21)
 #: Exclusive. The COVERED EIGHT's card returns here (10-09, 7 fixtures; 41 on
 #: 10-10). It is NOT the date the pipeline's card returns — uncovered leagues
@@ -1375,6 +1522,23 @@ def main() -> int:
         # so that "the filter cleared nothing" and "the filter was handed
         # nothing" are different lines rather than the same absence.
         print(f"{'':<56} {_census}")
+    # STAGE 23. The schedule margin, EVERY day, alarm or not. `2026-11-06` is a
+    # fit with R^2=0.451 and must never stand alone as a date; this is the
+    # measured number beside it.
+    _series, _cron = collect_lag_series()
+    _margin = schedule_margin(_series, _cron if _cron is not None else 0)
+    print()
+    print(format_schedule_margin(_margin))
+    if _cron is None:
+        print("!! daily-picks carries no single `m h * * *` cron — the margin is "
+              "UNEVALUATED, not safe")
+    elif _margin.get("alarm"):
+        print(f"!! SCHEDULE MARGIN {_margin['binding']:+.0f} min is below the "
+              f"{MARGIN_ALARM_MIN}-minute threshold. Remedy on file: "
+              f"{MARGIN_REMEDY}")
+        alarmed.append(f"schedule margin {_margin['binding']:+.0f}m "
+                       f"< {MARGIN_ALARM_MIN}m")
+
     if listing_warning:
         # Printed AGAIN under the table: the number a reader carries away is
         # the one at the bottom of a long listing, and that is the number the
