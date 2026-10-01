@@ -20365,3 +20365,279 @@ runs behind `assert db.is_postgres`.
 `.github/workflows/daily-picks.yml` (comments only, cron asserted unchanged),
 `docs/ci-audit-ledger.md`. No predicate, schema, migration or production-data
 change. `s5.14` / `00febf` unchanged.*
+
+---
+
+# TEST BOUNDED · SPLIT NOT REQUIRED — the 9-minute margin was mine and it was wrong twice
+
+`tests/` **1607 passed, 0 failed** (1239 → 1607; +366 parameterised, +2 cases).
+Invariants **passed** — count not cited. `cohort_status`: `s5.14` / `00febf`,
+**fingerprint unchanged, NO BUMP**, and `git status src/` is empty — **no
+production file touched.** Stage 26 **SUSPENDED**.
+
+---
+
+## PART A — TEST BOUNDED
+
+The patch is in the test, not the loader. **No cross-boundary grace was granted.**
+
+| | before | after |
+| --- | --- | --- |
+| `test_yesterdays_reading_is_still_used` | computed yesterday from the **real clock** | `today` **pinned**; writes a *same-period* yesterday |
+| the 1st-of-month case | asserted **both ways** by two tests | asserted **once**, by `test_the_tolerance_STOPS_at_the_period_boundary` |
+
+### The year-wide parameterisation, which is the proof
+
+`test_THE_PAIR_NEVER_WRITES_ONE_DATE_WITH_TWO_VERDICTS` runs over **366
+consecutive days** from 2026-01-01, pinning `date.today()` to each, and for every
+one asserts the two cases write **different** dates *and* that the loader agrees
+with each: same-period yesterday **admitted**, last-day-of-prior-month
+**refused**.
+
+> ### 366 days, 0 collisions. The OLD rule collides on 13: every first-of-month in 2026 plus 2027-01-01 — so the span also covers a year-boundary period change, not only month boundaries.
+
+*(measured 2026-10-01. The negative control replays the old computation over the
+same span and counts the collisions it would still produce — the parameterisation
+is not passing vacuously.)*
+
+### The positive control, and why the 1st is the only day that can carry it
+
+```python
+monkeypatch.setattr(ts, "_credits_period", lambda d: "ONE-PERIOD")
+assert ts._load_persisted_credits() == 220   # refusal must STOP holding
+```
+
+**On the 1st, last month's final day is exactly ONE day old**, so `age > 1` is
+False and the staleness check lets it through. **The period rule is the only thing
+standing between a finished month's figure and a spending decision — on that one
+day, and on no other.** Neutralising `_credits_period` flips the refusal to an
+admission, which proves the assertion is carried by the rule it names and not by
+the age check standing in for it.
+
+**Why no loader grace, recorded:** production was correct and its docstring named
+the date in advance; a grace would change which readings are admitted
+(prediction-affecting, a bump eight days before H1); and it is a widened tolerance,
+which is the shape this project has refused four times.
+
+---
+
+## PART B — SPLIT NOT REQUIRED. And the premise for splitting was my own error.
+
+> ### I reported a 9-minute margin last stage. It was wrong in BOTH directions: the current schedule is worse than 9 minutes — it is already failing by about an hour — and the remedy is smaller than a split, because settlement never bound the lower edge at all.
+
+### B1 — what actually binds each edge, measured
+
+**Upper edge.** *(measured 2026-10-01, n=2085 fixtures, 2026-08-01→09-20, all in
+the 30 tracked leagues, dialect asserted)*
+
+| | |
+| --- | --- |
+| **earliest kickoff** | **10:04 UTC** (Sunday) — the comment's figure, **verified exactly** |
+| **latest kickoff** | **19:45 UTC** (Mon 09-14, Wed 09-16) — the comment says 19:30; **it is 15 minutes optimistic** |
+| per-weekday latest | Mon 19:45 · Tue 19:30 · Wed 19:45 · Thu 19:30 · Fri 19:30 · Sat 19:30 · Sun 19:30 |
+
+**A 15-minute spread does not justify a per-weekday cron.** Saturday does not bind
+differently from Tuesday; a single cron is the right instrument.
+
+**And the deadline the whole arithmetic hangs on was never measured.** The comment
+says "a ~20-minute run starting at 09:37 finishes before it", giving a 09:45 start
+deadline. Measured time from run start to **picks complete**:
+
+| population | n | min | max | mean | sd | mean+3sd |
+| --- | --- | --- | --- | --- | --- | --- |
+| **full card (≥40 fx)** | 4 | 67.4m | **88.1m** | 76.4m | 10.2m | **107.0m** |
+| thin card | 6 | 24.0m | 41.4m | 33.8m | 8.1m | 58.2m |
+
+> ### 67–88 minutes on a full card, not 20. **The real latest-safe START is 08:35 UTC (full-card max) or 08:16 UTC (full-card mean+3sd)** — not 09:45. I cited the comment without checking it against the run durations sitting in the same API.
+
+**Current cron `0 3 * * *`, against the n=32 delay series:**
+
+| delay | start | + full-card | picks done | margin |
+| --- | --- | --- | --- | --- |
+| max 6h35m | 09:35 | max 88.1m | 11:03 | **−59 min** |
+| mean+3sd 6h53m | 09:53 | mean+3sd 107.0m | 11:40 | **−96 min** |
+
+**Today's run started 09:35. Even with passing tests it would have produced picks
+around 11:03 — an hour after the earliest kickoff.** The test failure was not what
+cost today's card; the clock was.
+
+**Lower edge — and it does not bind.**
+
+```
+settlement floor (day D) = latest kickoff 19:45 + match 115m + publication 120m [assumed]
+                         = 23:40 on day D
+```
+
+**The minimum observed delay is 4h11m.** A cron at time T on D+1 therefore starts
+no earlier than T+4h11m, so:
+
+| cron | earliest actual start | minutes past the floor |
+| --- | --- | --- |
+| 00:00 | 04:11 | **+271** |
+| 00:30 | 04:41 | **+301** |
+| 01:00 | 05:11 | **+331** |
+| 03:00 | 07:11 | +451 |
+
+> ### Settlement has 4½–7½ hours of slack at every candidate cron. It does not bind the lower edge and never did — 03:00 carried 3h20m of margin it did not need. **The publication latency is `assumed` and does not need re-measuring either: results are scraped ~90 min into the run, so the assumption would have to be 511 minutes rather than 120 before it could bind a 00:30 cron.**
+
+**So nothing binds the lower edge except odds freshness** — and the Stage 21
+comment already measured that: "9 of 10 fixtures are priced ≥24h before kickoff,
+so odds do not bind." **Verified against the mechanism it describes, that leaves
+pricing lead time as a preference, not a constraint.**
+
+### B2 — the two constraints DO co-satisfy, with one cron
+
+| cron | earliest start | latest start (mean+3sd) | picks done (worst) | **margin vs 10:04** |
+| --- | --- | --- | --- | --- |
+| **00:00** | 04:11 | 06:53 | 08:40 | **+84 min** |
+| **00:30** | 04:41 | 07:23 | 09:10 | **+54 min** |
+| 01:00 | 05:11 | 07:53 | 09:40 | +24 min |
+| 01:30 | 05:41 | 08:23 | 10:10 | −6 min |
+| 02:00 | 06:11 | 08:53 | 10:40 | −36 min |
+| 03:00 (current) | 07:11 | 09:53 | 11:40 | **−96 min** |
+
+**`SPLIT NOT REQUIRED`.** A single cron at **00:30** restores **+54 minutes**
+against the worst case on both axes simultaneously; **00:00** gives **+84**.
+
+**NOTHING IMPLEMENTED IN PART B, deliberately.** The instruction to split rested on
+the 9-minute figure, and that figure was mine and wrong. Executing a 31-step
+interleaved workflow refactor — whose first exercise is production, eight days
+before H1, and whose failure mode is precisely Part C's "a change that stops
+capture" — on a justification I have just withdrawn would be the worst available
+trade. **The choice between `0 30 0 * * *`-style shift and the split is now a
+decision with the arithmetic under it, and it is yours.**
+
+**What the split would still buy, honestly:** nothing on margin today. Its value is
+structural — it removes settlement from discovery's critical path so the two can
+drift independently — and it costs duplicated setup, a second alert surface, and a
+model-cache write race that needs naming (only the settling workflow may save the
+cache, or a refit is silently discarded by last-writer-wins). **If the delay
+distribution keeps drifting at ~10 min/week, 00:30's +54 minutes is consumed by
+early December, and the split becomes the answer then rather than now.**
+
+### B3 — cohort, unchanged because nothing changed
+
+`cohort_status`: **`00febf`, no bump.** Moving the cron *would* be
+selection-affecting by the `s5.2` precedent — it changes every pick's taken price,
+lead time, and which fixtures fall in the window — and the projected effect is
+stated so the bump can be taken deliberately:
+
+| | current | at a 00:30 cron |
+| --- | --- | --- |
+| pricing completes | 08:35–10:08 | **05:14–07:56** |
+| lead time to earliest kickoff | **−4 min … 1h29m** | **2h08m … 4h50m** |
+
+*(projected 2026-10-01 from the measured delay series and the measured `--update`
+completion offsets; not measured, because the cron has not moved.)* **Lead time
+roughly triples — better for reliability, worse for closing-line proximity. The
+CLV cost cannot be quantified: closing-line coverage is still 0%.**
+
+---
+
+## PART C — SIZING THE TEST GATE. Nothing implemented.
+
+### The step order, and exactly one gate
+
+**First irreversible capture: step 14, `Run daily update (fixtures + odds)`** — it
+writes odds rows, and prices never backfill.
+
+Of the 13 steps before it, **12 can halt the job**, and **11 of those are
+prerequisites** — without checkout, Python, dependencies, the config or the DB
+connection, capture cannot run at all.
+
+> ### `Run tests` is the ONLY step before the first irreversible capture that can stop the job without being required for capture to work. One step, and it is a gate rather than a prerequisite.
+
+### Two paths, not one
+
+| path | mechanism | observed | alert? |
+| --- | --- | --- | --- |
+| **1. test FAILS** | step 13 has no `continue-on-error`; non-zero exit halts the job, steps 14–22 skipped | **twice — 2026-09-20 and 2026-10-01** | yes, red + Telegram |
+| **2. test HANGS** | step 13 has **no `timeout-minutes`**, so it inherits the **360-minute job cap**; GitHub **cancels** the job | never | **NO — a cancelled job loses the day silently** |
+
+**Path 2 is the worse one and is unbounded against a measured baseline:** the suite
+runs in **119–130 seconds** in CI (n=4), and the step may consume 360 minutes.
+
+### What capture would have produced today
+
+*(measured 2026-10-01 11:55 UTC, the real scraper and the real emitter, 30
+leagues, read-only, no credits, no DB write)*
+
+| state | count |
+| --- | --- |
+| `none-in-range` | **30** |
+| `kept` | **0** |
+
+**Today's loss was ZERO fixtures.** The card returns tomorrow — `spain/laliga2`
+**10-02**, `england/league-two` and `league-one` **10-03**, the covered eight
+10-09/10-10.
+
+> ### So the 10-01 failure cost nothing, and that is the least useful possible version of this lesson: the gate fired on the one day in the last fortnight when it could do no damage. **2026-09-20 is the one that cost — and 2026-11-01 is a SUNDAY.** In-season Sunday cards measured 30–115 fixtures, mean **70** (n=8). That is the size of the recurrence, inside H1's collection window.
+
+*(Caveat so this is not mis-cited later: my local probe prints kickoffs in the
+machine's zone, UTC+3, while CI's `FS_DISCOVERY` prints UTC. Only **dates** are
+comparable between the two, and only dates were compared.)*
+
+### The proposal, not implemented
+
+**One change has no trade-off and is not the gate question at all:** give step 13 a
+`timeout-minutes` bounded against the measured 2-minute baseline. It closes path 2,
+changes no semantics, and makes a hang a red step with an alert instead of a silent
+cancellation.
+
+**The gate question itself has no free answer, and the honest version names the
+cost:**
+
+| option | capture survives a test failure? | what it costs |
+| --- | --- | --- |
+| move the suite to a `push`/PR workflow and drop it from the pipeline | yes | capture runs on a tree **nothing verified today**; the suite stops being a release gate for the pipeline's own runtime |
+| keep the step, add `continue-on-error: true`, fail the run **after** capture | yes | same exposure, plus the run is red *and* has written — a reader must learn that red no longer means "nothing happened" |
+| split the suite: a fast capture-relevant subset before, the full suite after | partly | **choosing the subset is a judgement that can be wrong**, and a subset that omits the relevant test grants false confidence — the failure mode is invisible by construction |
+
+> ### Capturing on an untested tree is itself a risk, and it is the worse one: a lost day costs one card, while odds rows written by broken code are **wrong and never backfill**, and nothing downstream distinguishes them from good ones. The current design chose "lose a day" over "write from an untested tree" **deliberately**, and that choice is defensible. What is not defensible is that the choice is unbounded in the hang case, and that the gate's blast radius was never written down until it had fired twice.
+
+---
+
+## PART D — CARRY-OVERS
+
+| item | status |
+| --- | --- |
+| **10-01 credit balance** | stays **`assumed`** (450 spendable / 500 tier). No run with `--update` has reached the provider since the reset. **"Credits are not the constraint" inherits that assumption and is NOT closed.** |
+| **`closing-lines` delay series** | **`CENSORED`.** With a 2h cadence, nearest-preceding attribution re-assigns any delay over ~2h to the next firing, so its 0h06m–2h50m range is **a ceiling imposed by the attribution rule, not an observation.** It must not be compared to the daily crons' spread, and last stage's "the three once-daily crons sit higher" is withdrawn as a comparison. |
+| **`TARGET_N` / `CREDIT_CEILING`** | unchanged — **still live only in the check, no enforced stop in the runner.** Eight days out. Status only. |
+| Stage 26 | **SUSPENDED** |
+
+---
+
+## DECLARATION
+
+> ### TEST BOUNDED
+> `366` days parameterised, **0 collisions**; the old rule collides on **13**
+> (every 2026 first-of-month + 2027-01-01). Positive control confirms the
+> prior-period rule is load-bearing — and that the 1st is the only day it carries
+> alone. **No loader grace. No production change. `00febf` unchanged.**
+> `tests/` **1607 passed, 0 failed.**
+
+> ### SPLIT NOT REQUIRED
+> **Settlement does not bind the lower edge** — +271 to +451 minutes of slack at
+> every candidate cron, because the minimum delay is 4h11m. The binding deadline
+> is **08:16–08:35 UTC**, measured, not the documented 09:45 which assumed a
+> 20-minute run against a measured **67–88**.
+>
+> | | |
+> | --- | --- |
+> | current `0 3 * * *` | **−59 to −96 min — already failing** |
+> | **`0 0 * * *`** | **+84 min** |
+> | **`30 0 * * *`** | **+54 min** |
+>
+> **Implemented nothing.** The split's justification was my own 9-minute figure,
+> withdrawn above. The shift is the smaller instrument and the decision is the
+> user's, with the cohort bump and the tripled pricing lead time stated.
+
+> ### PART C — SIZED, NOT FIXED
+> One gate (`Run tests`), **two** paths (fail → red; **hang → 360-min cap → silent
+> cancellation**, step has no timeout against a 2-minute baseline). Today's cost:
+> **0 fixtures**. Recurrence **2026-11-01, a Sunday — 30–115 fixtures, mean 70.**
+
+*Recorded 2026-10-01. `tests/test_credit_reading_freshness.py` only, plus this
+ledger entry. No production, config, schema, migration, workflow or cron change.
+`s5.14` / `00febf` unchanged.*
