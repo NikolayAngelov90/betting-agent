@@ -6,9 +6,18 @@ all eight covered leagues from 2026-09-21 through 2026-10-08. Every one of the
 eight has its last fixture on 09-20 and its next on 10-09 or 10-10. The card
 returns 10-09 with 7 fixtures and 41 on 10-10.
 
-So "zero fixtures" is the EXPECTED state for eleven more days, and the discovery
-alarms would otherwise fire daily with a known cause until they were tuned out —
-which is how `fixtures_zero_active` became noise three times.
+SCOPE, CORRECTED 2026-10-01 FROM PRODUCTION. That is true of THE EIGHT and of
+nothing else. The pipeline's own card was never empty inside this window: 34
+fixtures and 26 saved picks on five days (09-21, 09-25, 09-26, 09-27, 09-28), all
+in uncovered leagues, none in the eight. "The card is absent" is false said of 30
+leagues, and the refuting numbers — `disc[fs=18c]` on 09-26 and `disc[fs=5c]` on
+09-27 — were printed before the claim was written. The window's dates and the
+suppression's scope survive only because condition 3 narrowed it per league.
+
+So "zero fixtures" is the EXPECTED state for eleven more days IN THE COVERED
+EIGHT, and the discovery alarms would otherwise fire daily with a known cause
+until they were tuned out — which is how `fixtures_zero_active` became noise
+three times.
 
 BUT SUPPRESSING THEM IS SUP-1 UNLESS IT EXPIRES. A guard that silences the alarms
 about its own subject makes the first real collapse after 10-09 invisible. The
@@ -73,9 +82,12 @@ def test_the_suppression_has_EXPIRED():
     today = dt.date.today()
     assert today < ci.EMPTY_CARD_UNTIL, (
         f"the empty-card suppression expired on {ci.EMPTY_CARD_UNTIL} and today "
-        f"is {today}. The card has returned; DELETE the suppression rather than "
-        f"moving the date. If the break was genuinely extended, re-measure it "
-        f"against openfootball and record the new grid before changing anything.")
+        f"is {today}. The COVERED EIGHT's card has returned; DELETE the "
+        f"suppression rather than moving the date. If their break was genuinely "
+        f"extended, re-measure it against openfootball AND against the scraper's "
+        f"FS_DISCOVERY earliest_parsed, and record the new grid before changing "
+        f"anything — the static grid covers 8 of 30 and has already been wrong "
+        f"about emptiness once.")
 
 
 def test_the_end_date_is_a_LITERAL_not_a_config_flag():

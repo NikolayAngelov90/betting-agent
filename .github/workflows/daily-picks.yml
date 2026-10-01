@@ -16,6 +16,25 @@ on:
     # the hour — it was that GitHub's scheduler has delivered 0.5h to 11h21m of
     # delay, and a late start cannot be recovered.
     #
+    # THAT 0.5h-11h21m ENVELOPE DESCRIBES THE POOLED PRE-08-30 REGIME, NOT THIS
+    # CRON. It was recorded on 2026-08-30 — the day this clock changed — so it
+    # necessarily pools the 06:00, 07:30, 14:00, 09:37+12:23 and 09:37 schedules
+    # and contains no observation of `0 3 * * *`. Do not cite it as this cron's
+    # distribution; it has already been cited that way once.
+    #
+    # MEASURED FOR THIS CRON, 2026-10-01, n=32, membership by each run's OWN
+    # headSha carrying exactly `0 3 * * *` (which excludes 390a4be, a 09:37 run
+    # that would otherwise have read as an 11h30m outlier):
+    #
+    #   min 4h11m · max 6h35m · mean 5h03m · median 5h02m · sd 36.7m · spread 143m
+    #
+    # AND IT IS DRIFTING. At n=28 (through 09-27) the max was 6h02m and sd 25.3m;
+    # 09-28, 09-29, 09-30 and 10-01 then came in at 6h05m, 6h15m, 6h07m and
+    # 6h35m — four consecutive days above the prior 28-day maximum, which is a
+    # shift and not an outlier. Margin against the 09:45 binding constraint is
+    # now 9 MINUTES against the observed max, and mean+3sd (6h53m) EXCEEDS it.
+    # Re-measure before trusting the buffer; no cron change has been made.
+    #
     # MEASURED 2026-08-30, three constraints, all binding on different sides:
     #
     #   earliest kickoff  run must START by ~09:45 UTC, so a cron at 09:45-D

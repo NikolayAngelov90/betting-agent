@@ -18846,6 +18846,18 @@ condition untouched. `s5.14` / `00febf` unchanged.*
 applied a conclusion measured on 8 leagues to all 30. The break runs to 10-08
 and H1's start condition is 10-09 — both measured on the covered eight only.*
 
+> **AMENDED 2026-10-01 — THE RESIDUAL IS MEASURED AND THE PIPELINE'S CARD WAS
+> NEVER EMPTY.** Inside 09-21→10-08 production carried **34 fixtures and 26 saved
+> picks on five days** — 09-21 (2 fx / 2 pk), 09-25 (1/1), 09-26 (25/17), 09-27
+> (5/5), 09-28 (1/1) — **all in uncovered leagues, zero in the covered eight**
+> *(measured 2026-10-01 from PostgreSQL, dialect asserted; 33/25 was the figure
+> through 09-27)*. `RESIDUAL UNMEASURED` is closed: all 30 leagues report
+> `none-in-range`, rows 27–126 present, `no-rows` **0** on every run, and
+> production agrees with the 09-28 probe on all 30 leagues' state, rows and
+> earliest date. **H1's start condition of 10-09 holds for the eight only** — the
+> uncovered 22 resume earlier: laliga2 **10-02**, league-one/two **10-03**,
+> veikkausliiga 10-07, liga-1 10-08, all from the scraper rather than the grid.
+
 `tests/` **1202 passed, 2 skipped**. Invariants **passed** — count not cited.
 `cohort_status`: `s5.14` / `00febf`, 108 stamped. **No bump — Part B is two log
 lines and changes nothing about which fixtures resolve.** Stage 26 remains
@@ -19045,6 +19057,16 @@ production-data change; `s5.14` / `00febf` unchanged.*
 
 # EMPTY-CARD OPS — SET. Option 1, suppression expires 2026-10-09.
 
+> **AMENDED 2026-10-01 — "EMPTY CARD" NAMES THE COVERED EIGHT, NOT THE
+> PIPELINE.** This entry's cost model treated 09-21→10-08 as empty-day runs. It
+> was not: **34 fixtures and 26 saved picks on five days inside that window**, all
+> uncovered, zero in the eight *(measured 2026-10-01)*. The suppression's dates
+> and scope survive **only** because condition 3 later narrowed it per league;
+> `EMPTY_CARD_UNTIL` is the eight's return date, not the pipeline's — the next
+> card is **spain/laliga2 on 10-02**. The refutation was in this project's own
+> output before the claim was written: `disc[fs=18c]` (09-26) and `disc[fs=5c]`
+> (09-27) were printed on the two runs immediately preceding it.
+
 `tests/` **1214 passed, 2 skipped**. Invariants **passed** — count not cited.
 `cohort_status`: `s5.14` / `00febf`, 108 stamped. **No bump — option 1 changes
 nothing, and the suppression is an audit-side annotation.** Stage 26 remains
@@ -19200,6 +19222,16 @@ window and stop condition untouched. `s5.14` / `00febf` unchanged.*
 ---
 
 # SUPPRESSION NARROWED — and the narrowing disables it on every observed run
+
+> **AMENDED 2026-10-01 — THE TITLE IS REFUTED. THE NARROWING DID NOT DISABLE
+> IT.** On 2026-09-30 the suppression **suppressed 8 findings in production**:
+> `examined=36 candidates=35 suppressed=8 alarmed=28` on run `36694121546`
+> *(measured 2026-10-01)*. "Disables it on every observed run" was true of the
+> replays available that day and was never true in production — and the signal
+> then available could not distinguish *disabled* from *unreached*, which is why
+> `VAC-1`'s counter was built. With the counter, it is neither: it **engaged and
+> cleared the eight for cause**, exactly as designed. The 09-21→10-08 window also
+> was not empty — **34 fixtures / 26 picks**, all uncovered.
 
 `tests/` **1220 passed, 2 skipped**. Invariants **passed** — count not cited.
 `cohort_status`: `s5.14` / `00febf`, 108 stamped. **No bump — narrowing an alarm
@@ -19966,3 +19998,370 @@ dropped.
 *Recorded 2026-09-28. `scripts/ci_audit.py`, `tests/test_empty_card_suppression.py`,
 `tests/test_config_identity.py`. No config, schema, migration, workflow,
 dependency or production-data change. `s5.14` / `00febf` unchanged.*
+
+---
+
+# CI AUDIT 2026-10-01 — DEFECTS FOUND (3). AF boundary measured, suppression suppressed, H1 AT RISK.
+
+`tests/` **1 failed, 1238 passed** — the failure is **pre-existing and dated**, it
+broke CI at 09:35 today on `545c51b` before this stage touched anything, and it is
+Defect 1 below. Invariants **passed** — count not cited. `cohort_status`: `s5.14` /
+`00febf`, **fingerprint unchanged, no bump** (picks stamped 108 → **109**, the
+09-28 laliga2 pick). Stage 26 **SUSPENDED**.
+
+---
+
+## PART A — SCOPE. 41 runs, 39 unaudited.
+
+*(measured 2026-10-01)*
+
+| workflow | runs | conclusions |
+| --- | --- | --- |
+| `ci-audit` | **22** | 21 success, **1 failure** |
+| `closing-lines` | 12 | 12 success |
+| `daily-picks` | **4** | 3 success, **1 failure** |
+| `paper-trading-report` | 3 | 3 success |
+
+The two runs at 09-27 23:4x were covered by earlier entries; **the 39 from 09-28
+onward carry no ledger row.**
+
+> ### `ci-audit` APPEARS IN ITS OWN SCOPE, and that fix is now exercised across a three-day gap. 22 of its runs are listed, its verdicts are printed, and `NEVER_ALARM_WORKFLOWS` kept them out of `alarmed` — the audit reports on itself without alarming on itself.
+
+### Scheduled-vs-actual, every scheduled run in scope
+
+| workflow | cron | n | min | max | mean |
+| --- | --- | --- | --- | --- | --- |
+| `daily-picks` | `0 3 * * *` | 4 | 6h05m | **6h35m** | 6h16m |
+| `paper-trading-report` | `47 10 * * *` | 3 | 5h43m | 7h28m | 6h20m |
+| `ci-audit` | `0 12 * * *` | 3 | 5h52m | **7h30m** | 6h27m |
+| `closing-lines` | multi (`10:47` + `:17` odd hours) | 11 | 0h06m | 2h50m | 1h18m |
+
+**The three once-daily crons all sit at 5h43m–7h30m; the 8×/day cron sits at
+0h06m–2h50m.** I am *not* concluding that GitHub deprioritises infrequent
+schedules, because **the comparison is not clean**: with a firing every two hours,
+nearest-preceding attribution re-assigns any lag over ~2h to the *next* cron, so
+`closing-lines`' maximum is **capped by the measurement method**, not observed.
+`ci-audit`'s `workflow_run` runs have no scheduled time at all and are excluded
+rather than counted as zero.
+
+---
+
+## PART B1 — AF BOUNDARY MEASURED. First time outside a probe.
+
+*(measured 2026-10-01 from runs `36401345460`, `36547959778`, `36694121546`)*
+
+| date | rejected fixtures | untracked league ids | tracked |
+| --- | --- | --- | --- |
+| 09-27 | **865** | 233 | 30 |
+| 09-28 | 84 / 93 | 37 / 40 | 30 |
+| 09-29 | 179 / 178 | 55 / 55 | 30 |
+| 09-30 | **209** | 65 | 30 |
+
+*(two figures where two runs read the same date a day apart — the provider's list
+moves between calls; expected, not a discrepancy.)*
+
+### NO DEFECT, and the decisive check is not the rejected set
+
+The rejected set is **disjoint from `tracked` by construction** —
+`if league_id not in self._tracked_league_ids: continue` — so it can never contain
+one of our leagues. The failure mode that *would* be invisible is a configured
+league with **no entry in `ID_TO_LEAGUE`**, whose fixtures would land in the
+rejected bucket silently. Measured:
+
+| | |
+| --- | --- |
+| configured `flashscore_leagues` | **30** |
+| derived tracked ids | **30** — matches the log's `tracked=30` |
+| **configured but unmapped** | **0** |
+| configured mapping to >1 id | 0 |
+
+**All 30 map 1:1.** No league shows the provider offering fixtures we reject.
+
+**One instrumentation limit, stated rather than left implicit:** `top=[...]` prints
+12 of up to 233 ids, so the full rejected set is *not* recoverable from the log.
+It does not matter here — the mapping check is decisive and complete — but the
+line cannot answer a question about a specific untracked id.
+
+---
+
+## PART B2 — FS_DISCOVERY, 30 LINES PER RUN, AND PRODUCTION AGREES WITH THE PROBE
+
+*(measured 2026-10-01)*
+
+| run | `none-in-range` | `kept` | `no-rows` | `off-season` |
+| --- | --- | --- | --- | --- |
+| 09-28 `36401345460` | **29** | **1** (`spain/laliga2`, rows=122, earliest 09-28) | **0** | 0 |
+| 09-29 `36547959778` | 30 | 0 | **0** | 0 |
+| 09-30 `36694121546` | 30 | 0 | **0** | 0 |
+| 10-01 `36843668865` | — | — | — | — **ABSENT: `--update` skipped** |
+
+> ### THE 09-28 PRODUCTION RUN IS 29 `none-in-range` / 1 `kept` — the probe's result exactly, and not only in the totals: every one of the 30 leagues agrees on **state, row count AND earliest_parsed**. premier-league 117/10-10, laliga 111/10-09, serie-a 105/10-10, championship 109/10-09, veikkausliiga 27/10-07, league-one 119/10-03, league-two 117/10-03, liga-1 113/10-08, laliga2 122/kept=1.
+>
+> **No disagreement, so nothing lies between `_scrape_fixtures_page` and
+> `scrape_league_fixtures`.** The probe was a valid instrument, and the 09-28
+> entry's figures stand on production evidence rather than on a bypass.
+
+**`no-rows` is 0 on every run**: the scraper is healthy and every zero is calendar.
+
+**Dates confirmed FROM THE SCRAPER, not the grid:** `england/league-one` and
+`league-two` earliest **2026-10-03** on both 09-28 and 09-30; `spain/laliga2`
+moves to **10-02** after its 09-28 fixture. The covered eight are unchanged at
+10-09/10-10.
+
+**Today's two lines are ABSENT, not zero.** `--update` never ran, and only
+`--update` emits them.
+
+---
+
+## PART B3 — SUPPRESSION EXECUTED, AND IT SUPPRESSED FOR THE FIRST TIME
+
+*(measured 2026-10-01)*
+
+| run | date | census |
+| --- | --- | --- |
+| `36694121546` | **09-30** | **`examined=36 candidates=35 suppressed=8 alarmed=28`** |
+| `36843668865` | 10-01 | `examined=1 candidates=0 suppressed=0 alarmed=1` |
+
+> ### `suppressed=8`. Condition 3 did NOT decline this time — it cleared the covered eight for cause and left 28 alarmed. The suppression is no longer untested in production, and `candidates=35` is what makes that readable: the filter was handed 35 eligible findings and discriminated among them.
+
+**Today's run is the contrast case and it reads correctly:** one finding, **zero
+candidates**, nothing suppressed — a `DID_NOT_RUN` is not excused by the calendar.
+**VAC-1's counter is doing exactly the job it was built for**, one stage after the
+zero it was built to disambiguate.
+
+---
+
+## AND THE CI-AUDIT ALARM FIRED CORRECTLY, FIRST TIME IN PRODUCTION
+
+```
+36843668865  daily-picks  2026-10-01T09:35  DID_NOT_RUN  core step(s) DID NOT RUN:
+             update, settle (pre-picks), picks (incl. review)
+##[error]audit alarm — 36843668865 daily-picks DID_NOT_RUN
+```
+
+**Verdict → `--fail-on` → exit 1 → red run → `ci_alert` Telegram message.** The
+whole chain, end to end, on its first real exposure. `ci-audit` run
+`36846296928` is **supposed** to be red.
+
+---
+
+## PART C — COVERAGE. 34 fixtures / 26 picks in a window declared empty.
+
+*(measured 2026-10-01 from PostgreSQL, **dialect asserted** — see Defect 3's note)*
+
+| date | fixtures | picks | covered-8 | uncovered | basis |
+| --- | --- | --- | --- | --- | --- |
+| 09-21 | 2 | 2 | 0 | 2 | measured |
+| 09-25 | 1 | 1 | 0 | 1 | measured |
+| 09-26 | 25 | 17 | 0 | 25 | measured |
+| 09-27 | 5 | 5 | 0 | 5 | measured |
+| **09-28** | **1** | **1** | 0 | 1 | measured — laliga2 21:30, **picked** |
+| 09-29 | 0 | 0 | 0 | 0 | measured (run succeeded, 30/30 `none-in-range`) |
+| 09-30 | 0 | 0 | 0 | 0 | measured (ditto) |
+| **10-01** | 0 | 0 | 0 | 0 | **BLOCKED — `--update` skipped. Not a zero.** |
+| 10-02 … 10-08 | 0 | 0 | 0 | 0 | **ZERO BY CONSTRUCTION — `max_days_ahead=1`. Not measured.** |
+
+**In-window totals (09-21→10-08), measured through 10-01: 34 fixtures, 26 picks,
+five days, every one uncovered, zero in the covered eight.** *(33/25 was the
+figure through 09-27.)*
+
+| requirement | measured |
+| --- | --- |
+| **max picks on any single match** | **1** ✓ |
+| matches with >1 pick | **0** ✓ |
+| **identity-gate refusals** | **0 on all four runs** — `create=0`, `no_match=0`; none to classify |
+
+Resolution composition: `former_name` **261 / 274 / 315 / 315**, `exact_name`
+2575 / 2370 / 2623 / 2811, `strict` 24 on every run. **`former_name` — the branch
+that had never fired in production as of 2026-09-16 — is now heavily exercised**,
+and `strict=24` is a resolution path, not a refusal.
+
+---
+
+## PART D — STRINGS CORRECTED
+
+| site | correction |
+| --- | --- |
+| `ci_audit.py` empty-card block | the card is absent **for the eight only**; the 34/26 table added; notes the refutation (`fs=18c`, `fs=5c`) predated the claim |
+| `EMPTY_CARD_UNTIL` | now states it is **the eight's** return date, not the pipeline's — next card is laliga2 **10-02** |
+| the residual comment | `large and unmeasured` → **measured**, with the per-league resumption dates from the scraper |
+| `test_the_suppression_has_EXPIRED` message | names the **covered eight**; requires re-measuring against **openfootball AND `FS_DISCOVERY`**, because the grid covers 8 of 30 and has been wrong about emptiness once |
+| `test_empty_card_suppression.py` docstring | scope paragraph added |
+| 3 ledger entries | **amended in place with a dated block, originals left readable** — a retraction carries the assertion's burden |
+| `daily-picks.yml` envelope comment | **the `0.5h–11h21m` figure is marked as the pooled pre-08-30 regime**, with this cron's measured distribution beside it |
+
+**No predicate changed.** The workflow edit is comments only: YAML re-parsed,
+`schedule == [{cron: '0 3 * * *'}]` asserted, step order asserted
+(`Create config from example` idx 9 < `Run tests` idx 12), 19 insertions / 0
+deletions.
+
+> ### The amended ledger title is the sharpest one: "SUPPRESSION NARROWED — and the narrowing disables it on every observed run" is now **refuted by measurement**. It was true of the replays and never true in production, and the signal available that day could not tell *disabled* from *unreached*. With the counter it is neither.
+
+---
+
+## PART E — THE SERIES HAS WIDENED, AND THE MARGIN IS 9 MINUTES
+
+*(measured 2026-10-01; membership by each run's **own** `headSha` carrying exactly
+`0 3 * * *` — which is what excluded `390a4be`, a 09:37 run that would otherwise
+read as an 11h30m outlier)*
+
+| | n=28 (to 09-27) | **n=32 (to 10-01)** |
+| --- | --- | --- |
+| min | 4h11m | 4h11m |
+| **max** | 6h02m | **6h35m** |
+| mean | 4h53m | **5h03m** |
+| median | 4h56m | 5h02m |
+| **sd** | 25.3 min | **36.7 min** |
+| spread | 110 min | **143 min** |
+| **margin vs observed max** | 43 min | **9 min** |
+| margin vs mean+3sd | +9 min | **−8 min** |
+
+**Four consecutive days above the prior 28-day maximum:** 09-28 **6h05m**, 09-29
+**6h15m**, 09-30 **6h07m**, 10-01 **6h35m**.
+
+> ### That is a SHIFT, not an outlier, and it is reported as the new maximum rather than discarded. Under the n=28 distribution a single day above 6h02m was ~1-in-28; four consecutive is not a tail event. **mean+3sd (6h53m) now EXCEEDS the 6h45m binding constraint** — the 03:00 cron no longer has three sigma of room to start before the earliest kickoff.
+
+**No cron change in this stage**, as instructed. The series answered at n=32
+instead of waiting to n≈14 of fresh observations, because the cron's history made
+it recoverable — and what it says is that the constant it would have been set
+against has moved.
+
+---
+
+## PART F — CREDITS. Reset UNCONFIRMED by measurement; H1's risk is not credits.
+
+### What is measured
+
+| when | fact | source |
+| --- | --- | --- |
+| 09-28 | `OddsApiQuota 2026-09: **400/450 used, 0 spendable**` (margin 50, free tier 500); asked 1 request (2 credits), **granted 0** | run log |
+| 09-29 | persisted state **2 days old** (written 09-27, value 100) → treated as **NO READING** → **probed `/v4/sports` (free): 100 remaining** | run log |
+| 09-29, 09-30 | `no leagues with today's fixtures — skipping` → **0 credits spent** | run log |
+| **10-01** | `--update` **skipped** → **0 credits spent today**, per provider, per path | step conclusion |
+
+> ### The ledger and the provider agree exactly: 500 − 400 = **100**, and the provider said **100**. On 09-16 these disagreed three ways (file 154, provider 100, ledger 0). Both guards built since then — the 09-11 period check and the 09-16 staleness check — **fired in production and were right**.
+
+### What is BLOCKED, and not reported as a zero
+
+**The 10-01 balance is `assumed`, not measured: 450 spendable / 500 tier**, derived
+from the month-keyed ledger (`test_month_key_is_the_first_of_the_month` and
+`test_month_boundary_resets_the_ledger` both pass in CI today). **No 10-01
+production run reached the quota code**, because `--update` was skipped.
+
+Two local attempts to measure it **failed and are reported as failures**:
+
+1. `probe_credits()` returned `None` — **no API keys in the local environment**
+   (`THE_ODDS_API_KEY`, `ODDS_API_KEY`, `THEODDS_API_KEY`, `API_FOOTBALL_KEY` all
+   absent; they live in GitHub secrets). That `None` is my environment, not a
+   balance.
+2. `OddsApiQuota` built from a `Config` reported `used=0`, `remaining=350`,
+   `available=False` and logged **`api_budget probe failed: 'Config' object has no
+   attribute 'engine'`** — the ledger was **UNAVAILABLE**, so those numbers are my
+   harness. `monthly_budget=400` is the config default, not a live figure.
+
+> ### Both would have read as "plenty of credits" if published. A measurement failure that agrees with the standing hypothesis is the one that gets published — so it is named here instead.
+
+### Burn rate against H1's 106–168
+
+Measured burn with a thin card is **0–2 credits/day** (09-28 asked 2 and was
+granted 0; 09-29 and 09-30 spent 0). The card to 10-08 stays thin — laliga2 10-02,
+league-one/two 10-03, veikkausliiga 10-07, liga-1 10-08 — so **H1's 106–168
+against an assumed 450 spendable is intact with a wide margin. Credits are not
+H1's constraint.**
+
+### The two unmet requirements, status only
+
+`TARGET_N` and `CREDIT_CEILING` **still live only in the check, with no enforced
+stop in the runner.** Unchanged, not fixed here, and now **eight days** from being
+needed.
+
+---
+
+## THE THREE DEFECTS
+
+### DEFECT 1 — a test contradicts its own sibling one day in thirty, and that day cost the whole pipeline
+
+`tests/test_credit_reading_freshness.py::test_yesterdays_reading_is_still_used`
+— `assert ts._load_persisted_credits() == 220` → **`assert None == 220`**.
+
+On 2026-10-01:
+
+| test | date it writes | asserts |
+| --- | --- | --- |
+| `test_yesterdays_reading_is_still_used` | `today - 1d` = **2026-09-30** | the reading **is used** |
+| `test_a_PRIOR_PERIOD_reading_is_still_no_reading` | `today.replace(day=1) - 1d` = **2026-09-30** | the reading is **NO READING** |
+
+> ### The same date, opposite assertions. The suite is self-contradictory on the 1st of every month, and only on the 1st.
+
+**The production code is correct, and its docstring anticipated exactly today:**
+"September is projected to exhaust around 09-14, so the file will carry a figure
+at or near zero into 1 October — and the first run of the new month would have
+skipped the odds fetch entirely." `_load_persisted_credits` line 96 rejects a
+prior-period reading. **The test encodes a one-day tolerance that does not survive
+the period boundary.**
+
+**Blast radius, measured:** steps 15–22 skipped — `--update`, settle, ML retrain,
+picks. **No fixtures, no picks, no settlement on the credit-reset day**, and no
+`AF_LEAGUE_FILTER` or `FS_DISCOVERY`. That is the Stage 12.1 blast radius working
+as designed; the trigger is what was wrong.
+
+**NOT FIXED.** It self-heals on 10-02 (then `today - 1d` is 10-01, same period)
+and **recurs 2026-11-01, which is inside H1's collection window.** The fix is one
+line in the test, but choosing *between* bounding the test to same-period and
+granting the loader a cross-boundary grace is a decision about spending real
+credits on a finished month's figure — the exact near-miss the loader was built to
+stop. **That is the user's call, and the patch is ready.**
+
+### DEFECT 2 — scheduler margin down to 9 minutes
+
+Part E. Open; no cron change permitted in this stage.
+
+### DEFECT 3 — closed this stage: strings written under the refuted premise
+
+Part D. Seven sites. **And the method note:** my first Part C query silently fell
+back to an **empty local SQLite** and returned "0 fixtures" — a zero that agreed
+with the empty-card premise and would have confirmed it. Every DB figure here now
+runs behind `assert db.is_postgres`.
+
+---
+
+## DECLARATION
+
+> ### CI AUDIT 2026-10-01 — DEFECTS FOUND (3)
+> 1. **month-boundary test contradiction** — blocked the entire pipeline on the
+>    reset day; production code correct; **OPEN**, recurs 11-01
+> 2. **scheduler drift** — margin 9 min, mean+3sd exceeds the constraint; **OPEN**
+> 3. **stale reason strings** — **CLOSED**, 7 sites
+
+> ### AF BOUNDARY MEASURED
+> First time outside a probe. 84–865 fixtures rejected across 37–233 untracked
+> league ids, `tracked=30`. **All 30 configured leagues map 1:1 to an AF id, 0
+> unmapped — no league shows the provider offering fixtures we reject.**
+
+> ### SUPPRESSION EXECUTED — and suppressed for the first time
+> 09-30: **`examined=36 candidates=35 suppressed=8 alarmed=28`**. Condition 3
+> cleared the eight for cause rather than declining.
+
+> ### STRINGS CORRECTED
+> 4 code/test sites, 3 ledger entries amended in place with originals intact, and
+> the `0.5h–11h21m` envelope marked as the pooled pre-08-30 regime.
+
+> ### SCHEDULER SERIES — n=32, spread 143 min
+> 4h11m–**6h35m**, mean 5h03m, sd 36.7 min. Widened: max +33 min, sd +11.4 min.
+
+> ### H1 AT RISK — and not on credits
+> Credits are intact (106–168 against an assumed 450 spendable; measured burn
+> 0–2/day). The risk is **timing**: the margin to the 09:45 binding constraint is
+> **9 minutes**, mean+3sd already **exceeds** it, today's run delivered **nothing**,
+> and the month-boundary defect **recurs 11-01 inside the collection window**.
+> `TARGET_N` and `CREDIT_CEILING` still have **no enforced stop in the runner**,
+> eight days out.
+
+> ### AND THE ALARM WORKS
+> `DID_NOT_RUN` → `--fail-on` → exit 1 → red → Telegram, first time in
+> production. `ci-audit` `36846296928` is red **correctly**.
+
+*Recorded 2026-10-01. `scripts/ci_audit.py`, `tests/test_empty_card_suppression.py`,
+`.github/workflows/daily-picks.yml` (comments only, cron asserted unchanged),
+`docs/ci-audit-ledger.md`. No predicate, schema, migration or production-data
+change. `s5.14` / `00febf` unchanged.*

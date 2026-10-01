@@ -688,8 +688,24 @@ def extract(log: str) -> Dict[str, object]:
 #: with 7 fixtures, then 41 on 10-10. Every one of the eight has its last
 #: fixture on 09-20 and its next on 10-09 or 10-10 — a 19-20 day gap.
 #:
-#: So "zero fixtures" is the EXPECTED state for these dates, and the discovery
-#: alarms would fire daily with a known cause until they were tuned out.
+#: THE CARD IS ABSENT FOR THESE EIGHT LEAGUES ONLY, AND THE PIPELINE'S CARD WAS
+#: NEVER EMPTY. Corrected 2026-10-01 from production: inside this very window the
+#: pipeline had 34 fixtures and 26 saved picks on five days — 09-21 (2 fx / 2 pk),
+#: 09-25 (1/1), 09-26 (25/17), 09-27 (5/5), 09-28 (1/1) — every one of them in an
+#: UNCOVERED league (romania/liga-1, spain/laliga2, england/league-one,
+#: england/league-two) and ZERO in the covered eight. The scraper confirms the
+#: eight independently: all 30 leagues report `none-in-range` with 100+ rows
+#: present and the eight's earliest kickoff at 10-09/10-10.
+#:
+#: So the window's DATES AND SCOPE SURVIVE — the per-league narrowing is what
+#: saved them — but no text here may say "the card is absent" without naming the
+#: eight. Said of all 30 it is false, and it was already false when first written:
+#: `disc[fs=18c]` and `disc[fs=5c]` were printed on the two runs immediately
+#: preceding that claim.
+#:
+#: So "zero fixtures" is the EXPECTED state for these dates IN THESE EIGHT
+#: LEAGUES, and the discovery alarms would fire daily with a known cause until
+#: they were tuned out.
 #:
 #: SUPPRESSING THEM IS SUP-1 UNLESS IT EXPIRES. A guard that silences the alarms
 #: about its own subject would make the first real collapse after 10-09
@@ -716,8 +732,15 @@ def extract(log: str) -> Dict[str, object]:
 #: genuine failure in the other 22 as "expected" for eleven days, when nothing
 #: established that it was.
 #:
-#: The residual is large and unmeasured: on 09-19 the uncovered 22 produced 75
-#: of 116 tracked fixtures, on 09-26 all 25, and on 09-27 all 5.
+#: The residual was large and is now MEASURED, 2026-09-28 and again in production
+#: 2026-10-01: on 09-19 the uncovered 22 produced 75 of 116 tracked fixtures, on
+#: 09-26 all 25, on 09-27 all 5 and on 09-28 all 1. Every zero is the break and
+#: not a defect — all 30 leagues report `none-in-range` with rows present (27-126)
+#: and a future earliest kickoff, `no-rows` is 0 on every run, and production
+#: agrees with the 09-28 probe on all 30 leagues' state, row count and earliest
+#: date. The uncovered 22 resume EARLIER than the eight: spain/laliga2 10-02,
+#: england/league-one and league-two 10-03, finland/veikkausliiga 10-07,
+#: romania/liga-1 10-08 — all confirmed from the scraper, not from the grid.
 EMPTY_CARD_COVERED_LEAGUES = frozenset({
     "england/premier-league", "england/championship", "spain/laliga",
     "germany/bundesliga", "italy/serie-a", "france/ligue-1",
@@ -729,7 +752,10 @@ EMPTY_CARD_COVERED_LEAGUES = frozenset({
 _LEAGUE_IN_FINDING = re.compile(r"^discovery: ([a-z0-9/-]+) found 0 fixtures")
 
 EMPTY_CARD_FROM = _dt.date(2026, 9, 21)
-EMPTY_CARD_UNTIL = _dt.date(2026, 10, 9)      #: exclusive; the card returns here
+#: Exclusive. The COVERED EIGHT's card returns here (10-09, 7 fixtures; 41 on
+#: 10-10). It is NOT the date the pipeline's card returns — uncovered leagues
+#: play throughout, and the next of them is spain/laliga2 on 10-02.
+EMPTY_CARD_UNTIL = _dt.date(2026, 10, 9)
 
 #: Findings whose cause is the measured empty card. Matched as substrings of the
 #: assertion text, and DELIBERATELY NARROW: only the discovery-zero family. A
