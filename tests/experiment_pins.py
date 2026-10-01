@@ -85,13 +85,29 @@ History:
                     mutable count — s5.13 held 0 picks at the amend and 16
                     within the hour, so ee60cd labels two configurations. Always
                     bump.
+
+    s5.15 2026-10-01  THE CLOCK MOVED: `daily-picks.yml`'s cron 03:00 -> 00:00
+                    UTC. Nothing in TRACKED_KEYS saw it, so without this bump the
+                    two pricing regimes would pool under `00febf` — which 109
+                    picks already carry.
+                    Selection-affecting by the s5.2 precedent: the cron decides
+                    WHEN prices are taken. Taken price moves (pricing completed
+                    08:35-10:08, now 05:14-07:56) and lead time roughly TRIPLES
+                    (-4min..1h29m -> 2h08m..4h50m). The discovered-fixture
+                    population does NOT move: the `now + 1 day` cutoff lands
+                    04:11-06:53 on D+1 instead of 07:11-09:53, and the earliest
+                    D+1 kickoff is 10:15, so both admit exactly day D.
+                    The CLV cost is UNMEASURABLE, not absent — closing-line
+                    coverage is still 0%.
+                    NOT a model change: no learner, feature, threshold or
+                    selection rule moved. The cohort boundary is about prices.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.14"
+CODE_REVISION_PIN = "s5.15"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.00febf"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.8da2fd"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 #: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16

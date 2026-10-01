@@ -923,7 +923,47 @@ TRACKED_KEYS: List[str] = [
 #:       cache reaches the models, hence which training data produces the picks.
 #:       It diverges only on a path healthy runs do not take — which is the
 #:       whole reason it was worth fixing.
-CODE_REVISION = "s5.14"
+#: s5.15 (2026-10-01) — BUMP. The CLOCK MOVED, and nothing in TRACKED_KEYS saw it.
+#:
+#:       `daily-picks.yml`'s cron moved 03:00 -> 00:00 UTC. No config value
+#:       changed, so `fingerprint_inputs` would have reported the same `00febf`
+#:       and pooled the two regimes silently. This bump is the only thing that
+#:       separates them, and it is taken under the amend-or-bump rule because
+#:       109 picks already carry `00febf`.
+#:
+#:       WHY IT IS SELECTION-AFFECTING (the `s5.2` precedent). The cron decides
+#:       when prices are taken, so it changes every pick's taken price, its lead
+#:       time to kickoff, and — in principle — which fixtures fall inside
+#:       `max_days_ahead`'s window. Two of those three move:
+#:
+#:         taken price   moves. Pricing completed 08:35-10:08 under 03:00 and
+#:                       completes 05:14-07:56 under 00:00 (projected from the
+#:                       measured delay series and the measured `--update`
+#:                       offsets).
+#:         lead time     moves, and roughly TRIPLES: -4 min .. 1h29m before the
+#:                       earliest kickoff, now 2h08m .. 4h50m. Better for
+#:                       reliability, worse for closing-line proximity. The CLV
+#:                       cost CANNOT be quantified — closing-line coverage is
+#:                       still 0%, so this is recorded as a known unmeasured
+#:                       cost rather than as neutral.
+#:         window        does NOT move. The cutoff is `now + 1 day`, landing
+#:                       04:11-06:53 on D+1 instead of 07:11-09:53, and the
+#:                       earliest D+1 kickoff is 10:15 — so both cutoffs admit
+#:                       exactly day D's fixtures. Same population, measured.
+#:
+#:       WHY THE MOVE WAS MADE: the deadline is a MEASURED 08:28-08:47 UTC
+#:       (earliest real kickoff 10:15 minus full-card time-to-picks of
+#:       107.0/88.1 min), and 03:00 delivered picks 67-85 minutes PAST it. The
+#:       old `09:45` deadline in the workflow comment was derived from an assumed
+#:       "~20-minute run" and was never measured; the `10:04` earliest kickoff it
+#:       rested on came from rows whose `match_date` carries sub-second
+#:       precision — ingestion timestamps, not kickoffs. Both are corrected in
+#:       the workflow block.
+#:
+#:       NOT a model change. No learner, feature, threshold or selection rule was
+#:       touched. The cohort boundary exists because the PRICES differ, not
+#:       because the predictions do.
+CODE_REVISION = "s5.15"
 
 
 def _stable(value: Any) -> Any:

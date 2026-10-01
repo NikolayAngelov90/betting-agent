@@ -20641,3 +20641,250 @@ cost:**
 *Recorded 2026-10-01. `tests/test_credit_reading_freshness.py` only, plus this
 ledger entry. No production, config, schema, migration, workflow or cron change.
 `s5.14` / `00febf` unchanged.*
+
+---
+
+# CLOCK MOVED — `0 0 * * *`, margin +94 min, cohort `s5.15` / `8da2fd`
+
+`tests/` **1619 passed, 0 failed** (1607 → 1619; +12). Invariants **passed** —
+count not cited. `cohort_status`: **`s5.15` / `stage5_baseline_20260807.8da2fd`,
+0 picks stamped.** Exactly **one** bump, for Part A. Stage 26 **SUSPENDED**.
+
+---
+
+## AND TWO NUMBERS THE SCHEDULE RESTED ON WERE BOTH WRONG
+
+Before the arithmetic, the correction that changes it — **including a claim I
+"verified exactly" last stage.**
+
+| | comment said | **measured 2026-10-01** |
+| --- | --- | --- |
+| earliest kickoff | 10:04 UTC | **10:15 UTC** |
+| latest kickoff | 19:30 UTC | **19:45 UTC** |
+| run duration → start deadline | "~20-minute run" → 09:45 | **67.4–88.1 min full card → 08:28–08:47** |
+
+**The 10:04 figure came from contaminated rows.** Of 2085 fixtures in the
+measurement window, **419 carry sub-second precision in `match_date`** — those
+are ingestion timestamps, not kickoffs (a kickoff is never at
+`09:09:59.037521`). Across all history, **509 of 37,709** tracked rows are
+contaminated and **23,616 (63%)** sit at exactly `00:00:00.000000`, which are
+date-only historical rows.
+
+> ### On the 1666 CLEAN rows the earliest real kickoff is 10:15. Last stage I wrote that the comment's 10:04 was "verified exactly" — **it was verified against the same contamination that produced it.** Rule 1 in its own words: a number in a comment is `assumed` until re-measured, and re-measuring on the contaminated population is not re-measuring.
+
+**And the weekday structure is not what the latest-kickoff spread suggested:**
+
+| | Sat/Sun | Mon–Fri |
+| --- | --- | --- |
+| **earliest** kickoff | **10:15** | **14:30–15:00** |
+| latest kickoff | 19:30 | 19:30–19:45 |
+
+**The deadline is a weekend-only constraint.** Weekdays carry four hours more
+slack. A single cron remains the right instrument — it just has to satisfy the
+weekend — but "the per-weekday spread is 15 minutes", which I wrote last stage,
+was true of the *latest* kickoff and false of the *earliest*.
+
+*(Data-quality finding, recorded not fixed: `match_date` can hold an ingestion
+timestamp. 509 rows, 2026-02-28 → 2026-08-26. All historical and already played,
+so no bearing on this move — the predicates it would affect filter future
+fixtures.)*
+
+---
+
+## PART A — `0 0 * * *`, with the arithmetic
+
+**Deadline = 10:15 − time-to-picks.** Margins use `max` and `mean+3sd`, never the
+mean.
+
+| delay | start | + full-card | picks done | **margin vs 10:15** |
+| --- | --- | --- | --- | --- |
+| **max 6h35m** | 06:35 | max 88.1m | 08:22 | **+112 min** |
+| **mean+3sd 6h53m** | 06:53 | mean+3sd 107.0m | 08:40 | **+94 min** |
+| *(03:00, for contrast)* | 09:53 | 107.0m | 11:40 | **−85 min** |
+
+**Not 00:30.** Settlement clears its floor by **271 minutes** at 00:00, so the
+lower edge is free, and +94 against +54 is the whole of the available headroom
+for nothing.
+
+### Projected pick lead time at the new cron
+
+| | 03:00 (measured) | **00:00 (projected)** |
+| --- | --- | --- |
+| pricing completes | 08:35–10:08 | **05:14–07:56** |
+| lead time to earliest kickoff | **−4 min … 1h29m** | **2h19m … 5h01m** |
+
+*(projected 2026-10-01 from the measured delay series and the measured `--update`
+completion offsets of +17.8…+38.5 min.)* **Lead time roughly triples. Better for
+reliability, worse for closing-line proximity, and the CLV cost is UNMEASURABLE —
+closing-line coverage is still 0%. Recorded as a known unmeasured cost, not as
+neutral.**
+
+### The exhaustion date, so the next decision has a trigger
+
+**Measured drift, linear fit on the n=32 series: +2.585 min/day = +18.1 min/week,
+R² = 0.451.**
+
+> ### +94 minutes is consumed in 36 days — **2026-11-06** *(projected; R²=0.451, so the trend is real and noisy, and the date is a projection not a deadline)*. The working figure of "~10 min/week" was mine and measurement puts it at 18. **Seven weeks was optimistic; five is the number.**
+
+**The split is the instrument then, not now.** Withdrawn here as unnecessary, and
+the reason it becomes necessary later is recorded with its trigger.
+
+### A1 — THE DATE ARITHMETIC. Verified, and the risk runs the other way.
+
+**Execution stays on the same calendar day for both crons.** Execution is the cron
+instant plus the delay, so:
+
+| delay | from 03:00 | day | from 00:00 | day |
+| --- | --- | --- | --- | --- |
+| min 4h11m | 07:11 | D | 04:11 | D |
+| max 6h35m | 09:35 | D | 06:35 | D |
+| mean+3sd 6h53m | 09:53 | D | 06:53 | D |
+| **all-time documented 11h21m** | 14:21 | D | **11:21** | **D** |
+
+> ### Headroom before execution crosses into D+1: **24h at 00:00 against 21h at 03:00.** The move is STRICTLY MORE date-robust, which inverts the stated risk. A test pins this so the fear is not re-derived.
+
+**Every clock-derived site enumerated, with its verdict:**
+
+| site | derivation | changes? | why |
+| --- | --- | --- | --- |
+| the card's date | `today_start`/`today_end`, **day-aligned** | **NO** | execution date invariant |
+| settlement target | **DB results, not a date**; staleness branch is `now − 24h` | **NO** | the boundary moves to D−1 04:11–06:53; **zero kickoffs in that band** |
+| credits period | `_credits_period(date.today())` → `YYYY-MM` | **NO** | execution date invariant |
+| run marker | `briefings_sent.json` keyed by `date.today().isoformat()`; cache key is `run_id` | **NO** | execution date invariant |
+| audit window | `ci-audit.yml --since yesterday`, own cron `0 12 * * *` **unchanged** | **NO** | audit executes 17:52–19:30; a 04:11–06:53 run is in scope |
+| `max_days_ahead` cutoff | `now + 1 day`, one-sided | **NO** | cutoff lands 04:11–06:53 on D+1; **earliest D+1 kickoff is 10:15**, so both admit exactly day D |
+
+**The now-relative sites are invariant for one measured reason: the execution band
+moves through `[04:11, 07:11)`, and that band contains ZERO kickoffs in all 37,709
+tracked rows.** Not a single site resolves to a different calendar date, so
+nothing blocked the move.
+
+### A2 — COHORT
+
+**`s5.14` → `s5.15`; `00febf` → `8da2fd`.** The cron is not in `TRACKED_KEYS` and
+is not even a config value, so **`fingerprint_inputs` would have reported the same
+`00febf` and pooled the two pricing regimes silently** — `__code__` is the only
+field that separates them, and 109 picks already carry `00febf`.
+
+Recorded in the revision entry: the lead-time change, that the
+discovered-fixture population does **not** move, that the CLV cost is
+unmeasurable, and **that the move was made on a measured deadline of 08:28–08:47
+rather than on the withdrawn `09:45` comment.**
+
+**One discrepancy, flagged not fixed:** `cohort_status.py` prints
+`VERDICT: AMEND` for the empty cohort, but **s5.14's own entry retired the
+amend-while-empty rule** ("It evaluates a mutable count … Always bump"). The tool
+still implements the retired rule. Harmless today — the bump was taken — but the
+tool and the documented rule disagree.
+
+---
+
+## PART B — STEP 13 BOUNDED, AND THE TIMEOUT ALERTS
+
+```yaml
+- name: Run tests
+  id: tests
+  timeout-minutes: 15
+```
+
+**15 minutes ≈ 7× the measured maximum.** The suite runs **119–130 s** in CI
+(n=4, measured 2026-09-28…10-01), so 15 min absorbs the 2–3× variance an unlucky
+runner produces while cutting an unbounded hang from **360 min to 15**.
+
+### Why this is not cosmetic — the two events are different
+
+| | job-level cap (before) | **step-level timeout (now)** |
+| --- | --- | --- |
+| GitHub marks | job **`cancelled`** | **step `failure`** |
+| downstream steps | terminated | report **`skipped`** |
+| `if: always()` alert | **not guaranteed a grace period** | **runs** |
+| outcome | **day lost silently** | **red run + Telegram** |
+
+**The alert deliberately omits `tests` from its step map** and keys on the
+*downstream* outcomes instead. A step-13 timeout therefore produces the identical
+downstream state as a step-13 **failure** — and that path is not hypothetical:
+**it is exactly what ran today on `36843668865`.**
+
+### The positive control, executed against the shipped script
+
+The control **extracts the alert body from the YAML and runs it**, so it cannot
+pass while the real script drifts:
+
+| input state | result |
+| --- | --- |
+| all downstream `skipped` (**a step-13 timeout**) | **alerts** — `step(s) DID NOT RUN` |
+| all `success` | **silent** — so firing carries information |
+| one `cancelled` | **alerts as `UNEXPECTED`** — the three-state rule holds |
+
+> ### And a guard on the guard. The first version of this control injected its fakes into `exec`'s globals, and the script's own `import os, subprocess, sys` **overwrote them** — every outcome read as `''`, the control reported `UNEXPECTED` for a state it had never been given, and it would have "passed" having tested nothing. `test_the_harness_itself_passes_the_outcomes_through` now proves the inputs arrive. **A harness that silently substitutes its inputs is the exact defect class this file exists to bound.**
+
+### The remaining unbounded steps — reported, fixed none
+
+Every other step that runs a command and has **no** `timeout-minutes` inherits
+the 360-minute cap and carries the same shape. All are short-running today, which
+is why none is urgent and all are pinned: a test caps the count and asserts the
+three heavy steps (`--update`, picks, `--update-results`) stay bounded, so
+**adding a long-running step without a timeout fails in CI rather than in
+production at the cap.**
+
+---
+
+## PART C — THE GATE DECISION, FILED AS DECIDED
+
+> ### `Run tests` can halt the job before capture. **THIS IS ACCEPTED.** The cost is a card lost on any day the suite fails for a reason unrelated to capture correctness — realised once, **2026-09-20, permanently**. The 10-01 recurrence cost **nothing** because the card was empty (**30 `none-in-range`, 0 `kept`, measured**). The **11-01 recurrence was removed by bounding the test, not by changing the gate.**
+>
+> The gate stays because **capture on an untested tree is the worse risk**: wrong
+> odds rows never backfill and are indistinguishable downstream, whereas a lost
+> day costs one card.
+
+### AND A CORRECTION TO YESTERDAY'S RECORD
+
+> ### The claim that a test failure destroyed today's card is WITHDRAWN. It destroyed nothing — the card was empty. **The clock destroyed today's card:** the run started 09:35 and would have produced picks at ~11:03, 48 minutes after the earliest real kickoff, with every test passing.
+
+The entry titled *"CI AUDIT 2026-10-01 — DEFECTS FOUND (3)"* called the test
+failure Defect 1 and said it "blocked the entire pipeline on the reset day". The
+blocking is accurate; **the implied loss is not.** Defect 1's real cost was the
+recurrence it threatened, not the day it took.
+
+---
+
+## PART D — CARRY-OVERS, UNCHANGED
+
+| item | status |
+| --- | --- |
+| **credit balance** | stays **`assumed`** (450 spendable / 500 tier). **NOT closed** until a run with `--update` measures it against the provider. Today's run skipped `--update`, so the reset is still unconfirmed. |
+| **`closing-lines` series** | stays **`CENSORED`**; not compared to the daily crons. |
+| **`TARGET_N` / `CREDIT_CEILING`** | unchanged — **no enforced stop in the runner.** Eight days out. Status only. |
+| **scheduler series** | continues daily, `headSha`-defined. **Membership changes tomorrow:** runs now carry `0 0 * * *`, so the `0 3 * * *` population **closes at n=32** and a new series opens. The two must not be pooled — that is the `390a4be` error one level up. |
+| Stage 26 | **SUSPENDED** |
+
+---
+
+## DECLARATION
+
+> ### CLOCK MOVED
+>
+> | | |
+> | --- | --- |
+> | **new cron** | **`0 0 * * *`** (00:00 UTC, 03:00 Sofia) |
+> | **measured margin** | **+112 min** (max delay) · **+94 min** (mean+3sd) |
+> | deadline it was set against | **08:28–08:47 UTC**, measured — not the withdrawn 09:45 |
+> | **lead-time change** | −4 min…1h29m → **2h19m…5h01m** (projected, ~3×) |
+> | **cohort** | **`s5.15` / `stage5_baseline_20260807.8da2fd`**, 0 picks stamped |
+> | **`+94` runs out** | **2026-11-06** (projected, +2.585 min/day, R²=0.451) |
+> | date arithmetic | **6 of 6 sites unchanged**; 00:00 has **24h** of midnight headroom vs 03:00's 21h |
+>
+> ### STEP 13 BOUNDED
+> `timeout-minutes: 15` ≈ **7×** the measured 119–130 s baseline. A step timeout
+> is a **`failure`**, not a job cancellation, so the existing `if: always()`
+> alert fires — proved by executing the shipped alert body against the exact
+> downstream state a timeout produces. **Gate unchanged.**
+>
+> ### GATE DECISION FILED, AND ONE CLAIM WITHDRAWN
+> The gate stays, with its cost named. **A test failure did not destroy today's
+> card. The clock did.**
+
+*Recorded 2026-10-01. `.github/workflows/daily-picks.yml` (cron + one
+`timeout-minutes` + the rationale), `src/models/model_version.py` (`CODE_REVISION`
++ its entry), `tests/experiment_pins.py` (both pins), `tests/test_schedule_margin.py`
+(new). No predicate relaxed, no schema, migration or production-data change.*

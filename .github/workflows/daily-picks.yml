@@ -28,33 +28,62 @@ on:
     #
     #   min 4h11m · max 6h35m · mean 5h03m · median 5h02m · sd 36.7m · spread 143m
     #
-    # AND IT IS DRIFTING. At n=28 (through 09-27) the max was 6h02m and sd 25.3m;
-    # 09-28, 09-29, 09-30 and 10-01 then came in at 6h05m, 6h15m, 6h07m and
-    # 6h35m — four consecutive days above the prior 28-day maximum, which is a
-    # shift and not an outlier. Margin against the 09:45 binding constraint is
-    # now 9 MINUTES against the observed max, and mean+3sd (6h53m) EXCEEDS it.
-    # Re-measure before trusting the buffer; no cron change has been made.
+    # AND IT IS DRIFTING, measured 2026-10-01: a linear fit on the n=32 series
+    # gives +2.585 min/day (+18.1 min/week), R^2 = 0.451 — a real trend, noisy.
+    # 09-28, 09-29, 09-30 and 10-01 came in at 6h05m, 6h15m, 6h07m and 6h35m,
+    # four consecutive days above the prior 28-day maximum of 6h02m. A shift,
+    # not an outlier.
     #
-    # MEASURED 2026-08-30, three constraints, all binding on different sides:
+    # STAGE 22 (2026-10-01). 03:00 -> 00:00 UTC, and the two numbers the old
+    # block asserted were both WRONG. Every figure below is measured on this
+    # date and labelled; a number in a comment is `assumed` until re-measured.
     #
-    #   earliest kickoff  run must START by ~09:45 UTC, so a cron at 09:45-D
-    #                     tolerates D of delay.
-    #   settlement        latest kickoff 19:30 UTC, so football ends ~21:30.
-    #                     A cron before ~23:30 the previous day settles matches
-    #                     whose results are not yet published.
-    #   odds availability measured DIRECTLY against the provider rather than
-    #                     from our own first_seen_at (which records when this
-    #                     pipeline looked, not when the market opened, and is
-    #                     therefore confounded with the delay): 9 of 10 fixtures
-    #                     are priced >=24h before kickoff, so odds do not bind.
+    #   earliest kickoff  10:15 UTC, NOT 10:04. Measured over 1666 fixtures in
+    #                     the 30 tracked leagues, 2026-08-01..09-20, AFTER
+    #                     discarding 419 rows whose match_date carries
+    #                     sub-second precision — those are ingestion timestamps,
+    #                     not kickoffs, and 10:04 was one of them. Only Sat/Sun
+    #                     have morning kickoffs (10:15); Mon-Fri earliest is
+    #                     14:30. The binding case is the WEEKEND.
+    #   latest kickoff    19:45 UTC, NOT 19:30 (Mon 09-14, Wed 09-16). The
+    #                     per-weekday spread is 15 minutes, so a single cron is
+    #                     the right instrument for the lower edge.
+    #   time to picks     67.4-88.1 min on a FULL card (n=4), mean 76.4, sd 10.2,
+    #                     mean+3sd 107.0. The old block assumed "a ~20-minute
+    #                     run" and derived a 09:45 start deadline from it. That
+    #                     deadline was never measured and was wrong by 3-4x.
+    #   settlement        19:45 + 115m match + 120m publication [ASSUMED] = the
+    #                     floor is 23:40 on day D. DOES NOT BIND: the MINIMUM
+    #                     observed delay is 4h11m, so a 00:00 cron starts no
+    #                     earlier than 04:11 and clears the floor by 271 min.
+    #                     The publication figure would have to be 511 min rather
+    #                     than 120 before it could bind, so it is not worth
+    #                     re-measuring.
+    #   odds availability unchanged from 2026-08-30 and still non-binding:
+    #                     9 of 10 fixtures are priced >=24h before kickoff.
     #
-    # 03:00 tolerates 6h45m of delay -- the whole historical 0.5-5.7h envelope
-    # with an hour to spare -- and leaves 5h30m of settlement margin.
+    # SO THE DEADLINE IS A MEASURED 08:28-08:47 UTC (10:15 minus full-card
+    # mean+3sd / max), and 03:00 sat 67-85 MINUTES PAST IT. 00:00 restores:
     #
-    # WHAT IT DOES NOT FIX: a cron at 03:00 delayed 11h lands at 14:00 and still
-    # misses a Saturday afternoon card. This buys margin against the TYPICAL
-    # delay, not the observed maximum. OPS-3 stays open.
-    - cron: '0 3 * * *'    # 03:00 UTC (06:00 Sofia)
+    #   delay max 6h35m      -> start 06:35, picks 08:22, margin +112 min
+    #   delay mean+3sd 6h53m -> start 06:53, picks 08:40, margin  +94 min
+    #
+    # DATE SAFETY, the whole risk of moving across midnight. Execution stays on
+    # the SAME calendar day for both crons (00:00 + 11h21m, the largest delay
+    # ever documented, is 11:21 the same day), and 00:00 has 24h of headroom
+    # before a crossing against 03:00's 21h — the move is STRICTLY MORE
+    # date-robust. Every clock-derived site was enumerated and none changes:
+    # the card's date, the settlement target, the credits period, the run marker
+    # (briefings_sent.json, keyed by date.today()), the audit window and
+    # max_days_ahead's cutoff. The now-relative ones are invariant because the
+    # execution band moves through [04:11, 07:11), which contains ZERO kickoffs
+    # in 37,709 tracked rows.
+    #
+    # WHAT IT DOES NOT FIX: +94 min is consumed by the measured drift around
+    # 2026-11-06 (projected, R^2=0.451). That is the trigger for the next
+    # decision, and the pipeline split — withdrawn here as unnecessary — is the
+    # instrument then. OPS-3 stays open.
+    - cron: '0 0 * * *'    # 00:00 UTC (03:00 Sofia)
   workflow_dispatch: # Allow manual trigger
 
 # Serialize runs so a manual dispatch can never write to the DB at the same
@@ -185,8 +214,25 @@ jobs:
       # job before update/settle/picks, which is the correct blast radius: a
       # missed day of picks is recoverable, picks generated from code whose
       # tests fail are not obviously wrong and may never be noticed.
+      # BOUNDED 2026-10-01. Until today this step had NO timeout-minutes, so it
+      # inherited the 360-minute JOB cap — and a job cancelled at the cap loses
+      # the day with no alert, because `always()` steps are not guaranteed a
+      # grace period once the job is cancelled. A step-level timeout is a
+      # different event: GitHub marks the STEP `failure`, the job halts here (no
+      # continue-on-error, deliberately), every step below reports `skipped`, and
+      # the critical-step alert — which runs `if: always()` and keys on those
+      # downstream outcomes rather than on anything tests-specific — fires with
+      # "step(s) DID NOT RUN". That path is not hypothetical: it is exactly what
+      # ran on 2026-10-01 when a test FAILED, and a timeout produces the same
+      # downstream state.
+      #
+      # 15 MINUTES = ~7x the measured maximum. The suite runs in 119-130s in CI
+      # (n=4, measured 2026-09-28..10-01), so 15 min absorbs the 2-3x variance an
+      # unlucky runner produces while cutting an unbounded hang from 360 min to
+      # 15. Raise it when the measured baseline moves, not when it trips.
       - name: Run tests
         id: tests
+        timeout-minutes: 15
         run: python -m pytest tests/ -v --tb=short
 
       - name: Run daily update (fixtures + odds, no Flashscore results)
