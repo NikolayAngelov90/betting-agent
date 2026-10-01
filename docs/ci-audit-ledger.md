@@ -21158,3 +21158,208 @@ UNEVALUATED, and an empty series never sets `alarm`.
 `tests/test_contamination_and_margin.py` (new). No predicate changed, no model
 input altered, no schema, migration or production-data change. `s5.15` /
 `8da2fd` unchanged.*
+
+---
+
+# BASELINE GAP CLOSED — b1 → b2, and one significance verdict flips
+
+`tests/` **1642 passed, 0 failed** (1636 → 1642). Invariants **passed** — count not
+cited. `cohort_status`: **`s5.15` / `8da2fd` UNCHANGED** — Part B touched no
+prediction path, as rule 7 requires. Stage 26 **SUSPENDED**.
+
+---
+
+## PART A — H1 INDEPENDENT. Traced, not expected.
+
+| | |
+| --- | --- |
+| `h1_collection_check.py` imports | `fixture_identity`, `odds_quota`, `database`, `sqlalchemy.text` — **nothing from `src.evaluation`** |
+| its SQL | `FROM odds o JOIN matches m ON m.id = o.match_id`, plus `api_budget` |
+| **and it already gates** | **`AND m.training_exclusion_reason IS NULL`** (line 231) |
+| `h1_analysis.py` imports | only from `h1_collection_check` |
+| its SQL | `FROM saved_picks` |
+| references to `baseline` / `walk_forward` / `fold` / `clean_dataset` / `MatchRow` | **none** |
+
+> ### Neither file reads a baseline figure, `walk_forward`, or a fold assignment. H1 is a price-momentum study over `odds` and `saved_picks`, and its own query carries the phantom exclusion — its docstring has said so since it was written: *"phantom class — `training_exclusion_reason IS NULL`, on every query."*
+
+The only `fold`/`baseline` string matches in either file are prose — *"folding
+them together is how a partial market gets…"* and *"Both thresholds come from the
+pre-registration"*. **H1 INDEPENDENT.** Part B proceeds.
+
+---
+
+## PART B — BASELINE GAP CLOSED
+
+`scripts/run_baseline.py:load_rows` now filters with
+**`*_HistoryCache._base_filter()`** — the single definition Poisson, Elo and
+`feature_engineer` inherit through `get_completed_matches`. No second predicate.
+
+*(The class is `_HistoryCache`, not `MatchHistory`; reaching into it directly is
+deliberate — a public alias would be a second NAME for one rule.)*
+
+### Fold membership, counted per window *(measured 2026-10-01, dialect asserted)*
+
+| cutoff | train Δ | test Δ | test excluded |
+| --- | --- | --- | --- |
+| 2025-08-01 | −66 | 0 | 0 of 1035 |
+| 2025-11-01 | −66 | 0 | 0 of 1514 |
+| 2026-02-01 | −66 | −18 | 18 of 2099 |
+| 2026-05-01 | −123 | −12 | 12 of 956 |
+| **2026-07-01** | **−135** | **−449** | **449 of 1513 — 29.7%** |
+| **all folds** | | **−479** | **479 of 7117 — 6.73%** |
+
+> ### The most recent fold — the one that evaluates the configuration actually in force — had **29.7% of its test set** carrying an exclusion, and `walk_forward` assigns folds **by `match_date`**. That is not noise with a conservative direction. It is the specific failure the walk-forward method exists to prevent.
+
+### The figures, before and after
+
+Both runs are on **today's** data, so the *only* difference is the predicate —
+comparing against the 2026-08-07 snapshot would have confounded the fix with two
+months of new matches.
+
+| candidate | log-loss `b1` | log-loss `b2` | Δ |
+| --- | --- | --- | --- |
+| market (de-vigged consensus) | 0.9863 | 0.9868 | +0.0005 |
+| market (raw 1/odds) | 0.9885 | 0.9891 | +0.0005 |
+| market 80% + poisson/elo 19% | 0.9889 | 0.9893 | +0.0004 |
+| market 60% + poisson/elo 40% | 0.9946 | 0.9948 | +0.0002 |
+| market 40% + poisson/elo 60% | 1.0032 | 1.0032 | +0.0001 |
+| poisson + elo (50/50) | 1.0302 | 1.0299 | −0.0003 |
+| elo only | 1.0303 | 1.0304 | +0.0001 |
+| poisson only | 1.0399 | 1.0393 | −0.0007 |
+| **n shared** | **2355** | **2346** | **−9 (−0.38%)** |
+
+**Why only 9 of 479 excluded test rows left the shared set:** the harness scores a
+match only where *every* candidate can produce a forecast and market odds exist,
+so most excluded rows were never in the scored population. **The 29.7% is the
+population the folds were split on; the 0.38% is the population finally scored.
+Both are true and they answer different questions.**
+
+### DOES ANY CONCLUSION IN THE RECORD MOVE? YES — ONE.
+
+| candidate | `b1` | `b2` |
+| --- | --- | --- |
+| **market 80% + poisson/elo 19%** | **+0.0026, CI [+0.0001, +0.0048] — SIGNIFICANT** | **+0.0024, CI [−0.0000, +0.0046] — NOT significant** |
+
+Every other verdict holds: poisson, elo and the 50/50 blend remain significantly
+worse than the market; raw-vig market remains not significant.
+
+> ### A 0.38% change in the scored population flipped a verdict whose CI lower bound was **+0.0001**. The honest reading is not "the blend is better than we thought" — it is **that verdict was never robust**, and nothing should have been built on it. The standing conclusion that the model adds no information over the price is **unaffected**: it rests on poisson/elo at +0.04–0.05 nats, two orders of magnitude clear of the boundary.
+
+---
+
+## PART C — THE BASELINE IS VERSIONED
+
+The dilemma dissolved exactly as predicted, and it was never a dilemma:
+
+> ### A changed evaluation population is a different experiment, exactly as a changed prediction population is. Picks carry `model_version`; **baselines carried nothing**, so every correction to the evaluation set was irreversible instead of a bump.
+
+| | |
+| --- | --- |
+| `BASELINE_REVISION` | **`b2`** |
+| fingerprints | the **exclusion predicate**, the **fold strategy**, the **window definition** (+ cutoffs, `since`) |
+| today's figure | **`b2.884ee8`** |
+| pre-fix snapshots | **3 stamped `b1.unstamped-pre-exclusion`** with a note saying what b1 admitted |
+
+**Mark, never delete — third instance**, after the 510 phantoms and the 81
+identity rows. The stamping diff is **+3/−1 per file: the two new keys and a
+comma.** No figure, no `generated_at`, no candidate value touched.
+
+**THE RULE, recorded:** *no post-fix figure may be compared against a pre-fix one
+without naming both revisions.* A test asserts every snapshot carries a revision
+and that any `b1` stamp explains itself.
+
+**And the pin was inverted, not deleted.** The test that previously asserted
+`run_baseline.py` **lacked** the exclusion — and said in its own docstring that it
+must be inverted when the gap closed — is now
+`test_run_baseline_APPLIES_the_exclusion_via_the_single_definition`. It also
+asserts the predicate is **imported, not re-typed**, so the fix cannot become the
+seventh instance of THE HABIT. A further test checks the fingerprint moves when
+**each** of the five inputs moves — a fingerprint blind to one of them pools two
+experiments silently, which is the `__code__`-in-`TRACKED_KEYS` lesson one level
+out.
+
+---
+
+## PART D — COHORT TOOL TRACKED
+
+**15 recorded revisions, s5.1 → s5.15.**
+
+**The retrospective question cannot be answered, and that is the finding:** an
+untracked file has no history, so what `config/config.yaml` contained at each past
+bump is **unrecoverable**. Today it is **sha256-identical** to the example
+(`B10DFCA2…`), so the answer is *probably* none —
+
+> ### which is luck, already recorded as luck, and not a check. The only bump I can verify is the one taken today: `s5.15` reproduces as `8da2fd` from the tracked example.
+
+**From s5.15 onward the question cannot arise.** The tool reads
+`config/config.example.yaml`, which is in HEAD. The test asserts **every
+`config/` or `data/` path the tool names is in the committed tree**, with a
+positive control on the real negative case: `config/config.yaml` must **not** be
+in HEAD (and if it ever is, the Stage 10.1 defect has returned from the other
+side — a convenience file become a specification).
+
+**And a distinction the test makes explicit:** `.env` is untracked and *is* read —
+legitimately. It supplies `DATABASE_URL`, which selects **where the count comes
+from**, not **what the fingerprint is**. Untracked inputs may feed the connection;
+they may not feed the cohort label. A third test asserts no environment value
+reaches the `model_version(...)` call.
+
+---
+
+## PART E — THE TWO CORRECTIONS, RECORDED
+
+> ### Stage 17's 53.5% created-after-kickoff is REFUTED as a phantom artefact. The measured value is 91.8%, mean +638 days; phantoms account for **−0.06 pp**. The cause is backfill population growth. Stage 19's suspicion is separated.
+>
+> **Stage 18 C2's conclusion STRENGTHENS rather than falls:** 91.8% is *worse*
+> than 53.5%, so `created_at` is an even poorer proxy for first-seen than the
+> comment claimed. **The explicit `first_seen_at` timestamp remains justified**,
+> and more strongly than when it was added.
+
+> ### A second independent detector is not an improvement to the first. The microsecond signature and the `created_at`-proximity test **share no input**, so their agreement is evidence; a refinement of one would not have been. The residual — whole-second AND far from `created_at` — is bounded at ~1e-6 per call and is stated as **a probability, not a proof**.
+
+---
+
+## AND TWO DEFECTS OF MINE, BOTH CAUGHT BY THE SUITE'S OWN GUARDS
+
+The helper I wrote for Part D failed two existing tests:
+
+| guard | what my code did |
+| --- | --- |
+| `test_every_subprocess_capture_declares_utf8` | `subprocess.run(..., text=True)` with **no `encoding="utf-8"`** — the platform codec, which on cp1251 leaves `.stdout` as None, which reads as an empty result, which reads as a **clean finding** |
+| `test_no_check_scopes_itself_on_staged_files_alone` | `git ls-files --error-unmatch` — reads the **INDEX**, so it answers differently before and after `git add` at the same commit |
+
+> ### The second is a REPEAT: the same `git ls-files` scope trap caught me once already this project, and the guard written then is what caught it now. Both were fixed by asking a better question rather than by patching flags — `git cat-file -e HEAD:<path>` is not merely the compliant form, it is the *correct* one, because a cohort verdict has to be reproducible from a **commit** and "is it staged" does not establish that.
+
+---
+
+## DECLARATION
+
+> ### H1 INDEPENDENT
+> Traced by import and by SQL. `h1_collection_check` reads `odds`, `matches`
+> (**already gated**) and `api_budget`; `h1_analysis` reads `saved_picks`.
+> **Zero** references to `baseline`, `walk_forward`, folds or `clean_dataset`.
+
+> ### BASELINE GAP CLOSED
+>
+> | | |
+> | --- | --- |
+> | predicate | **`_HistoryCache._base_filter()`**, imported, not re-typed |
+> | fold-membership delta | train **−479** total; test **−479**, of which **−449 in the 2026-07-01 fold (29.7%)**; all folds **6.73%** |
+> | scored population | **2355 → 2346 (−0.38%)** |
+> | **revisions** | **`b1.unstamped-pre-exclusion` → `b2.884ee8`** |
+> | conclusion that moves | **`market 80% + poisson/elo 19%`: SIGNIFICANT → NOT significant** (CI lower bound +0.0001 → −0.0000). It was never robust. |
+> | standing conclusion | **unaffected** — poisson/elo remain +0.04–0.05 nats worse than the market |
+>
+> Pre-fix figures **stamped, not discarded**. The comparability rule is recorded:
+> **no cross-revision comparison without naming both revisions.**
+
+> ### COHORT TOOL TRACKED
+> Reads `config.example.yaml`, which is in HEAD. **Past bumps are unauditable by
+> construction** — an untracked file has no history — and today's identity is
+> luck, recorded as luck. From `s5.15` the question cannot arise. Positive
+> control: the check fails if an untracked config is reintroduced.
+
+*Recorded 2026-10-01. `scripts/run_baseline.py`, `src/evaluation/baseline.py`,
+`data/baselines/*.json` (stamped, figures untouched),
+`tests/test_contamination_and_margin.py`. `model_version` UNCHANGED at `8da2fd` —
+no prediction path touched. No schema, migration or production-data change.*

@@ -58,28 +58,75 @@ def test_the_single_predicate_EXISTS_and_is_not_duplicated_again():
         "feature_engineer all inherit it from here")
 
 
-def test_run_baseline_STILL_LACKS_the_exclusion_and_that_is_RECORDED():
-    """THE GAP, pinned as a known defect rather than silently carried.
+def test_run_baseline_APPLIES_the_exclusion_via_the_single_definition():
+    """THE GAP, CLOSED 2026-10-01 (Stage 24). Was a pinned known defect.
 
-    Deliberately NOT fixed in Stage 23: adding the predicate changes every
-    baseline figure measured to date, which makes past comparisons
-    non-reproducible. That is a decision about the experimental record, not a
-    bug fix, and it is the user's to take.
+    The previous version of this test asserted the exclusion was ABSENT and said
+    it must be inverted when closed. This is that inversion — the gap could not
+    be closed silently, and it was not forgotten.
 
-    WHEN IT IS FIXED, this test fails and must be inverted — which is the point:
-    the gap cannot be closed silently, and it cannot be forgotten either.
+    The predicate must come from `_HistoryCache._base_filter()`, not be
+    re-typed: one rule, one definition. A hand-copied copy is how
+    feature_engineer ended up with its own, and how three discovery phrasings
+    happened.
     """
     src = pathlib.Path("scripts/run_baseline.py").read_text(encoding="utf-8")
-    block = src.split("def load_rows(", 1)[1].split("def ", 1)[0]
-    assert "training_exclusion_reason" not in block, (
-        "run_baseline.py now applies the exclusion. GOOD — but every baseline "
-        "figure recorded before this change was measured on a population that "
-        "included 510 phantoms (up to 17.3% of a recent window), so the old "
-        "numbers are not comparable to the new ones. Record that, then invert "
-        "this assertion.")
-    assert "NOT GATED" not in block, (
-        "run_baseline.py claims to be deliberately ungated. It MEASURES, so the "
-        "three permitted categories (populates/repairs/resolves) do not apply")
+    block = src.split("def load_rows(", 1)[1].split("\ndef ", 1)[0]
+    assert "_HistoryCache._base_filter()" in block, (
+        "run_baseline.py no longer applies the shared exclusion predicate — the "
+        "evidence bar for every model change is admitting phantom rows again")
+    assert "Match.training_exclusion_reason" not in block, (
+        "the predicate was re-typed inline instead of imported. One definition: "
+        "use _HistoryCache._base_filter()")
+
+
+def test_the_baseline_carries_a_REVISION():
+    """Part C: a changed evaluation population is a different experiment.
+
+    Picks carry `model_version`; baselines carried nothing, so every correction
+    to the evaluation set was irreversible instead of a bump. That is the only
+    reason closing the gap ever looked like a choice.
+    """
+    from src.evaluation.baseline import BASELINE_REVISION, baseline_fingerprint
+    assert BASELINE_REVISION == "b2"
+    fp = baseline_fingerprint(exclusion="x", fold_strategy="y", window_days=60,
+                              cutoffs=[dt.date(2026, 1, 1)], since="2022-01-01")
+    assert fp.startswith("b2.") and len(fp.split(".")[1]) == 6
+    src = pathlib.Path("scripts/run_baseline.py").read_text(encoding="utf-8")
+    assert 'payload["baseline_revision"]' in src, (
+        "the snapshot is written without a revision, so a corrected population "
+        "is indistinguishable from a changed result")
+
+
+def test_the_fingerprint_SEPARATES_the_three_things_that_define_a_population():
+    """Exclusion, fold strategy and window must each move the digest.
+
+    A fingerprint that ignores one of them silently pools two experiments — the
+    `__code__`-in-TRACKED_KEYS lesson, one level out.
+    """
+    from src.evaluation.baseline import baseline_fingerprint
+    base = dict(exclusion="a", fold_strategy="b", window_days=60,
+                cutoffs=[dt.date(2026, 1, 1)], since="2022-01-01")
+    ref = baseline_fingerprint(**base)
+    for field, other in (("exclusion", "a2"), ("fold_strategy", "b2"),
+                         ("window_days", 90), ("since", "2023-01-01"),
+                         ("cutoffs", [dt.date(2026, 2, 1)])):
+        alt = dict(base); alt[field] = other
+        assert baseline_fingerprint(**alt) != ref, (
+            f"changing {field} does not change the baseline revision")
+
+
+def test_pre_fix_snapshots_are_STAMPED_not_deleted():
+    """Mark, never delete — third instance, after the phantoms and the 81."""
+    import json
+    snaps = sorted(pathlib.Path("data/baselines").glob("*.json"))
+    assert snaps, "the recorded baseline snapshots are gone"
+    for p in snaps:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        assert "baseline_revision" in d, f"{p.name} carries no revision"
+        if d["baseline_revision"].startswith("b1"):
+            assert "training_exclusion_reason" in d["baseline_revision_note"], (
+                f"{p.name} is stamped b1 but does not say what b1 means")
 
 
 def test_the_NOT_GATED_marker_convention_is_still_documented():
@@ -252,3 +299,87 @@ def test_current_cron_minutes_refuses_a_MULTI_cron_workflow():
     the `closing-lines` defect. Refuse rather than pick one."""
     assert ci.current_cron_minutes() == 0, "daily-picks is not on 00:00 UTC"
     assert ci.MARGIN_TRAILING_DAYS == 28
+
+
+# ── D: the cohort tool reads only TRACKED inputs ────────────────────────────
+#
+# The tool that gates cohort decisions fingerprinted `config/config.yaml` — a
+# gitignored file. Same root as this week's test-skip-count surprise: an
+# UNTRACKED FILE PARTICIPATING IN A DECISION THAT MUST BE REPRODUCIBLE.
+#
+# The retrospective question cannot be answered: an untracked file has no
+# history, so what it contained at each of the 15 recorded bumps is
+# unrecoverable. Today it is sha256-identical to the example, so the answer is
+# PROBABLY none — which is luck, already recorded as luck, and not a check.
+# From s5.15 onward the question cannot arise, and that is what these pin.
+
+def _in_committed_tree(path: str) -> bool:
+    """Is `path` in HEAD's tree?
+
+    NOT `git ls-files --error-unmatch`, which the suite's own
+    `test_no_check_scopes_itself_on_staged_files_alone` rejects: that reads the
+    INDEX, so it answers differently before and after `git add` at the same
+    commit. Caught by that test while writing this one — second time this class
+    has bitten me.
+
+    `HEAD:` is also the right question rather than merely the compliant one. A
+    cohort verdict has to be reproducible from a COMMIT, so "is this file in the
+    committed tree" is what makes the bump auditable; "is it staged" does not.
+
+    `encoding="utf-8"` because `text=True` alone decodes with the platform codec,
+    and on a cp1251 console that leaves `.stdout` as None — which reads as an
+    empty result, which reads as a clean finding.
+    """
+    import subprocess
+    r = subprocess.run(["git", "cat-file", "-e", f"HEAD:{path}"],
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    return r.returncode == 0
+
+
+def test_cohort_status_opens_only_TRACKED_files():
+    """Every path the tool names must be in git.
+
+    Read from the source rather than by executing it, so the assertion covers
+    the code path taken on any machine rather than the one taken here.
+    """
+    src = pathlib.Path("scripts/cohort_status.py").read_text(encoding="utf-8")
+    paths = set(re.findall(r'["\'](config/[^"\']+|data/[^"\']+)["\']', src))
+    assert paths, "no config path found — did the tool stop reading one?"
+    for p in sorted(paths):
+        assert _in_committed_tree(p), (
+            f"cohort_status.py reads {p!r}, which is NOT tracked by git. A "
+            f"cohort verdict computed from an untracked file is not "
+            f"reproducible, and the bump it authorises is unauditable")
+
+
+def test_POSITIVE_CONTROL_an_untracked_config_would_FAIL_that_test():
+    """The control: the check must be able to fail.
+
+    `config/config.yaml` is the real untracked file the tool used to read, so it
+    is the honest negative case — not a fabricated path that git would reject
+    for any reason.
+    """
+    assert pathlib.Path("config/config.yaml").exists() or True
+    assert not _in_committed_tree("config/config.yaml"), (
+        "config/config.yaml is now TRACKED — then the Stage 10.1 defect has "
+        "been reintroduced from the other side: a local convenience file has "
+        "become a specification")
+    assert _in_committed_tree("config/config.example.yaml"), (
+        "the deployed config is not tracked, so nothing the tool reads is")
+
+
+def test_the_env_loader_reads_dotenv_which_is_NOT_a_fingerprint_input():
+    """`.env` is untracked and read by this tool — and that is fine.
+
+    It supplies DATABASE_URL, which selects WHERE the count comes from, not WHAT
+    the fingerprint is. The distinction is the whole point of the test above:
+    untracked inputs may not feed the FINGERPRINT; they may feed the connection.
+    """
+    src = pathlib.Path("scripts/cohort_status.py").read_text(encoding="utf-8")
+    assert '".env"' in src
+    fp_block = src.split("version = model_version(", 1)[1][:120]
+    assert "config.example.yaml" in fp_block
+    assert "environ" not in fp_block, (
+        "an environment value reached the fingerprint call — env is untracked "
+        "and must not decide the cohort label")

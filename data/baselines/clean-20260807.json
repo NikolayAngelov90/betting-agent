@@ -58,5 +58,7 @@
       "accuracy": 0.509719222462203,
       "n": 926
     }
-  }
+  },
+  "baseline_revision": "b1.unstamped-pre-exclusion",
+  "baseline_revision_note": "b1: `scripts/run_baseline.py` applied is_fixture, home_goals, away_goals and match_date, and NOT training_exclusion_reason. 584 excluded rows were admitted (510 phantom_kickoff_now_stamp + 81 corrupt_team_identity, of which 584 fall in this population); on the 2026-07-01 cutoff 449 of 1513 test rows (29.7%) carried an exclusion, and walk_forward assigns folds BY match_date. STAMPED 2026-10-01, figures UNTOUCHED. Not comparable with b2."
 }

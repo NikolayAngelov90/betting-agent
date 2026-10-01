@@ -23,6 +23,8 @@ before/after comparisons diff the two.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -34,6 +36,51 @@ import numpy as np
 from src.utils.logger import get_logger
 
 logger = get_logger()
+
+
+# ──────────────────────────────── the evaluation cohort (Stage 24, 2026-10-01)
+#
+# A CHANGED EVALUATION POPULATION IS A DIFFERENT EXPERIMENT, exactly as a changed
+# prediction population is. Picks carry `model_version`; baselines carried
+# NOTHING, so every correction to the evaluation set was irreversible instead of
+# a bump — which is why closing the `run_baseline.py` exclusion gap looked like a
+# choice between a correct population and a comparable record. It was never that
+# choice. It was a missing version.
+#
+# THE RULE: no post-fix figure may be compared against a pre-fix one without
+# naming both revisions.
+#
+#   b1  (through 2026-09-30) `scripts/run_baseline.py` applied is_fixture,
+#       home_goals, away_goals and match_date, and NOT
+#       `training_exclusion_reason`. 584 excluded rows admitted; on the
+#       2026-07-01 cutoff 449 of 1513 test rows (29.7%) carried an exclusion,
+#       and folds are assigned BY match_date.
+#   b2  (2026-10-01) the exclusion applied via `_HistoryCache._base_filter()`,
+#       the same single definition Poisson, Elo and feature_engineer inherit.
+#
+#: Pre-fix snapshots are STAMPED, never discarded — third instance of mark-never-
+#: delete in this project, after the 510 phantoms and the 81 identity rows.
+BASELINE_REVISION = "b2"
+
+
+def baseline_fingerprint(*, exclusion: str, fold_strategy: str,
+                         window_days: int, cutoffs: Sequence, since) -> str:
+    """`<revision>.<6-char digest>` over everything that defines the population.
+
+    Fingerprints the three things that decide which rows are scored and how they
+    are split: the exclusion predicate in force, the fold strategy, and the
+    window definition. Two figures carrying the same string are comparable; two
+    carrying different strings are not, and the difference is not a result.
+    """
+    payload = json.dumps({
+        "exclusion": exclusion,
+        "fold_strategy": fold_strategy,
+        "window_days": int(window_days),
+        "cutoffs": [str(c) for c in cutoffs],
+        "since": str(since),
+    }, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.blake2s(payload.encode(), digest_size=3).hexdigest()
+    return f"{BASELINE_REVISION}.{digest}"
 
 # Outcome index convention used throughout: 0 = home win, 1 = draw, 2 = away win.
 HOME, DRAW, AWAY = 0, 1, 2

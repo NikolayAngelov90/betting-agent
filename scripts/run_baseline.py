@@ -25,6 +25,7 @@ from scipy.stats import poisson as _pois
 from src.data.database import get_db
 from src.data.models import Match, Odds
 from src.evaluation.baseline import (
+    baseline_fingerprint,
     Candidate,
     MatchRow,
     compare,
@@ -44,6 +45,29 @@ SHRINK_CAP = 100
 # --------------------------------------------------------------------- loading
 
 def load_rows(since: date) -> list:
+    """Completed matches for the walk-forward, WITH the training exclusion.
+
+    GATED 2026-10-01 (b1 -> b2). This query applied `is_fixture`, both goal
+    columns and `match_date`, and NOT `training_exclusion_reason` — so the
+    evidence bar every model parameter change must clear was admitting the 510
+    `phantom_kickoff_now_stamp` rows whose `match_date` is a `datetime.now()`
+    stamp, plus the 81 `corrupt_team_identity` rows.
+
+    WHY IT MATTERED MORE THAN A ROW COUNT: `walk_forward` assigns train and test
+    folds BY `match_date`, so a fabricated date does not add a bad row to the
+    right fold — it puts a real match in the WRONG fold. Measured on the
+    2026-07-01 cutoff, 449 of 1513 test rows (29.7%) carried an exclusion.
+
+    The predicate is NOT re-implemented here: `_HistoryCache._base_filter()` is
+    the single definition, the one Poisson, Elo and feature_engineer inherit
+    through `get_completed_matches`. Reaching into it directly is deliberate —
+    a public alias would be a second NAME for one rule, which is how the three
+    discovery phrasings happened.
+    """
+    # `_base_filter()` already carries is_fixture and home_goals; the repetition
+    # is harmless and keeping it makes the local intent readable.
+    from src.data.match_history import _HistoryCache
+
     db = get_db()
     rows: dict = {}
     with db.get_session() as session:
@@ -51,8 +75,7 @@ def load_rows(since: date) -> list:
             Match.id, Match.match_date, Match.home_team_id, Match.away_team_id,
             Match.home_goals, Match.away_goals, Match.league,
         ).filter(
-            Match.is_fixture == False,  # noqa: E712
-            Match.home_goals.isnot(None),
+            *_HistoryCache._base_filter(),
             Match.away_goals.isnot(None),
             Match.match_date >= since,
         ).order_by(Match.match_date)
@@ -294,7 +317,20 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = {k: v for k, v in results.items() if not k.startswith("_")}
     payload["generated_at"] = datetime.utcnow().isoformat()
+    # STAGE 24. The evaluation cohort, stamped on every figure this produces.
+    # Without it a corrected population is indistinguishable from a changed
+    # result, and the correction becomes irreversible instead of a bump.
+    payload["baseline_revision"] = baseline_fingerprint(
+        exclusion="_HistoryCache._base_filter: is_fixture=False, "
+                  "home_goals NOT NULL, training_exclusion_reason IS NULL "
+                  "(+ away_goals NOT NULL, match_date >= since)",
+        fold_strategy="chronological walk-forward, train=all before cutoff, "
+                      "test=[cutoff, cutoff+window_days), identical match set",
+        window_days=args.window, cutoffs=cutoffs, since=args.since)
     out.write_text(json.dumps(payload, indent=2))
+    print(f"\nbaseline_revision = {payload['baseline_revision']}")
+    print("  Figures carrying a DIFFERENT revision are not comparable with "
+          "these, and the difference is not a result.")
     print(f"\nSnapshot written to {out} (do not edit — new runs write new files)")
 
 

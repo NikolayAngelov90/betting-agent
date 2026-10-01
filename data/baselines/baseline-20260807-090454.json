@@ -98,5 +98,7 @@
       "clv_note": "UNAVAILABLE \u2014 no closing line is stored (0 of 124,158 odds rows on picked matches were written after the pick day). Requires closing-line capture."
     }
   },
-  "generated_at": "2026-08-07T09:04:54.971163"
+  "generated_at": "2026-08-07T09:04:54.971163",
+  "baseline_revision": "b1.unstamped-pre-exclusion",
+  "baseline_revision_note": "b1: `scripts/run_baseline.py` applied is_fixture, home_goals, away_goals and match_date, and NOT training_exclusion_reason. 584 excluded rows were admitted (510 phantom_kickoff_now_stamp + 81 corrupt_team_identity, of which 584 fall in this population); on the 2026-07-01 cutoff 449 of 1513 test rows (29.7%) carried an exclusion, and walk_forward assigns folds BY match_date. STAMPED 2026-10-01, figures UNTOUCHED. Not comparable with b2."
 }
