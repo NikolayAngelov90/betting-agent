@@ -21363,3 +21363,221 @@ The helper I wrote for Part D failed two existing tests:
 `data/baselines/*.json` (stamped, figures untouched),
 `tests/test_contamination_and_margin.py`. `model_version` UNCHANGED at `8da2fd` —
 no prediction path touched. No schema, migration or production-data change.*
+
+---
+
+# REQUIREMENT 1 MET — and the budget does not fit. Say it now, not on 10-09.
+
+`tests/` **1659 passed, 0 failed** (1642 → 1659; +17). Invariants **passed** —
+count not cited. `cohort_status`: **`s5.15` / `8da2fd` UNCHANGED** — Part A changed
+collection, not prediction, as rule 7 requires. Stage 26 **un-suspended for
+Requirement 1 only**; window, `min_interval` and the analysis **untouched**.
+
+---
+
+## PART A — THE ENFORCED STOP
+
+### One definition, and the runner imports it
+
+`TARGET_N` and `CREDIT_CEILING` stay in `scripts/h1_collection_check.py`, which
+now also owns the **decision**: `collection_stop()` and `collection_state()`.
+`src/scrapers/theodds_scraper.py` imports them. A test asserts the runner assigns
+neither constant — **a second copy of a registered constant is the seventh
+instance of THE HABIT**, and the check reporting one threshold while the runner
+enforces another is worse than no stop.
+
+### The three terminal states, registered before the discriminator was used
+
+| state | trigger | runner's action |
+| --- | --- | --- |
+| `COLLECTING` | neither limb | proceed (non-terminal, **named** so "still collecting" is a state and not an absence) |
+| **`COMPLETE`** | `n >= TARGET_N` | halt, **exit clean**, the analysis may run |
+| **`CEILING_HIT`** | `credits >= CREDIT_CEILING` | halt, **ALARM** — stopped SHORT; the budget does not return until the next reset |
+| **`NO_DATA`** | a halt with **zero** in-band observations | halt, **ALARM** — spent and collected nothing; do not re-run before finding out why |
+
+**`NO_DATA` refines a halt, it does not trigger one.** Halting the moment
+`raw_rows == 0` would stop the collection before its first slot had written
+anything — so the state is reached only when a halt condition is already met.
+A test asserts the three **print differently**, because registering states that
+log identically is the defect, not the fix.
+
+**FAILS CLOSED on an unreadable ledger:** `credits_spent is None` halts. The
+alternative is `None >= 200`, which raises — or worse, `if credits and credits >=
+CEILING`, which silently passes.
+
+### POSITIVE CONTROLS — both limbs, no credit spent
+
+**This stop cannot be tested in production: firing it for real costs the
+experiment's budget, and the budget is monthly.**
+
+| limb | driven to | result |
+| --- | --- | --- |
+| **1 — `n`** | `TARGET_N − 1` → `COLLECTING`; **`TARGET_N` → halt `COMPLETE`** | **fires** |
+| | `TARGET_N + 5` → halt | `>=` not `==`: a slot adding two trajectories cannot step over the stop |
+| **2 — credits** | `CEILING − 1` → `COLLECTING`; **`CEILING` → halt `CEILING_HIT`** | **fires** |
+| | `None` → halt, reason `UNREADABLE` | fail-closed limb also fires |
+| **3rd state** | `credits >= CEILING` with `raw_rows == 0` → **`NO_DATA`** | distinguishable from both |
+
+### The flag cannot be forgotten
+
+The ceiling is **collection-scoped, not global** — 200 bounds H1's spend, not the
+month's ordinary pricing, so evaluating it on every refresh would halt the
+pipeline the moment routine spend passed 200. That makes the flag necessary, and
+a flag is a single point of forgetting —
+
+> ### so H1-SHAPED PARAMETERS WITHOUT THE FLAG ARE REFUSED. `window >= 360` or `0 < interval <= 120` plus `h1_collection=False` raises. The parameters themselves demand the enforcement, which is the one thing a caller cannot forget to pass.
+
+The shape test is **deliberately broad** (any wide window, not just the
+registered 360/120): a caller inventing its own window spends unbounded too.
+**And the existing suite caught my first version of it** — it refused
+`test_dry_run_spends_nothing` (window=1440, interval=0). A dry run returns above
+`_fetch_and_persist` and cannot spend, so it is exempt **on the merits**, not to
+quiet the test. A guard that breaks a legitimate caller is not a guard.
+
+**Unevaluable is also a halt:** if `collection_state` raises, the runner logs
+`H1_STOP state=UNEVALUATED halt=True` and returns without requesting. A stop that
+cannot be evaluated is not a stop that passed.
+
+### THE REVERT PLAN, shipped in the same commit
+
+1. stop passing `h1_collection=True`
+2. restore `window_minutes=120`, `min_interval_minutes=180` — these are
+   `refresh_imminent`'s **defaults**, so the revert is the removal of two
+   arguments, which is why the H1 values are passed and never defaulted
+3. leave `TARGET_N`, `CREDIT_CEILING` and the check untouched — the registration
+   fixes them, and a revert that edits them is a new experiment wearing the old
+   one's name
+
+---
+
+## AND THE ARITHMETIC DOES NOT FIT
+
+*(measured 2026-10-01 from the `api_budget` ledger, dialect asserted)*
+
+| | |
+| --- | --- |
+| `odds_api.monthly_credit_budget` | **450** · `safety_margin_credits` **50** |
+| **usable pool per month** | **400** (free tier 500, 50 below the tier, 50 held back) |
+| 2026-08 spend | **437** |
+| **2026-09 spend** | **400 — the entire pool, by normal operation alone** |
+| 2026-10 spend so far | **0** — *measured:* the ledger has **no 2026-10 row**, and the row is created on first spend |
+| H1 sized at | **106–168** · `CREDIT_CEILING` **200** |
+
+> ### September consumed the whole 400-credit pool with NO collection running. Adding H1's minimum of 106 needs 506; adding its ceiling of 200 needs 600. **The ceiling and `TARGET_N` cannot both be satisfied inside the available budget**, and that is reported now rather than on 10-09.
+
+**The honest bracket.** H1 collection runs on the *same* `refresh_imminent` path
+as normal pricing, so part of its spend **substitutes** rather than adds:
+
+* **worst case (fully additive):** 400 + 200 = **600 of 400** — exhausted by about
+  10-20
+* **best case (fully substitutive):** **400** — unchanged, but that is already the
+  entire pool, so H1 would be collecting only where normal ops was already
+  spending, which the registered 360/120 window is specifically designed not to be
+* the truth is between, and **unmeasured**
+
+**And the two bounds are uncoordinated.** `CREDIT_CEILING = 200` bounds H1;
+`monthly_budget − safety_margin = 400` bounds everything; **nothing allocates
+between them.** Whichever runs first wins: if normal operation spends 300 before
+10-09, H1 gets 100 and cannot reach even its lower bound of 106. The registration
+does not answer this priority question, and the stop I shipped does not create the
+budget — it only guarantees H1 cannot be the thing that silently consumes it.
+
+**The balance is still `assumed`.** No run with `--update` has executed since the
+reset — today's skipped it on the test failure — so the provider's own remaining
+count is unconfirmed. **"Credits are not the constraint" is NOT closed, and this
+stage is the first evidence that it may be false.**
+
+---
+
+## PART B — FRAGILITY CENSUS
+
+Re-ran nothing. Read the recorded intervals, and calibrated the sensitivity on
+the **one** verdict measured both ways: the 80/20 blend moved its CI lower bound
+`+0.0001 → −0.0000` on a **0.38%** population change, so ≈ **0.00026 nats of
+bound movement per 1% of population**.
+
+> ### That is a single-point calibration, so what follows is an order-of-magnitude screen, not a threshold. Saying otherwise would be this week's error again.
+
+| verdict | effect | CI low | % population change to flip | group |
+| --- | --- | --- | --- | --- |
+| poisson only (180d, ρ=−0.13) | +0.0524 | +0.0394 | **150%** | **robust** |
+| elo only | +0.0436 | +0.0322 | **122%** | **robust** |
+| poisson + elo (50/50) | +0.0431 | +0.0314 | **119%** | **robust** |
+| market 40% + poisson/elo 60% | +0.0164 | +0.0094 | **36%** | **robust** |
+| market 60% + poisson/elo 40% | +0.0080 | +0.0032 | **12%** | **robust** |
+| **market 80% + poisson/elo 19%** | +0.0024 | **−0.0000** | **0%** | **FRAGILE — already flipped** |
+| **market (raw 1/odds, vig in)** | +0.0022 | **−0.0003** | **0%** | **FRAGILE — on the boundary, never significant** |
+| fixture-creation drop | — | — | p=0.004, and p=0.0002 on the team denominator | **robust** — survived the dimension it was challenged on |
+
+**Already not significant — nothing to flip** (interval crosses zero, or p above
+any line this project uses):
+
+| | effect | interval / p |
+| --- | --- | --- |
+| flat ROI `CHANGE − KEEP` | +7.88 pp | [−3.99, +19.92], **p=0.202** |
+| CLV MODEL | +0.311% | [−0.243, +0.881] |
+| CLV FINAL | +0.182% | [−0.360, +0.741] |
+| CLV mean (model, earlier) | −0.509% | [−1.4, +0.3] |
+| CLV mean (final, earlier) | −0.470% | [−1.2, +0.3] |
+| final − model | +0.104% | [−0.4, +0.6] |
+| unpriced-alarm zero | — | **p=0.36** (underpowered) |
+| league ROI spread | — | **p=0.407** |
+
+> ### COUNTS: **robust 6 · fragile 2 · already not significant 8** (16 total). Nothing is re-decided here; the output is the list.
+>
+> **The standing conclusion is in the robust group and not marginally so.** "The
+> model adds no information over the bookmaker price" rests on poisson, elo and
+> the 50/50 blend at +0.031–0.039 nats of CI lower bound — **a 119–150%
+> population change would be needed to move them**, against the 0.38% that moved
+> the 80/20 blend. That is the contrast the census exists to draw.
+
+**And the shape of the two fragile entries is the same shape:** both sit within
+0.0003 nats of zero, which is the resolution of the measurement itself. **A
+verdict inside its own instrument's resolution was never a verdict about the
+phenomenon.** This is the ~15-fitted-thresholds finding one level up, and it cost
+one query.
+
+---
+
+## PART C — TWO RECORD ENTRIES
+
+> ### The untracked-config question is `UNADDRESSABLE`, not `OPEN`. An untracked file has no history, so what `config/config.yaml` held at each of the 15 past bumps is unrecoverable **in principle**. Second item in this project in that class, after H1's momentum being unaddressable by self-observation. Today's file is sha256-identical to the example, so probably none differed — **luck, recorded as luck.**
+
+> ### First designed payback from the ledger. The `git ls-files` scope trap caught the same author a second time, and **the guard written after the first occurrence is what caught it.** The `continue-on-error` protection was recorded as luck; this was not. And `git cat-file -e HEAD:<path>` being both the compliant form *and* the correct one means the guard was encoding the semantics — which is the reason to ask **why** a guard exists rather than how to satisfy it.
+
+**A third instance arrived inside this stage.** `test_dry_run_spends_nothing` —
+written for an unrelated reason — caught my H1 shape check refusing a caller that
+cannot spend. Two guards, two catches, one day. Both were fixed by changing my
+code to match the semantics the guard encoded, not by relaxing the guard.
+
+---
+
+## DECLARATION
+
+> ### REQUIREMENT 1 MET
+>
+> | | |
+> | --- | --- |
+> | definition | `collection_stop()` in the check; **the runner imports, keeps no copy** |
+> | **limb 1 control** | `n = TARGET_N` → **halt `COMPLETE`**; `TARGET_N+5` also halts (`>=`, not `==`) |
+> | **limb 2 control** | `credits = CREDIT_CEILING` → **halt `CEILING_HIT`**; `None` → **halt, fail closed** |
+> | **three terminal states** | `COMPLETE` / `CEILING_HIT` / `NO_DATA`, asserted to **print differently** |
+> | on halt | exit clean (COMPLETE) · **alarm** (CEILING_HIT, NO_DATA) · never a silent return |
+> | bypass | **refused** — H1-shaped parameters without the flag raise; dry runs exempt on the merits |
+> | revert plan | shipped in this commit; the revert is **removing two arguments** |
+>
+> **BUT THE BUDGET DOES NOT FIT.** Usable pool **400/month** (measured);
+> September spent **400** on normal operation alone; H1 needs **106–168** with a
+> **200** ceiling. **400 + 106 = 506 > 400.** The two bounds are uncoordinated and
+> whichever runs first wins. Reported now, eight days out, not on 10-09.
+
+> ### FRAGILITY CENSUS — robust 6 · fragile 2 · already not significant 8
+> Both fragile entries sit within **0.0003 nats** of zero — the resolution of the
+> measurement. The standing no-information conclusion is robust by a **119–150%**
+> margin. Nothing re-decided; re-ran nothing.
+
+*Recorded 2026-10-01. `scripts/h1_collection_check.py`,
+`src/scrapers/theodds_scraper.py`, `tests/test_h1_enforced_stop.py` (new).
+`model_version` UNCHANGED at `8da2fd` — collection, not prediction. Window,
+`min_interval` and the analysis untouched. No schema, migration or
+production-data change.*

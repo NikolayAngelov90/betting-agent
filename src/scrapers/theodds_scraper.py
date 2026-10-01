@@ -1308,7 +1308,9 @@ class TheOddsScraper:
                                quota=None,
                                require_pending_pick: bool = True,
                                dry_run: bool = False,
-                               now=None) -> dict:
+                               now=None,
+                               h1_collection: bool = False,
+                               h1_since=None) -> dict:
         """Refresh odds only for leagues with imminent fixtures worth a credit.
 
         This never widens what counts as a valid closing line — it only changes
@@ -1316,10 +1318,86 @@ class TheOddsScraper:
 
         ``now`` is injectable so the selection and dedup windows can be tested
         deterministically instead of against the wall clock.
+
+        H1 REQUIREMENT 1 (Stage 26, un-suspended 2026-10-01). ``h1_collection``
+        binds the ENFORCED STOP: before anything is spent, the collection halts
+        when ``n >= TARGET_N`` or when credits reach ``CREDIT_CEILING``. The
+        constants and the decision both come from
+        ``scripts.h1_collection_check`` — the runner imports them, it does not
+        keep a copy, because a second copy of a registered constant is the
+        seventh instance of THE HABIT.
+
+        THE CEILING IS COLLECTION-SCOPED, NOT GLOBAL. 200 credits is a bound on
+        H1's spend, not on the month's ordinary pricing, so the stop must not be
+        evaluated on normal refreshes — it would halt the pipeline the moment
+        routine spend passed 200.
+
+        WHICH LEAVES THE FLAG AS A SINGLE POINT OF FORGETTING, so it is not left
+        as one: H1-SHAPED PARAMETERS WITHOUT THE FLAG ARE REFUSED. Stage 26's
+        collection widens the window to 360 and drops the interval to 120, and a
+        caller that sets those without ``h1_collection=True`` gets no stop at
+        all — exactly the shape where an advisory guard became a no-op. So the
+        parameters themselves demand the flag.
         """
         from src.data.odds_quota import CREDITS_PER_REQUEST, credits_for
 
         now = now or utcnow()
+
+        # ── the H1 stop, evaluated BEFORE any spend ──────────────────────────
+        #
+        # A DRY RUN IS EXEMPT, and that is on the merits rather than to quiet a
+        # test: `dry_run=True` returns above `_fetch_and_persist`, so it cannot
+        # spend, and a stop that guards spending has nothing to guard. The first
+        # version of this check refused `test_dry_run_spends_nothing`
+        # (window=1440, interval=0) — the suite caught a guard that would have
+        # broken a legitimate caller.
+        #
+        # The shape test stays DELIBERATELY BROAD (any window >= 360, any
+        # positive interval <= 120, not just the registered 360/120 pair). Fail
+        # closed: a caller inventing its own wide window is also spending without
+        # a ceiling, and the only false positive was the dry run.
+        h1_shaped = window_minutes >= 360 or 0 < min_interval_minutes <= 120
+        if h1_shaped and not h1_collection and not dry_run:
+            raise ValueError(
+                f"refresh_imminent called with H1 collection parameters "
+                f"(window={window_minutes}, min_interval={min_interval_minutes}) "
+                f"but h1_collection=False, so TARGET_N/CREDIT_CEILING would not "
+                f"be enforced. Pass h1_collection=True — the stop is the whole "
+                f"reason Stage 26 was un-suspended.")
+        if h1_collection:
+            from scripts.h1_collection_check import collection_state
+            from src.data.database import get_db
+            # The collection window starts at the monthly RESET, which is the
+            # only reason month-to-date credits equal collection-to-date
+            # credits. The check names that coincidence rather than assuming it,
+            # and so does this.
+            _since = h1_since or now.replace(day=1, hour=0, minute=0,
+                                             second=0, microsecond=0)
+            try:
+                with get_db().get_session() as _s:
+                    stop = collection_state(_s, _since)
+            except Exception as exc:
+                # FAIL CLOSED. A stop that cannot be evaluated is not a stop
+                # that passed.
+                plan = {"now": now.isoformat(), "h1_stop": "UNEVALUATED",
+                        "halted": True, "requested": [], "skipped": {},
+                        "credits_estimated": 0, "credits_claimed": 0,
+                        "odds_written": 0}
+                logger.error(
+                    f"H1_STOP state=UNEVALUATED halt=True reason=could not "
+                    f"evaluate the stop ({type(exc).__name__}: {exc}) — "
+                    f"refusing to spend")
+                return plan
+            logger.info(str(stop))
+            if stop.halt:
+                logger.warning(
+                    f"H1 COLLECTION HALTED — {stop.state}. No request made. "
+                    f"{stop.reason}")
+                return {"now": now.isoformat(), "h1_stop": stop.state,
+                        "halted": True, "h1_reason": stop.reason,
+                        "requested": [], "skipped": {},
+                        "credits_estimated": 0, "credits_claimed": 0,
+                        "odds_written": 0}
         plan = {
             "now": now.isoformat(),
             "window_minutes": window_minutes,

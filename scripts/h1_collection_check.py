@@ -55,7 +55,7 @@ import argparse
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 # ── REGISTERED CONSTANTS. Changing one changes the experiment. ───────────────
 
@@ -282,6 +282,115 @@ def attach_fixture_identity(session, observations: List[dict]) -> None:
                   file=sys.stderr)
     for o in observations:
         o["fixture"] = groups.get(o["match_id"], o["match_id"])
+
+
+# ── REQUIREMENT 1: THE ENFORCED STOP (Stage 26, un-suspended 2026-10-01) ─────
+#
+# `TARGET_N` and `CREDIT_CEILING` lived HERE and nowhere else, so the check could
+# report "stop condition met" while the runner kept spending. An advisory stop on
+# a MONTHLY budget is not a stop: H1 is sized at 106-168 credits of a 450-credit
+# month, and an unbounded loop empties it in one run with no second chance until
+# 11-01.
+#
+# THE OUTCOMES ARE REGISTERED BEFORE THE DISCRIMINATOR IS USED, in the type that
+# emits them. Three TERMINAL states, and they are not interchangeable:
+#
+#   COMPLETE     n >= TARGET_N. The experiment has its data. Exit clean.
+#   CEILING_HIT  credits exhausted BEFORE the target. Exit and ALARM — the
+#                collection stopped short and the budget will not return until
+#                the next reset.
+#   NO_DATA      a halt with ZERO in-band observations. The budget went and the
+#                apparatus produced nothing. This REFINES a halt rather than
+#                triggering one, because "spent and collected nothing" must never
+#                be filed as either of the other two.
+#
+# THE REVERT PLAN, per the original registration, shipped in the same commit as
+# the stop rather than written after it fires:
+#
+#   1. stop passing `h1_collection=True` to `refresh_imminent`
+#   2. restore the registered normal values: `window_minutes=120`,
+#      `min_interval_minutes=180`. These are `refresh_imminent`'s DEFAULTS, so
+#      the revert is the removal of two arguments, not an edit to a constant —
+#      which is why the H1 values are passed and never defaulted.
+#   3. leave `TARGET_N`, `CREDIT_CEILING` and this module untouched: the
+#      registration fixes them, and a revert that edits them is a new experiment
+#      wearing the old one's name.
+#
+# ON EACH TERMINAL STATE:
+#   COMPLETE     revert, and the analysis may run. Exit clean.
+#   CEILING_HIT  revert, and the analysis may NOT run at n < TARGET_N without
+#                saying so — an underpowered result reported as a result is the
+#                failure H2 died of. ALARM.
+#   NO_DATA      revert, and do NOT re-run collection before finding out why the
+#                apparatus produced nothing. ALARM. Re-running costs the next
+#                month's budget to repeat a known failure.
+#
+#: Non-terminal. Named so that "still collecting" is a state and not an absence.
+COLLECTION_RUNNING = "COLLECTING"
+COLLECTION_TERMINAL_STATES = ("COMPLETE", "CEILING_HIT", "NO_DATA")
+COLLECTION_STATES = (COLLECTION_RUNNING,) + COLLECTION_TERMINAL_STATES
+
+
+class CollectionStop(NamedTuple):
+    """The stop decision. `state` is always one of `COLLECTION_STATES`."""
+
+    halt: bool
+    state: str
+    reason: str
+
+    def __str__(self) -> str:
+        return (f"H1_STOP state={self.state} halt={self.halt} "
+                f"reason={self.reason}")
+
+
+def collection_stop(*, n_fixtures: int, credits_spent: Optional[int],
+                    raw_rows: int) -> CollectionStop:
+    """THE ONLY DEFINITION of the stop. Imported by the runner, not re-typed.
+
+    FAILS CLOSED on an unreadable ledger: `credits_spent is None` halts. A
+    collection that cannot see its own spend must not keep spending — the
+    alternative is `None` compared against an int, which is how a guard becomes
+    a no-op.
+    """
+    ceiling_hit = credits_spent is None or credits_spent >= CREDIT_CEILING
+    target_hit = n_fixtures >= TARGET_N
+
+    if not (ceiling_hit or target_hit):
+        return CollectionStop(
+            False, COLLECTION_RUNNING,
+            f"n={n_fixtures}/{TARGET_N} credits={credits_spent}/{CREDIT_CEILING}")
+
+    # NO_DATA refines a halt: the budget is gone and nothing was collected.
+    if raw_rows == 0:
+        return CollectionStop(
+            True, "NO_DATA",
+            f"halting with ZERO in-band observations after "
+            f"credits={credits_spent}/{CREDIT_CEILING} — the collection spent "
+            f"and collected nothing; the apparatus is not working")
+    if target_hit:
+        return CollectionStop(
+            True, "COMPLETE",
+            f"n={n_fixtures} >= TARGET_N={TARGET_N} "
+            f"(credits={credits_spent}/{CREDIT_CEILING})")
+    return CollectionStop(
+        True, "CEILING_HIT",
+        f"credits={credits_spent}/{CREDIT_CEILING} reached with "
+        f"n={n_fixtures} < TARGET_N={TARGET_N} — stopped SHORT of the target; "
+        f"the budget does not return until the next monthly reset"
+        if credits_spent is not None else
+        f"credit ledger UNREADABLE — failing closed with n={n_fixtures}")
+
+
+def collection_state(session, since: datetime) -> CollectionStop:
+    """Evaluate the stop against the database. One call, so the runner does not
+    re-assemble the check's four steps and drift from them."""
+    observations, _dropped = load_observations(session, since)
+    attach_fixture_identity(session, observations)
+    _series, by_provider = count_qualifying_fixtures(observations)
+    return collection_stop(
+        n_fixtures=len(by_provider.get("TheOddsAPI", set())),
+        credits_spent=credits_used(session),
+        raw_rows=len(observations))
 
 
 def credits_used(session) -> Optional[int]:
