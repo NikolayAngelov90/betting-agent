@@ -90,7 +90,9 @@ def test_midnight_has_MORE_date_headroom_than_the_old_cron():
     Execution is the cron instant plus the scheduler delay, so the headroom
     before execution lands on the NEXT calendar day is `1440 - cron`. At 00:00
     that is a full 24h; at 03:00 it was 21h. The largest delay ever documented is
-    11h21m, so both are safe — but the move INCREASES the margin, and this test
+    11h21m — the largest delay ever documented in ANY regime, and it belongs to
+    the retired `37 9 * * *` (n=39), not to this cron — so both are safe. The
+    move INCREASES the margin, and this test
     exists so nobody re-derives the fear.
     """
     old, new = 3 * 60, 0

@@ -158,21 +158,21 @@ def test_a_stale_or_absurd_line_is_out_of_band():
 # ── THE THREE OUTCOMES, WHICH MUST READ DIFFERENTLY ──────────────────────────
 
 def test_no_observations_reads_as_DID_NOT_RUN():
-    out = "\n".join(h1.render(0, {}, {}, {}, raw_rows=0, used=0))
+    out = "\n".join(render_in_window(0, {}, {}, {}, raw_rows=0, used=0))
     assert "H1 COLLECTION DID NOT RUN" in out
     assert "PRODUCED NOTHING" not in out
 
 
 def test_observations_but_no_trajectories_reads_as_PRODUCED_NOTHING():
     """L2 shipped inert and measured as 'implemented, 0 saved'."""
-    out = "\n".join(h1.render(0, {}, {}, {}, raw_rows=4200, used=120))
+    out = "\n".join(render_in_window(0, {}, {}, {}, raw_rows=4200, used=120))
     assert "PRODUCED NOTHING" in out
     assert "DID NOT RUN" not in out
     assert "spending and not collecting" in out
 
 
 def test_progress_reads_as_n_of_39():
-    out = "\n".join(h1.render(11, {"TheOddsAPI": set(range(11))},
+    out = "\n".join(render_in_window(11, {"TheOddsAPI": set(range(11))},
                               {"TheOddsAPI": 40}, {}, raw_rows=9000, used=90))
     assert "H1 COLLECTION: 11 of 39 qualifying trajectories" in out
     assert "DID NOT RUN" not in out and "PRODUCED NOTHING" not in out
@@ -182,7 +182,7 @@ def test_the_three_lines_are_mutually_exclusive():
     """Two of them in one report would make the ledger unreadable."""
     markers = ("DID NOT RUN", "PRODUCED NOTHING", "qualifying trajectories")
     for n, raw in ((0, 0), (0, 500), (5, 500)):
-        out = "\n".join(h1.render(n, {"TheOddsAPI": set(range(n))} if n else {},
+        out = "\n".join(render_in_window(n, {"TheOddsAPI": set(range(n))} if n else {},
                                   {}, {}, raw_rows=raw, used=0))
         assert sum(m in out for m in markers) == 1, out
 
@@ -190,14 +190,14 @@ def test_the_three_lines_are_mutually_exclusive():
 # ── THE STOP CONDITIONS, WHICH MUST BE VISIBLE ───────────────────────────────
 
 def test_reaching_the_target_says_so():
-    out = "\n".join(h1.render(39, {"TheOddsAPI": set(range(39))},
+    out = "\n".join(render_in_window(39, {"TheOddsAPI": set(range(39))},
                               {}, {}, raw_rows=9000, used=100))
     assert "TARGET REACHED" in out and "Restore the window" in out
 
 
 def test_the_credit_ceiling_says_so_even_below_target():
     """Whichever comes first. A ceiling hit at n=3 still stops the run."""
-    out = "\n".join(h1.render(3, {"TheOddsAPI": {1, 2, 3}}, {}, {},
+    out = "\n".join(render_in_window(3, {"TheOddsAPI": {1, 2, 3}}, {}, {},
                               raw_rows=900, used=h1.CREDIT_CEILING))
     assert "CREDIT CEILING REACHED" in out
     assert "regardless of n" in out
@@ -205,14 +205,14 @@ def test_the_credit_ceiling_says_so_even_below_target():
 
 def test_an_unreadable_ledger_says_UNKNOWN_not_zero():
     """Zero credits used and 'cannot tell' must not print the same."""
-    out = "\n".join(h1.render(3, {"TheOddsAPI": {1, 2, 3}}, {}, {},
+    out = "\n".join(render_in_window(3, {"TheOddsAPI": {1, 2, 3}}, {}, {},
                               raw_rows=900, used=None))
     assert "UNKNOWN" in out
     assert "CREDIT CEILING REACHED" not in out
 
 
 def test_a_second_provider_is_flagged_loudly():
-    out = "\n".join(h1.render(
+    out = "\n".join(render_in_window(
         2, {"TheOddsAPI": {1, 2}, "API-Football": {9}}, {}, {},
         raw_rows=900, used=10))
     assert "MORE THAN ONE PROVIDER QUALIFIED" in out
@@ -277,3 +277,17 @@ def test_a_chain_of_close_writes_is_one_instant():
     """40s apart across three writes is one market, not three."""
     keys = [(1, "b", "1X2", T0 + timedelta(seconds=s)) for s in (0, 40, 80)]
     assert len(set(h1.assemble_instants(keys).values())) == 1
+
+
+# ── render() gained `in_window` (Stage 27). These tests exercise the IN-WINDOW
+# messages, and used to get them because `render` had no notion of a window at
+# all. Now that NOT-STARTED is a state, a test that wants the running messages
+# has to say so — which is the point: the implicit "always collecting"
+# assumption is what let "the apparatus is not working" fire on 2026-10-02 with
+# a correct zero.
+_h1_render = h1.render
+
+
+def render_in_window(*args, **kwargs):
+    kwargs.setdefault("in_window", True)
+    return _h1_render(*args, **kwargs)

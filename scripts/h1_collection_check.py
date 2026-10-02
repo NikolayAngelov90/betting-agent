@@ -61,6 +61,7 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 TARGET_N = 39                 #: stop condition, upper end of the 33-39 band
 CREDIT_CEILING = 200          #: the other stop condition, whichever comes first
+_H1_WINDOW_FROM = '2026-10-09'   #: the reservation window's start, for the DID_NOT_START message
 MIN_GAP_MINUTES = 30          #: separation
 MAX_INTERVAL_RATIO = 2.0      #: comparability of the two intervals
 OVERROUND_LO = 1.005          #: below this a book is not pricing a real market
@@ -327,9 +328,31 @@ def attach_fixture_identity(session, observations: List[dict]) -> None:
 #
 #: Non-terminal. Named so that "still collecting" is a state and not an absence.
 COLLECTION_RUNNING = "COLLECTING"
-COLLECTION_TERMINAL_STATES = ("COMPLETE", "CEILING_HIT", "NO_DATA",
-                              "RESERVATION_EXHAUSTED")
+#: FIVE, not four — and the fifth is a SPLIT, not an addition. `CEILING_HIT` was
+#: carrying two different facts: the registered bound was reached, and the ledger
+#: could not be read. The second is not a ceiling event, and folding it in meant
+#: a fail-closed halt was reported as if a bound had been hit.
+COLLECTION_TERMINAL_STATES = ("COMPLETE", "RESERVATION_EXHAUSTED", "CEILING_HIT",
+                              "NO_DATA", "BUDGET_UNREADABLE")
 COLLECTION_STATES = (COLLECTION_RUNNING,) + COLLECTION_TERMINAL_STATES
+
+
+def effective_bound(reservation: int) -> int:
+    """THE ONE CREDIT BOUND. `CREDIT_CEILING` caps the reservation; it is not a
+    parallel limb.
+
+    CEILINGS COLLAPSED 2026-10-02. Two independent bounds over one exhaustible
+    pool are not a budget, and the weaker one was DEAD: with a 168 reservation
+    against a registered 200, nothing could ever reach 200 from the runner, so
+    `CEILING_HIT` was a terminal state that could not occur on a readable
+    ledger.
+
+    Now there is one number. Which of the two supplies it is reported by the
+    STATE, so the registered ceiling still has a voice — and it becomes the
+    binding one by a STATED INPUT: a reservation raised above it, which is a
+    misconfiguration the state names rather than silently honours.
+    """
+    return min(int(reservation), CREDIT_CEILING)
 
 
 class CollectionStop(NamedTuple):
@@ -365,15 +388,31 @@ def collection_stop(*, n_fixtures: int, credits_spent: Optional[int],
         from src.data.odds_quota import H1_RESERVED_CREDITS
         reservation = H1_RESERVED_CREDITS
 
-    ceiling_hit = credits_spent is None or credits_spent >= CREDIT_CEILING
-    reservation_hit = credits_spent is not None and credits_spent >= reservation
+    bound = effective_bound(reservation)
+    #: Which of the two supplied the bound. The registered ceiling binds only
+    #: when the reservation exceeds it — a misconfiguration, named rather than
+    #: silently honoured.
+    bound_is_ceiling = CREDIT_CEILING < reservation
+    budget_hit = credits_spent is not None and credits_spent >= bound
     target_hit = n_fixtures >= TARGET_N
 
-    if not (ceiling_hit or reservation_hit or target_hit):
+    # FAIL CLOSED, AND SAY WHICH FACT IT IS. An unreadable ledger is not a
+    # ceiling event; reporting it as one made a halt-for-ignorance look like a
+    # halt-at-a-bound.
+    if credits_spent is None:
+        return CollectionStop(
+            True, "BUDGET_UNREADABLE",
+            f"credit ledger UNREADABLE — failing closed with n={n_fixtures}; "
+            f"this is NOT a bound being reached, it is the bound being "
+            f"unknown, and a collection that cannot see its spend must not "
+            f"keep spending")
+
+    if not (budget_hit or target_hit):
         return CollectionStop(
             False, COLLECTION_RUNNING,
-            f"n={n_fixtures}/{TARGET_N} credits={credits_spent}/{reservation} "
-            f"reserved (registered ceiling {CREDIT_CEILING})")
+            f"n={n_fixtures}/{TARGET_N} credits={credits_spent}/{bound} "
+            f"(bound = {'registered ceiling' if bound_is_ceiling else 'reservation'}"
+            f"; reservation {reservation}, registered ceiling {CREDIT_CEILING})")
 
     # NO_DATA refines a halt: the budget is gone and nothing was collected.
     if raw_rows == 0:
@@ -386,26 +425,69 @@ def collection_stop(*, n_fixtures: int, credits_spent: Optional[int],
         return CollectionStop(
             True, "COMPLETE",
             f"n={n_fixtures} >= TARGET_N={TARGET_N} "
-            f"(credits={credits_spent}/{reservation} reserved)")
-    if credits_spent is None:
+            f"(credits={credits_spent}/{bound})")
+    if bound_is_ceiling:
         return CollectionStop(
             True, "CEILING_HIT",
-            f"credit ledger UNREADABLE — failing closed with n={n_fixtures}")
-    # THE RESERVATION BINDS BEFORE THE REGISTERED CEILING, and the two are not
-    # the same event: this one says the ALLOCATION ran out, which is a budget
-    # fact; CEILING_HIT says the EXPERIMENT's registered bound was reached.
-    if reservation_hit and credits_spent < CREDIT_CEILING:
-        return CollectionStop(
-            True, "RESERVATION_EXHAUSTED",
-            f"credits={credits_spent} reached the H1 RESERVATION of "
-            f"{reservation} with n={n_fixtures} < TARGET_N={TARGET_N} — the "
-            f"allocation is spent and H1 may NOT borrow from the global pool; "
-            f"the registered ceiling {CREDIT_CEILING} was never reached")
+            f"credits={credits_spent} reached the REGISTERED ceiling "
+            f"{CREDIT_CEILING} with n={n_fixtures} < TARGET_N={TARGET_N}. The "
+            f"ceiling bound rather than the reservation because the reservation "
+            f"({reservation}) EXCEEDS it — a misconfiguration: the registration "
+            f"fixes {CREDIT_CEILING} and an allocation may not raise it")
     return CollectionStop(
-        True, "CEILING_HIT",
-        f"credits={credits_spent}/{CREDIT_CEILING} reached the REGISTERED "
-        f"ceiling with n={n_fixtures} < TARGET_N={TARGET_N} — stopped SHORT of "
-        f"the target; the budget does not return until the next monthly reset")
+        True, "RESERVATION_EXHAUSTED",
+        f"credits={credits_spent} reached the H1 RESERVATION of {reservation} "
+        f"with n={n_fixtures} < TARGET_N={TARGET_N} — the allocation is spent "
+        f"and H1 may NOT borrow from the global pool; the registered ceiling "
+        f"{CREDIT_CEILING} was never reached")
+
+
+# ──────────────── THE APPARATUS STATE (Stage 27, 2026-10-02) ────────────────
+#
+# `render()` printed "H1 COLLECTION PRODUCED NOTHING - the apparatus is not
+# working" whenever there were observations and no trajectories. On 2026-10-02
+# that fired with 103 observations and 0 trajectories — and it was WRONG:
+# collection had not started, the window opens 10-09, and ordinary pricing
+# refreshes at most once per league per 180 min, so no series can accumulate
+# three separated points. A correct zero was reported as a broken apparatus.
+#
+# NOT-STARTED and STARTED-AND-FAILING are the third-state family again, in the
+# check's own headline. Registered here, in the type that emits them.
+
+APPARATUS_STATES = ("DID_NOT_START", "RUNNING_AND_FAILING", "RUNNING_AND_FINE")
+
+
+class ApparatusState(NamedTuple):
+    state: str
+    alarms: bool
+    message: str
+
+    def __str__(self) -> str:
+        return f"H1_APPARATUS state={self.state} alarms={self.alarms}"
+
+
+def apparatus_state(*, in_window: bool, raw_rows: int,
+                    n_fixtures: int) -> ApparatusState:
+    """Which of the three the collection is in. `in_window` comes from the
+    reservation window — one definition, not a second calendar."""
+    if not in_window:
+        return ApparatusState(
+            "DID_NOT_START", False,
+            f"H1 COLLECTION HAS NOT STARTED — the window opens "
+            f"{_H1_WINDOW_FROM}. {raw_rows} observation(s) and {n_fixtures} "
+            f"trajectories is the EXPECTED state: ordinary pricing refreshes a "
+            f"league at most once per 180 min, so no series accumulates three "
+            f"separated points. This is not a null and not a fault.")
+    if n_fixtures == 0:
+        return ApparatusState(
+            "RUNNING_AND_FAILING", True,
+            f"H1 COLLECTION PRODUCED NOTHING — the apparatus is not working. "
+            f"{raw_rows} observation(s) written and ZERO separated "
+            f"trajectories: inside the window, the collection is spending and "
+            f"not collecting.")
+    return ApparatusState(
+        "RUNNING_AND_FINE", False,
+        f"H1 COLLECTION: {n_fixtures} of {TARGET_N} qualifying trajectories")
 
 
 def collection_state(session, since: datetime) -> CollectionStop:
@@ -445,19 +527,23 @@ def credits_used(session) -> Optional[int]:
 def render(n_fixtures: int, by_provider: Dict[str, set],
            series_by_provider: Dict[str, int], dropped: dict,
            raw_rows: int, used: Optional[int],
-           month_to_date_only: bool = False) -> List[str]:
+           month_to_date_only: bool = False,
+           in_window: Optional[bool] = None) -> List[str]:
     out: List[str] = []
+
+    if in_window is None:
+        from src.data.odds_quota import h1_reservation
+        in_window = h1_reservation() > 0
 
     if raw_rows == 0:
         out.append("H1 COLLECTION DID NOT RUN")
         out.append("  no pre-kickoff observation was written in the window — "
                    "the slots made no requests, so this is NOT a null result")
-    elif n_fixtures == 0:
-        out.append("H1 COLLECTION PRODUCED NOTHING - the apparatus is not working")
-        out.append(f"  {raw_rows} observation(s) written and ZERO separated "
-                   f"trajectories: the collection is spending and not collecting")
     else:
-        out.append(f"H1 COLLECTION: {n_fixtures} of {TARGET_N} qualifying trajectories")
+        _app = apparatus_state(in_window=in_window, raw_rows=raw_rows,
+                               n_fixtures=n_fixtures)
+        out.append(str(_app))
+        out.append("  " + _app.message)
 
     out.append("")
     out.append(f"  raw pre-kickoff observations (in band) : {raw_rows}")

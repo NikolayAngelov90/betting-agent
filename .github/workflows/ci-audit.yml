@@ -13,7 +13,7 @@ name: CI Audit
 # a preference; it is why the step could not be added to daily-picks.
 #
 # WHY `workflow_run` AND NOT A CRON. daily-picks fires at 03:00 and has landed
-# between 07:56 and 08:20, but GitHub's scheduler has delivered 0.5h to 11h21m
+# between 07:56 and 08:20, but GitHub's scheduler has delivered 0.5h to 11h21m UNDER THE RETIRED `37 9 * * *` CRON (n=39)
 # of delay (OPS-3). Any fixed hour is a guess that a late run defeats;
 # `workflow_run: completed` fires exactly when the log becomes readable. The
 # daily cron below is a backstop for a `workflow_run` event that is dropped.

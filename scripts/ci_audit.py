@@ -100,6 +100,43 @@ def _sh(*args: str) -> str:
 #: "come back later", and until 2026-09-13 nothing came back.
 PROVISIONAL_VERDICTS = ("IN_PROGRESS", "UNAUDITABLE")
 
+#: `##[error]` ANNOTATIONS THIS REPOSITORY EMITS ON PURPOSE, each paired with
+#: the file that prints it. Identified BY SOURCE, not by how routine the text
+#: looks: `test_every_self_emitted_annotation_names_a_REAL_emitter` asserts the
+#: named file still contains the pattern, so an entry cannot survive its
+#: emitter being deleted and cannot be added for a message nothing prints.
+#:
+#: These are the known-benign baseline. A detector whose baseline equals its
+#: threshold has no dynamic range, which is exactly what happened: every
+#: alarming `ci-audit` run emitted two of these and scored DEGRADED for an
+#: unexplained absorbed failure.
+SELF_EMITTED_ANNOTATIONS = (
+    ("::error::audit alarm", "scripts/ci_audit.py"),
+    ("::error::CI audit alarmed", ".github/workflows/ci-audit.yml"),
+    ("::error::Pick generation", ".github/workflows/daily-picks.yml"),
+)
+
+# ────────────────────── RESOLVED RUNS (CLR-2, Stage 27, 2026-10-02) ──────────
+#
+# An alarm cleared by TIME teaches waiting. The 10-01 `DID_NOT_RUN` was fixed in
+# `a4d5228` and alarmed eight more times, clearing only when `--since yesterday`
+# rolled past the run. CLR-2 requires an action a person can take, and narrowing
+# the scope is not it — the scope was narrowed once already, which is how this
+# shape arrived.
+#
+# So a run leaves the alarm's scope BECAUSE A ROW SAYS SO. Recording the
+# resolution IS the clearing action, and it changes the predicate.
+#
+# RECORDED, NOT SILENCING: a resolved run still appears in the table with its
+# verdict and its resolution. What changes is only whether it enters `alarmed`.
+RESOLVED_RUNS = {
+    # run id        (resolving commit, reason)
+    "36843668865": ("a4d5228",
+                    "the month-boundary contradiction in "
+                    "test_credit_reading_freshness was bounded; the test gate "
+                    "that stopped --update can no longer fire on the 1st"),
+}
+
 #: Matches a ledger row's run id whether or not it is bolded. The original
 #: pattern required a bare `| 123… |` and silently skipped every
 #: bolded row — which is why the 09-10 pass re-listed six runs that were
@@ -672,10 +709,40 @@ def extract(log: str) -> Dict[str, object]:
     ) | set(
         re.findall(r"Flashscore returned 0 fixtures for ([a-z0-9/-]+)", log)
     ))
-    f["steps_nonzero_exit"] = len(re.findall(
+    # ── THE THREE-WAY PARTITION (Stage 27, 2026-10-02) ──────────────────────
+    #
+    # `##[error]` was split two ways: step exits and everything else. On every
+    # alarming `ci-audit` run the count is 2, and BOTH are the audit's own
+    # verdict exits — so the detector's expected baseline equalled its
+    # threshold and it had NO DYNAMIC RANGE. A genuine third absorbed failure
+    # on a `ci-audit` run was invisible.
+    #
+    # The third bucket is DELIBERATE ANNOTATION EMITTED BY THIS REPOSITORY,
+    # identified by SOURCE: every pattern in `SELF_EMITTED_ANNOTATIONS` is
+    # pinned to the file that prints it, and a test asserts the emitter still
+    # contains it. That is what stops the registry drifting into "errors that
+    # look routine".
+    f["exit_annotations"] = len(re.findall(
         r"##\[error\]Process completed with exit code \d+", log))
-    f["error_annotations"] = len(re.findall(r"##\[error\]", log)) - \
-        f["steps_nonzero_exit"]
+    f["self_emitted_annotations"] = sum(
+        len(re.findall(re.escape(pat), log)) for pat, _src in SELF_EMITTED_ANNOTATIONS)
+    f["foreign_annotations"] = (len(re.findall(r"##\[error\]", log))
+                                - f["exit_annotations"]
+                                - f["self_emitted_annotations"])
+    # Retained names, so the ledger and the older rows stay readable.
+    f["steps_nonzero_exit"] = f["exit_annotations"]
+    f["error_annotations"] = (f["self_emitted_annotations"]
+                              + f["foreign_annotations"])
+
+    # THE SIGNAL IS THE REMAINDER. Each deliberate annotation we print is
+    # followed by its step exiting non-zero — the script returns 1, or the echo
+    # step is followed by `exit 1` — so each explains AT MOST ONE exit. `min`
+    # rather than subtraction so a log carrying more annotations than exits
+    # cannot drive the remainder negative and read as "fewer than none".
+    f["self_emitted_exits"] = min(f["self_emitted_annotations"],
+                                  f["exit_annotations"])
+    f["unexplained_nonzero_exit"] = (f["exit_annotations"]
+                                     - f["self_emitted_exits"])
     return f
 
 
@@ -1250,7 +1317,11 @@ def assertions(facts: Dict[str, object],
     #   tracebacks      the failure printed a traceback and is already BROKEN
     #
     # Found by running it against the real logs rather than the synthetic ones.
-    if (facts.get("steps_nonzero_exit")
+    # SATURATION REMOVED 2026-10-02: the predicate is the REMAINDER after the
+    # repository's own deliberate annotations are subtracted, not the raw exit
+    # count. On an alarming `ci-audit` run that remainder is 0, where the raw
+    # count was 2 — its own baseline.
+    if (facts.get("unexplained_nonzero_exit")
             and not facts.get("steps_failed")
             and not facts.get("steps_not_run")
             and not facts.get("tracebacks")):
@@ -1261,10 +1332,12 @@ def assertions(facts: Dict[str, object],
         # depends on that step's continue-on-error, which the API does not
         # expose. Claiming absorption for all of them over-attributes.
         hits.append(
-            f"{facts['steps_nonzero_exit']} step(s) exited NON-ZERO with no "
-            "traceback and no named failed step — any of them under "
-            "continue-on-error reports conclusion: success, so this annotation "
-            "is the only record")
+            f"{facts['unexplained_nonzero_exit']} step(s) exited NON-ZERO with "
+            f"no traceback and no named failed step "
+            f"({facts.get('self_emitted_exits', 0)} further exit(s) explained "
+            f"by this repository's own deliberate annotations) — any of them "
+            f"under continue-on-error reports conclusion: success, so this "
+            f"annotation is the only record")
     return hits
 
 
@@ -1509,7 +1582,12 @@ def main() -> int:
         _pre = "  ".join(x for x in (disc, res) if x)
         # The audit reports on itself and never alarms on itself — see
         # NEVER_ALARM_WORKFLOWS for why a one-run lag would not break the loop.
-        if v in fail_on and r["workflow"] not in NEVER_ALARM_WORKFLOWS:
+        # CLR-2. A resolved run leaves the ALARM's scope because a row says so,
+        # and stays in the TABLE because it happened. Recording the resolution
+        # is the clearing action and it changes this predicate.
+        _resolved = RESOLVED_RUNS.get(str(rid))
+        if v in fail_on and r["workflow"] not in NEVER_ALARM_WORKFLOWS \
+                and not _resolved:
             alarmed.append(f"{rid} {r['workflow']} {v}")
         print(f"{rid:<12} {r['workflow']:<14} {(r.get('startedAt') or '')[:16]:<17} "
               f"{v:<10} {((_pre + '  ') if _pre else '') + '; '.join(hits)}"[:190])
@@ -1518,6 +1596,10 @@ def main() -> int:
         # RECORDED, not hidden. Suppressed is not unobserved.
         for h in _suppressed:
             print(f"{'':<56} ~ {h[:150]}")
+        # RECORDED, not silencing. The verdict above is unchanged; only the
+        # alarm's scope moved, and the row says why and by which commit.
+        if _resolved:
+            print(f"{'':<56} = RESOLVED by {_resolved[0]}: {_resolved[1][:120]}")
         # VAC-1. UNCONDITIONAL: printed whether or not anything was suppressed,
         # so that "the filter cleared nothing" and "the filter was handed
         # nothing" are different lines rather than the same absence.

@@ -3,7 +3,8 @@ name: Daily Betting Picks
 on:
   schedule:
     # One daily run. The WC (which forced a 16:00-UTC kickoff deadline and a
-    # second "backup" cron to survive GitHub's 0.5-5.7h scheduler delays) is
+    # second "backup" cron to survive GitHub's 0.5-5.7h scheduler delays, a figure
+    # from the RETIRED pre-08-30 regime) is
     # over; club matches kick off in the evening, hours after this ~11:00-UTC
     # run finishes even when the scheduler is late — so a single run has ample
     # buffer and the backup cron was removed (2026-07-22). Off-hour minute
@@ -16,11 +17,30 @@ on:
     # the hour — it was that GitHub's scheduler has delivered 0.5h to 11h21m of
     # delay, and a late start cannot be recovered.
     #
-    # THAT 0.5h-11h21m ENVELOPE DESCRIBES THE POOLED PRE-08-30 REGIME, NOT THIS
-    # CRON. It was recorded on 2026-08-30 — the day this clock changed — so it
-    # necessarily pools the 06:00, 07:30, 14:00, 09:37+12:23 and 09:37 schedules
-    # and contains no observation of `0 3 * * *`. Do not cite it as this cron's
-    # distribution; it has already been cited that way once.
+    # ── THE ENVELOPE, RE-ATTRIBUTED. THE CANONICAL STATEMENT. ───────────────
+    #
+    # EVERY DELAY FIGURE CARRIES THE CRON IT WAS MEASURED UNDER. A figure without
+    # its regime gets re-pooled within a month; that has already happened twice —
+    # once when `0.5h-11h21m` was cited as this cron's envelope, and once when a
+    # 09:37 run (`390a4be`) read as an 11h30m outlier of a 03:00 series.
+    #
+    # Measured 2026-10-02, membership by each run's OWN headSha:
+    #
+    #   cron           n    min      max      mean     sd        regime
+    #   -----------  ---  -------  -------  -------  -------  -----------------
+    #   37 9 * * *    39   0h17m   11h21m    1h53m   143.9m   retired 2026-08-30
+    #   0 3 * * *     32   4h11m    6h35m    5h03m    36.7m   retired 2026-10-01
+    #   0 0 * * *      1   4h15m    4h15m    4h15m      n/a   CURRENT
+    #
+    # SO `11h21m` BELONGS TO `37 9 * * *` AND TO NOTHING ELSE. The `0 3 * * *`
+    # regime's measured maximum was 6h35m — 4h46m below it — and the current
+    # cron has n=1, which supports no distributional claim at all. The retrospective
+    # reconstruction is what made this visible, and `headSha` membership is why
+    # it was possible: without it the three populations are one series with a
+    # 143.9-minute sd and no structure.
+    #
+    # `0.5-5.7h` appears elsewhere in this repository and belongs to the same
+    # retired pre-08-30 pool. It is not this cron's envelope either.
     #
     # MEASURED FOR THIS CRON, 2026-10-01, n=32, membership by each run's OWN
     # headSha carrying exactly `0 3 * * *` (which excludes 390a4be, a 09:37 run
@@ -70,6 +90,7 @@ on:
     #
     # DATE SAFETY, the whole risk of moving across midnight. Execution stays on
     # the SAME calendar day for both crons (00:00 + 11h21m, the largest delay
+    # ever documented in ANY regime — it belongs to the retired `37 9 * * *`,
     # ever documented, is 11:21 the same day), and 00:00 has 24h of headroom
     # before a crossing against 03:00's 21h — the move is STRICTLY MORE
     # date-robust. Every clock-derived site was enumerated and none changes:

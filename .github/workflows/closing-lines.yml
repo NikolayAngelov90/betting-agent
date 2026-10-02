@@ -27,7 +27,7 @@ name: Closing Line Capture
 # logic depends on local time — kickoff comparisons use stored UTC datetimes —
 # so correctness is unaffected; only the convenience of the slots moves. The
 # 2-hourly spread absorbs it, as it absorbs GitHub's scheduler delay (observed
-# 0.5-5.7h on this repo).
+# 0.5-5.7h on this repo, under the RETIRED pre-08-30 crons).
 
 on:
   schedule:
@@ -51,7 +51,7 @@ on:
     # indistinguishable from a lever that does not work.
     #
     # 10:47 clears the latest observed pick write by 15 minutes and precedes an
-    # 11:00 kickoff by 13. When GitHub's scheduler is late (0.5-5.7h observed)
+    # 11:00 kickoff by 13. When GitHub's scheduler is late (0.5-5.7h observed under the RETIRED pre-08-30 crons)
     # this slot degrades to behaving like the 11:17 one, which is the existing
     # status quo, not a regression.
     - cron: '47 10 * * *'

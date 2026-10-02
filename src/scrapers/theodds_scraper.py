@@ -139,7 +139,7 @@ def _persist_credits(remaining: int) -> None:
 #: The picks cron, and how long after it a run can still be PENDING.
 #:
 #: 03:00 UTC (Stage 21 moved it from 09:37), plus the observed maximum scheduler
-#: delay of 11h21m, plus the p90 run duration of 106 minutes. Outside this
+#: delay of 11h21m (regime `37 9 * * *`, n=39, retired), plus the p90 run duration of 106 minutes. Outside this
 #: window a picks run cannot still be pending, so the guard below must not
 #: decline — that is precisely what the REVERTED version got wrong: it asked
 #: "have today's picks run" via a `date.today()` marker, which stayed false at
@@ -1438,7 +1438,11 @@ class TheOddsScraper:
         # a scheduling coincidence: measured 2026-09-17, 0 of 18 runs under the
         # current cron overlapped the first refresh — by a margin of 41 minutes,
         # against a scheduler documented at 0.5-5.7h and observed once at
-        # 11h21m. Under the OLD cron the same question answered 133 of 223.
+        # 11h21m — BOTH figures belong to the RETIRED `37 9 * * *` regime
+        # (n=39), not to the cron in force. Under the OLD cron the same question
+        # answered 133 of 223. Re-measured 2026-10-02: `0 3 * * *` ran 4h11m to
+        # 6h35m over n=32, and `0 0 * * *` has n=1. See daily-picks.yml for the
+        # per-regime table; a delay figure without its cron gets re-pooled.
         #
         # THE REVERTED VERSION ASKED THE WRONG QUESTION. It asked "have today's
         # picks run", keyed on `date.today()`, and declined globally. Those

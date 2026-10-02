@@ -487,7 +487,7 @@ def test_the_census_is_PRINTED_unconditionally_at_the_call_site():
     """A line that appears only when something was suppressed is a line whose
     absence means nothing — the AF_LEAGUE_FILTER lesson, applied here."""
     src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
-    body = src.split("for h in _suppressed:")[1][:400]
+    body = src.split("for h in _suppressed:")[1][:900]
     assert "print(f\"{'':<56} {_census}\")" in body, (
         "the census is not printed after the suppressed block")
     assert "if _census" not in body and "if _suppressed" not in body, (

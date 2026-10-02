@@ -24,7 +24,9 @@ case impossible:
 
 WHY IT IS BACK. Measured 2026-09-17: 0 of 18 runs under the current cron overlap
 the first refresh, by a margin of **41 minutes**, against a scheduler documented
-at 0.5-5.7h and observed once at 11h21m. Under the OLD cron the same question
+at 0.5-5.7h and observed once at 11h21m — both figures belong to the RETIRED
+`37 9 * * *` regime (n=39), not to the cron in force; `0 3 * * *` measured
+4h11m-6h35m over n=32 and `0 0 * * *` has n=1. Under the OLD cron the same question
 answered **133 of 223**. It is also on H1's critical path — the collection widens
 the refresh window to 360 minutes, which widens the blast radius of an overlap.
 """

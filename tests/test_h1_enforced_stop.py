@@ -42,10 +42,14 @@ from scripts.h1_collection_check import (
 # ── the outcomes are REGISTERED, in the type that emits them ────────────────
 
 def test_the_states_are_registered_and_exhaustive():
-    assert COLLECTION_STATES == ("COLLECTING", "COMPLETE", "CEILING_HIT",
-                                 "NO_DATA", "RESERVATION_EXHAUSTED")
+    """FIVE terminal states after the 2026-10-02 collapse, and the fifth is a
+    SPLIT: `CEILING_HIT` was carrying both "the registered bound was reached"
+    and "the ledger could not be read", and the second is not a bound event."""
+    assert COLLECTION_STATES == ("COLLECTING", "COMPLETE",
+                                 "RESERVATION_EXHAUSTED", "CEILING_HIT",
+                                 "NO_DATA", "BUDGET_UNREADABLE")
     assert COLLECTION_RUNNING not in COLLECTION_TERMINAL_STATES
-    assert len(COLLECTION_TERMINAL_STATES) == 4
+    assert len(COLLECTION_TERMINAL_STATES) == 5
 
 
 def test_every_reachable_state_is_in_the_registry():
@@ -104,9 +108,10 @@ def test_POSITIVE_CONTROL_limb2_credits_reach_the_CEILING_and_HALT():
                          raw_rows=500, reservation=high)
     assert at.halt is True, "credits reached the ceiling and collection did NOT halt"
     assert at.state == "CEILING_HIT"
-    assert "SHORT" in at.reason, (
-        "CEILING_HIT does not say the collection stopped short of its target — "
-        "a reader would file it as a normal completion")
+    assert "misconfiguration" in at.reason, (
+        "CEILING_HIT no longer explains WHY the registered ceiling bound "
+        "rather than the reservation — a reader cannot tell it from a normal "
+        "reservation halt")
 
 
 def test_limb2_FAILS_CLOSED_on_an_unreadable_ledger():
@@ -117,6 +122,10 @@ def test_limb2_FAILS_CLOSED_on_an_unreadable_ledger():
     """
     s = collection_stop(n_fixtures=1, credits_spent=None, raw_rows=500)
     assert s.halt is True
+    assert s.state == "BUDGET_UNREADABLE", (
+        "an unreadable ledger is reported as a bound being reached; it is the "
+        "bound being UNKNOWN, and folding the two made a halt-for-ignorance "
+        "look like a halt-at-a-bound")
     assert "UNREADABLE" in s.reason
 
 
@@ -141,27 +150,18 @@ def test_NO_DATA_refines_a_halt_and_does_not_TRIGGER_one():
     assert s.halt is False and s.state == "COLLECTING"
 
 
-def test_the_terminal_states_PRINT_DIFFERENTLY():
-    """Distinguishable in the log, not merely in the enum.
-
-    All four are reachable only when the reservation and the ceiling are
-    DIFFERENT numbers, which is the production arrangement (168 < 200).
-    """
-    res = 168
-    cases = [
-        dict(n_fixtures=TARGET_N, credits_spent=0, raw_rows=9),
-        dict(n_fixtures=0, credits_spent=res, raw_rows=9),
-        dict(n_fixtures=0, credits_spent=CREDIT_CEILING, raw_rows=9),
-        dict(n_fixtures=0, credits_spent=res, raw_rows=0),
-    ]
-    msgs = {}
-    for kw in cases:
-        s = collection_stop(reservation=res, **kw)
-        msgs[s.state] = str(s)
-    assert set(msgs) == set(COLLECTION_TERMINAL_STATES), set(msgs)
-    assert len(set(msgs.values())) == 4, "two terminal states print the same line"
-    for state, line in msgs.items():
-        assert f"state={state}" in line
+#: SUPERSEDED 2026-10-02 by the ceilings collapse. The state set, the
+#: distinguishability of all five, and `CEILING_HIT`'s reachable path are owned
+#: by `tests/test_saturation_and_resolution.py`:
+#:
+#:    test_the_terminal_states_are_FIVE_and_all_DISTINGUISHABLE
+#:    test_CEILING_HIT_HAS_a_reachable_path_and_it_is_STATED
+#:    test_an_UNREADABLE_ledger_is_its_OWN_state_not_a_ceiling_event
+#:
+#: Three tests here asserted the same properties against the FOUR-state design.
+#: Keeping updated copies would be two definitions of one contract — the habit
+#: this project has removed six times — so they are deleted rather than
+#: duplicated, and this note is the pointer.
 
 
 # ── ONE DEFINITION: the runner imports, it does not copy ───────────────────
@@ -410,23 +410,6 @@ def test_H1_sees_its_reservation_rather_than_having_it_withheld():
     assert _quota(used=0, for_h1=False).remaining(today=IN_WINDOW) == 232
 
 
-def test_RESERVATION_EXHAUSTED_is_DISTINGUISHABLE_from_the_other_three():
-    from scripts.h1_collection_check import (
-        COLLECTION_TERMINAL_STATES, CREDIT_CEILING, collection_stop)
-    cases = {
-        "COMPLETE": dict(n_fixtures=39, credits_spent=10, raw_rows=9),
-        "RESERVATION_EXHAUSTED": dict(n_fixtures=5, credits_spent=168, raw_rows=9),
-        "CEILING_HIT": dict(n_fixtures=5, credits_spent=CREDIT_CEILING, raw_rows=9),
-        "NO_DATA": dict(n_fixtures=0, credits_spent=168, raw_rows=0),
-    }
-    lines = {}
-    for expected, kw in cases.items():
-        s = collection_stop(reservation=H1_RESERVED_CREDITS, **kw)
-        assert s.state == expected, f"{kw} -> {s.state}, expected {expected}"
-        lines[expected] = str(s)
-    assert set(lines) == set(COLLECTION_TERMINAL_STATES)
-    assert len(set(lines.values())) == 4, "two terminal states print identically"
-
 
 def test_the_ONSET_is_pinned_not_only_the_expiry():
     """The expiry is the half everyone pins. The ONSET is the half that can
@@ -455,31 +438,6 @@ def test_the_allocator_is_DORMANT_before_the_onset():
             f"{day}: normal operation is already throttled — seven days of "
             f"reduced pricing bought nothing")
 
-
-def test_only_the_FAIL_CLOSED_branch_reaches_CEILING_HIT_from_the_runner():
-    """An honest reachability statement, not a claim that all four fire live.
-
-    The runner calls `collection_state`, which uses the DEFAULT reservation
-    (168). Because 168 < CREDIT_CEILING (200), the reservation ALWAYS binds
-    first on a readable ledger — so from the runner as shipped, `CEILING_HIT`
-    is reachable only through `credits_spent is None`, the fail-closed path.
-    That is the safe direction, and it is recorded so nobody reads a missing
-    CEILING_HIT as the ceiling being untested.
-    """
-    from scripts.h1_collection_check import CREDIT_CEILING, collection_stop
-    assert H1_RESERVED_CREDITS < CREDIT_CEILING
-
-    # readable ledger, far past both bounds -> the RESERVATION is reported
-    s = collection_stop(n_fixtures=0, credits_spent=CREDIT_CEILING + 50,
-                        raw_rows=9)
-    assert s.state == "CEILING_HIT", s          # past the ceiling too
-    mid = collection_stop(n_fixtures=0, credits_spent=H1_RESERVED_CREDITS + 1,
-                          raw_rows=9)
-    assert mid.state == "RESERVATION_EXHAUSTED", mid
-
-    # unreadable ledger -> CEILING_HIT via fail-closed, with no credit figure
-    none = collection_stop(n_fixtures=0, credits_spent=None, raw_rows=9)
-    assert none.state == "CEILING_HIT" and "UNREADABLE" in none.reason
 
 
 def test_the_H1_window_values_are_PASSED_never_defaulted():

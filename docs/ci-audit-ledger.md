@@ -22127,3 +22127,286 @@ accumulates three separated points. 97 H1 tests pass.
 *Recorded 2026-10-02. `tests/test_h1_enforced_stop.py` only. `model_version`
 UNCHANGED at `8da2fd`, `s5.15`, 1 pick. No production, config, schema, migration
 or workflow change.*
+
+---
+
+# SATURATION REMOVED · RESOLVED MARKER LIVE · THIRD OUTCOME REGISTERED · CEILINGS COLLAPSED · ENVELOPE RE-ATTRIBUTED
+
+`tests/` **1699 passed, 0 failed** (1673 → 1699). Invariants **passed** — count
+not cited. `cohort_status`: **`s5.15` / `8da2fd` UNCHANGED, 1 pick** — Parts A–E
+bumped nothing. Stage 26 suspended except `a4d5228` + `42ad297`.
+
+**The audit now exits 0 on `--since 2026-10-01 --fail-on BROKEN,DID_NOT_RUN`**,
+where it had exited 1 eight times.
+
+---
+
+## PART A — SATURATION REMOVED
+
+> ### A detector whose expected baseline equals its threshold has no dynamic range.
+
+### The three counts, partitioning the annotations exactly
+
+| count | what |
+| --- | --- |
+| `exit_annotations` | `##[error]Process completed with exit code N` |
+| **`self_emitted_annotations`** | **deliberate annotations THIS repository prints**, identified by source |
+| `foreign_annotations` | the remainder |
+
+A test asserts **`exit + self + foreign == every `##[error]` in the log`** over
+four logs including the empty one. A partition that does not sum is two
+overlapping counts wearing the name.
+
+### Identified BY SOURCE, and the registry is enforced against its emitters
+
+```python
+SELF_EMITTED_ANNOTATIONS = (
+    ("::error::audit alarm",     "scripts/ci_audit.py"),
+    ("::error::CI audit alarmed", ".github/workflows/ci-audit.yml"),
+    ("::error::Pick generation",  ".github/workflows/daily-picks.yml"),
+)
+```
+
+`test_every_self_emitted_annotation_names_a_REAL_emitter` asserts **the named
+file still contains the pattern**. So an entry cannot survive its emitter being
+deleted, and cannot be added for a message nothing prints — **that is what stops
+a source registry decaying into "errors that look routine".**
+
+### The signal is the remainder
+
+```
+self_emitted_exits      = min(self_emitted_annotations, exit_annotations)
+unexplained_nonzero_exit = exit_annotations - self_emitted_exits
+```
+
+`min` rather than subtraction, so a log carrying more annotations than exits
+cannot drive the remainder negative and read as *fewer than none*. Each
+deliberate annotation explains **at most one** exit, because each is followed by
+its own step returning 1.
+
+**On an alarming `ci-audit` run: `exit=2, self=2, unexplained=0`.** The finding
+no longer fires.
+
+### POSITIVE CONTROL — the subtraction did not take the signal
+
+| log | exits | self | **unexplained** | finding fires? |
+| --- | --- | --- | --- | --- |
+| the audit's own alarm | 2 | 2 | **0** | **no** |
+| **+ one foreign `exit code 127`** | 3 | 2 | **1** | **YES** |
+
+> ### If the baseline removal had taken the signal with it, the second row would read 0. It reads 1, and `assertions()` produces the finding — so the verdict moves on a genuine third absorbed failure, which is exactly what was invisible before.
+
+---
+
+## PART B — RESOLVED MARKER LIVE
+
+> ### An alarm cleared by time teaches waiting. CLR-2 requires an action a person can take.
+
+Narrowing the scope was not the fix — **the scope had already been narrowed
+once, which is how this shape arrived.** So a run leaves the alarm's scope
+**because a row says so**:
+
+```python
+RESOLVED_RUNS = {
+    "36843668865": ("a4d5228",
+                    "the month-boundary contradiction in "
+                    "test_credit_reading_freshness was bounded; the test gate "
+                    "that stopped --update can no longer fire on the 1st"),
+}
+```
+
+**The eight are backfilled** — one run id, one resolving commit, one reason a
+future reader can check.
+
+### CLR-2, stated and confirmed
+
+**The clearing action is recording the resolution, and it changes the
+predicate.** A test reads the source and asserts `not _resolved` gates
+`alarmed` — because a marker that is recorded but not consulted is theatre.
+
+**Measured on the live audit:**
+
+```
+36843668865  daily-picks  2026-10-01T09:35  DID_NOT_RUN  core step(s) DID NOT RUN: …
+                                            = RESOLVED by a4d5228: the month-boundary …
+```
+
+→ **exit code 0**, where the same command exited 1 on each of the eight runs.
+
+### RECORDED, not silencing
+
+The row still carries **`DID_NOT_RUN`** and its findings; only the alarm's scope
+moved. A test asserts the **verdict is computed before the marker is consulted**,
+so a resolution can never rewrite what happened.
+
+---
+
+## PART C — THIRD OUTCOME REGISTERED
+
+| state | meaning | alarms |
+| --- | --- | --- |
+| **`DID_NOT_START`** | outside the window, or it has not opened | **no** |
+| **`RUNNING_AND_FAILING`** | inside the window, producing nothing | **YES** |
+| **`RUNNING_AND_FINE`** | inside the window, producing | no |
+
+Registered in the type that emits them (`ApparatusState`), all three pinned by a
+parametrised test, and **all three print differently**.
+
+**The 2026-10-02 case now reads correctly:**
+
+```
+H1_APPARATUS state=DID_NOT_START alarms=False
+  H1 COLLECTION HAS NOT STARTED — the window opens 2026-10-09. 103
+  observation(s) and 0 trajectories is the EXPECTED state: ordinary pricing
+  refreshes a league at most once per 180 min, so no series accumulates three
+  separated points. This is not a null and not a fault.
+```
+
+**POSITIVE CONTROL:** `in_window=True, raw_rows=103, n=0` → **`RUNNING_AND_FAILING`,
+alarms=True**, message retains *"the apparatus is not working"*. **The third
+state was added by splitting the detector, not by deleting it** — and the control
+is the only reason to trust the silence above it.
+
+**`in_window` comes from ONE definition** — `h1_reservation() > 0`, the
+reservation window. A second date literal here would be the habit; a test
+asserts the import.
+
+### And the tests that implicitly assumed "always collecting"
+
+Three `render()` tests passed only because `render` had no notion of a window.
+They now pass `in_window=True` through a named helper — **the implicit
+always-collecting assumption is exactly what let a correct zero be reported as a
+broken apparatus.**
+
+---
+
+## PART D — CEILINGS COLLAPSED
+
+> ### Two independent bounds over one exhaustible pool are not a budget, and the weaker one was DEAD: with a 168 reservation against a registered 200, nothing could reach 200 from the runner.
+
+**There is now ONE bound:**
+
+```python
+def effective_bound(reservation): return min(reservation, CREDIT_CEILING)
+```
+
+`CREDIT_CEILING` **caps the reservation** — it is no longer a parallel runtime
+limb. The registration still has a voice: it supplies the bound whenever an
+allocation tries to exceed it.
+
+### `CEILING_HIT` has a reachable path, and the input is stated
+
+**A reservation raised above the registered ceiling** — a misconfiguration the
+state names rather than silently honouring:
+
+```
+CEILING_HIT: credits=200 reached the REGISTERED ceiling 200 with n=0 < TARGET_N=39.
+  The ceiling bound rather than the reservation because the reservation (250)
+  EXCEEDS it — a misconfiguration: the registration fixes 200 and an allocation
+  may not raise it.
+```
+
+### FOUR BECAME FIVE, and the fifth is a SPLIT not an addition
+
+| state | reachable by |
+| --- | --- |
+| `COMPLETE` | `n >= TARGET_N` |
+| **`RESERVATION_EXHAUSTED`** | the bound, when the reservation supplies it — **the normal case** |
+| **`CEILING_HIT`** | the bound, when the registered ceiling supplies it (reservation > 200) |
+| `NO_DATA` | a halt with zero in-band observations |
+| **`BUDGET_UNREADABLE`** | **the ledger cannot be read** |
+
+> ### `CEILING_HIT` was carrying two different facts: *the bound was reached* and *the bound is unknown*. Folding them meant a halt-for-ignorance was reported as a halt-at-a-bound. **The split is the honest count, and it is reported as five rather than forced back to four.**
+
+All five print differently, asserted. And three superseded tests in
+`test_h1_enforced_stop.py` were **deleted rather than updated**, with a pointer
+to the canonical versions — keeping updated copies would be two definitions of
+one contract.
+
+---
+
+## PART E — ENVELOPE RE-ATTRIBUTED, PERMANENTLY
+
+### The canonical table, in `daily-picks.yml`
+
+| cron | **n** | min | max | mean | sd | regime |
+| --- | --- | --- | --- | --- | --- | --- |
+| `37 9 * * *` | **39** | 0h17m | **11h21m** | 1h53m | 143.9m | retired 2026-08-30 |
+| `0 3 * * *` | **32** | 4h11m | **6h35m** | 5h03m | 36.7m | retired 2026-10-01 |
+| `0 0 * * *` | **1** | 4h15m | 4h15m | 4h15m | n/a | **CURRENT** |
+
+> ### `11h21m` belongs to `37 9 * * *` and to nothing else. The `0 3 * * *` maximum was **6h35m — 4h46m below it** — and the current cron has **n=1**, which supports no distributional claim.
+
+**Six live sites corrected**, each naming its regime: `daily-picks.yml` (×3),
+`ci-audit.yml`, `closing-lines.yml` (×2), `theodds_scraper.py` (×2),
+`test_picks_run_guard.py`, `test_schedule_margin.py`.
+
+**`test_every_LIVE_citation_of_the_envelope_names_its_regime` enforces it** — and
+**it caught three sites I had missed** on its first run, which is the whole
+argument for writing it: `daily-picks.yml:6`, `daily-picks.yml:91` and
+`test_schedule_margin.py:93`.
+
+**The ledger is deliberately EXCLUDED from that check.** Its entries record what
+was believed when written; rewriting them would be deleting the record rather
+than correcting it. The correction lives here, in the current entry.
+
+### How it became visible
+
+**The retrospective reconstruction is what exposed it, and `headSha` membership
+is why it was possible.** Without per-run sha attribution the three populations
+are one series with a 143.9-minute sd and no structure — which is precisely how
+a 09:37 run (`390a4be`) once read as an 11h30m outlier of a 03:00 series.
+
+> ### A figure without its regime gets re-pooled within a month. That has now happened twice, and both times the pooling looked like an outlier rather than a category error.
+
+---
+
+## PART F — STANDING, STATED
+
+| item | status |
+| --- | --- |
+| `0 0 * * *` | **n=1, 4h15m, margin +252 min.** Whether the distribution moved is **UNANSWERABLE at n=1** — `sd=0` and `mean+3sd` collapse onto the single reading, asserted by a test. **A single near-minimum reading is not "the delay improved."** |
+| H1 budget | **fits on option 1, +6 credits of slack** |
+| the unused lever | **named and NOT taken**: 100 credits sit below the provider's tier; raising the budget 450→500 frees 50 with no paid tier |
+| the analysis | **`NO DATA` at 103 observations / 0 trajectories — the expected pre-window state, not a null** |
+
+---
+
+## DECLARATION
+
+> ### SATURATION REMOVED
+> Three counts partition the annotations exactly (`exit + self + foreign ==
+> total`, pinned). Self-emitted identified **by source**, with the registry
+> asserted against each emitter. The signal is the remainder.
+> **Positive control: a third foreign `exit code 127` gives
+> `unexplained=1` and the finding fires; the audit's own baseline gives 0 and it
+> does not.**
+
+> ### RESOLVED MARKER LIVE
+> `36843668865 daily-picks DID_NOT_RUN`, resolved by **`a4d5228`**, backfilled
+> 2026-10-02. **CLR-2 confirmed: recording the resolution is the action and it
+> changes the predicate** — the live audit now exits **0**. Recorded, not
+> silencing: the row keeps its verdict and prints `= RESOLVED by a4d5228`.
+
+> ### THIRD OUTCOME REGISTERED
+> `DID_NOT_START` / `RUNNING_AND_FAILING` / `RUNNING_AND_FINE`, in the emitting
+> type, all three printing differently. **A correct zero outside the window no
+> longer alarms, and the control proves the alarm still fires inside it.**
+
+> ### CEILINGS COLLAPSED
+> One bound: `min(reservation, CREDIT_CEILING)`. `CEILING_HIT` reachable by a
+> **stated input** — a reservation exceeding the registered ceiling. Terminal
+> states: **`COMPLETE` · `RESERVATION_EXHAUSTED` · `CEILING_HIT` · `NO_DATA` ·
+> `BUDGET_UNREADABLE` — five, because the fifth is a split, not an addition.**
+
+> ### ENVELOPE RE-ATTRIBUTED
+> **`37 9 * * *` n=39 · `0 3 * * *` n=32 · `0 0 * * *` n=1.** Six live sites
+> corrected, enforced by a test that caught three more. The ledger's historical
+> entries stand as written.
+
+*Recorded 2026-10-02. `scripts/ci_audit.py`, `scripts/h1_collection_check.py`,
+`src/scrapers/theodds_scraper.py`, `.github/workflows/{daily-picks,ci-audit,closing-lines}.yml`
+(comments only; cron, steps and timeout asserted unchanged),
+`tests/test_saturation_and_resolution.py` (new) and four existing test files.
+`model_version` UNCHANGED at `8da2fd`. No schema, migration or production-data
+change.*
