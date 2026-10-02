@@ -21810,3 +21810,320 @@ names the table. A text scan cannot tell provenance from a query.
 `tests/test_h1_enforced_stop.py`, `tests/test_price_history_accumulates.py`.
 `model_version` UNCHANGED at `8da2fd`. `s5.15` now holds 1 pick. No schema,
 migration or production-data change beyond the dispatched run's ordinary output.*
+
+---
+
+# CI AUDIT 2026-10-02 — DEFECTS FOUND (3). The new cron's first scheduled run landed inside the predicted band.
+
+`tests/` **1673 passed, 0 failed** (1669 → 1673). Invariants **passed** — count not
+cited. `cohort_status`: **`s5.15` / `8da2fd` UNCHANGED, 1 pick stamped** — this
+stage changed **one test file only**, so no bump. Stage 26 suspended except
+`a4d5228` + `42ad297`.
+
+---
+
+## PART A — SCOPE, AND THE 8 FAILURES ARE ONE VERDICT
+
+15 runs since the last ledger row: `ci-audit` **8**, `closing-lines` 4,
+`daily-picks` 2, `paper-trading-report` 1. **7 success, 8 failure — and every
+failure is `ci-audit`.**
+
+| created | workflow | run | sha | trigger | concl | lag | dur |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 10-01 14:14 | daily-picks | `36874774931` | `a4d5228` | dispatch | success | — | 40.0m |
+| 10-01 14:54 | ci-audit | `36880069642` | `a4d5228` | workflow_run | **failure** | — | 1.3m |
+| 10-01 17:08 | paper-trading | `36897170944` | `a4d5228` | schedule | success | 6h21m | 0.6m |
+| 10-01 17:08 | closing-lines | `36897237638` | `a4d5228` | schedule | success | 1h51m | 0.8m |
+| 10-01 17:09 | ci-audit | `36897251265` | `a4d5228` | workflow_run | **failure** | — | 1.0m |
+| 10-01 17:09 | ci-audit | `36897347409` | `a4d5228` | workflow_run | **failure** | — | 1.6m |
+| 10-01 17:21 | closing-lines | `36898743585` | `a4d5228` | schedule | success | 0h04m | 0.8m |
+| 10-01 17:22 | ci-audit | `36898840563` | `a4d5228` | workflow_run | **failure** | — | 1.3m |
+| 10-01 18:18 | ci-audit | `36905833480` | `a4d5228` | schedule | **failure** | 6h18m | 1.1m |
+| 10-01 23:09 | closing-lines | `36939278910` | `a4d5228` | schedule | success | 1h52m | 0.7m |
+| 10-01 23:10 | ci-audit | `36939348023` | `a4d5228` | workflow_run | **failure** | — | 1.3m |
+| 10-02 02:12 | closing-lines | `36954559333` | `a4d5228` | schedule | success | 2h55m | 0.5m |
+| 10-02 02:13 | ci-audit | `36954606225` | `a4d5228` | workflow_run | **failure** | — | 0.9m |
+| **10-02 04:15** | **daily-picks** | **`36963791559`** | `a4d5228` | **schedule** | **success** | **4h15m** | 42.3m |
+| 10-02 04:58 | ci-audit | `36966857583` | `a4d5228` | workflow_run | **failure** | — | 1.0m |
+
+### VERDICT, not machinery — and nothing is unaudited
+
+```
+##[error]audit alarm — 36843668865 daily-picks DID_NOT_RUN
+```
+
+**All 8 failures carry the same alarm, on one historical run** — 10-01's
+scheduled `daily-picks`, which the credit-freshness test gate stopped before
+`--update`. `DID_NOT_RUN` is in `--fail-on`, so the audit exits 1 **because it
+found something**.
+
+> ### The machinery is healthy and the failure is AFTER the ledger write, not before: the table printed in full on every run — 15 rows, `disc[...]`, `resolve[...]`, every suppression census and the margin line — and only then did the job go red. **Nothing has gone unaudited since 10-01.**
+
+### The three-way partition, and where it disagrees
+
+For `ci-audit`'s own runs the extractor reports *"2 step(s) exited NON-ZERO with
+no traceback and no named failed step"*, while the API reports:
+
+| source | says |
+| --- | --- |
+| `##[error]Process completed with exit code 1` | **2** occurrences |
+| `steps_failed` (log-derived) | **0** |
+| `tracebacks` | **0** |
+| **API step conclusions** | step 4 `Audit unaudited runs` = **success** (it has `continue-on-error`, though it exited 1); step 6 `Fail the job when the audit alarmed` = **failure** |
+
+> ### **DEFECT 1 — the audit mis-diagnoses its own alarm as an absorbed failure.** Both non-zero exits are deliberate: one is `--fail-on` doing its job, the other is the step that reddens the run. The detector reads failures from the LOG, where neither emits a traceback or a named-failure marker, so it scores every alarming `ci-audit` run `DEGRADED` for an unexplained absorbed failure. `NEVER_ALARM_WORKFLOWS` stops it alarming, but **the signal is now saturated at 2 — a genuine third absorbed failure on a `ci-audit` run would be invisible.** SLF-1's shape: the audit's output corrupts its own input.
+
+### DEFECT 2 — the alarm is not clearable by the remedy it prompted
+
+The 10-01 `DID_NOT_RUN` was remediated in `a4d5228` (the month-boundary test
+bounded). The run stays red forever, and `--since yesterday` keeps it in scope,
+so the audit **re-alarms 8 times on an already-fixed historical fact** and clears
+only when the window rolls past it. **CLR-2**: an alarm must be clearable by the
+remedy it prompts; this one is cleared only by the calendar.
+
+---
+
+## PART B — THE NEW CRON'S FIRST SCHEDULED RUN
+
+*(measured 2026-10-02)*
+
+| | |
+| --- | --- |
+| run | **`36963791559`**, scheduled, **success**, 42.3m |
+| **actual start** | **04:15 UTC — lag 4h15m** |
+| predicted execution band | **`[04:11, 07:11)`** |
+| **held?** | **YES — 04:15 is inside it** |
+| binding margin vs the weekend 10:15 deadline | **+252 min** (`max` and `mean+3sd` coincide at n=1) |
+
+### All six date-derived sites, resolved in production
+
+| site | predicted for an execution in `[04:11, 07:11)` | **resolved to** |
+| --- | --- | --- |
+| the card's date | 2026-10-02 (day-aligned) | **2026-10-02** — found and picked the laliga2 fixture |
+| settlement target | D−1 results from the DB | **"Settling picks: 2 days back" → Settled 0** (the 18:30 fixture had not played) |
+| credits period | `2026-10` | **`month=2026-10`** in `CREDITS_CLAIMED` |
+| run marker | `briefings_sent.json` keyed 2026-10-02 | **restored and saved** |
+| audit window | covers 10-01 and 10-02 | **both present in the table** |
+| **`max_days_ahead` cutoff** | `[04:11, 07:11)` **on D+1** | **`2026-10-03T04:21:30`** |
+
+> ### The enumeration's load-bearing claim was site 6, and it held exactly: the cutoff landed at **04:21 on D+1** instead of 07:11+, and because the earliest 10-03 kickoffs are **11:30 and 14:00**, both cutoffs admit the same population. **The fixture set is unchanged by the clock move, as predicted.**
+
+### Did the delay distribution move with the scheduled instant? UNANSWERABLE AT n=1.
+
+4h15m sits inside the old series' range (4h11m–6h35m), near its minimum — so
+**no evidence of a shift and no power to detect one.** The band held on the one
+observation; the distributional question needs n≥2 and is not answered here.
+`sd = 0` and `mean+3sd = max` by construction at n=1, which is why the +252 is
+reported as a single observation and not as a bound.
+
+### The credits-period guard, now verified on TWO inputs with OPPOSITE outcomes
+
+| date | input | behaviour |
+| --- | --- | --- |
+| **10-01** (boundary) | file dated 2026-09, value 100 | **REFUSED** — "the quota has reset since… Treating 100 as NO READING" → probed free → **500** |
+| **10-02** (non-boundary) | file dated 2026-10-01, age 1 day | **ACCEPTED** — no NO-READING line, no probe; spent 2 credits, header **498** |
+
+> ### A guard verified only on the day it was designed for is verified on one input. It now has two, and they fall on opposite sides. **This is also the production exercise of `test_yesterdays_reading_is_still_used` — the one-day-tolerance-within-a-period case I bounded on 10-01 is the case that fired today.**
+
+### B1 — THE SERIES, THREE OF THEM, NEVER POOLED
+
+*(membership by each run's own `headSha`)*
+
+| cron | **n** | min | max | mean | sd | mean+3sd | margin vs 10:15 (max / 3sd) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `37 9 * * *` | **39** | 0h17m | **11h21m** | 1h53m | 143.9m | 9h05m | −713 / −577 |
+| `0 3 * * *` **CLOSED** | **32** | 4h11m | 6h35m | 5h03m | 36.7m | 6h53m | **−67 / −85** |
+| `0 0 * * *` **OPEN** | **1** | 4h15m | 4h15m | 4h15m | 0.0m | 4h15m | **+252 / +252** |
+
+**And the documented 11h21m finally has a population:** it belongs to
+`37 9 * * *`, n=39 — the regime whose sd is 143.9 min. It was never an
+observation of `0 3 * * *`, which is what citing it as this cron's envelope
+assumed.
+
+**The margin line printed on EVERY run in scope, including all 8 failures** —
+verified in the failed `36966857583`:
+
+```
+schedule_margin[n=1 window=28d delay max=4h15m mean+3sd=4h15m
+                | margin max=+271m 3sd=+252m binding=+252m threshold=30m]
+```
+
+---
+
+## PART C — COVERAGE
+
+| date | fx | picks | cov-8 | unc | basis |
+| --- | --- | --- | --- | --- | --- |
+| 09-28 | 1 | 1 | 0 | 1 | measured |
+| 09-29 … 10-01 | 0 | 0 | 0 | 0 | measured |
+| **10-02** | **1** | **1** | 0 | **1** | measured — `spain/laliga2` |
+| 10-03 | 0 | 0 | 0 | 0 | **ZERO BY CONSTRUCTION** — cutoff 10-03T04:21, kickoffs 11:30/14:00 are beyond it |
+| 10-04 … 10-11 | 0 | 0 | 0 | 0 | **ZERO BY CONSTRUCTION** (`max_days_ahead=1`) — **not measured** |
+
+| requirement | measured |
+| --- | --- |
+| **max picks on any single match** | **1** ✓ |
+| matches with >1 pick | **0** ✓ |
+| **identity-gate refusals** | **0** — `create=0`, `no_match=0`; none to classify |
+
+Resolution composition today: `provider_id=1`, `former_name=311`,
+`exact_name=2255`, `strict=24`.
+
+### `AF_LEAGUE_FILTER`, both dates, in production
+
+| date | rejected fixtures | untracked league ids | tracked |
+| --- | --- | --- | --- |
+| 10-01 | **124** | 40 | 30 |
+| 10-02 | **305** | **115** | 30 |
+
+### `FS_DISCOVERY` — 30 lines, and the resumption dates confirmed FROM THE SCRAPER
+
+| state | count |
+| --- | --- |
+| `none-in-range` | **29** |
+| **`kept`** | **1** — `spain/laliga2`, rows=121, kept=1, **earliest 2026-10-02T18:30** |
+| `no-rows` | **0** |
+
+| league | scraper says | directive said |
+| --- | --- | --- |
+| `spain/laliga2` | **kept, 10-02T18:30** | 10-02 ✓ |
+| `england/league-one` | `none-in-range`, earliest **10-03T14:00** | 10-03 ✓ |
+| `england/league-two` | `none-in-range`, earliest **10-03T11:30** | 10-03 ✓ |
+
+### The suppression census
+
+| run | census |
+| --- | --- |
+| `36874774931` (10-01 dispatch) | `examined=33 candidates=32 suppressed=8 alarmed=25` |
+| **`36963791559` (10-02 scheduled)** | **`examined=31 candidates=30 suppressed=8 alarmed=23`** |
+| every `ci-audit` run | `examined=1 candidates=0 suppressed=0 alarmed=1` |
+| every `closing-lines` / `paper-trading` run | `examined=0 … NOT-ENGAGED:no-findings` |
+
+**`suppressed=8` on both daily-picks runs** — the covered eight cleared for
+cause, with `candidates` reported so the zero on the other workflows is
+distinguishable from a filter that examined nothing.
+
+---
+
+## PART D — ALLOCATOR DORMANT
+
+*(measured 2026-10-02)*
+
+| | |
+| --- | --- |
+| `h1_reservation(today)` | **0** |
+| `allocate(450, 50, today)` | pool **400** · h1_reserved **0** · normal_ceiling **400** |
+| `reserved_from_me(today)` | **50 — the margin only, no H1 deduction** |
+| `remaining()` | **398** = 400 − 2 used |
+| `max_requests()` | 199 |
+
+**The onset/offset boundary, exact:** 10-08 → 50 · **10-09 → 218** (50+168) ·
+10-16 → 218 · **10-17 → 50**. It arms and disarms itself.
+
+**A test now pins the ONSET as well as the expiry** — the expiry was already
+pinned; the onset is the half that can silently cost a week, because an allocator
+that activates early throttles pricing for seven days and *nothing fails*:
+pricing simply goes dark sooner, which looks exactly like a busy month.
+
+### Credits spent since the reset, measured, per provider and per path
+
+| provider | key | spend | path |
+| --- | --- | --- | --- |
+| **theoddsapi** | month `2026-10-01` | **2** | **pick-time pricing 2** (`requests=1`), pre-kickoff refresh **0** |
+| api-football | day `2026-10-01` / `2026-10-02` | 52 / 56 = **108** | discovery + odds + injuries |
+
+**theoddsapi: 2 of the 400 pool (0.5%); 2 of the 232 normal ceiling (0.9%) had it
+been active.** Provider header **498** after the spend — 500 − 2, so **ledger and
+provider agree exactly.**
+
+---
+
+## PART E — H1 AT SEVEN DAYS
+
+### The four terminal states, reachability FROM THE RUNNER as shipped
+
+| state | reachable from the runner? |
+| --- | --- |
+| `COMPLETE` | yes — `n >= 39` |
+| **`RESERVATION_EXHAUSTED`** | yes, and **it is the one that will fire**: `collection_state` uses the default reservation 168, and 168 < 200 |
+| `CEILING_HIT` | **only through the fail-closed branch** (`credits_spent is None`), because the reservation always binds first on a readable ledger |
+| `NO_DATA` | yes — a halt with `raw_rows == 0` |
+
+> ### Recorded so nobody reads a missing `CEILING_HIT` as the ceiling being untested: on a readable ledger it is **unreachable by construction**, and that is the safe direction. A test asserts exactly this.
+
+### The revert plan
+
+**Confirmed as the removal of two arguments.** `refresh_imminent`'s defaults are
+`window_minutes=120`, `min_interval_minutes=180`, `h1_collection=False` — the
+normal values. A test pins all three, so the H1 values are **passed, never
+defaulted**.
+
+### The analysis path, end to end, now that the allocator exists
+
+**Importing `h1_analysis` does not pull in `odds_quota`** — the reservation is an
+input to the collection STOP, not to the analysis. The coupling is lazy, inside
+`collection_stop`. Run end to end *(measured 2026-10-02)*:
+
+| | |
+| --- | --- |
+| in-band pre-kickoff observations | **103** |
+| market-instants kept / out / uncomputable | **40 / 3 / 6** |
+| **qualifying trajectories** | **0** — separated points per series `{1: 103}` |
+| picks available to match against | 1862 |
+| trajectories on a picked (market, selection) | 0 |
+| **STATE** | **`NO DATA`** — reported as *"NOT a null result"* |
+
+**Zero trajectories is the EXPECTED state today**: collection has not started, so
+ordinary pricing refreshes at most once per league per 180 min and no series
+accumulates three separated points. 97 H1 tests pass.
+
+> ### **DEFECT 3 — the check calls this a broken apparatus.** `render()` prints *"H1 COLLECTION PRODUCED NOTHING — the apparatus is not working"* with 103 observations and 0 trajectories. That message is written for the collection window and fires **outside** it, where zero trajectories is correct. It conflates **not-started** with **started-and-failing** — the third-state family again, in the check's own headline. The analysis path gets this right (`NO DATA`, explicitly not a null); the collection check does not.
+
+### What remains unmet at seven days
+
+| item | status |
+| --- | --- |
+| Requirement 1 (enforced stop) | **MET** — `a4d5228`, both limbs controlled |
+| the allocator | **BUILT and dormant** — `42ad297` |
+| **the budget** | **H1 FITS only on option 1** — 164-credit cut against a 170-credit throttleable pool, **+6 slack**. The throttle is enforced in `remaining()`, but the *decision* to run option 1 is recorded, not executed: the window arms itself on 10-09 |
+| `CEILING_HIT` live reachability | unreachable on a readable ledger, by design |
+| Defect 3 | open — the check will call a correct zero a broken apparatus on every pre-window run |
+
+---
+
+## PART F — TWO ENTRIES
+
+> ### A guard that penalises the documentation of a measurement is paid for in deleted documentation. `test_nothing_reads_the_snapshot_table_yet` fired on a comment recording how the September spend was obtained. Made comment-blind with a positive control proving it still catches real reads. **The scope of a check is part of its correctness, not an implementation detail.**
+
+> ### `s5.15` is no longer empty. The manually dispatched balance-measurement run produced a pick. The amend-while-empty window has closed; the next selection- or prediction-affecting change in this cohort requires a bump. **The cost was paid deliberately to close "credits are not the constraint", which is now FALSE, measured:** the 400-credit pool is fully committed — **226 fixed** on pick-time pricing, **170 throttleable** on pre-kickoff refresh — with the whole pool consumed in **eleven days** and **nine in-season days running unpriced.**
+
+---
+
+## DECLARATION
+
+> ### CI AUDIT 2026-10-02 — DEFECTS FOUND (3)
+> 1. **the audit mis-diagnoses its own alarm as an absorbed failure** — 2 deliberate non-zero exits scored as unexplained; the signal is saturated so a real third would be invisible. **OPEN**
+> 2. **the `DID_NOT_RUN` alarm is not clearable by its remedy** — re-alarmed 8× on a fact fixed in `a4d5228`; clears only when the window rolls. **CLR-2. OPEN**
+> 3. **the collection check calls a correct zero a broken apparatus** — "the apparatus is not working" fires outside the collection window. **OPEN**
+>
+> All three are **reporting** defects. No pipeline output was lost: the table
+> printed in full on every failed run.
+
+> ### THE NEW CRON — first scheduled run **04:15, lag 4h15m, inside the predicted `[04:11, 07:11)` band**. Binding margin **+252 min** at n=1. All six date-derived sites resolved as the enumeration predicted; the `max_days_ahead` cutoff landed at **10-03T04:21** and admits the same fixture population. Whether the delay distribution moved is **unanswerable at n=1**.
+
+> ### THE SERIES — `37 9 * * *` n=**39** · `0 3 * * *` **CLOSED at n=32** · `0 0 * * *` **OPEN at n=1**. Never pooled. The margin line printed on all 15 runs including all 8 failures.
+
+> ### ALLOCATOR DORMANT
+> `h1_reserved=0`, `normal_ceiling=400`, `reserved_from_me=50`. Arms 10-09,
+> disarms 10-17, both boundaries pinned. Spend since reset: **theoddsapi 2**
+> (ledger = provider header, delta 0), api-football 108.
+
+> ### H1 ON TRACK — with one qualification
+> Requirement 1 met, allocator built and dormant, analysis verified end to end
+> and correctly reporting `NO DATA`. **The qualification is the budget: H1 fits
+> only on option 1, with +6 credits of slack**, and Defect 3 will mislabel every
+> pre-window run until the window opens.
+
+*Recorded 2026-10-02. `tests/test_h1_enforced_stop.py` only. `model_version`
+UNCHANGED at `8da2fd`, `s5.15`, 1 pick. No production, config, schema, migration
+or workflow change.*

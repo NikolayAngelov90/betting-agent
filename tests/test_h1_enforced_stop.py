@@ -426,3 +426,70 @@ def test_RESERVATION_EXHAUSTED_is_DISTINGUISHABLE_from_the_other_three():
         lines[expected] = str(s)
     assert set(lines) == set(COLLECTION_TERMINAL_STATES)
     assert len(set(lines.values())) == 4, "two terminal states print identically"
+
+
+def test_the_ONSET_is_pinned_not_only_the_expiry():
+    """The expiry is the half everyone pins. The ONSET is the half that can
+    silently cost a week.
+
+    An allocator that activates early throttles normal pricing for seven days
+    for nothing, and nothing would fail — pricing would simply get less budget
+    and go dark sooner, which looks exactly like a busy month.
+    """
+    assert H1_RESERVATION_FROM == _d.date(2026, 10, 9), (
+        "the reservation's start moved; it must match the card's return date, "
+        "measured from the scraper as 10-09/10-10 for the covered eight")
+    assert h1_reservation(_d.date(2026, 10, 8)) == 0, "activates a day early"
+    assert h1_reservation(_d.date(2026, 10, 9)) == H1_RESERVED_CREDITS
+    assert h1_reservation(_d.date(2026, 10, 16)) == H1_RESERVED_CREDITS
+    assert h1_reservation(_d.date(2026, 10, 17)) == 0, "outlives its window"
+
+
+def test_the_allocator_is_DORMANT_before_the_onset():
+    """What a dormant allocator means, asserted rather than assumed: normal
+    operation sees the WHOLE pool and the reservation is not yet deducted."""
+    for day in (_d.date(2026, 10, 2), _d.date(2026, 10, 8)):
+        a = allocate(450, 50, today=day)
+        assert a["h1_reserved"] == 0, f"{day}: reservation deducted early"
+        assert a["normal_ceiling"] == a["pool"] == 400, (
+            f"{day}: normal operation is already throttled — seven days of "
+            f"reduced pricing bought nothing")
+
+
+def test_only_the_FAIL_CLOSED_branch_reaches_CEILING_HIT_from_the_runner():
+    """An honest reachability statement, not a claim that all four fire live.
+
+    The runner calls `collection_state`, which uses the DEFAULT reservation
+    (168). Because 168 < CREDIT_CEILING (200), the reservation ALWAYS binds
+    first on a readable ledger — so from the runner as shipped, `CEILING_HIT`
+    is reachable only through `credits_spent is None`, the fail-closed path.
+    That is the safe direction, and it is recorded so nobody reads a missing
+    CEILING_HIT as the ceiling being untested.
+    """
+    from scripts.h1_collection_check import CREDIT_CEILING, collection_stop
+    assert H1_RESERVED_CREDITS < CREDIT_CEILING
+
+    # readable ledger, far past both bounds -> the RESERVATION is reported
+    s = collection_stop(n_fixtures=0, credits_spent=CREDIT_CEILING + 50,
+                        raw_rows=9)
+    assert s.state == "CEILING_HIT", s          # past the ceiling too
+    mid = collection_stop(n_fixtures=0, credits_spent=H1_RESERVED_CREDITS + 1,
+                          raw_rows=9)
+    assert mid.state == "RESERVATION_EXHAUSTED", mid
+
+    # unreadable ledger -> CEILING_HIT via fail-closed, with no credit figure
+    none = collection_stop(n_fixtures=0, credits_spent=None, raw_rows=9)
+    assert none.state == "CEILING_HIT" and "UNREADABLE" in none.reason
+
+
+def test_the_H1_window_values_are_PASSED_never_defaulted():
+    """The revert is the removal of two arguments. That only holds if the
+    defaults are the NORMAL values."""
+    import inspect
+    import src.scrapers.theodds_scraper as ts
+    sig = inspect.signature(ts.TheOddsScraper.refresh_imminent)
+    assert sig.parameters["window_minutes"].default == 120
+    assert sig.parameters["min_interval_minutes"].default == 180
+    assert sig.parameters["h1_collection"].default is False, (
+        "h1_collection defaults to True — then the revert is an edit, not a "
+        "removal, and every ordinary refresh carries the collection stop")
