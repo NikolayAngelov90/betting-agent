@@ -21581,3 +21581,232 @@ code to match the semantics the guard encoded, not by relaxing the guard.
 `model_version` UNCHANGED at `8da2fd` — collection, not prediction. Window,
 `min_interval` and the analysis untouched. No schema, migration or
 production-data change.*
+
+---
+
+# BUDGET MEASURED — 500 remaining · ALLOCATOR BUILT · H1 FITS on option 1
+
+`tests/` **1669 passed, 0 failed** (1659 → 1669). Invariants **passed** — count
+not cited. `cohort_status`: **`s5.15` / `8da2fd` UNCHANGED** — this stage touched
+collection and budget, not prediction. **`s5.15` now carries 1 pick** (the
+dispatched run produced one), so the cohort is no longer empty. Stage 26
+**un-suspended for Requirement 1 only**.
+
+---
+
+## PART A — BUDGET MEASURED. The balance is no longer `assumed`.
+
+`--update` executed in run **`36874774931`** (dispatched on `a4d5228`,
+2026-10-01 14:14 → 14:54, **success**). The keys live only in CI, so the run was
+the only way to get this.
+
+| | |
+| --- | --- |
+| **provider reports** | **500 remaining** — *measured 2026-10-01 14:30:30 UTC*, free `/v4/sports` probe |
+| **ledger (`api_budget`, 2026-10)** | **no row → 0 used** — *measured 2026-10-01* |
+| **agreement** | **exact. 500 of a 500 tier, 0 used both sides. Delta = 0.** |
+| spend since the reset, all paths | **0** — the card was empty, so pricing skipped |
+
+### The response was real, asserted three ways
+
+A silently-failed quota call returns `None`, which the loader reports as NO
+READING — a visibly different line. This one returned a number, and:
+
+1. **500 is exactly the documented free tier**, so it is self-consistent
+2. **the ledger independently says 0 used** — two sources, one agreeing figure
+3. the run's own log shows the probe line, timestamped, from a run that completed
+   **success**
+
+### And the period guard fired exactly as its docstring predicted for 1 October
+
+```
+TheOddsAPI: persisted credit state is from 2026-09 and today is 2026-10 —
+the quota has reset since. Treating 100 as NO READING, not a low one.
+```
+
+> ### The guard written on 2026-09-11 said in its docstring: *"the file will carry a figure at or near zero into 1 October — and the first run of the new month would have skipped the odds fetch entirely on a number describing a finished month."* It carried **100**, and was refused. **The prediction was dated and it resolved.** Without it this run would have priced nothing against a September figure while 500 credits sat unused.
+
+**"Credits are not the constraint" is now CLOSED AS FALSE** — not because the
+balance is low, but because Part B shows the pool is fully committed.
+
+---
+
+## PART B — THE SPEND BREAKDOWN, MEASURED
+
+*(measured 2026-10-01 from append-only snapshot history as distinct
+(league, minute) pairs, **cross-validated against the ledger**: 198 × 2 = **396**
+against a recorded **400** — 99%)*
+
+| path | requests | credits | share | hours |
+| --- | --- | --- | --- | --- |
+| **pick-time pricing** (`--update`) | 113 | **226** | **57%** | 07–08 |
+| **pre-kickoff refresh** (`refresh_imminent`) | 85 | **170** | **43%** | 13–18 |
+
+### The per-day profile is not flat, and that is the finding
+
+| day | 09-01 | 09-02 | 09-03 | **09-04** | **09-05** | **09-06** | 09-07 | 09-08 | 09-09 | 09-10 | **09-11** |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| credits | 10 | 22 | 16 | **52** | **86** | **82** | 34 | 14 | 18 | 16 | **46** |
+
+> ### The entire 400 was spent in ELEVEN DAYS, and **55% of it on 09-04/05/06**. There is no spend after 09-11 — so the pipeline ran the remaining nine days of in-season football (09-12 → 09-20) with **no Odds API pricing at all**. The 396 is not demand; it is the budget. Actual demand is higher, and the system already goes dark.
+
+### Throttleable vs fixed
+
+| path | throttleable? | what stops being produced |
+| --- | --- | --- |
+| **pre-kickoff refresh — 170 credits** | **YES** | **CLV observations.** Its only purpose is making odds fresh enough for `capture_closing_lines` |
+| pick-time pricing — 226 credits | **effectively fixed** | the day's prices for pick generation. API-Football still prices (533 matches vs TheOddsAPI's 313), so the record would not break — but the de-vigged multi-book consensus and Pinnacle would go, which is the price every pick is taken at |
+
+**And the CLV axis is resolved — verified in the record, not taken on trust:**
+ledger lines 2352, 2396, 2427 — best-line break-even **+1.85%**, measured upper
+bound **+0.107%**, **"Status: ALREADY SATISFIED"**. Two further bounds (+0.695%,
++0.999%) also sit below break-even.
+
+> ### So the 170 throttleable credits buy precision on an axis already decided. **That is the answer to "what is lost per credit freed": nothing that changes a decision.**
+
+**Freeable in an eight-day window: up to 170 credits** (the refresh path in
+full), and 0 from pick-time pricing without degrading every pick's taken price.
+
+---
+
+## PART C — ALLOCATOR BUILT
+
+One definition in `src/data/odds_quota.py`; both consumers read it.
+
+```python
+allocate(450, 50, today=...)  ->  pool 400 · h1_reserved 168 · normal_ceiling 232
+```
+
+| | |
+| --- | --- |
+| **`normal_ceiling` is COMPUTED** | `pool − reserved`, never a second constant. A test asserts the two sides **sum to the pool** |
+| **reservation** | **168** — H1's upper sizing, affordable because the throttleable pool is 170 |
+| **not the same as `CREDIT_CEILING`** | 168 < 200, deliberately. The ceiling is the **registered** experiment stop and does not move; the reservation is a **budget** allocation |
+| **by calendar, never a flag** | **2026-10-09 → 2026-10-17** exclusive, eight days. A switch someone must unset would throttle pricing every month after — SUP-1 on the credit budget |
+| enforcement point | `remaining()` withholds the reservation from normal operation, and `claim_requests` walks down from it — **so there is no second ceiling to drift** |
+
+**Measured allocation across the boundary:** 10-02 → `0 / 400`; 10-10 →
+`168 / 232`; 10-17 → `0 / 400`. It turns itself off.
+
+### Both positive controls fire
+
+| control | observed |
+| --- | --- |
+| **normal operation halts at its remainder** | `used=200` → **32** spendable; `used=232` → **0** spendable, `max_requests()==0`, **and the pool still holds 168** |
+| **H1 halts at its reservation without borrowing** | `credits=167` → `COLLECTING`; **`credits=168` → halt `RESERVATION_EXHAUSTED`**, reason states it **"may NOT borrow from the global pool"** and that the registered ceiling **was never reached** |
+| normal ops outside the window | **unthrottled** — `used=232` still leaves 168 |
+| H1 sees its own reservation | `for_h1=True` → 400 spendable; `for_h1=False` → 232 |
+
+### The fourth terminal state
+
+`RESERVATION_EXHAUSTED` — *the allocation ran out*, which is a budget fact — is
+**not** `CEILING_HIT` (*the experiment's registered bound was reached*), **not**
+`COMPLETE`, **not** `NO_DATA`. A test asserts all **four print different lines**
+and that each names its own state.
+
+---
+
+## PART D — THE ARITHMETIC, AND THE DECISION
+
+### Option 1 — reserve and throttle. **THE ARITHMETIC SUPPORTS IT.**
+
+| | |
+| --- | --- |
+| normal operation, measured September | **396** credits |
+| normal ceiling under the reservation | **232** |
+| **required cut** | **164** |
+| **throttleable pool (pre-kickoff refresh)** | **170** |
+| **slack** | **+6 credits** |
+
+> ### 164 ≤ 170. **Option 1 fits**, and it fits by throttling exactly the path whose output Stage 16 already resolved. **Pick-time pricing is untouched** — every pick keeps its multi-book price.
+>
+> **What stops being produced for eight days:** CLV observations, and nothing
+> else. Against a measured upper bound of **+0.107%** on a **+1.85%** threshold,
+> recorded as ALREADY SATISFIED.
+
+**One honest refinement.** September exhausted the pool on 09-11, so by 10-09 —
+when the window opens — normal operation may already be dark. In that case the
+throttle costs **nothing additional** and the 168 is simply available. The
+throttle is still required rather than hoped for, which is why it is enforced in
+`remaining()` and not left to the calendar working out.
+
+### Option 2 — reduce `TARGET_N`. **NOT AN OPTION BELOW 33.**
+
+`TARGET_N = 39` is the upper end of the registered **33–39** band, and **33 is
+the ρ=0.42 / 80%-power floor**. Reducing to 33 saves roughly
+`(39−33)/39 ≈ 15%` of collection cost — about **25 credits** — and spends the
+entire power margin to do it. **Below 33 the study cannot conclude, so that is
+not an option and is not listed as one.** 25 credits does not close a 164-credit
+gap; this option is available and nearly pointless.
+
+### Option 3 — do not run H1 this cycle. **DEFERRING REPEATS THE PROBLEM.**
+
+The next opportunity is the **2026-11-01** reset. But normal operation consumed
+the full pool in September and the card returns 10-09, so **October and November
+have the same shape** — the pool is committed every month. Deferring buys a month
+in which nothing changes, and the throttle (option 1's mechanism) would be needed
+then anyway.
+
+### And one unused margin, named because it exists
+
+The provider holds **500**; the config spends at most **450** and reserves 50 of
+that, so **100 credits sit below the tier and are never used.** Raising
+`monthly_credit_budget` 450 → 500 would free **50** without a paid tier — at the
+cost of the buffer that exists so an unusually busy month cannot exhaust the
+tier outright. **Not taken here**; recorded as the cheapest remaining lever.
+
+> ### **No paid tier** — standing instruction, honoured.
+
+---
+
+## WHICH OF THE STATED PREMISES THE MEASUREMENT REFUTES: NONE
+
+The reading was option 1 on the grounds that lost CLV observations buy precision
+on a resolved axis. **The breakdown confirms it:** the refresh path is 170
+credits, it is the CLV path, the axis is resolved in the record, and 170 covers
+the 164-credit cut. **The premise that Part B might show the 400 to be
+predominantly non-throttleable is the one that failed** — it is 43%
+throttleable, and that is just enough.
+
+---
+
+## AND A GUARD FIRED ON PROSE
+
+`test_nothing_reads_the_snapshot_table_yet` failed on `src/data/odds_quota.py`
+because the comment there **records how the September spend was measured** and
+names the table. A text scan cannot tell provenance from a query.
+
+> ### Fixed by making the scan comment-blind rather than by deleting the provenance — **a guard that fires on prose creates pressure to stop writing down how a number was obtained**, which is the opposite of this project's discipline. The crude scan stays crude on CODE, which is where the cohort risk is, and a **positive control** now asserts it still catches a real read (`session.query(OddsSnapshot)`, `SELECT ... FROM odds_snapshots`, and a real read carrying a trailing comment) while exempting a bare mention. Fourth instance of this class, and the same `_code_lines` fix as before.
+
+---
+
+## DECLARATION
+
+> ### BUDGET MEASURED
+> **Provider 500 remaining**, measured 2026-10-01 14:30 UTC from run
+> `36874774931`; ledger 0 used; **delta 0**. Spend since the reset: **0, all
+> paths**. September's 400 went **113 requests / 226 credits** on pick-time
+> pricing and **85 / 170** on pre-kickoff refresh, spent in **eleven days** with
+> **55% on three days** and **nothing after 09-11**.
+> **"Credits are not the constraint" is CLOSED AS FALSE** — the pool is fully
+> committed.
+
+> ### ALLOCATOR BUILT
+> `allocate()` — one definition, `normal_ceiling` computed as the remainder,
+> reservation **168** active **10-09 → 10-17 by calendar**. Both controls fire:
+> normal operation reaches **0 spendable at 232 with the reservation intact**;
+> H1 halts at **168** as **`RESERVATION_EXHAUSTED`**, unable to borrow. Four
+> terminal states, four distinct lines.
+
+> ### H1 FITS — OPTION 1
+> **164 required cut ≤ 170 throttleable**, +6 slack. Throttles only the CLV
+> path, whose axis is resolved (**+0.107%** against **+1.85%**, verified in the
+> record at ledger lines 2352/2396/2427). **Pick-time pricing untouched.**
+> Option 2 saves ~25 credits and spends the whole power margin; **below n=33 it
+> cannot conclude and is therefore not an option.** Option 3 defers into an
+> identical November. **No premise refuted.**
+
+*Recorded 2026-10-02. `src/data/odds_quota.py`, `scripts/h1_collection_check.py`,
+`tests/test_h1_enforced_stop.py`, `tests/test_price_history_accumulates.py`.
+`model_version` UNCHANGED at `8da2fd`. `s5.15` now holds 1 pick. No schema,
+migration or production-data change beyond the dispatched run's ordinary output.*

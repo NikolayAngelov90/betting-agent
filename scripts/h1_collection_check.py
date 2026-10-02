@@ -327,7 +327,8 @@ def attach_fixture_identity(session, observations: List[dict]) -> None:
 #
 #: Non-terminal. Named so that "still collecting" is a state and not an absence.
 COLLECTION_RUNNING = "COLLECTING"
-COLLECTION_TERMINAL_STATES = ("COMPLETE", "CEILING_HIT", "NO_DATA")
+COLLECTION_TERMINAL_STATES = ("COMPLETE", "CEILING_HIT", "NO_DATA",
+                              "RESERVATION_EXHAUSTED")
 COLLECTION_STATES = (COLLECTION_RUNNING,) + COLLECTION_TERMINAL_STATES
 
 
@@ -344,21 +345,35 @@ class CollectionStop(NamedTuple):
 
 
 def collection_stop(*, n_fixtures: int, credits_spent: Optional[int],
-                    raw_rows: int) -> CollectionStop:
+                    raw_rows: int,
+                    reservation: Optional[int] = None) -> CollectionStop:
     """THE ONLY DEFINITION of the stop. Imported by the runner, not re-typed.
 
     FAILS CLOSED on an unreadable ledger: `credits_spent is None` halts. A
     collection that cannot see its own spend must not keep spending — the
     alternative is `None` compared against an int, which is how a guard becomes
     a no-op.
+
+    `reservation` is the BUDGET bound and comes from `odds_quota.allocate()` —
+    the single allocator both consumers read. It is smaller than
+    `CREDIT_CEILING` (168 against 200), so it binds first and
+    `RESERVATION_EXHAUSTED` is the state that actually fires in practice.
+    CEILING_HIT remains the REGISTERED experiment stop and is not redefined:
+    the two answer different questions, and H1 cannot borrow past either.
     """
+    if reservation is None:
+        from src.data.odds_quota import H1_RESERVED_CREDITS
+        reservation = H1_RESERVED_CREDITS
+
     ceiling_hit = credits_spent is None or credits_spent >= CREDIT_CEILING
+    reservation_hit = credits_spent is not None and credits_spent >= reservation
     target_hit = n_fixtures >= TARGET_N
 
-    if not (ceiling_hit or target_hit):
+    if not (ceiling_hit or reservation_hit or target_hit):
         return CollectionStop(
             False, COLLECTION_RUNNING,
-            f"n={n_fixtures}/{TARGET_N} credits={credits_spent}/{CREDIT_CEILING}")
+            f"n={n_fixtures}/{TARGET_N} credits={credits_spent}/{reservation} "
+            f"reserved (registered ceiling {CREDIT_CEILING})")
 
     # NO_DATA refines a halt: the budget is gone and nothing was collected.
     if raw_rows == 0:
@@ -371,14 +386,26 @@ def collection_stop(*, n_fixtures: int, credits_spent: Optional[int],
         return CollectionStop(
             True, "COMPLETE",
             f"n={n_fixtures} >= TARGET_N={TARGET_N} "
-            f"(credits={credits_spent}/{CREDIT_CEILING})")
+            f"(credits={credits_spent}/{reservation} reserved)")
+    if credits_spent is None:
+        return CollectionStop(
+            True, "CEILING_HIT",
+            f"credit ledger UNREADABLE — failing closed with n={n_fixtures}")
+    # THE RESERVATION BINDS BEFORE THE REGISTERED CEILING, and the two are not
+    # the same event: this one says the ALLOCATION ran out, which is a budget
+    # fact; CEILING_HIT says the EXPERIMENT's registered bound was reached.
+    if reservation_hit and credits_spent < CREDIT_CEILING:
+        return CollectionStop(
+            True, "RESERVATION_EXHAUSTED",
+            f"credits={credits_spent} reached the H1 RESERVATION of "
+            f"{reservation} with n={n_fixtures} < TARGET_N={TARGET_N} — the "
+            f"allocation is spent and H1 may NOT borrow from the global pool; "
+            f"the registered ceiling {CREDIT_CEILING} was never reached")
     return CollectionStop(
         True, "CEILING_HIT",
-        f"credits={credits_spent}/{CREDIT_CEILING} reached with "
-        f"n={n_fixtures} < TARGET_N={TARGET_N} — stopped SHORT of the target; "
-        f"the budget does not return until the next monthly reset"
-        if credits_spent is not None else
-        f"credit ledger UNREADABLE — failing closed with n={n_fixtures}")
+        f"credits={credits_spent}/{CREDIT_CEILING} reached the REGISTERED "
+        f"ceiling with n={n_fixtures} < TARGET_N={TARGET_N} — stopped SHORT of "
+        f"the target; the budget does not return until the next monthly reset")
 
 
 def collection_state(session, since: datetime) -> CollectionStop:

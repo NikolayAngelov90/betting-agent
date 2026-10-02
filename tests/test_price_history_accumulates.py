@@ -114,6 +114,32 @@ def test_every_odds_writer_records_a_snapshot(scraper):
         "observations are still being discarded")
 
 
+def _code_lines(text: str) -> str:
+    """Source with comment-only lines and trailing comments removed.
+
+    A MENTION IS NOT A READ. On 2026-10-01 this check fired on
+    `src/data/odds_quota.py` because a comment there RECORDS HOW A MEASUREMENT
+    WAS MADE — the September spend was inferred from the append-only snapshot
+    history and cross-checked against the ledger. A text scan cannot tell that
+    prose from a query.
+
+    The crude scan stays crude on CODE, which is where the cohort risk is. What
+    it must not do is create pressure to delete provenance in order to pass:
+    this project's whole discipline is that a number carries how it was
+    obtained. Fourth instance of this class — the same fix was applied to the
+    `definition is not an occurrence` checks.
+    """
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if "#" in line:
+            line = line.split("#", 1)[0]
+        out.append(line)
+    return "\n".join(out)
+
+
 def test_nothing_reads_the_snapshot_table_yet():
     """Cohort neutrality. If a model starts reading history, that is a cohort
     event and it needs a decision, not a deploy."""
@@ -122,7 +148,7 @@ def test_nothing_reads_the_snapshot_table_yet():
         for path in pathlib.Path(base).rglob("*.py"):
             if path.name in ("models.py", "price_history.py"):
                 continue
-            txt = path.read_text(encoding="utf-8")
+            txt = _code_lines(path.read_text(encoding="utf-8"))
             if "OddsSnapshot" in txt or "odds_snapshots" in txt:
                 offenders.append(str(path))
     assert not offenders, (
@@ -142,3 +168,20 @@ def test_odds_table_shape_is_unchanged_for_existing_consumers():
         "value, and a guessed first-sight time looks like evidence")
     uniques = [i for i in Odds.__table__.indexes if i.unique]
     assert uniques, "`odds` lost its unique constraint; it is now append-only too"
+
+
+def test_POSITIVE_CONTROL_the_scan_still_catches_a_REAL_read():
+    """The relaxation must not have made the guard vacuous.
+
+    A comment is exempt; a query is not. If this stops failing, `_code_lines`
+    has started stripping code.
+    """
+    assert "odds_snapshots" in _code_lines(
+        'q = session.execute(text("SELECT * FROM odds_snapshots"))')
+    assert "OddsSnapshot" in _code_lines("rows = session.query(OddsSnapshot).all()")
+    # and a trailing comment on a real read is still caught
+    assert "odds_snapshots" in _code_lines(
+        'rows = q("odds_snapshots")  # reads the price path')
+    # while a pure mention is not
+    assert "odds_snapshots" not in _code_lines(
+        "# inferred from odds_snapshots, cross-checked against the ledger")

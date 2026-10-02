@@ -70,6 +70,70 @@ DEFAULT_MONTHLY_BUDGET = 400
 #: Credits held back from the budget for manual/diagnostic calls.
 DEFAULT_SAFETY_MARGIN = 50
 
+# ─────────────────── THE ALLOCATION (Stage 26, 2026-10-01) ───────────────────
+#
+# TWO INDEPENDENT CEILINGS OVER ONE EXHAUSTIBLE POOL ARE NOT A BUDGET.
+# `CREDIT_CEILING = 200` bounded H1; `monthly_budget - safety_margin = 400`
+# bounded everything; nothing allocated between them, so first-come won — and H1
+# runs LAST by construction, after the card has been priced.
+#
+# MEASURED 2026-10-01, and it is worse than first-come: September's 400 credits
+# were spent in ELEVEN DAYS (09-01..09-11) and the pipeline then ran the
+# remaining nine days of in-season football with NO Odds API pricing at all. The
+# pool is not consumed evenly; 55% of it went on 09-04/05/06.
+#
+#   pick-time pricing   113 requests = 226 credits (57%)   hours 07-08
+#   pre-kickoff refresh  85 requests = 170 credits (43%)   hours 13-18
+#
+# (Inferred from append-only `odds_snapshots` as distinct (league, minute) pairs
+# and CROSS-CHECKED against the ledger: 198 x 2 = 396 against a recorded 400.)
+#
+# So the reservation is deducted from the pool BEFORE normal operation sees it,
+# and normal operation's ceiling is the REMAINDER rather than a second constant.
+
+#: Reserved for H1 collection. 168 is H1's upper sizing (106-168), and it is
+#: affordable because the 170-credit pre-kickoff refresh path buys CLV
+#: observations on an axis Stage 16 already resolved — upper bound +0.107%
+#: against a +1.85% best-line break-even, recorded as ALREADY SATISFIED.
+#:
+#: NOT the same number as `CREDIT_CEILING = 200`, and deliberately smaller: the
+#: ceiling is the REGISTERED experiment stop and must not move, while this is a
+#: budget allocation. Because 168 < 200 the reservation binds first, which is
+#: why `RESERVATION_EXHAUSTED` exists as its own terminal state.
+H1_RESERVED_CREDITS = 168
+
+#: The reservation turns itself on and off BY CALENDAR, never by a flag. A switch
+#: someone must remember to unset is how SUP-1 happens, and this one would
+#: silently throttle normal pricing for every month after the experiment.
+H1_RESERVATION_FROM = _date(2026, 10, 9)
+H1_RESERVATION_UNTIL = _date(2026, 10, 17)      #: exclusive — eight days
+
+
+def h1_reservation(today: Optional[_date] = None) -> int:
+    """Credits reserved for H1 TODAY. Zero outside the window."""
+    today = today or _date.today()
+    if H1_RESERVATION_FROM <= today < H1_RESERVATION_UNTIL:
+        return H1_RESERVED_CREDITS
+    return 0
+
+
+def allocate(monthly_budget: int = DEFAULT_MONTHLY_BUDGET,
+             safety_margin: int = DEFAULT_SAFETY_MARGIN,
+             today: Optional[_date] = None) -> dict:
+    """THE ONE ALLOCATION. Both consumers read this; neither keeps a copy.
+
+    `normal_ceiling` is computed as the remainder, so it cannot drift away from
+    the pool it is carved out of — which is precisely what two independent
+    constants did.
+    """
+    pool = max(0, int(monthly_budget) - int(safety_margin))
+    reserved = min(max(0, h1_reservation(today)), pool)
+    return {"pool": pool,
+            "h1_reserved": reserved,
+            "normal_ceiling": pool - reserved,
+            "window": (H1_RESERVATION_FROM.isoformat(),
+                       H1_RESERVATION_UNTIL.isoformat())}
+
 #: Ceiling on what ONE workflow execution may spend, independent of the monthly
 #: budget. The monthly guard alone cannot stop a single pathological run — a
 #: fixture-data glitch that made 27 leagues look imminent would spend 54 credits
@@ -114,7 +178,14 @@ class OddsApiQuota:
 
     def __init__(self, db, monthly_budget: int = DEFAULT_MONTHLY_BUDGET,
                  safety_margin: int = DEFAULT_SAFETY_MARGIN,
-                 max_credits_per_run: int = DEFAULT_MAX_CREDITS_PER_RUN):
+                 max_credits_per_run: int = DEFAULT_MAX_CREDITS_PER_RUN,
+                 for_h1: bool = False):
+        #: `for_h1` decides which side of the allocation this instance spends.
+        #: Normal operation (the default) has H1's reservation WITHHELD from it,
+        #: so it halts at the remainder with the reservation intact. H1's own
+        #: collection sets it True — the reservation is its to spend, and its
+        #: ceiling is enforced by `collection_stop`, not here.
+        self.for_h1 = bool(for_h1)
         self.monthly_budget = int(monthly_budget)
         self.safety_margin = int(safety_margin)
         self.max_credits_per_run = int(max_credits_per_run)
@@ -133,10 +204,24 @@ class OddsApiQuota:
     def used(self, today: Optional[_date] = None) -> int:
         return self._store.used(day=month_key(today))
 
+    def reserved_from_me(self, today: Optional[_date] = None) -> int:
+        """Credits this instance may NOT spend: the margin, plus — for normal
+        operation inside the H1 window — H1's reservation.
+
+        One source for both numbers, so the remainder cannot drift from the pool.
+        """
+        extra = 0 if self.for_h1 else h1_reservation(today)
+        return self.safety_margin + extra
+
     def remaining(self, today: Optional[_date] = None) -> int:
-        """Spendable credits, after the safety margin."""
+        """Spendable credits, after the safety margin AND the H1 reservation.
+
+        Withholding the reservation here is what makes normal operation halt at
+        its remainder: `claim_requests` walks down from this number, so no extra
+        enforcement point is needed and there is no second ceiling to drift.
+        """
         return max(0, self._store.remaining(
-            reserve=self.safety_margin, day=month_key(today)))
+            reserve=self.reserved_from_me(today), day=month_key(today)))
 
     def max_requests(self, today: Optional[_date] = None) -> int:
         """How many league requests the remaining budget allows."""

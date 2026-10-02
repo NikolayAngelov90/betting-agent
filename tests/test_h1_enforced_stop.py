@@ -42,9 +42,10 @@ from scripts.h1_collection_check import (
 # ── the outcomes are REGISTERED, in the type that emits them ────────────────
 
 def test_the_states_are_registered_and_exhaustive():
-    assert COLLECTION_STATES == ("COLLECTING", "COMPLETE", "CEILING_HIT", "NO_DATA")
+    assert COLLECTION_STATES == ("COLLECTING", "COMPLETE", "CEILING_HIT",
+                                 "NO_DATA", "RESERVATION_EXHAUSTED")
     assert COLLECTION_RUNNING not in COLLECTION_TERMINAL_STATES
-    assert len(COLLECTION_TERMINAL_STATES) == 3
+    assert len(COLLECTION_TERMINAL_STATES) == 4
 
 
 def test_every_reachable_state_is_in_the_registry():
@@ -86,13 +87,21 @@ def test_limb1_is_GREATER_OR_EQUAL_not_equality():
 # ── POSITIVE CONTROL, LIMB 2: credits reach CREDIT_CEILING ─────────────────
 
 def test_POSITIVE_CONTROL_limb2_credits_reach_the_CEILING_and_HALT():
-    """Drive the credit counter to the ceiling. No real credit is spent."""
+    """Drive the credit counter to the REGISTERED ceiling. No real credit spent.
+
+    `reservation` is raised ABOVE the ceiling here to isolate this limb. In
+    production the reservation (168) is smaller and binds first — that is
+    `RESERVATION_EXHAUSTED`, tested separately. Isolating the limb is what makes
+    this a control for the ceiling rather than for whichever bound happens to be
+    lower.
+    """
+    high = CREDIT_CEILING + 100
     below = collection_stop(n_fixtures=1, credits_spent=CREDIT_CEILING - 1,
-                            raw_rows=500)
+                            raw_rows=500, reservation=high)
     assert below.halt is False and below.state == "COLLECTING"
 
     at = collection_stop(n_fixtures=1, credits_spent=CREDIT_CEILING,
-                         raw_rows=500)
+                         raw_rows=500, reservation=high)
     assert at.halt is True, "credits reached the ceiling and collection did NOT halt"
     assert at.state == "CEILING_HIT"
     assert "SHORT" in at.reason, (
@@ -132,18 +141,25 @@ def test_NO_DATA_refines_a_halt_and_does_not_TRIGGER_one():
     assert s.halt is False and s.state == "COLLECTING"
 
 
-def test_the_three_terminal_states_PRINT_DIFFERENTLY():
-    """Distinguishable in the log, not merely in the enum."""
-    msgs = {
-        collection_stop(n_fixtures=TARGET_N, credits_spent=0, raw_rows=9).state:
-            str(collection_stop(n_fixtures=TARGET_N, credits_spent=0, raw_rows=9)),
-        collection_stop(n_fixtures=0, credits_spent=CREDIT_CEILING, raw_rows=9).state:
-            str(collection_stop(n_fixtures=0, credits_spent=CREDIT_CEILING, raw_rows=9)),
-        collection_stop(n_fixtures=0, credits_spent=CREDIT_CEILING, raw_rows=0).state:
-            str(collection_stop(n_fixtures=0, credits_spent=CREDIT_CEILING, raw_rows=0)),
-    }
-    assert set(msgs) == set(COLLECTION_TERMINAL_STATES)
-    assert len(set(msgs.values())) == 3, "two terminal states print the same line"
+def test_the_terminal_states_PRINT_DIFFERENTLY():
+    """Distinguishable in the log, not merely in the enum.
+
+    All four are reachable only when the reservation and the ceiling are
+    DIFFERENT numbers, which is the production arrangement (168 < 200).
+    """
+    res = 168
+    cases = [
+        dict(n_fixtures=TARGET_N, credits_spent=0, raw_rows=9),
+        dict(n_fixtures=0, credits_spent=res, raw_rows=9),
+        dict(n_fixtures=0, credits_spent=CREDIT_CEILING, raw_rows=9),
+        dict(n_fixtures=0, credits_spent=res, raw_rows=0),
+    ]
+    msgs = {}
+    for kw in cases:
+        s = collection_stop(reservation=res, **kw)
+        msgs[s.state] = str(s)
+    assert set(msgs) == set(COLLECTION_TERMINAL_STATES), set(msgs)
+    assert len(set(msgs.values())) == 4, "two terminal states print the same line"
     for state, line in msgs.items():
         assert f"state={state}" in line
 
@@ -260,3 +276,153 @@ def test_the_shape_test_stays_BROAD_not_pinned_to_360_slash_120():
         with pytest.raises(ValueError):
             asyncio.run(sc.refresh_imminent(window_minutes=window,
                                             min_interval_minutes=interval))
+
+
+# ═══════════════ THE ALLOCATOR (Stage 26, 2026-10-01) ════════════════════════
+#
+# Two independent ceilings over one exhaustible pool are not a budget. These
+# assert there is ONE allocation, that each consumer halts on its own side of it,
+# and that neither can borrow from the other.
+
+import datetime as _d
+
+from src.data.odds_quota import (
+    DEFAULT_MONTHLY_BUDGET,
+    DEFAULT_SAFETY_MARGIN,
+    H1_RESERVATION_FROM,
+    H1_RESERVATION_UNTIL,
+    H1_RESERVED_CREDITS,
+    allocate,
+    h1_reservation,
+)
+
+IN_WINDOW = _d.date(2026, 10, 10)
+BEFORE_WINDOW = _d.date(2026, 10, 8)
+AFTER_WINDOW = _d.date(2026, 10, 17)
+
+
+def test_there_is_ONE_allocation_and_the_remainder_is_COMPUTED():
+    """`normal_ceiling` must be the remainder, never a second constant."""
+    a = allocate(450, 50, today=IN_WINDOW)
+    assert a["pool"] == 400
+    assert a["h1_reserved"] == H1_RESERVED_CREDITS == 168
+    assert a["normal_ceiling"] == 400 - 168 == 232
+    assert a["h1_reserved"] + a["normal_ceiling"] == a["pool"], (
+        "the two sides do not sum to the pool — then one of them is an "
+        "independent ceiling again")
+
+
+def test_the_reservation_is_BY_CALENDAR_not_by_a_flag():
+    """A switch someone must unset would throttle pricing every month after."""
+    assert h1_reservation(BEFORE_WINDOW) == 0
+    assert h1_reservation(IN_WINDOW) == H1_RESERVED_CREDITS
+    assert h1_reservation(AFTER_WINDOW) == 0, (
+        "the reservation outlives its window — SUP-1, on the credit budget")
+    assert (H1_RESERVATION_UNTIL - H1_RESERVATION_FROM).days == 8
+
+
+def test_outside_the_window_normal_operation_gets_the_WHOLE_pool():
+    a = allocate(450, 50, today=BEFORE_WINDOW)
+    assert a["h1_reserved"] == 0 and a["normal_ceiling"] == a["pool"] == 400
+
+
+def test_the_reservation_is_SMALLER_than_the_registered_ceiling():
+    """Which is why RESERVATION_EXHAUSTED exists and binds first."""
+    from scripts.h1_collection_check import CREDIT_CEILING
+    assert H1_RESERVED_CREDITS < CREDIT_CEILING
+
+
+# ── POSITIVE CONTROL 1: normal operation halts at the remainder ─────────────
+
+class _Store:
+    """Minimal ledger stand-in: `used` is injected, `remaining` honours reserve."""
+
+    def __init__(self, used, budget):
+        self._used, self._budget = used, budget
+
+    def available(self):
+        return True
+
+    def used(self, day=None):
+        return self._used
+
+    def remaining(self, reserve=0, day=None):
+        return self._budget - reserve - self._used
+
+
+def _quota(used, for_h1=False, budget=450, margin=50):
+    from src.data.odds_quota import OddsApiQuota
+    q = OddsApiQuota.__new__(OddsApiQuota)
+    q.for_h1 = for_h1
+    q.monthly_budget, q.safety_margin = budget, margin
+    q.max_credits_per_run, q.spent_this_run = 0, 0
+    q._store = _Store(used, budget)
+    return q
+
+
+def test_POSITIVE_CONTROL_normal_operation_HALTS_at_its_remainder():
+    """Drive normal spend to the remainder and confirm it stops with H1's
+    reservation untouched. The limb fires."""
+    # 231 of 232 spent: one request (2 credits) still fits? 232-231 = 1 < 2.
+    below = _quota(used=200).remaining(today=IN_WINDOW)
+    assert below == 232 - 200 == 32, below
+
+    at = _quota(used=232).remaining(today=IN_WINDOW)
+    assert at == 0, (
+        f"normal operation still has {at} spendable credits after reaching its "
+        f"remainder ceiling — it is eating H1's reservation")
+    assert _quota(used=232).max_requests(today=IN_WINDOW) == 0
+
+    # AND THE RESERVATION IS INTACT: the pool still holds 168 unspent.
+    assert 400 - 232 == H1_RESERVED_CREDITS
+
+
+def test_normal_operation_is_UNTHROTTLED_outside_the_window():
+    """The throttle must cost nothing on the other 23 days of the month."""
+    assert _quota(used=232).remaining(today=BEFORE_WINDOW) == 400 - 232 == 168
+
+
+# ── POSITIVE CONTROL 2: H1 halts at its reservation, cannot borrow ──────────
+
+def test_POSITIVE_CONTROL_H1_HALTS_at_its_reservation_without_borrowing():
+    """Drive H1's spend to the reservation and confirm the halt — and that the
+    state is RESERVATION_EXHAUSTED, not CEILING_HIT."""
+    from scripts.h1_collection_check import CREDIT_CEILING, collection_stop
+
+    below = collection_stop(n_fixtures=5, credits_spent=H1_RESERVED_CREDITS - 1,
+                            raw_rows=500, reservation=H1_RESERVED_CREDITS)
+    assert below.halt is False
+
+    at = collection_stop(n_fixtures=5, credits_spent=H1_RESERVED_CREDITS,
+                         raw_rows=500, reservation=H1_RESERVED_CREDITS)
+    assert at.halt is True, "H1 reached its reservation and did NOT halt"
+    assert at.state == "RESERVATION_EXHAUSTED"
+    assert "may NOT borrow" in at.reason
+    assert str(CREDIT_CEILING) in at.reason, (
+        "the state does not record that the registered ceiling was never "
+        "reached — a reader would think the experiment hit its own bound")
+
+
+def test_H1_sees_its_reservation_rather_than_having_it_withheld():
+    """`for_h1=True` must not have the reservation deducted from it — the
+    reservation IS H1's to spend; its bound is `collection_stop`, not the ledger."""
+    assert _quota(used=0, for_h1=True).remaining(today=IN_WINDOW) == 400
+    assert _quota(used=0, for_h1=False).remaining(today=IN_WINDOW) == 232
+
+
+def test_RESERVATION_EXHAUSTED_is_DISTINGUISHABLE_from_the_other_three():
+    from scripts.h1_collection_check import (
+        COLLECTION_TERMINAL_STATES, CREDIT_CEILING, collection_stop)
+    cases = {
+        "COMPLETE": dict(n_fixtures=39, credits_spent=10, raw_rows=9),
+        "RESERVATION_EXHAUSTED": dict(n_fixtures=5, credits_spent=168, raw_rows=9),
+        "CEILING_HIT": dict(n_fixtures=5, credits_spent=CREDIT_CEILING, raw_rows=9),
+        "NO_DATA": dict(n_fixtures=0, credits_spent=168, raw_rows=0),
+    }
+    lines = {}
+    for expected, kw in cases.items():
+        s = collection_stop(reservation=H1_RESERVED_CREDITS, **kw)
+        assert s.state == expected, f"{kw} -> {s.state}, expected {expected}"
+        lines[expected] = str(s)
+    assert set(lines) == set(COLLECTION_TERMINAL_STATES)
+    assert len(set(lines.values())) == 4, "two terminal states print identically"
