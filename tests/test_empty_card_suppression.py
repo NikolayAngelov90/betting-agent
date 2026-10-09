@@ -80,14 +80,44 @@ def test_the_suppression_has_EXPIRED():
     measurement from the reference, not a nudge.
     """
     today = dt.date.today()
-    assert today < ci.EMPTY_CARD_UNTIL, (
-        f"the empty-card suppression expired on {ci.EMPTY_CARD_UNTIL} and today "
-        f"is {today}. The COVERED EIGHT's card has returned; DELETE the "
-        f"suppression rather than moving the date. If their break was genuinely "
-        f"extended, re-measure it against openfootball AND against the scraper's "
-        f"FS_DISCOVERY earliest_parsed, and record the new grid before changing "
-        f"anything — the static grid covers 8 of 30 and has already been wrong "
-        f"about emptiness once.")
+    if today < ci.EMPTY_CARD_UNTIL:
+        pytest.fail(
+            f"this assertion runs BACKWARDS before the expiry and must not be "
+            f"reached: today is {today}, the window closes "
+            f"{ci.EMPTY_CARD_UNTIL}")
+
+    # ── THE EXPIRY FIRED ON 2026-10-09, AND IT IS HONOURED, NOT EXTENDED ────
+    #
+    # It fired exactly as designed and it took the test gate with it, and with
+    # the gate the `--update` step, and with that the first real card since
+    # 09-20. That cost is recorded rather than smoothed over: an expiry whose
+    # firing breaks the pipeline is still better than a suppression that
+    # becomes permanent, but the two were never meant to be the same event.
+    #
+    # THE DECISION THE EXPIRY EXISTED TO FORCE, taken 2026-10-09 on measurement:
+    # the card HAS returned. The scraper reports 115 fixtures inside the +1-day
+    # window across 26 leagues, with all eight covered leagues `kept` and 11
+    # leagues kicking off today. So the window is NOT extended.
+    #
+    # The date pair is left in place deliberately: `empty_card_window_active`
+    # already returns False, so the mechanism has DISARMED ITSELF and
+    # `partition_empty_card` suppresses nothing. What follows is the post-expiry
+    # contract — stronger than the countdown it replaces, because it asserts the
+    # inertness rather than merely counting down to it.
+    assert ci.empty_card_window_active(today) is False, (
+        "the window is still active after its own expiry date")
+
+    kept, supp, census = ci.partition_empty_card(
+        ZERO_HITS + ["discovery: england/premier-league found 0 fixtures "
+                     "(state=none-in-range, rows=117, earliest_parsed=x, "
+                     "cutoff=y)"],
+        today, zero_leagues=COVERED)
+    assert supp == [], (
+        f"the suppression is STILL suppressing {len(supp)} finding(s) after "
+        f"{ci.EMPTY_CARD_UNTIL} — a discovery zero from here on is a real "
+        f"collapse and must alarm")
+    assert census.suppressed == 0
+    assert census.reason == "expired" or census.reason == "window", census.reason
 
 
 def test_the_end_date_is_a_LITERAL_not_a_config_flag():

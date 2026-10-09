@@ -57,20 +57,38 @@ def test_request_blocked_when_it_would_exceed_budget(tmp_path):
     assert q.claim_requests(1) == 0, "spent past the monthly budget"
 
 
+#: A date OUTSIDE the H1 reservation window (2026-10-09 → 2026-10-17).
+#:
+#: THE RESERVATION IS A DATED OVERLAY ON THE MONTHLY GUARD, and these tests
+#: measure the guard alone. Until 2026-10-09 they got that implicitly, because
+#: `h1_reservation()` returned 0 on every date that had ever existed. On the
+#: window's first active day `remaining()` began withholding 168 and three of
+#: them failed — `assert 0 == 60`, `212 == 380`, `87 == 255` — taking the test
+#: gate, and with it the `--update` step, and with it the first real card since
+#: 09-20.
+#:
+#: So each test now STATES the regime it measures, rather than inheriting
+#: whatever today happens to be. Same correction as `render(in_window=...)`: an
+#: implicit "no overlay" assumption is invisible until the overlay exists.
+NO_RESERVATION_DAY = date(2026, 9, 15)
+
+
 def test_safety_margin_is_respected(tmp_path):
     """Budget 100 with a 40-credit margin leaves 60 spendable = 30 requests.
 
     max_credits_per_run=0 disables the per-run ceiling so this isolates the
-    MONTHLY guard; the ceiling has its own tests below.
+    MONTHLY guard; the ceiling has its own tests below. `today` is pinned
+    outside the H1 window so the reservation is not in play either.
     """
+    d = NO_RESERVATION_DAY
     q = OddsApiQuota(_mgr(tmp_path), monthly_budget=100, safety_margin=40,
                      max_credits_per_run=0)
-    assert q.remaining() == 60
-    assert q.max_requests() == 30
-    assert q.claim_requests(30) == 30
-    assert q.claim_requests(1) == 0
+    assert q.remaining(today=d) == 60
+    assert q.max_requests(today=d) == 30
+    assert q.claim_requests(30, today=d) == 30
+    assert q.claim_requests(1, today=d) == 0
     # The margin is untouched, not consumed.
-    assert q.used() == 60
+    assert q.used(today=d) == 60
 
 
 def test_partial_grant_when_budget_is_nearly_gone(tmp_path):
@@ -83,11 +101,12 @@ def test_partial_grant_when_budget_is_nearly_gone(tmp_path):
 
 
 def test_multiple_claims_accumulate(tmp_path):
+    d = NO_RESERVATION_DAY                      # the monthly guard, no overlay
     q = OddsApiQuota(_mgr(tmp_path), monthly_budget=400, safety_margin=0)
     for _ in range(5):
-        q.claim_requests(2)
-    assert q.used() == 20
-    assert q.remaining() == 380
+        q.claim_requests(2, today=d)
+    assert q.used(today=d) == 20
+    assert q.remaining(today=d) == 380
 
 
 def test_month_boundary_resets_the_ledger(tmp_path):
@@ -436,14 +455,15 @@ def test_reconcile_adopts_out_of_band_provider_spend(tmp_path):
     used for August while our ledger read 0. The ledger only sees spend that
     goes through it; the provider counts everything on the key. Budgeting
     against the ledger alone would have authorised 400 more on top of 95."""
+    d = NO_RESERVATION_DAY                      # the monthly guard, no overlay
     q = OddsApiQuota(_mgr(tmp_path, "rec.db"), monthly_budget=400, safety_margin=50)
-    assert q.used() == 0
+    assert q.used(today=d) == 0
 
-    assert q.reconcile(95) == 95
-    assert q.used() == 95, "out-of-band spend was ignored"
+    assert q.reconcile(95, today=d) == 95
+    assert q.used(today=d) == 95, "out-of-band spend was ignored"
     # 400 budget - 95 already gone - 50 margin = 255 spendable.
-    assert q.remaining() == 255
-    assert q.max_requests() == 127
+    assert q.remaining(today=d) == 255
+    assert q.max_requests(today=d) == 127
 
 
 def test_reconcile_never_lowers_the_ledger(tmp_path):
