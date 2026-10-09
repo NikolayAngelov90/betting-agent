@@ -254,7 +254,33 @@ jobs:
       - name: Run tests
         id: tests
         timeout-minutes: 15
-        run: python -m pytest tests/ -v --tb=short
+        run: python -m pytest tests/ -v --tb=short -m "not calendar"
+
+      # ── CALENDAR ASSERTIONS, OUT OF THE CAPTURE-GATING PATH (Stage 28) ────
+      #
+      # A test whose pass/fail changes with no code change must not be able to
+      # stop price capture. On 2026-10-09 two of them did: the empty-card
+      # suppression's expiry (firing exactly as designed) and three quota tests
+      # that inherited the H1 allocator's first active day. Between them they
+      # stopped `Run tests`, which stopped `--update`, which lost the first real
+      # card in nineteen days — 26 fixtures, 2416 odds rows — recovered only by
+      # a manual dispatch with 3h01m to spare. The recovery depended on someone
+      # watching.
+      #
+      # THE GATE DECISION IS UNCHANGED. The step above still halts the job, so
+      # capture never runs on an untested tree — wrong odds rows never backfill
+      # and are indistinguishable downstream. Only the CALENDAR assertions move.
+      #
+      # `continue-on-error` here means "does not gate capture", NOT "ignored":
+      # the critical-step alert below reads this step's outcome and reddens the
+      # run. Membership is DECLARED by the `calendar` marker, never inferred —
+      # a grep over `date.today()` in tests/ finds 56 candidates and misses
+      # exactly the three that fired.
+      - name: Run calendar assertions (does NOT gate capture)
+        id: calendar
+        timeout-minutes: 5
+        continue-on-error: true
+        run: python -m pytest tests/ -v --tb=short -m calendar
 
       - name: Run daily update (fixtures + odds, no Flashscore results)
         id: update
@@ -395,6 +421,7 @@ jobs:
           O_PICKS: ${{ steps.picks.outcome }}
           O_RESULTS: ${{ steps.results.outcome }}
           O_SETTLE2: ${{ steps.settle2.outcome }}
+          O_CALENDAR: ${{ steps.calendar.outcome }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'EOF'
@@ -415,10 +442,30 @@ jobs:
           not_run = [n for n, o in steps.items() if o == "skipped"]
           odd = [f"{n}={o!r}" for n, o in steps.items()
                  if o not in ("success", "failure", "skipped")]
+          # STAGE 28. The calendar step is reported SEPARATELY and in its own
+          # words, because a red run whose capture SUCCEEDED is a new state and
+          # the person triaging it will read this message, not the ledger.
+          cal = os.environ.get("O_CALENDAR", "")
+          cal_msg = ""
+          if cal == "failure":
+              cal_msg = (
+                  "📅 A CALENDAR ASSERTION FAILED — a self-expiring guard has "
+                  "reached its date and is asking for a decision (delete it, do "
+                  "not extend it). CAPTURE IS UNAFFECTED: prices and picks ran "
+                  "independently, so check the steps below before assuming this "
+                  "run produced nothing. This run is RED because a decision is "
+                  "due, not because the pipeline failed.")
           if not (failed or not_run or odd):
               print("All critical steps OK:", steps)
+              if cal_msg:
+                  subprocess.run([sys.executable, "-m", "scripts.ci_alert",
+                                  cal_msg + " Logs: "
+                                  + os.environ.get("RUN_URL", "")], check=False)
+                  sys.exit(1)
               sys.exit(0)
           parts = []
+          if cal_msg:
+              parts.append(cal_msg)
           if failed:
               parts.append("step(s) FAILED — " + ", ".join(failed))
           if not_run:

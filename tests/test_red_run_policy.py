@@ -197,9 +197,20 @@ def test_continue_on_error_is_still_set_on_every_core_step():
     """
     guarded = [s.get("name", "") for s in _steps()
                if s.get("continue-on-error") is True]
-    assert len(guarded) == 9, (
-        f"{len(guarded)} steps carry continue-on-error, expected 9 — if a step "
-        "lost it, the job now HALTS there instead of merely reporting red")
+    # 9 -> 10 on 2026-10-09 (Stage 28). The tenth is the CALENDAR step, and it
+    # carries the flag for the opposite reason to the other nine: they must not
+    # halt the job so that `--update-results`, the second `--settle` and the
+    # cache saves still run; this one must not halt the job so that PRICE
+    # CAPTURE still runs. Same mechanism, and it is declared here rather than
+    # absorbed into the number, because this guard exists so a step cannot LOSE
+    # the flag silently — which means a step gaining it must be named.
+    assert len(guarded) == 10, (
+        f"{len(guarded)} steps carry continue-on-error, expected 10 — if a step "
+        "lost it, the job now HALTS there instead of merely reporting red; if "
+        "one gained it, name it here and say why")
+    assert any("calendar" in n for n in guarded), (
+        "the calendar step lost continue-on-error — a date-dependent assertion "
+        "can stop price capture again, which is the 2026-10-09 incident")
     assert any("Generate, review, and send picks" in n for n in guarded), (
         "the picks step lost continue-on-error — the job will now halt before "
         "update-results, the second settle, and the cache saves")

@@ -2,6 +2,36 @@
 
 import os
 
+
+# ─────────────── THE `calendar` MARKER (Stage 28, 2026-10-09) ───────────────
+#
+# A test whose PASS/FAIL CAN CHANGE WITH NO CODE CHANGE does not belong in the
+# path that gates price capture. On 2026-10-09 two such tests failed — the
+# empty-card suppression's expiry, firing exactly as designed, and three quota
+# tests that inherited the allocator's first active day — and together they
+# stopped `Run tests`, which stopped `--update`, which lost the first real card
+# in nineteen days until it was recovered by hand with 3h01m to spare.
+#
+# The gate decision is UNCHANGED: capture on an untested tree is still the worse
+# risk, because wrong odds rows never backfill. What moves is where a CALENDAR
+# assertion lives.
+#
+# MEMBERSHIP IS DECLARED, NEVER INFERRED. A grep cannot find these: the three
+# quota tests that broke contain no clock read at all — `remaining()` reads it.
+# So a member carries the marker, and `tests/test_calendar_separation.py`
+# asserts the split holds in both directions.
+#
+# A member asserts a DEPLOYMENT FACT — "this guard has expired, decide" — not a
+# correctness property. A correctness test that happens to use a date stays in
+# the gating suite.
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "calendar: a test whose outcome depends on today's date rather than on "
+        "the code — it asserts a deployment fact and must NOT gate price "
+        "capture. Run separately; a failure reds the run without blocking "
+        "--update.")
+
 # Opt into the insecure default HMAC key for tests. Production runs require
 # MODEL_HMAC_KEY to be set or this env var to be set explicitly — see
 # src/models/ml_models.py for the rationale.

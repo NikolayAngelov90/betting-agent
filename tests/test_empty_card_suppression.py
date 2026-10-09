@@ -67,6 +67,7 @@ REAL_HITS = [
 
 # ── REQUIREMENT 2, FIRST, BECAUSE IT IS THE ONE THAT MATTERS ─────────────────
 
+@pytest.mark.calendar
 def test_the_suppression_has_EXPIRED():
     """FAILS FROM 2026-10-09. That is the point, not a bug.
 

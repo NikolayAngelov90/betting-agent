@@ -22410,3 +22410,323 @@ a 09:37 run (`390a4be`) once read as an 11h30m outlier of a 03:00 series.
 `tests/test_saturation_and_resolution.py` (new) and four existing test files.
 `model_version` UNCHANGED at `8da2fd`. No schema, migration or production-data
 change.*
+
+---
+
+# CARD SAVED · CALENDAR TESTS SEPARATED — 2026-10-09, the card's return
+
+`tests/` **1712 passed, 0 failed**. Invariants **passed** — count not cited.
+`cohort_status`: **`s5.15` / `8da2fd` UNCHANGED**, **35 picks stamped** (1 → 26 →
+35 across the week). Stage 26 suspended except `a4d5228` + `42ad297`.
+
+---
+
+## CARD STATUS — SAVED
+
+| | |
+| --- | --- |
+| scheduled run `37885390196` | **failed at step 14 `Run tests`**; step 15 `Run daily update` **skipped** |
+| written by it | **nothing** — no fixtures, no prices, no picks. Failure was **before capture** |
+| dispatched `37968348548` at **17:44 UTC** | `Run tests` ✓ · **`Run daily update` ✓** · `Settle` ✓ · **`picks` ✓** |
+| **captured** | **26 fixtures · 2416 odds rows · 9 picks · max 1/match** (8 covered-eight, 18 uncovered) |
+| 10-10 discovered | **76 fixtures** (31 covered, 45 uncovered) |
+| earliest kickoff | **20:45 UTC** — capture completed **18:14**, picks **18:21**: **2h24m of margin** |
+| credits | 22–52 estimated; **214 remained** for normal operation, H1's 168 untouched |
+
+> ### Nothing was lost. The recovery depended on someone watching, and that is the finding — not the fix.
+
+**Probe timezone settled before acting on it:** the probe, production
+`FS_DISCOVERY` and the DB all read **18:30** for the 10-02 laliga2 fixture, so
+probe time **is** UTC. Had it been local (+3), the earliest kickoff would have
+read 17:45 and the card would have looked already lost.
+
+---
+
+## FAILURE CLASS — VERDICT, and both causes were mine and dated to today
+
+Four failures, two causes. **Neither was a correctness failure.**
+
+| | |
+| --- | --- |
+| `test_the_suppression_has_EXPIRED` | **fired exactly as designed** — the empty-card window closed 10-09 |
+| 3 × `test_odds_quota_and_refresh` | **the allocator's first active day** — `remaining()` began withholding 168 and three tests measuring the *monthly guard alone* inherited the overlay (`assert 0 == 60`, `212 == 380`, `87 == 255`) |
+
+**The decision the expiry exists to force, taken on measurement:** the card HAS
+returned — 115 fixtures in the +1-day window, all eight covered leagues `kept`,
+11 kicking off today. **The window is not extended.** `empty_card_window_active`
+already returns `False`, so the mechanism had disarmed itself; the countdown
+assertion is replaced by the **post-expiry contract** asserting that inertness.
+
+The three quota tests now pin `today=NO_RESERVATION_DAY`, so each **states the
+regime it measures** — the same correction as `render(in_window=...)`.
+
+---
+
+## ALLOCATOR — IMPLICATED, and not by starving credits
+
+**Onset verified by enumeration, not expectation:**
+
+| date | `h1_reserved` | `normal_ceiling` |
+| --- | --- | --- |
+| 10-02 … **10-08** | **0** | **400** |
+| **10-09** … 10-16 | **168** | **232** |
+| **10-17** → | **0** | **400** |
+
+So it activated **today and not earlier**, and the 10-03→10-08 runs saw `0`.
+
+| | |
+| --- | --- |
+| used this month (theoddsapi) | **18** of a 232 ceiling |
+| `remaining()` | **214** · `reserved_from_me` **218** (50 margin + 168 H1) |
+| **was normal operation throttled?** | **NO — the throttle never bound** |
+| `collection_stop` state reached | **none.** Nothing invokes `h1_collection=True` |
+
+> ### The allocator did not starve the card of credits — 214 remained. **It starved the card of a passing test suite.** A change to a BUDGET reached production through the TEST GATE, and option 1's arithmetic (164 required against 170 throttleable, +6 slack) was never exercised, because the pipeline stopped before pricing. The dependency graph that matters includes the tests.
+
+---
+
+## THE WEEK 10-03 → 10-09 — 85 runs, 6 failures
+
+`ci-audit` 45 · `closing-lines` 25 · `daily-picks` 8 · `paper-trading` 7.
+78 success, 6 failure, 1 in-flight.
+
+| failure | class |
+| --- | --- |
+| `37885390196` daily-picks 10-09 | **verdict** — the test gate, above |
+| 4 × `ci-audit` 10-09 | **verdict** — alarming on that `DID_NOT_RUN` |
+| **`37369828831` ci-audit 10-05** | **MACHINERY — job `cancelled`, log EMPTY (0 lines), 15 min, no steps recorded** |
+
+**The 10-05 cancellation is the purest "absent instrumentation is not a zero":
+every counter reads 0 on an empty log.** The audit scores it **`UNAUDITABLE`**,
+not CLEAN — the short-log guard holds. Context: 10-05 19:23–19:47 shows
+durations of 5.8–16.4 min against a normal 0.6–1.1, so a platform-side
+degradation that evening, not our code.
+
+### Coverage
+
+| date | fx | picks | cov-8 | unc |
+| --- | --- | --- | --- | --- |
+| **10-03** | **25** | **15** | 0 | 25 | ← league-one/two's return, captured |
+| 10-04 | 6 | 5 | 0 | 6 |
+| 10-05 | 1 | 1 | 0 | 1 |
+| 10-06 | 0 | 0 | 0 | 0 |
+| 10-07 | 1 | 1 | 0 | 1 |
+| 10-08 | 3 | 3 | 0 | 3 |
+| **10-09** | **26** | **9** | **8** | 18 |
+
+**Max picks on any single match: 1. Zero above it.** Identity-gate refusals:
+**0** (`create=0`, `no_match=0`) — none to classify. `AF_LEAGUE_FILTER` 10-01
+rejected 124 across 40 untracked ids, 10-02 rejected 305 across 115,
+`tracked=30` throughout.
+
+### The suppression census — and `candidates` earning its place
+
+| census | count |
+| --- | --- |
+| `examined=0 candidates=0 … NOT-ENGAGED:expired` | **70** |
+| `examined=0 candidates=30 … NOT-ENGAGED:expired` | 3 |
+| `examined=0 candidates=28 … NOT-ENGAGED:expired` | 2 |
+| `examined=0 candidates=34 … NOT-ENGAGED:expired` | 1 |
+| `… NOT-ENGAGED:window` | 9 |
+
+> ### Six rows carry `examined=0` with **28–34 candidates**. Without the `candidates` counter all 76 would read identically as `suppressed=0`. VAC-1's counter is doing in production exactly what it was built for: *handed 30 eligible findings and did not engage* is a different fact from *there was nothing*.
+
+**`EMPTY_CARD_UNTIL = 2026-10-09` expired today and is HONOURED, not extended.**
+
+### The three-way partition's first week · the `resolved` marker's first week
+
+| | |
+| --- | --- |
+| `foreign` annotations / "exited NON-ZERO" findings | **0 across 45 `ci-audit` runs, 4 of which alarmed** |
+| `resolved` marker exercised | **0 — `36843668865` is dated 10-01, outside `--since 2026-10-03`** |
+
+**The saturation fix is confirmed in production:** before it, every alarming
+`ci-audit` run carried a false absorbed-failure finding. This week: none.
+**The resolved marker was never exercised in scope** — reported as not-exercised
+rather than as working.
+
+---
+
+## THE SCHEDULER SERIES — and the distribution HAS moved, with power
+
+| cron | **n** | min | max | mean | median | sd | spread | margin (max / mean+3sd) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `37 9 * * *` | **16** | 0h17m | **11h21m** | 2h18m | 0h27m | 220.7m | 663m | −713 / −832 |
+| `0 3 * * *` | **32** | 4h11m | 6h35m | 5h03m | 5h02m | 36.7m | 143m | −67 / −85 |
+| **`0 0 * * *`** | **8** | **3h58m** | **5h04m** | **4h30m** | 4h31m | **20.7m** | 66m | **+203 / +175** |
+
+> ### WELCH t = −3.36 on mean 5h03m (n=32) → 4h30m (n=8): a **−32.9 min shift**, SE 9.8. **|t| > 2, so the difference IS detectable** — and the sd nearly halved, 36.7 → 20.7. At n=1 this was unanswerable; at n=8 it is answered. **Earlier and tighter.**
+>
+> **What is NOT established is causation.** n=8 over eight consecutive days against n=32 over thirty-two is also a comparison of two time periods, so a concurrent platform change is not excluded. The cron time is the known change; it is not the only candidate.
+
+**And `37 9 * * *`'s n is 16 here, not the 39 reported on 10-02** — because that
+figure came from `--limit 120` and this from `--limit 60`. **A retired regime's n
+is a function of the query window and must be quoted with it.** Rule 8: the
+number is reported, not the expectation.
+
+**The 30-minute trigger printed on every run in scope, including all six
+failures** — verified in the failed `37887656748`:
+`schedule_margin[n=8 … binding=+175m threshold=30m]`.
+
+---
+
+## H1 — BLOCKED, and the reason is not credits
+
+| | |
+| --- | --- |
+| collection started? | **NO** |
+| why | **nothing invokes `h1_collection=True`.** The only occurrences are the parameter and its guard |
+| observations / trajectories since 10-09 | **0 / 0** — reported as `H1 COLLECTION DID NOT RUN`, *"NOT a null result"* |
+| credits consumed by collection | **0** of the 168 reservation |
+| `collection_stop` state reached | **none** |
+| competing with the card for credits? | **no** — collection spent 0, 214 remained |
+
+**The collection runner was never built.** Requirement 1 shipped the *stop* and
+`42ad297` shipped the *allocator*; the caller that widens the window to 360,
+drops the interval to 120 and passes `h1_collection=True` does not exist. **A
+collection that starts into a failed pipeline collects nothing — but this one
+never started at all, and the window is finite: 8 of 8 days remain.**
+
+---
+
+## CALENDAR TESTS SEPARATED
+
+### The census — declared, because a grep cannot find them
+
+> ### A grep over `date.today()` in `tests/` returns **56 candidates and misses exactly the three that fired** — they contain no clock read at all; `remaining()` reads it. **Membership is declared.**
+
+| member | flips | kind |
+| --- | --- | --- |
+| `test_the_suppression_has_EXPIRED` | **2026-10-09** ✓ fired | deployment fact |
+| **`test_the_H1_RESERVATION_WINDOW_has_EXPIRED`** (new) | **2026-10-17** | deployment fact |
+
+**Latent members: 25 tests** call a quota method with no explicit `today=`, so
+their outcome can change with no code change. **Three flipped on 10-09; the
+other 22 survived only because their budgets are small enough that withholding
+168 changed no assertion.** They are latent, not safe. Recorded as a measured
+count; pinning 22 tests belongs in its own commit.
+
+**Boundary dates, from evaluating the predicates at explicit dates:**
+
+| date | predicate | before → after |
+| --- | --- | --- |
+| **2026-10-09** | `h1_reservation` | 0 → **168** · `empty_card_window_active` True → **False** |
+| **2026-10-17** | `h1_reservation` | **168 → 0** |
+| **2026-11-01** | `month_key` | `2026-10-01` → **`2026-11-01`** |
+
+### THE MEASUREMENT THAT DID NOT WORK — recorded, because it cost two attempts
+
+I tried to enumerate membership by freezing the clock. **A process-wide frozen
+clock is not a valid instrument for this suite.**
+
+| attempt | result |
+| --- | --- |
+| 1 — pin source modules only | 3 failures. **Artifacts**: a test wrote `{"updated": date.today()}` on the REAL clock and the loader read it on the PINNED clock, so the reading looked 7 days old |
+| 2 — pin everything | 3 **different** failures. `test_history_mirror`'s incremental-sync tests need the clock to **ADVANCE**, not hold a value |
+
+> ### The control — pin to TODAY, which must reproduce the unpinned 1699/0 — **FAILED**, and that is the only reason the second artifact was caught. A measurement failure that agrees with the standing hypothesis is the one that gets published; this one disagreed with it, loudly, and the instrument was discarded. The boundary dates above come from evaluating the predicates at explicit dates, which is exact.
+
+### Part C — successor contracts, written before the dates
+
+**10-17 had NO firing test.** `h1_reservation()` would simply return 0 and the
+dead window would sit in `odds_quota.py` indefinitely — the SUP-1 shape the
+suppression's expiry exists to prevent. **A self-expiring guard with no firing
+test expires silently.** So one now exists, with its remedy written in advance:
+delete `H1_RESERVED_CREDITS`, the window pair, `h1_reservation`, the `for_h1`
+branch and the test. **Do not move the date.**
+
+> ### AND 10-17 IS BENIGN WHERE 10-09 WAS NOT, measured: at 10-17 `h1_reservation` returns to **0 — the value it held before 10-09** — so the three quota tests that broke on the onset **SELF-HEAL on the expiry**. The expiry is a RESTORATION, not a new break. **The onset was the dangerous edge and it has already fired.** That is why freezing the clock at 10-17/10-18 found nothing: there is nothing to find.
+
+**11-01** (`month_key`) needs no firing test — no decision is due; the
+credit-period guard is correctness and was verified on both sides on 10-01/10-02.
+The 25 latent quota members are its exposure.
+
+### Part B — the split, and both directions tested
+
+```yaml
+- name: Run tests                 # GATES capture, unchanged
+  timeout-minutes: 15
+  run: pytest tests/ -m "not calendar"
+
+- name: Run calendar assertions (does NOT gate capture)
+  id: calendar
+  continue-on-error: true
+  run: pytest tests/ -m calendar
+```
+
+| property | asserted |
+| --- | --- |
+| **direction 1** — a calendar failure does **not** stop capture | `continue-on-error: true`, step **before** `--update` |
+| **direction 2** — a correctness failure **still** stops capture | `Run tests` has no `continue-on-error`, keeps its 15-min bound, and runs `-m "not calendar"` |
+| the selectors **partition** | measured: **calendar collects 2, gate collects 1706 of 1708** |
+| `continue-on-error` ≠ ignored | the alert reads `steps.calendar.outcome` and **exits 1** |
+
+**POSITIVE CONTROL — the state never observed in production:** the shipped alert
+script, executed against `calendar=failure` with every capture step green,
+**emits the alert and exits 1**. Plus three more: a clean run stays **silent**; a
+capture failure still alerts **without** being mislabelled as calendar; and both
+failing reports **both**.
+
+**The cost is in the alert text, not only the ledger:**
+
+> 📅 A CALENDAR ASSERTION FAILED — a self-expiring guard has reached its date and
+> is asking for a decision (delete it, do not extend it). **CAPTURE IS
+> UNAFFECTED**: prices and picks ran independently, so check the steps below
+> before assuming this run produced nothing. **This run is RED because a
+> decision is due, not because the pipeline failed.**
+
+**And a guard caught the change:** `test_continue_on_error_is_still_set_on_every_core_step`
+pins the count at 9; the calendar step makes it **10**. Updated to 10 **with the
+new member named**, because that guard exists so a step cannot *lose* the flag
+silently — which means a step *gaining* it must be declared.
+
+---
+
+## THE GATE'S SECOND REALISATION
+
+> ### The accepted cost of `Run tests` gating capture has now been realised twice: **09-20, permanently**, on a card of unknown size; and **10-09, recovered by manual dispatch with 3h01m of margin**, on a card of **115 fixtures in window / 26 captured** — the first real card in nineteen days. **The recovery depended on someone watching.**
+>
+> **Both 10-09 failures were date-dependent tests, not correctness failures.**
+> The gate decision stands; the calendar assertions have moved.
+
+> ### A change to a budget reached production through the test gate. The allocator starved the card of a passing suite, not of credits — **214 remained against a 22–52 credit re-dispatch, with H1's 168 untouched.** The dependency graph that matters includes the tests.
+
+---
+
+## DECLARATION
+
+> ### CARD STATUS — **SAVED**
+> 26 fixtures, **2416 odds rows**, 9 picks, max 1/match, captured **18:14–18:21
+> UTC against a 20:45 earliest kickoff**. The scheduled run wrote nothing; the
+> failure was before capture.
+
+> ### FAILURE CLASS — **VERDICT**
+> Two date-dependent tests: an expiry firing as designed, and the allocator's
+> first active day. Mechanism: step 14 failed → step 15 skipped.
+
+> ### ALLOCATOR — **IMPLICATED, measured**
+> Onset exact by enumeration (10-08 `0/400` → 10-09 `168/232` → 10-17 `0/400`).
+> **The throttle never bound: 18 used, 214 remaining.** It stopped the card
+> through the suite, not the budget.
+
+> ### H1 — **BLOCKED**
+> Collection never started: **nothing invokes `h1_collection=True`**. 0
+> observations, 0 trajectories, 0 credits of the 168. The runner was never
+> built. 8 of 8 window days remain.
+
+> ### THE WEEK — **6 defects**, 1 machinery (the 10-05 empty-log cancellation,
+> correctly `UNAUDITABLE`), 5 verdict. Series n: **16 / 32 / 8**, and the
+> `0 0 * * *` distribution **has moved** (Welch t = −3.36), earlier and tighter,
+> **causation not established**.
+
+> ### CALENDAR TESTS SEPARATED
+> Census: **2 declared members** (10-09 fired, **10-17 new**) + **25 latent**
+> quota members. Both directions asserted; selectors partition **2 / 1706**.
+> **Positive control fires** and the alert names the new state. Successor
+> contracts written for **10-17** and **11-01**.
+
+*Recorded 2026-10-09. `.github/workflows/daily-picks.yml`, `tests/conftest.py`,
+`tests/test_calendar_separation.py` (new), `tests/test_empty_card_suppression.py`,
+`tests/test_odds_quota_and_refresh.py`, `tests/test_red_run_policy.py`.
+`model_version` UNCHANGED at `8da2fd`; `s5.15`, 35 picks. No predicate, schema or
+migration change.*
