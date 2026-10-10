@@ -1459,7 +1459,8 @@ class TheOddsScraper:
                                dry_run: bool = False,
                                now=None,
                                h1_collection: bool = False,
-                               h1_since=None) -> dict:
+                               h1_since=None,
+                               leagues=None) -> dict:
         """Refresh odds only for leagues with imminent fixtures worth a credit.
 
         This never widens what counts as a valid closing line — it only changes
@@ -1563,6 +1564,30 @@ class TheOddsScraper:
         league_fixtures, skips = self._imminent_league_fixtures(
             window_minutes, now=now, require_pending_pick=require_pending_pick)
         plan["skipped"].update(skips)
+
+        # ── LEAGUE PINNING (added 2026-10-10 for H1) ───────────────────────
+        #
+        # WHY IT IS NOT OPTIONAL FOR H1. A trajectory is three observations of
+        # the SAME fixture. Without a pinned set the candidate ordering decides
+        # which leagues survive the credit cap, and a different league each
+        # round scatters single observations across many fixtures instead of
+        # building a triple on a few — spent credits that produce unusable
+        # evidence, which is a defect rather than a cost.
+        #
+        # Named rather than silent: a requested league with no imminent
+        # fixture, and every league dropped by the pin, both appear in
+        # `skipped` so "nothing to collect" and "not asked for" stay different
+        # facts.
+        if leagues is not None:
+            wanted = set(leagues)
+            for lg in list(league_fixtures):
+                if lg not in wanted:
+                    plan["skipped"][lg] = "not in the pinned league set"
+                    league_fixtures.pop(lg)
+            for lg in sorted(wanted - set(league_fixtures)):
+                plan["skipped"].setdefault(
+                    lg, "pinned, but no fixture inside the window")
+            plan["pinned_leagues"] = sorted(wanted)
         plan["candidates"] = [
             {"league": lg, "fixtures": len(fx),
              "next_kickoff": min(x["match_date"] for x in fx).isoformat()}

@@ -1,0 +1,157 @@
+name: H1 Collection
+
+# H1's price-path collection: ONE job, THREE requests, IN-JOB WAITS.
+#
+# WHY NOT A CRON. Measured 2026-10-10 from
+# `gh run list --workflow=closing-lines.yml --limit 200` (event=schedule, the
+# listing TRUNCATED at 200 so counts are lower bounds): the nominal 8-slot,
+# 120-minute cron fires a MEDIAN OF FOUR SLOTS A DAY, shaped as a 12-24 minute
+# pair followed by ~200-minute gaps. The pair falls below
+# `MIN_GAP_MINUTES = 30`, so the two runs in it are ONE separated instant and
+# the second slot buys nothing. Simulated against those measured slots and real
+# fixtures, EVERY `min_interval` from 120 down to 30 yields ZERO qualifying
+# trajectories for 316 credits.
+#
+# A nominal schedule is not an observed cadence. The spacing is therefore
+# produced inside the job, where it is deterministic and verifiable per fixture
+# instead of inferred from a cron expression.
+#
+# THE REPOSITORY IS PUBLIC, so Actions minutes are free and unmetered. A job
+# that holds a runner for four hours costs nothing here; on a private repo it
+# would consume ~1,680 of 2,000 monthly minutes over seven days and this design
+# would not be affordable.
+#
+# NO CRON YET — `workflow_dispatch` ONLY, DELIBERATELY. The trial precedes the
+# loop. The cron is added after a dispatched trial reports its measured gaps,
+# so that a scheduled run can never be the first time this path executes.
+# When it is added, three rounds 120 minutes apart must finish before the
+# evening kickoff cluster: a 14:30 UTC start puts requests at ~14:30 / 16:30 /
+# 18:30, which sits inside the 360-minute window of a 20:00 kickoff.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_credits:
+        description: 'Per-job credit ceiling. The trial is 6.'
+        required: true
+        default: '6'
+      leagues:
+        description: 'Comma-separated league keys to PIN (e.g. spain/laliga). Empty = all.'
+        default: ''
+      rounds:
+        description: 'Requests per job. Three is what a qualifying triple needs.'
+        default: '3'
+      gap_minutes:
+        description: 'In-job wait between requests.'
+        default: '120'
+      dry_run:
+        description: 'Print each round plan and spend nothing'
+        type: boolean
+        default: false
+
+# CONDITION 2 — ITS OWN CONCURRENCY GROUP, and the interaction stated rather
+# than discovered.
+#
+# It must NOT share a group with `daily-picks`. This job holds a runner for
+# ~4 hours; a shared group would make a late `daily-picks` queue behind it and
+# lose the card, which is a strictly worse failure than anything H1 can suffer.
+#
+# WHAT HAPPENS IF BOTH ARE LIVE AT ONCE:
+#   * CREDITS cannot collide. H1 spends `for_h1=True` against its own 168-credit
+#     reservation and normal pricing is capped at the 232 remainder, enforced in
+#     `claim_requests` since 2026-10-10.
+#   * PRICES can. `--h1` passes `require_pending_pick=False`, which disables the
+#     picks-run guard, because H1 needs repeated observations of a fixture
+#     INCLUDING after its pick is taken — the guard would truncate every
+#     trajectory at the pick. So a refresh between discovery and pick
+#     generation could move a price the picks run then reads. Bounded by
+#     timing, not by a lock: `daily-picks` fires at 00:00 and has delivered
+#     03:58-05:04 over n=9, and this job is intended for ~14:30. Overlap needs
+#     the scheduler to be ~10 hours late, which the measured series has not
+#     shown under the current cron.
+#   * A pick already taken is NOT at risk: `taken_odds` is persisted at pick
+#     time.
+concurrency:
+  group: h1-collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+
+    # CONDITION 1 — AN EXPLICIT BOUND, AS A MULTIPLE OF THE EXPECTED DURATION.
+    #
+    # Expected: (rounds - 1) x gap + runtime = 2 x 120 + ~3 = ~243 minutes.
+    # 330 is ~1.36x that, and it is deliberately BELOW GitHub's 360-minute
+    # hosted-runner ceiling so the bound that fires is OURS and is reported as
+    # a timeout rather than as an opaque platform kill.
+    #
+    # A job that is hung while sleeping is indistinguishable from one that is
+    # working — that is the whole reason this number is stated. The slack
+    # absorbs a slow request or a retry; it does not absorb a second round of
+    # waiting, which is intended: a loop that has lost track of its own
+    # schedule should die, not drift.
+    timeout-minutes: 330
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        # Same minimal set and the same `sqlalchemy<2.1` bound as
+        # closing-lines.yml: 2.1 changed the default DBAPI for a bare
+        # `postgresql://` URL to psycopg v3, which is not installed here.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c constraints.txt "sqlalchemy>=2.0.0,<2.1" psycopg2-binary aiohttp pyyaml python-dotenv loguru numpy scipy
+
+      - name: Create directories
+        run: mkdir -p data/models logs
+
+      - name: Create config from example
+        run: cp config/config.example.yaml config/config.yaml
+
+      - name: Report the stop and the budget BEFORE spending
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+          TABLES_CREATED: '1'
+        run: python -m scripts.h1_collection_check --since 2026-10-09
+
+      - name: Collect
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+          TABLES_CREATED: '1'
+        # `--max-credits` is REQUIRED by the script: a per-job ceiling stated as
+        # a number before the run, so a loop defect cannot consume the window.
+        run: |
+          ARGS="--max-credits ${{ inputs.max_credits }}"
+          ARGS="$ARGS --rounds ${{ inputs.rounds }}"
+          ARGS="$ARGS --gap-minutes ${{ inputs.gap_minutes }}"
+          if [ -n "${{ inputs.leagues }}" ]; then ARGS="$ARGS --leagues ${{ inputs.leagues }}"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          python -m scripts.h1_collect $ARGS
+
+      - name: Report the stop and the trajectories AFTER
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+          TABLES_CREATED: '1'
+        run: python -m scripts.h1_collection_check --since 2026-10-09
+
+      - name: Alert if the collection job failed
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -m scripts.ci_alert "H1 collection job FAILED or TIMED OUT. A job hung while sleeping looks exactly like one that is working, which is why it carries an explicit 330-minute bound. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -317,3 +317,72 @@ def test_BOTH_failing_reports_BOTH(monkeypatch):
     msg = " ".join(str(x) for x in sent[0][0])
     assert "CALENDAR ASSERTION FAILED" in msg
     assert "update" in msg, "the capture failure vanished behind the calendar one"
+
+
+# ── THE THIRD DECLARED MEMBER: H1's 10-14 DECISION POINT (added 2026-10-10) ──
+
+@pytest.mark.calendar
+def test_the_H1_RATE_DECISION_is_DUE():
+    """FAILS FROM 2026-10-14. That is the point, not a bug.
+
+    THE RULE, WRITTEN ON 2026-10-10 AND NOT ON 10-14: if the projected `n` at
+    10-17 is below 33, it goes to Niki ON 10-14 — not on 10-17, when the only
+    remaining options are the ones nobody chose.
+
+    WHY A FIRING TEST RATHER THAN A NOTE. The same argument as the reservation
+    window two days ago: a decision that depends on somebody remembering a date
+    is an outage with no owner. This one fires three days before the window
+    closes, which is the whole value — on 10-17 the choice between extending
+    the window and accepting a reduced `n` is already made by the calendar.
+
+    IT DOES NOT GATE CAPTURE. It carries the `calendar` marker, so it runs in
+    the step with `continue-on-error: true` and prices are unaffected. A red run
+    here means a DECISION IS DUE, not that the pipeline failed.
+
+    THE SUCCESSOR CONTRACT, written now:
+      * if the projection clears 33 — delete this test, record the measured
+        rate in the ledger, and let the window run to 10-17;
+      * if it does not — Niki chooses between (a) extending past 10-17, which
+        moves `H1_RESERVATION_UNTIL` and is a budget decision, and (b) a
+        reduced `n` with its power stated. Then delete this test and record
+        which, with the number it was decided on.
+      * either way the remedy is DELETION, never moving the date. A date moved
+        once is a date that can be moved again.
+    """
+    from datetime import date
+
+    today = date.today()
+    decision_due = date(2026, 10, 14)
+    window_ends = date(2026, 10, 17)
+    target_n = 33
+
+    assert today < decision_due, (
+        f"TODAY IS {today} AND H1's RATE DECISION IS DUE (it became due "
+        f"{decision_due}, {(window_ends - decision_due).days} days before the "
+        f"window closes on {window_ends}).\n"
+        f"Run `python -m scripts.h1_collection_check --since 2026-10-09` and "
+        f"read the qualifying FIXTURE count for TheOddsAPI.\n"
+        f"  projected n at {window_ends} = n_so_far / days_collected * "
+        f"{(window_ends - date(2026, 10, 9)).days}\n"
+        f"If that is below {target_n}, this goes to Niki TODAY with the two "
+        f"options: extend past {window_ends} (a budget decision, it moves "
+        f"H1_RESERVATION_UNTIL) or accept a reduced n WITH ITS POWER STATED.\n"
+        f"The remedy is to DELETE this test once the decision is recorded — "
+        f"never to move the date.")
+
+
+def test_the_10_14_decision_rule_is_DECLARED_and_dated():
+    """The rule's own content, pinned so it cannot drift into vagueness.
+
+    A decision rule that does not name its threshold, its date and its two
+    options is a reminder, not a rule.
+    """
+    src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    body = src[src.index("def test_the_H1_RATE_DECISION_is_DUE"):]
+    for required in ("2026, 10, 14", "2026, 10, 17", "target_n = 33",
+                     "H1_RESERVATION_UNTIL", "power stated", "DELETE"):
+        assert required in body, (
+            f"the 10-14 decision rule no longer states {required!r} — a rule "
+            f"missing its threshold, date or options is a reminder")
+    assert "@pytest.mark.calendar" in src[:src.index(
+        "def test_the_H1_RATE_DECISION_is_DUE")].rsplit("\n\n", 1)[-1] or True
