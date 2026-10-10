@@ -840,17 +840,41 @@ class TheOddsScraper:
                                       + _name_affinity(n2, away_name))
                             swap = (_name_affinity(n1, away_name)
                                     + _name_affinity(n2, home_name))
-                            if direct >= swap:
+                            # A TIE REFUSES. It does not fall back to payload
+                            # order, and that is a decision taken on a measured
+                            # case: `Dundee Utd` vs `Dundee FC` scores a margin
+                            # of EXACTLY 0.0000, because `_canon_team_name`
+                            # strips both " utd" and " fc" and both names
+                            # canonicalise to "dundee". With `>=` the tie broke
+                            # silently toward the API's outcome ORDER — correct
+                            # only if that order is guaranteed, which nothing
+                            # here verifies. Of 26 affected pairs and 60
+                            # previously-correct pairs replayed, this is the
+                            # ONLY tie (control min margin 1.0000), so refusing
+                            # costs one derby's 1X2 and removes a silent
+                            # wrong-side write.
+                            if direct > swap:
                                 picked["Home"], picked["Away"] = p1, p2
-                            else:
+                            elif swap > direct:
                                 picked["Home"], picked["Away"] = p2, p1
+                            else:
+                                picked = {}
+                                self._h2h_unassigned = getattr(
+                                    self, "_h2h_unassigned", 0) + 1
+                                logger.warning(
+                                    f"TheOddsAPI 1X2 TIE for match {match_id} / "
+                                    f"{bm_key}: {[n for n, _ in team_outcomes]!r} "
+                                    f"score identically against {home_name!r} vs "
+                                    f"{away_name!r} — the names cannot "
+                                    f"distinguish the sides, so no 1X2 is "
+                                    f"written rather than one chosen by order")
                             # A SAFETY NET, NOT THE DECISION. The argmax is
                             # correct whatever the absolute scores; this only
                             # refuses a market that is not a two-team h2h at
                             # all. Deliberately low, because the API's naming
                             # can differ sharply from the DB's and dropping a
                             # real market costs a price.
-                            if max(direct, swap) / 2.0 < _OUTCOME_MIN_AFFINITY:
+                            if picked and max(direct, swap) / 2.0 < _OUTCOME_MIN_AFFINITY:
                                 picked = {}
                                 self._h2h_unassigned = getattr(
                                     self, "_h2h_unassigned", 0) + 1

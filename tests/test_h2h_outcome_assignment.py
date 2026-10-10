@@ -188,7 +188,6 @@ def test_a_swapped_payload_is_assigned_by_CONTENT_not_by_order(tmp_path):
     ("Real Madrid", "Villarreal"),
     ("Start", "Fredrikstad"),
     ("Paris FC", "Paris SG"),
-    ("Dundee Utd", "Dundee FC"),
     ("St. Mirren", "St Johnstone"),
     ("Gent", "Genk"),
     ("West Ham", "Wolves"),
@@ -396,3 +395,140 @@ def test_a_second_call_appends_rather_than_overwriting(tmp_path):
     assert len(live) == 1 and live[0].odds_value == 2.45, (
         "`odds` must keep exactly the latest price — if this changes, every "
         "current-price consumer is affected")
+
+
+# ═══════════ A5: THE REPLAY CONTROL — 26 affected + 60 previously-correct ════
+
+#: Every distinct (home, away) pair among the 28 matches the defect's signature
+#: identifies in production, 2026-10-10. Data, not invention.
+AFFECTED_PAIRS = [
+    ("AEL Larissa", "Kifisia"), ("AIK", "Sirius"),
+    ("Albacete", "Real Sociedad B"), ("Antalyaspor", "Alanyaspor"),
+    ("Blackpool", "Exeter"), ("Burgos CF", "Real Sociedad B"),
+    ("Ceuta", "Sabadell"), ("Dundee Utd", "Dundee FC"),
+    ("Fredrikstad", "Start"), ("Gent", "Genk"), ("Kifisia", "AEL Larissa"),
+    ("Le Havre", "Marseille"), ("Lille OSC", "Le Havre"),
+    ("Malaga", "Dep. La Coruna"), ("Paris FC", "Paris SG"),
+    ("Real Madrid", "Villarreal"),
+    ("Real Racing Club de Santander", "Villarreal"),
+    ("St. Mirren", "St Johnstone"), ("Start", "Fredrikstad"),
+    ("Start", "Viking"), ("Sunderland", "Brighton"), ("Viking", "Start"),
+    ("Villarreal", "Dep. La Coruna"), ("West Ham", "Wolves"),
+    ("Wisla Krakow", "Wieczysta Krakow"), ("Zurich", "Grasshoppers"),
+]
+
+#: 60 pairs drawn at random from matches whose 1X2 is COMPLETE in production —
+#: the cases the fix must NOT change. An assignment fix that reassigns a
+#: working case is worse than the defect it repairs.
+CONTROL_PAIRS = [
+    ("AEK Athens", "PAOK"), ("Ajax", "Groningen"),
+    ("Asteras Tripolis", "Panserraikos"), ("Austria Vienna", "LASK"),
+    ("Austria Vienna", "Sturm Graz"), ("Barcelona", "Feyenoord"),
+    ("Barnet", "Bromley"), ("Barnsley", "Stockport County"),
+    ("Brommapojkarna", "Vasteras SK"), ("Cambuur", "Excelsior"),
+    ("Castellon", "Cadiz CF"), ("Charlton", "Ipswich"),
+    ("Clermont Foot", "Guingamp"), ("Como", "Napoli"),
+    ("Crystal Palace", "Vallecano"), ("Dep. La Coruna", "Leganes"),
+    ("Everton", "Liverpool"), ("Exeter", "Bradford City"),
+    ("FC Copenhagen", "Odense"), ("FC Metz", "Paris FC"),
+    ("FC Porto", "Arouca"), ("FC Porto", "Moreirense"),
+    ("FC Porto", "Nott'm Forest"), ("France", "Iraq"), ("Genk", "Kortrijk"),
+    ("Gornik Zabrze", "Zaglebie"), ("Grimsby", "Shrewsbury"),
+    ("Hartberg", "Ried"), ("Heerenveen", "PEC Zwolle"), ("Malmo FF", "AIK"),
+    ("Middlesbrough", "Southampton"), ("Midtjylland", "Viborg"),
+    ("Monaco", "Marseille"), ("Nacional", "Alverca"), ("Nantes", "Brest"),
+    ("Nijmegen", "Go Ahead Eagles"), ("Odense", "Fredericia"),
+    ("Osasuna", "Sevilla"), ("Panetolikos", "Kifisia"),
+    ("Paris SG", "Lorient"), ("Paris SG", "Le Mans"),
+    ("Parma Calcio 1913", "Monza"), ("Portsmouth", "Birmingham"),
+    ("Preston", "Blackburn"), ("Randers FC", "Vejle"),
+    ("Rangers", "Hibernian"), ("Rochdale", "Swindon"), ("Servette", "Luzern"),
+    ("Sion", "Thun"), ("SK Rapid", "Salzburg"),
+    ("St Etienne", "Clermont Foot"), ("Start", "Tromso"),
+    ("Swindon", "Chesterfield"), ("Tottenham", "Brighton"),
+    ("Tromso", "Kristiansund"), ("Union Berlin", "Elversberg"),
+    ("Valerenga", "Sarpsborg 08"), ("Viking", "Aalesund"),
+    ("Wieczysta Krakow", "Lech Poznan"), ("Wycombe", "Luton"),
+]
+
+#: The one pair the fix CANNOT resolve, named rather than hidden.
+UNRESOLVABLE = ("Dundee Utd", "Dundee FC")
+
+
+def _margin(home, away):
+    """direct minus swap. Positive means the correct pairing wins."""
+    return ((_name_affinity(home, home) + _name_affinity(away, away))
+            - (_name_affinity(home, away) + _name_affinity(away, home)))
+
+
+def test_the_CONTROL_pairs_are_all_resolved_with_room_to_spare():
+    """The cases the fix must not change. Measured min margin 1.0000."""
+    margins = sorted((_margin(h, a), h, a) for h, a in CONTROL_PAIRS)
+    assert margins[0][0] > 0, (
+        f"a previously-correct pair is now a tie or inverted: {margins[0]} — "
+        f"an assignment fix that reassigns a working case is worse than the "
+        f"defect")
+    assert margins[0][0] >= 0.9, (
+        f"the tightest control margin fell to {margins[0][0]:.4f} from a "
+        f"measured 1.0000 — the headroom on working cases has shrunk")
+
+
+def test_every_AFFECTED_pair_is_resolved_EXCEPT_the_one_that_cannot_be():
+    """25 of 26 resolve by content. The 26th is named and refuses.
+
+    Reported as a residual rather than smoothed over: `Dundee Utd` and
+    `Dundee FC` both canonicalise to `"dundee"`, because `_canon_team_name`
+    strips " utd" and " fc" alike. Margin is EXACTLY 0.0000, so no graded score
+    over these names can separate them — the information is destroyed by
+    canonicalisation, before any comparison happens.
+    """
+    ties = [(h, a) for h, a in AFFECTED_PAIRS if _margin(h, a) <= 0]
+    assert ties == [UNRESOLVABLE], (
+        f"the set of unresolvable affected pairs changed: {ties} — if it grew, "
+        f"the fix resolves less than it did; if it shrank, update this test "
+        f"and the ledger rather than leaving a stale claim")
+    for h, a in AFFECTED_PAIRS:
+        if (h, a) == UNRESOLVABLE:
+            continue
+        assert _margin(h, a) > 0, (h, a, _margin(h, a))
+
+
+def test_the_canonicaliser_is_what_destroys_the_Dundee_information():
+    """Pinned at the cause, not the symptom.
+
+    Fixing this would mean changing `_canon_team_name`, which
+    `_team_names_similar` shares with FIXTURE MATCHING across three scrapers —
+    so it is left alone deliberately and the tie refuses instead.
+    """
+    from src.scrapers.theodds_scraper import _canon_team_name
+
+    assert _canon_team_name("Dundee Utd") == _canon_team_name("Dundee FC") == "dundee"
+    assert _margin(*UNRESOLVABLE) == 0.0
+
+
+@pytest.mark.parametrize("home,away", AFFECTED_PAIRS + CONTROL_PAIRS)
+def test_the_full_REPLAY_through_the_real_parser(tmp_path, home, away):
+    """Both groups, driven end to end. 86 pairs, one database each.
+
+    The tie refuses rather than writing a side, so it is asserted as a refusal
+    — which is the honest expectation, not a weakened one.
+    """
+    mgr = _mgr(tmp_path, f"r{abs(hash((home, away))) % 10**9}.db")
+    _seed(mgr, 1, home, away)
+    sc = _scraper(mgr)
+    with mgr.get_session() as s:
+        sc._save_game_odds(_game(home, away, 2.10, 3.40, 3.20), 1, [], session=s)
+        s.commit()
+    got = _written(mgr, 1)
+
+    if (home, away) == UNRESOLVABLE:
+        assert got == {"Draw": 3.40}, (
+            f"the unresolvable pair wrote a team price: {got} — a tie must "
+            f"refuse, not break toward payload order")
+        assert getattr(sc, "_h2h_unassigned", 0) == 1
+        return
+
+    assert got == {"Home": 2.10, "Draw": 3.40, "Away": 3.20}, (
+        f"{home} vs {away} wrote {got} — a missing or duplicated side means "
+        f"one team's live price is the other team's price")
+    assert getattr(sc, "_h2h_unassigned", 0) == 0

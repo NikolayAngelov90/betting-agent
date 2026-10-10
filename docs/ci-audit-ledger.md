@@ -23270,3 +23270,222 @@ decision with 12 settled picks attached to it.
 Full suite **1765 passed**. Invariants passed, count not cited. `model_version`
 UNCHANGED at `8da2fd`; `s5.15`, 146 picks stamped. No schema or migration
 change — the unique index was MEASURED, not altered.*
+
+---
+
+# 2026-10-10 (third entry) — 1X2 CORRUPTION CLOSED. Bumped to `s5.16`.
+
+## A1 — THE BLAST RADIUS, WITH A NUMBER FOR EACH
+
+### The affected set, and the control that proves the cause
+
+| population | keys missing AWAY | keys missing HOME | matches | verdict |
+| --- | --- | --- | --- | --- |
+| **TheOddsAPI** (the defective writer) | **486** | **0** | 28 | **asymmetric** |
+| API-Football (same table, same query, different writer) | 49 | 49 | 49 | symmetric |
+
+**An asymmetric absence rules out a symmetric cause.** A feed gap, a naming
+mismatch and a coverage hole are all symmetric — the API-Football population is
+the control, and it is symmetric to the row. Only an ordered test chain produces
+486/0. The API-Football rows are **NOT** marked by this work: different
+population, different and still-open cause.
+
+Date range **2026-03-14 → 2026-10-10**, 35 bookmakers, 1X2 only.
+
+### No other market or scraper is reachable by this path
+
+* `theodds` **`totals`** matches `"Over"`/`"Under"` exactly and carries the
+  `point` in the selection — no fuzzy matching, and that is why `over_under`
+  escaped.
+* `apifootball` assigns from a literal `{"Home": "Home", ...}` dict — no fuzzy
+  matching.
+
+### CONFIRMED vs PRESUMED, because instrumentation has a start date
+
+`odds_snapshots` begins **2026-08-25**. Where coverage exists the defect leaves
+a second signature — two `Home` rows for one (match, bookmaker) inside a single
+second. **8 of 28 confirmed; 20 outside coverage.** A zero from absent
+instrumentation is not a clean bill, so all 28 are marked and the split is
+reported.
+
+### The 13 picks — NOT 12, correcting this morning's entry
+
+The earlier entry said "12 of the 28 carry a saved pick". The count is **13**;
+I miscounted the rows. Measured per pick:
+
+**NO PICK WAS TAKEN AT A CORRUPTED PRICE.** Every one took a real price from a
+market this defect never touched:
+
+| group | n | markets | taken vs best-in-market |
+| --- | --- | --- | --- |
+| LIVE (`is_paper=false`), all settled | **5** | 1X2 ×2, Over 2.5 ×3 | 1X2 picks **diff 0.000** |
+| PAPER, settled | 4 | goals, team goals, double chance | drift 0.010–0.110 |
+| PAPER, **pending** (today's card) | 4 | Under 3.5 ×2, Over 2.5, Double Chance | drift 0.000–0.250 |
+
+The two picks on 1X2 itself (48575 `Away Win` @1.57, 1753 `Home Win` @2.20) took
+**API-Football** prices, matching that provider's best to **0.000**. The two
+Double Chance picks took API-Football's own `double_chance` market, which is not
+derived from TheOddsAPI 1X2. So:
+
+* **no settled pick's ROI is wrong** — no price was corrupted;
+* **`pick_observations`: 16 rows on these matches, `final` and `model`
+  attributions, and ZERO on the 1X2 market** — no MODEL or FINAL attribution
+  rests on a corrupted price.
+
+**The exposure is entirely via FEATURES**, which is precisely what
+`evidence_status='void_corrupt_features'` was built to record.
+
+### The fitting set
+
+**24 of the 28 are settled**, so 24 rows left the fitting set: **41,311 →
+41,287**, a share of **0.058%**.
+
+## A2 — THREE MARKINGS APPLIED. `odds` UNTOUCHED.
+
+| field | value | count |
+| --- | --- | --- |
+| `matches.training_exclusion_reason` | `corrupt_1x2_assignment` | **28** |
+| `saved_picks.evidence_status` | `void_corrupt_features` | **13** |
+| `saved_picks.disposition` | untouched | **0** |
+
+**Orthogonality verified, not assumed.** `evidence_status` now reads 16 rows
+total: the 13 new plus **3 pre-existing** from Stage 13's
+`corrupt_team_identity` marking (picks 309, 314, 1148). `disposition` is NULL on
+all 16 — a pick can be excluded from training and still be a live pick, exactly
+as the two fields were designed. The exclusion reason is NEW rather than reused:
+`corrupt_team_identity` says a participant row belongs to a different club; this
+says the right clubs carry two prices on the wrong selections.
+
+`odds` is unchanged. **Mark, never delete — fourth instance.** The script
+contains no write to `odds`, which is checkable in its source; the evidence
+lives there and in `odds_snapshots`.
+
+**The population is DERIVED, not listed.** A hardcoded id list is a snapshot of
+one query at one moment. `scripts/mark_1x2_assignment_corruption.py` re-derives
+from the defect's own signature on every run, scoped to kickoffs before
+2026-10-11 so a future genuine single-book gap cannot be swept in, and is
+idempotent.
+
+**CACHE INVALIDATION IS NOT AUTOMATIC, and it had to be checked.**
+`filter_generation()` digests `_base_filter`'s **source text**, so marking DATA
+does not move it. The Parquet mirror still self-corrects, via its row-COUNT
+reconcile — excluding rows changes that count. The **ML pickles do not**, and
+fall back to `_ml_models_stale()`'s 3-day rule.
+
+## A3 — TODAY'S FOUR PICKS: `evidence_status`, NOT a disposition, NOT a re-price
+
+All four are **PAPER** (`is_paper=true`). No live money is exposed on today's
+card from these matches.
+
+| pick | match | market | taken | correct price | difference |
+| --- | --- | --- | --- | --- | --- |
+| 2123 | 52822 Real Madrid–Villarreal | Under 3.5 | 2.15 | 2.15 (real, in market) | **0.000** |
+| 2112 | 52728 Lille–Le Havre | Under 3.5 | 1.50 | 1.50 | **0.000** |
+| 2206 | 52743 Ceuta–Sabadell | Over 2.5 | 1.72 | 1.72 | **0.000** |
+| 2156 | 52749 Sunderland–Brighton | Double Chance 1X | 1.61 | 1.61 | **0.000** |
+
+**The decision, and why.** A3 offered re-price or `disposition`, on the premise
+that the pick "was made on a price that did not exist". **That premise does not
+hold here** — every one of these prices existed, in a market the defect never
+touched, and `odds` still holds it. So:
+
+* **not a re-price**: there is no wrong price to correct, and re-pricing would
+  rewrite `taken_at`'s meaning for no gain;
+* **not a `disposition`**: that field answers "why did this leave the live
+  record", and these picks have not left it;
+* **`evidence_status='void_corrupt_features'`** is the correct and sufficient
+  marking: the wager was genuine, the model's 1X2 features were inverted.
+
+**Would the selection have been the same? UNDETERMINED, and stated as such.**
+The price is unaffected but the FEATURES are not, so the model's probabilities
+were computed from inverted 1X2 implied probabilities. Establishing the
+counterfactual means re-running the ensemble against repaired prices — and the
+true home price is recoverable only for the 8 confirmed matches, since for the
+20 presumed ones the overwrite destroyed it before snapshots existed. Guessing
+would be worse than recording the uncertainty, which is what the marking does.
+
+## A4 — BUMPED TO `s5.16`, AND THE RULE COLLISION IS REPORTED
+
+```
+CODE_REVISION   s5.15  ->  s5.16
+model_version   stage5_baseline_20260807.8da2fd -> ...ae1752
+picks stamped   0 of 2191      <== a fresh, EMPTY cohort
+```
+
+**ONE bump, covering the fix and the exclusions together.** They are the same
+event from two sides: the fix stops new inverted prices, the exclusion stops the
+models learning from the old ones. A boundary between "fixed but still learning
+from it" and "fixed and not" describes no configuration anyone ran.
+
+**Why now, having been recorded as no-bump this morning:** that deferral existed
+to protect H1's sized window. H1 has zero observations and a blocked mechanism,
+so there is no window left to protect. The reversal is recorded in
+`model_version.py` rather than edited away.
+
+> **RULES 7 AND 8 COLLIDE HERE, AND I AM REPORTING IT RATHER THAN CHOOSING
+> SILENTLY.** Rule 7 instructs the bump. Rule 8 says to STOP and report if any
+> invariant fails — and `test_invariant_6b_stage8_bumped_the_revision` pins
+> `CODE_REVISION`, so **any** bump fails it. The collision is unavoidable, not
+> incidental.
+>
+> Resolved by reading 6b's own docstring: *"Pinning the value here means a
+> future selection change that forgets to bump has to argue with a test."* The
+> invariant exists to demand an argument, not to forbid a bump. The argument is
+> written into `tests/experiment_pins.py` beside the moved pin, the test was
+> **not** relaxed, and one pin source feeds all seven revision guards. If Niki
+> reads rule 8 as absolute, the revert is `s5.16 → s5.15` plus restoring two
+> pin literals.
+
+## A5 — THE POSITIVE CONTROL, AND IT FOUND A CASE THE FIX CANNOT HANDLE
+
+Replayed through the real `_save_game_odds`: **26 affected pairs + 60
+previously-correct pairs**, 86 parametrised drives, one database each.
+
+| group | n | min margin | non-positive |
+| --- | --- | --- | --- |
+| affected | 26 | **0.0000** | **1** |
+| control (must not change) | 60 | **1.0000** | 0 |
+
+**`Dundee Utd` vs `Dundee FC` scores a margin of EXACTLY 0.0000.**
+`_canon_team_name` strips `" utd"` and `" fc"` alike, so **both names
+canonicalise to `"dundee"`** — the information is destroyed before any
+comparison happens, and no graded score over these names can separate them.
+
+With the original `direct >= swap`, that tie broke **silently toward the API's
+outcome order** — correct only if that order is guaranteed, which nothing
+verifies. Changed: **a tie now refuses and is counted.** It costs one derby's
+1X2 and removes a silent wrong-side write. Of 86 pairs replayed it is the only
+tie, so the cost is bounded by measurement rather than hope.
+
+Fixing it properly would mean changing `_canon_team_name`, which
+`_team_names_similar` shares with **fixture matching across three scrapers** —
+left alone deliberately, and pinned at the cause.
+
+25 of 26 affected pairs resolve; all 60 control pairs resolve with margin ≥
+1.0000, so the fix changes no working case.
+
+## DECLARATION
+
+**1X2 CORRUPTION CLOSED.** Blast radius: **486 keys / 28 matches / 35
+bookmakers / 2026-03-14 → 2026-10-10**, 1X2 only, no other market or scraper
+reachable by the path, 8 confirmed and 20 presumed. **13 picks, none taken at a
+corrupted price**, no settled ROI wrong, no MODEL/FINAL observation on a
+corrupted price; the exposure is features, and **24 settled matches (0.058% of
+the fitting set) are excluded**. Three markings applied, `odds` untouched.
+Today's four picks are paper, priced correctly, marked `void_corrupt_features`
+with no disposition and no re-price; whether the selection would have differed
+is **undetermined and recorded as such**. Positive control: 25 of 26 affected
+pairs resolve, all 60 controls unchanged, and **one pair is unresolvable by
+construction** — named, refused, counted.
+
+**Bumped to `s5.16` / `ae1752`, one bump for the fix and the exclusions, 0 picks
+stamped.** Full suite **1853 passed**. Invariants pass after the pin moved with
+its argument; the rule 7/8 collision is reported above rather than resolved
+quietly.
+
+*Recorded 2026-10-10. `src/scrapers/theodds_scraper.py`,
+`src/models/model_version.py`, `tests/experiment_pins.py`,
+`scripts/mark_1x2_assignment_corruption.py` (new),
+`tests/test_h2h_outcome_assignment.py`, `tests/test_price_history_accumulates.py`.
+Production writes: `matches.training_exclusion_reason` ×28,
+`saved_picks.evidence_status` ×13. No schema or migration change.*

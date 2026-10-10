@@ -963,64 +963,82 @@ TRACKED_KEYS: List[str] = [
 #:       NOT a model change. No learner, feature, threshold or selection rule was
 #:       touched. The cohort boundary exists because the PRICES differ, not
 #:       because the predictions do.
-#: ── 2026-10-10 — TWO CHANGES, **NO BUMP**, BOTH WITH THEIR MEASURED EFFECT ───
+#: s5.16 (2026-10-10) — BUMP. The 1X2 assignment fix AND its exclusions, as
+#:       ONE cohort event.
 #:
-#:       Recorded here rather than silently, because both touch the PICK
-#:       POPULATION while touching no learner, feature, threshold or selection
-#:       rule. The Stage 19 precedent governs: a change that returns the system
-#:       to its DECLARED behaviour is a correctness fix, not a policy change,
-#:       and does not open a cohort. The measured effect is recorded anyway —
-#:       `s5.3` set that precedent by carrying its 1.6% cap figure.
+#:       SUPERSEDES THE NO-BUMP ENTRY THIS REPLACES, and the reason the decision
+#:       changed is recorded rather than quietly edited. Earlier today both
+#:       changes were recorded as no-bump on the Stage 19 precedent — a change
+#:       returning the system to its DECLARED behaviour is a correctness fix —
+#:       and deferred because a bump inside a sized window invalidates the
+#:       sizing. H1 has **zero observations and a blocked mechanism**, so there
+#:       is no sized window left to protect, and marking the matches changes
+#:       what the models READ. That is prediction-affecting. It bumps.
 #:
-#:       NEITHER IS BUMPED BY ME. A bump inside a sized window invalidates the
-#:       sizing, so this is reported for decision rather than taken.
+#:       ONE BUMP, NOT TWO. The fix and the exclusion are the same event seen
+#:       from two sides: the fix stops new inverted prices, the exclusion stops
+#:       the models learning from the old ones. Splitting them would create a
+#:       cohort boundary between "fixed but still learning from it" and "fixed
+#:       and not", which describes no configuration anyone ran.
 #:
-#:  (1) 1X2 OUTCOME ASSIGNMENT. `_save_game_odds` classified each `h2h`
-#:       outcome with a chain testing the HOME name first, using the FUZZY
+#:  (1) THE DEFECT. `_save_game_odds` classified each Odds-API `h2h` outcome
+#:       with a chain testing the HOME name first, via the fuzzy
 #:       `_team_names_similar`. `_tok_match` accepts substring containment, so
-#:       `"ce"` matches `"ceuta"`; with a one-token name the token ratio is
-#:       1/1. The AWAY outcome therefore satisfied the home branch and was
-#:       written as "Home" — and `odds` is UNIQUE on
-#:       (match_id, bookmaker, market_type, selection), so the second write
-#:       OVERWROTE the first and the live Home price BECAME the away price.
+#:       `"ce"` matches `"ceuta"`; with a one-token name the token ratio is 1/1.
+#:       The AWAY outcome satisfied the home branch, and because `odds` is
+#:       UNIQUE on (match_id, bookmaker, market_type, selection) the second
+#:       write OVERWROTE the first — the stored Home price became the AWAY
+#:       team's price, with no Away row written.
 #:
-#:       MEASURED EFFECT (production, 2026-10-10, TheOddsAPI 1X2, 2,171
-#:       matches): 44,719 (match, bookmaker) keys, 44,210 complete;
-#:       **486 keys across 28 matches carry Home with NO Away**, and
-#:       `missing_HOME` is exactly **0** — the directionality the `elif` order
-#:       predicts, and the reason this is a misclassification rather than a
-#:       feed gap. **12 of the 28 carry a saved pick; 4 of those are on the
-#:       2026-10-10 card.** So 28 of 2,171 matches (1.3%) were priced with one
-#:       side's price on the other side's selection.
+#:       MEASURED 2026-10-10, TheOddsAPI 1X2 over 2,171 matches: 44,719
+#:       (match, bookmaker) keys, 44,210 complete, **486 keys across 28 matches
+#:       with Home present and Away ABSENT, and `missing_HOME` exactly 0**.
+#:       The API-Football population, same table and same query with a
+#:       different writer, is 49/49 — SYMMETRIC. An asymmetric absence rules
+#:       out a symmetric cause.
 #:
-#:       The fix is a SHAPE change, not a threshold change: two outcomes and
-#:       two teams is an assignment problem, resolved by `_name_affinity`
-#:       argmax over the two pairings. `_team_names_similar` is UNCHANGED —
-#:       fixture matching applies it as a conjunction over home AND away, where
-#:       a false positive on one side is caught by the other.
+#:       Fixed as an ASSIGNMENT: `_name_affinity` scores both pairings and the
+#:       better wins; a TIE refuses rather than falling back to payload order.
+#:       Replayed over 26 affected and 60 previously-correct pairs — 25 of 26
+#:       resolve, control min margin 1.0000, and ONE pair is unresolvable
+#:       (`Dundee Utd` / `Dundee FC`, margin exactly 0.0000, because
+#:       `_canon_team_name` strips " utd" and " fc" alike and both become
+#:       "dundee"). That residual is refused and counted, not guessed.
 #:
-#:       NOT BUMPED because no prediction input's DEFINITION changed; a price
-#:       that was wrong is now right. The counter-argument is real and is
-#:       recorded: going forward, 1X2 for those matches differs, so the pick
-#:       population differs. If that is judged a cohort event, the bump is
-#:       `s5.16` and this entry is its justification.
+#:  (2) THE EXCLUSIONS — THE MEASURED EFFECT ON THE FITTING SET.
 #:
-#:  (2) RESERVATION ENFORCEMENT. `claim_requests` claimed against
-#:       `safety_margin` alone while `remaining()` reported the allocation, so
-#:       the 168-credit H1 reservation was reported and never enforced. It now
-#:       claims `reserved_from_me()`.
+#:         matches marked `corrupt_1x2_assignment`      28
+#:           of them CONFIRMED by the duplicate signature  8
+#:           PRESUMED, outside odds_snapshots coverage    20
+#:         of the 28, SETTLED and therefore in the fitting set  24
+#:         fitting set before                       41,311
+#:         fitting set after                        41,287
+#:         share removed                             0.058%
+#:         picks marked `void_corrupt_features`         13
 #:
-#:       MEASURED EFFECT TO DATE: **ZERO.** October stands at 84 credits used
-#:       against a 232 normal ceiling (ledger read 2026-10-10), so the
-#:       enforcement has refused nothing and cannot have changed any pick.
+#:       `odds` IS UNCHANGED — it is the evidence. Mark, never delete.
 #:
-#:       COUNTERFACTUAL, on the one month where the budget DID bind: September
-#:       spent its full 400 in ELEVEN days (ledger `used=400`, last write
-#:       2026-09-11). Against a 232 ceiling, **168 of those 400 credits (42%)
-#:       would have been refused** — roughly 84 of 198 league requests. So the
-#:       effect is zero in the live window and large in a busy month, and that
-#:       asymmetry is the number worth carrying rather than "no effect".
-CODE_REVISION = "s5.15"
+#:       NO PICK WAS TAKEN AT A CORRUPTED PRICE, measured per pick: all 13 took
+#:       a real price from a market this defect never touched (goals, team
+#:       goals, and API-Football's own `double_chance`), and the two picks on
+#:       1X2 itself took API-Football prices matching to 0.000. So no settled
+#:       ROI is wrong, and `pick_observations` carries 16 rows on these matches
+#:       with NONE on the 1X2 market — no MODEL or FINAL attribution rests on a
+#:       corrupted price. The exposure is via FEATURES, which is exactly what
+#:       `void_corrupt_features` records.
+#:
+#:  (3) CACHE INVALIDATION IS NOT AUTOMATIC HERE, and that is worth stating.
+#:       `filter_generation()` digests `_base_filter`'s SOURCE TEXT, so marking
+#:       DATA does not move it. The Parquet mirror still self-corrects via its
+#:       row-COUNT reconcile. The ML pickles do NOT, and fall back to
+#:       `_ml_models_stale()`'s 3-day rule.
+#:
+#:       RESERVATION ENFORCEMENT travels with this bump rather than its own.
+#:       Effect to date ZERO — October stands at 84 credits against a 232
+#:       ceiling, so nothing was refused. Counterfactually, September spent its
+#:       full 400 in eleven days, so against 232 **168 credits (42%) would have
+#:       been refused**, ~84 of 198 league requests.
+CODE_REVISION = "s5.16"
 
 
 def _stable(value: Any) -> Any:

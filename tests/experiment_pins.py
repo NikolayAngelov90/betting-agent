@@ -101,19 +101,46 @@ History:
                     coverage is still 0%.
                     NOT a model change: no learner, feature, threshold or
                     selection rule moved. The cohort boundary is about prices.
+
+    s5.16 2026-10-10  THE 1X2 ASSIGNMENT FIX AND ITS EXCLUSIONS, as ONE event.
+                    `_save_game_odds` tested the HOME name FIRST with a fuzzy
+                    predicate whose token rule accepts substring containment, so
+                    the AWAY outcome satisfied the home branch and -- `odds`
+                    being UNIQUE on (match, bookmaker, market, selection) --
+                    OVERWROTE it. The stored Home price became the away team's.
+                    Measured: 486 keys / 28 matches with Home present and Away
+                    ABSENT, `missing_HOME` exactly 0. The API-Football control
+                    population is 49/49, SYMMETRIC; an asymmetric absence rules
+                    out a symmetric cause.
+                    PREDICTION-AFFECTING BY THE MARKING, not only by the fix:
+                    24 of the 28 are settled and leave the fitting set
+                    (41,311 -> 41,287, 0.058%), so the models now read different
+                    rows. 13 picks carry `void_corrupt_features`.
+                    ONE BUMP: the fix stops new inverted prices and the
+                    exclusion stops learning from the old ones. A boundary
+                    between "fixed but still learning from it" and "fixed and
+                    not" describes no configuration anyone ran.
+                    WHY NOW, having been recorded as no-bump earlier the same
+                    day: the deferral existed to protect H1's sized window, and
+                    H1 has zero observations with a blocked mechanism. There is
+                    no window left to protect.
+                    AND THIS IS THE ARGUMENT invariant 6b ASKS FOR. Its own
+                    docstring says a selection change "has to argue with a
+                    test"; the argument is above, and the pin moves with it
+                    rather than the test being relaxed.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.15"
+CODE_REVISION_PIN = "s5.16"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.8da2fd"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.ae1752"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 #: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16
 #: and 12 by 889f8ba on 09-17. That is the defect the always-bump rule closes.
-PREVIOUS_CODE_REVISION = "s5.13"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.ee60cd"
+PREVIOUS_CODE_REVISION = "s5.15"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.8da2fd"
 
 
 #: How many completed-match queries are exempt from the training-exclusion

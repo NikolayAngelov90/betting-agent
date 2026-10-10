@@ -147,6 +147,11 @@ _SNAPSHOT_READERS = {
     # the table and the writer
     "models.py": "defines OddsSnapshot",
     "price_history.py": "the only writer",
+    # the MARKING script, 2026-10-10: reads the duplicate-Home signature to
+    # separate CONFIRMED from PRESUMED corruption. Writes nothing to the
+    # table and feeds no prediction.
+    "mark_1x2_assignment_corruption.py": (
+        "dates the 1X2 corruption from the duplicate-Home signature"),
     # the RESEARCH consumer, wired 2026-10-10
     "h1_collection_check.py": (
         "H1's analysis. It MEASURES the price path; it does not feed a "
