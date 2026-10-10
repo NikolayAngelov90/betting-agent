@@ -206,7 +206,10 @@ def test_the_margin_line_is_printed_UNCONDITIONALLY():
     # per-day-type pair when the cron split. The property under test is
     # UNCHANGED - the margin prints before anything can branch on `alarm` -
     # so the anchor moves and the assertion does not.
-    body = src.split("collect_lag_series_by_daytype()", 1)[1][:600]
+    # anchor on the CALL SITE in main(), not the definition: the helpers
+    # that build these series are defined above it and share the name.
+    body = src.split("_by_type, _crons = collect_lag_series_by_daytype()",
+                     1)[1][:900]
     assert "print(format_schedule_margins(_margins))" in body
     assert body.index("print(format_schedule_margins(_margins))") < \
         body.index("alarm"), "the margin line is printed only when it alarms"

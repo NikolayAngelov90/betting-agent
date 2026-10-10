@@ -42,6 +42,10 @@ import subprocess
 import sys
 from collections import defaultdict
 from typing import Dict, List, NamedTuple, Optional
+from scripts.schedule_deadline import (
+    DEADLINE_PERCENTILES as _DEADLINE_PERCENTILES,
+    MIN_ACCEPTABLE_MARGIN_MIN,
+)
 
 LEDGER = pathlib.Path("docs/ci-audit-ledger.md")
 LOGS = pathlib.Path("ci_logs")
@@ -874,11 +878,52 @@ _LEAGUE_IN_FINDING = re.compile(r"^discovery: ([a-z0-9/-]+) found 0 fixtures")
 #: weekdays; it gives 12:00, which is 2h30 stricter. The stricter measured
 #: value is used, because a figure verified against the data that produced it
 #: is not verified.
-DEADLINE_MIN_BY_DAYTYPE = {"weekend": 10 * 60 + 15, "weekday": 12 * 60}
+
+#: ── RETIRED AS BOUNDS 2026-10-10, kept as LABELLED PERCENTILES ────────────
+#:
+#: These were used as deadlines. Measured over 148 weekdays and 66 weekends of
+#: clean rows, they are percentiles of a date-varying quantity:
+#:
+#:     14:30 weekday -> the ~12th percentile. 87.8% of weekdays start LATER;
+#:                      18 of 148 start EARLIER, and `0 4` BREACHES on those.
+#:     10:15 weekend -> the ~5th percentile. Weekends at 10:00 occur, and the
+#:                      weekend cron clears even those by 198 minutes.
+#:
+#: The margin is now computed against `discovered_deadline()`. These remain
+#: only as the fallback a single-cron or undiscovered-card path reports, and
+#: they arrive WITH their percentile label so no reader mistakes one for a
+#: bound. `test_no_margin_computation_uses_a_deadline_LITERAL` keeps the
+#: literals out of this file.
+#:
+#: THE TWO PROVENANCE FACTS THAT MUST STAY BESIDE THE CONSTANT, because a
+#: deadline without them has been wrong twice:
+#:
+#: 1. 10:04 WAS A PHANTOM. The earlier figure came from rows whose `match_date`
+#:    carries sub-second precision — `datetime.now()` ingestion stamps, not
+#:    kickoffs, 419 of them. Every query here that takes a kickoff extremum
+#:    applies the sub-second exclusion; uncorrected the weekday deadline reads
+#:    07:53 and 111 of 112 sub-14:30 rows in one league are phantoms.
+#: 2. INDEPENDENTLY VERIFIED against openfootball, which is not the data that
+#:    produced it: Sparta Rotterdam v Feyenoord on 2026-08-09 reads 12:15 CEST
+#:    there and 10:15 UTC here, and it is openfootball's own earliest
+#:    eredivisie kickoff of the season.
+DEADLINE_MIN_BY_DAYTYPE = {
+    k: v[0] for k, v in _DEADLINE_PERCENTILES.items()
+}
+
+#: Which percentile each one is, for the report line.
+DEADLINE_BASIS_BY_DAYTYPE = {
+    k: f"{v[1]} percentile ({v[2]})" for k, v in _DEADLINE_PERCENTILES.items()
+}
 
 #: The WORSE of the two, kept under its old name so a single-cron regime and
 #: every existing caller still reads one conservative number.
 SCHEDULE_DEADLINE_MIN = min(DEADLINE_MIN_BY_DAYTYPE.values())
+
+#: MEASURED 2026-10-10, scheduled daily-picks runs, regime `0 0 * * *`,
+#: n=10: wall-clock minutes from run start to run end.
+MARGIN_RUN_DURATIONS = [72.3, 53.3, 29.0, 41.8, 47.5, 37.0, 40.8,
+                        45.4, 43.2, 42.3]
 
 #: Time from run start to picks complete on a FULL card (>=40 fixtures).
 #: MEASURED 2026-10-01, n=4: 67.4-88.1 min, mean 76.4, sd 10.2.
@@ -1071,6 +1116,105 @@ def collect_lag_series(today: _dt.date = None, limit: int = 120):
             sched -= _dt.timedelta(days=1)
         series.append((c.date(), (c - sched).total_seconds() / 60.0))
     return series, cron_now
+
+
+#: ── THE SCHEDULER SERIES, FIVE OF THEM, NEVER POOLED ──────────────────────
+#:
+#: Five populations is where pooling becomes tempting. Each carries its own n,
+#: its own QUERY WINDOW, and its own deadline basis. `11h21m` belongs to
+#: `37 9 * * *` and to nothing else.
+#:
+#: The three retired regimes are recorded figures, not live queries: their runs
+#: are outside the 28-day trailing window and re-deriving them would need the
+#: `--limit` that produced them, which is exactly the page-size trap.
+RETIRED_SERIES = (
+    # (cron, n, query window / provenance, deadline basis at the time)
+    ("37 9 * * *", "39 @ --limit 120 / 16 @ --limit 60",
+     "measured 2026-10-02 and 2026-10-09; n IS a function of the query window",
+     "09:45 assumed, never measured"),
+    ("0 3 * * *", "32", "measured 2026-10-02, closed regime",
+     "10:15, treated as a bound"),
+    ("0 0 * * *", "9", "measured 2026-10-10, single-cron regime, 28d window",
+     "10:15, treated as a bound"),
+)
+
+
+def format_series_census(series_by_type: dict, crons: dict) -> str:
+    """All five, apart, with n and basis. Printed every run."""
+    lines = ["scheduler series (FIVE populations, never pooled):"]
+    for cron, n, window, basis in RETIRED_SERIES:
+        lines.append(f"  RETIRED  {cron:16s} n={n:34s} deadline basis: {basis}")
+        lines.append(f"           {'':16s}   {window}")
+    from scripts.schedule_deadline import DEADLINE_PERCENTILES
+
+    for day_type in ("weekend", "weekday"):
+        cron_min = crons.get(day_type)
+        n = len(series_by_type.get(day_type) or [])
+        expr = ("0 0 * * 6,0" if day_type == "weekend" else "0 4 * * 1-5")
+        _, pct, prov = DEADLINE_PERCENTILES[day_type]
+        state = f"n={n}" if n else "n=0 UNEVALUATED, not clear"
+        lines.append(f"  LIVE     {expr:16s} {state:36s} "
+                     f"deadline basis: {pct} ({prov.split(';')[0]})")
+        if cron_min is None:
+            lines.append(f"           {'':16s}   no cron resolved for this day type")
+    return chr(10).join(lines)
+
+
+def report_discovered_margins(series_by_type: dict, crons: dict) -> dict:
+    """Today's margin against the DISCOVERED card, and tomorrow's prospectively.
+
+    Returns `{"lines": [...], "alarm": str|None}`.
+
+    TOMORROW IS `UNKNOWN` AND THAT IS A MEASURED FACT, not a gap in this code.
+    `max_days_ahead` is a ROLLING 24 HOURS from the moment of the run, so a
+    weekday run firing ~08:31 reaches only to ~08:36 the next day, and a
+    weekday card starts at 15:00-19:30. Measured 2026-10-10: the furthest
+    `match_date` in the whole table was 19:30 THAT DAY, and no fixture has ever
+    been priced more than 14.6 hours before kickoff (recent mean 8.5). So the
+    day-ahead deadline is not knowable from the database, and this says so
+    rather than substituting a constant.
+    """
+    from scripts.schedule_deadline import (
+        CLEARING_ACTION, day_type, discovered_deadline, format_prospective,
+        prospective_margin,
+    )
+
+    out = {"lines": [], "alarm": None}
+    today = _dt.date.today()
+    tomorrow = today + _dt.timedelta(days=1)
+
+    try:
+        from src.data.database import get_db
+
+        db = get_db()
+        session_cm = db.get_session()
+    except Exception as exc:
+        out["lines"].append(
+            f"discovered_margin[UNEVALUATED: no database ({type(exc).__name__}) "
+            f"- NOT safe]")
+        return out
+
+    _durations = MARGIN_RUN_DURATIONS
+    with session_cm as session:
+        for label, day in (("today", today), ("tomorrow", tomorrow)):
+            dtp = day_type(day)
+            try:
+                deadline = discovered_deadline(session, day)
+            except Exception as exc:
+                out["lines"].append(
+                    f"  {label:9s} UNEVALUATED: {type(exc).__name__} - NOT safe")
+                continue
+            delays = [lag for _d, lag in (series_by_type.get(dtp) or [])]
+            m = prospective_margin(deadline, crons.get(dtp), delays,
+                                   _durations, serves=day)
+            out["lines"].append(f"  {label:9s} " + format_prospective(m))
+            if m["verdict"] == "ALARM" and label == "tomorrow":
+                out["alarm"] = (
+                    f"PROSPECTIVE schedule margin {m['binding']:+.0f}m for "
+                    f"{m['serves']} (discovered kickoff "
+                    f"{m['deadline_min'] // 60:02d}:{m['deadline_min'] % 60:02d}) "
+                    f"below {m['min_margin']}m. {CLEARING_ACTION}")
+    return out
 
 
 def collect_lag_series_by_daytype(today: _dt.date = None, limit: int = 120):
@@ -1805,6 +1949,21 @@ def main() -> int:
     print(format_schedule_margins(_margins))
     _margin = _margins.get(_margins.get("worse")) or {}
     _cron = _crons.get(_margins.get("worse"))
+
+    # ── THE DEADLINE IS DATA (2026-10-10) ───────────────────────────────────
+    #
+    # The line above measures the delay distribution against a LABELLED
+    # PERCENTILE. These two measure it against the DISCOVERED CARD, which is
+    # the figure that actually binds, and they report the deadline beside the
+    # margin so the number carries what it was measured against.
+    print()
+    print(format_series_census(_by_type, _crons))
+    print()
+    _prospective = report_discovered_margins(_by_type, _crons)
+    for _line in _prospective["lines"]:
+        print(_line)
+    if _prospective["alarm"]:
+        alarmed.append(_prospective["alarm"])
     if _cron is None:
         print("!! daily-picks carries no single `m h * * *` cron — the margin is "
               "UNEVALUATED, not safe")

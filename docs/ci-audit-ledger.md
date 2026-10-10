@@ -24346,3 +24346,226 @@ changes no predicate.
 
 *Recorded 2026-10-10. `tests/test_cron_split_by_daytype.py`. No production
 write. No schema or migration change.*
+
+---
+
+# 2026-10-10 (eighth entry) — DEADLINE IS DATA. And the prospective check cannot see tomorrow.
+
+H1 untouched: no change to the collection, the stop, the reservation or the H1
+cron in this stage.
+
+## FIRST, TWO CORRECTIONS TO MY OWN FIGURES
+
+**14:30 is the ~12th percentile of weekdays, NOT the 88th.** I reported it as
+the 88th this morning; that was the tail inverted. 87.8% of weekdays start
+**later** than 14:30 — the error is that **18 of 148 start earlier**.
+
+**And 10:15 is not a weekend bound either** — it is the ~5th percentile.
+Weekends at **10:00** occur.
+
+`MEASURED` 2026-10-10 from `matches`, clean rows only (phantom exclusion
+applied), 2026-02-01 onward, `world/*` excluded:
+
+| day type | days | p0 | p05 | p25 | p50 | p88 | p100 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| weekday | 148 | **09:59** | 13:00 | 15:00 | 16:00 | 18:00 | 19:30 |
+| weekend | 66 | **10:00** | 10:15 | 10:30 | 11:00 | 12:00 | 14:45 |
+
+**The two constants fail differently, which is why only one is urgent:**
+
+```
+weekend  `0 0`  ready(3sd) 06:42  vs observed min 10:00  ->  +198   harmless
+weekday  `0 4`  ready(3sd) 10:42  vs observed min 10:15  ->   -27   BREACH
+```
+
+## PART A — THE MARGIN AGAINST THE DISCOVERED CARD
+
+`scripts/schedule_deadline.py`. `discovered_deadline(session, day)` returns the
+earliest kickoff for the day the run serves, **with the phantom exclusion
+inside the query** rather than left to the caller — uncorrected the weekday
+deadline reads **07:53**, and 111 of 112 sub-14:30 rows in one league are
+phantoms. Rule 3 has no fixed point.
+
+Live, printed per run, with the deadline beside the margin:
+
+```
+today     prospective_margin[serves=2026-10-10 weekend deadline=10:30
+          (discovered card) ready max=05:44 3sd=06:24
+          | margin max=+286m 3sd=+246m binding=+246m min=60m n=3]
+```
+
+**Today's discovered deadline is 10:30, not the 10:15 constant** — the figure
+is now a property of the card rather than of a table of percentiles.
+
+## PART B — `PROSPECTIVE CHECK NOT POSSIBLE` from the database, and the number says why
+
+The directive's premise was that `max_days_ahead=1` means tomorrow's card is
+discovered today. **It does not.** `cutoff = datetime.now() + 1 day` is a
+**rolling 24 hours from the moment of the run**, and the run fires early:
+
+| measured 2026-10-10 | |
+| --- | --- |
+| fixtures for today (10-10) | **117** |
+| fixtures for tomorrow (10-11) | **0** |
+| furthest `match_date` in the entire table | **2026-10-10 19:30** |
+| max hours a fixture has EVER been known before kickoff | **14.6** |
+| recent mean | 8.5 |
+
+So **nothing beyond today exists at all**, and no fixture has ever been priced
+more than 14.6 hours ahead. A weekday run firing ~08:31 reaches to ~08:36 the
+next day, while a weekday card starts 15:00–19:30 — the cutoff lands *before*
+the card.
+
+The check reports it rather than substituting:
+
+```
+tomorrow  prospective_margin[serves=2026-10-11 weekend
+          UNKNOWN: the card for that day is not discovered - NOT safe]
+```
+
+**`UNKNOWN` is a third state and it neither alarms nor reassures.** A test
+asserts `None` never becomes a constant — falling back to 14:30 would turn "we
+do not know" into "we have until 14:30", which is the whole defect this stage
+removes.
+
+### What tomorrow's card does not tell us, and what would
+
+It tells us **nothing**: tomorrow has zero rows. Three ways to obtain the
+input, with their costs:
+
+1. **A read-only probe at a wider horizon** — already demonstrated today. The
+   density probe called the production scraper with `max_days_ahead=8`, saw
+   **eight days** across 30 leagues, and **persisted nothing**. It does not
+   change the discovered-fixture population and therefore **does not move the
+   cohort**. Cost: Selenium in a daily workflow, ~5–8 min/run.
+2. **Widen `max_days_ahead` in the pipeline** — changes which fixtures enter
+   the card, which is a **cohort event** by the `s5.15` precedent. Not free.
+3. **`0 2 * * 1-5`** — the directive's fallback. Clears even the observed
+   09:59, and costs **two of the four hours** gained.
+
+**(1) is the only one that buys the prospective check without paying a cohort
+or two hours**, and it is a decision about adding Selenium to a daily job
+rather than something to take unilaterally. **Nothing changes today**; the
+exposure remains dated to **Easter 2027**.
+
+## B1 — VERIFIED ON THE DATES THAT ALREADY FAILED
+
+The check's logic is a pure function, so it is verifiable regardless of where
+the deadline comes from. **Four positives and one negative control:**
+
+| date | earliest | provenance | margin(3sd) | verdict |
+| --- | --- | --- | --- | --- |
+| Good Friday 2026-04-03 | 11:30 | `measured`, 61 fixtures | **+48** | **ALARM** — positive but below the stated 60 |
+| Easter Monday 2026-04-06 | 10:15 | `measured`, 95 fixtures | **−27** | **ALARM** |
+| Good Friday 2027-04-02 | 11:30 | `assumed` from 2026-04-03 | +48 | **ALARM** |
+| Easter Monday 2027-04-05 | 10:15 | `assumed` from 2026-04-06 | −27 | **ALARM** |
+| **ordinary weekday 2026-10-13** | **16:45** | `measured`, champions-league | **+363** | **CLEAR** |
+
+Plus an ordinary weekend (10:00, the observed minimum) → **CLEAR at +198**.
+A check that alarms on everything carries what one that never alarms carries.
+
+### CLR-2 — the action is named, and it is proven to change the predicate
+
+> `CLEARING_ACTION`: **DISPATCH `daily-picks` MANUALLY that morning**
+> (`gh workflow run daily-picks.yml`). A dispatched run skips the scheduler's
+> measured 3h58m–5h04m lateness, so it is the one action that changes this
+> margin. **Nobody else performs it: it is the operator's, and there is no
+> automated alternative today.**
+
+Driven, not asserted: the same Easter Monday that alarms on the cron **CLEARS**
+when dispatched at 06:00. The action is interpolated into the alarm string that
+reaches the `::error::` annotation — in the **alert text**, not only here — and
+the alarm carries the date, the discovered kickoff and the shortfall.
+
+**It only fires for tomorrow.** Today's margin is retrospective: the run has
+already started, so alarming on it adds noise without adding action.
+
+## PART C — THE CONSTANTS, RETIRED AS BOUNDS
+
+`DEADLINE_MIN_BY_DAYTYPE` is now derived from one labelled table in
+`schedule_deadline.py`, and a guard —
+`test_no_margin_computation_uses_a_deadline_LITERAL` — fails if 14:30, 12:00 or
+10:15 reappears as a minute literal in a margin computation in `ci_audit.py`.
+
+**The weekday fallback stays at 12:00, not 14:30**, and that is deliberate: a
+fallback must never be **laxer than the figure the schedule was justified
+with**. `0 4` was sized against 12:00 and clears it by +76; switching the
+fallback to our own ~12th percentile of 14:30 would have loosened it silently.
+Caught by a test that pins the value and requires the provenance to record that
+even 12:00 is not a bound (observed minimum 09:59).
+
+**The weekend constant stays, and the directive's condition was measured rather
+than assumed.** The weekend distribution **is unimodal** — p0 10:00 → p50 11:00
+→ p88 12:00, one tight mode with a right tail to 14:45 — whereas the weekday
+distribution has a **gap** (p0 09:59, then p05 13:00) because its early mass is
+public holidays behaving like weekends. It survives for a second reason too:
+`0 0` is ready by 06:42, so even 10:00 clears by 198 minutes. Its percentile
+costs nothing.
+
+**Successor contracts, written now:**
+
+* **weekday 12:00** — retired the moment a prospective source exists; until
+  then it is the undiscovered-card fallback and must stay ≤ the figure the cron
+  was sized against. Remedy on the day it fires: see the three options above.
+* **weekend 10:15** — retired if the weekend distribution stops being unimodal
+  (the test's `p88 − p0 ≤ 120 min` condition) **or** if `0 0` ever moves late
+  enough that 10:00 stops clearing by 150 min. Either failing is the signal.
+* **14:30** — already retired as a bound; it survives only as the recorded
+  ~12th percentile in the provenance string, and the literal guard keeps it out
+  of arithmetic.
+
+**And the two provenance facts now sit beside the constant**, because a
+deadline without them has been wrong twice: 10:04 was a sub-second phantom (419
+of them), and 10:15 was independently verified against openfootball — Sparta
+Rotterdam v Feyenoord, 12:15 CEST there, 10:15 UTC here, openfootball's own
+earliest eredivisie kickoff of the season.
+
+## PART D — FIVE SERIES, NEVER POOLED
+
+```
+RETIRED  37 9 * * *   n=39 @ --limit 120 / 16 @ --limit 60   basis: 09:45 assumed, never measured
+RETIRED  0 3 * * *    n=32  (closed regime)                  basis: 10:15 treated as a bound
+RETIRED  0 0 * * *    n=9   (single-cron, 28d window)        basis: 10:15 treated as a bound
+LIVE     0 0 * * 6,0  n=3                                    basis: ~5th percentile (n=66 days)
+LIVE     0 4 * * 1-5  n=0 UNEVALUATED, not clear             basis: ~5th-percentile proxy (n=5 days)
+```
+
+Printed every run. **`n` for `37 9 * * *` carries its query window because it
+IS a function of it** — 39 at `--limit 120`, 16 at `--limit 60`. `11h21m`
+belongs to that regime and to nothing else. The weekday series is **`n=0`,
+UNEVALUATED, not clear and not zero**, because no run has fired under `0 4`.
+
+## DECLARATION
+
+**DEADLINE IS DATA.** The margin is computed against the discovered card with
+the phantom exclusion inside the query, printed per run with the deadline
+beside it — today **10:30 discovered**, not the 10:15 constant. The constants
+are retired as bounds, labelled with which percentile they are, sourced from
+one table, and kept out of arithmetic by a literal guard; the weekday fallback
+is held at 12:00 so it cannot be laxer than what justified the cron, and the
+weekend constant survives on a **measured** unimodality test.
+
+**Four positives and the negative control pass**: Good Friday and Easter Monday
+2026 and 2027 all alarm (−27 and +48, the latter positive but below the stated
+minimum), an ordinary weekday at 16:45 stays silent at +363, and an ordinary
+weekend at its observed minimum stays silent at +198. The clearing action is
+named, says who performs it, states that no automated alternative exists, sits
+in the alert text, and is **driven to prove it clears the alarm**.
+
+**But the prospective check cannot see tomorrow**, and the number is the
+reason: **nothing beyond today exists in the table** (furthest `match_date` =
+2026-10-10 19:30) and **no fixture has ever been known more than 14.6 hours
+before kickoff**. It reports `UNKNOWN — NOT safe` rather than substituting a
+constant. Making it prospective costs either Selenium in a daily job (the
+read-only probe, no cohort change), a widened horizon (a cohort event), or
+`0 2 * * 1-5` (two of the four hours). **That is Niki's choice and nothing
+changed today.**
+
+Full suite **1899 passed**. Invariants pass, count not cited. Cohort
+**UNCHANGED** at `s5.17` / `818026`, 0 picks stamped — this stage measures and
+alarms, and H1 is mid-collection.
+
+*Recorded 2026-10-10. `scripts/schedule_deadline.py` (new), `scripts/ci_audit.py`,
+`tests/test_prospective_deadline.py` (new),
+`tests/test_contamination_and_margin.py`. No production write. No schema or
+migration change.*
