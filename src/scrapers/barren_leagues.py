@@ -60,8 +60,24 @@ BARREN_TTL_DAYS = 10
 class BarrenLeagueCache:
     """Remembers which leagues returned no odds, and forgets on a schedule."""
 
-    def __init__(self, path: pathlib.Path | str = DEFAULT_PATH):
-        self.path = pathlib.Path(path)
+    def __init__(self, path: pathlib.Path | str | None = None):
+        # RESOLVED AT CALL TIME, NOT CAPTURED AT IMPORT (fixed 2026-10-10).
+        #
+        # This was `path: ... = DEFAULT_PATH`, which binds the module value when
+        # the `def` executes. `tests/conftest.py` lists
+        # ("src.scrapers.barren_leagues", "DEFAULT_PATH", "file") in
+        # PRODUCTION_STATE_PATHS and monkeypatches that global — and the patch
+        # could never take effect, because the default had already been bound.
+        # So the guard that exists to stop a test writing production state
+        # ENUMERATED this path and protected nothing.
+        #
+        # MEASURED, not reasoned: `test_h1_caller_reachability` drives
+        # `refresh_imminent` with a fetcher returning `[]`, which recorded three
+        # consecutive empty fetches for england/premier-league and wrote
+        # `data/odds_barren_leagues.json` at 2026-10-10T08:57. Two unrelated
+        # tests then READ that real file and failed — the pollution was
+        # cross-test and arrived through the guarded path.
+        self.path = pathlib.Path(path if path is not None else DEFAULT_PATH)
         self._state: Dict[str, dict] = self._load()
 
     def _load(self) -> Dict[str, dict]:

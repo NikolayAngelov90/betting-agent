@@ -139,6 +139,55 @@ class ApiBudgetStore:
             logger.warning(f"api_budget raise_used_to failed ({e})")
         return self.used(day)
 
+    def record_attributed(self, n: int,
+                          day: Optional[_date] = None) -> Optional[int]:
+        """Increment ``used`` with NO ceiling check and VERIFY the write.
+
+        Added 2026-10-09 for H1 credit attribution, and it fails in the
+        opposite direction to everything else in this class on purpose.
+
+        ``claim`` asks permission and fails OPEN on error — ``return True``
+        with nothing written — because budget bookkeeping must never break a
+        scrape. That is right for a guard whose job is to let work proceed. It
+        is WRONG for a counter whose job is to say how much an account spent:
+        failing open there reports ZERO SPEND for spend that happened, and a
+        bound compared against that zero never binds. The silent zero is the
+        failure mode, not the exception.
+
+        So this returns the new ``used`` on a verified write and ``None`` when
+        it cannot prove one. A caller that cannot attribute its spend must not
+        spend — see ``OddsApiQuota.claim_requests``.
+
+        There is no ceiling here because the bound belongs to ONE definition
+        (``collection_stop``) and a second ceiling in the ledger would be the
+        same two-definitions defect this counter exists to repair.
+        """
+        if n <= 0:
+            return self.used(day)
+        if not self.available():
+            return None
+        day = day or _date.today()
+        try:
+            with self.db.get_session() as session:
+                self._ensure_row(session, day)
+                row = session.execute(
+                    update(ApiBudget.__table__)
+                    .where(
+                        ApiBudget.day == day,
+                        ApiBudget.provider == self.provider,
+                    )
+                    .values(used=ApiBudget.used + n, updated_at=utcnow())
+                    .returning(ApiBudget.__table__.c.used)
+                ).first()
+            # No row updated is NOT success: `_ensure_row` just created it, so
+            # a miss here means the write did not land where it was aimed.
+            return int(row[0]) if row is not None else None
+        except Exception as e:
+            logger.warning(
+                f"api_budget record_attributed FAILED ({e}) — returning None "
+                f"so the caller refuses to spend unattributed credits")
+            return None
+
     # ------------------------------------------------------------------ claim
 
     def claim(self, n: int = 1, reserve: int = 0,

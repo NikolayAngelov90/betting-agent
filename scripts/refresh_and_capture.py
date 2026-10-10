@@ -55,7 +55,8 @@ def _load_env() -> None:
 
 
 async def _run(window: int, min_interval: int, dry_run: bool,
-               require_pending_pick: bool) -> int:
+               require_pending_pick: bool, h1: bool = False,
+               max_credits: int = 0) -> int:
     from src.data.database import get_db
     from src.data.odds_quota import OddsApiQuota
     from src.scrapers.theodds_scraper import TheOddsScraper
@@ -70,8 +71,19 @@ async def _run(window: int, min_interval: int, dry_run: bool,
         db,
         monthly_budget=int(config.get("odds_api.monthly_credit_budget", 400)),
         safety_margin=int(config.get("odds_api.safety_margin_credits", 50)),
+        # H1 SPENDS ITS OWN RESERVATION, so the 168 is not withheld from it.
+        # Its bound is `collection_stop`, enforced inside `refresh_imminent`
+        # before any request — not this ledger.
+        for_h1=h1,
+        # THE TRIAL'S CAP. A per-run ceiling below the reservation, so a loop
+        # defect cannot consume the window on day one. 0 keeps the default.
+        max_credits_per_run=max_credits if max_credits else 24,
     )
     print(quota.describe())
+    if h1:
+        from src.data.odds_quota import h1_reservation
+        print(f"  H1 COLLECTION: reservation {h1_reservation()} credits, "
+              f"per-run cap {quota.max_credits_per_run}")
 
     scraper = TheOddsScraper(config)
     try:
@@ -81,6 +93,7 @@ async def _run(window: int, min_interval: int, dry_run: bool,
             quota=None if dry_run else quota,
             require_pending_pick=require_pending_pick,
             dry_run=dry_run,
+            h1_collection=h1,
         )
     finally:
         close = getattr(scraper, "close", None)
@@ -156,6 +169,23 @@ def main() -> None:
                          "(costs more credits; off by default)")
     ap.add_argument("--status", action="store_true",
                     help="print the quota ledger and CLV coverage, then exit")
+    # ── H1 COLLECTION (Stage 29, 2026-10-09) ────────────────────────────────
+    #
+    # THE CALLER. The stop, the allocator, the reservation and five terminal
+    # states shipped across three stages, all green, and NOTHING CALLED THEM.
+    # PNC-1 at the top level: a producer with no consumer looks exactly like a
+    # working feature, and the more thoroughly the producer is tested the more
+    # convincingly it does.
+    #
+    # THE REGISTERED VALUES ARE PASSED HERE, NEVER DEFAULTED — that was the
+    # registration's own condition and it is what makes the revert a removal of
+    # two arguments rather than an edit to a constant.
+    ap.add_argument("--h1", action="store_true",
+                    help="H1 collection: window 360, min-interval 120, the "
+                         "enforced stop ON. Spends the H1 reservation.")
+    ap.add_argument("--max-credits", type=int, default=0,
+                    help="per-run credit ceiling (H1 trial: state it as a "
+                         "number so a loop defect cannot consume the window)")
     args = ap.parse_args()
 
     if args.status:
@@ -173,14 +203,42 @@ def main() -> None:
         print_coverage()
         return
 
-    window = args.window if args.window is not None else int(
-        cfg.get("betting.odds_refresh_window_minutes", 120))
-    min_interval = args.min_interval if args.min_interval is not None else int(
-        cfg.get("betting.odds_refresh_min_interval_minutes", 180))
+    # ── H1's REGISTERED VALUES, PASSED EXPLICITLY ───────────────────────────
+    #
+    # THE REVERT PLAN, shipped in the same commit:
+    #   1. stop passing `--h1` to `refresh_and_capture`
+    #   2. that is the whole revert. The values live HERE, in the `--h1` branch,
+    #      and the defaults below are the NORMAL ones — so removing the flag
+    #      restores normal pricing without editing a constant.
+    #   3. leave TARGET_N, CREDIT_CEILING, H1_RESERVED_CREDITS and the window
+    #      pair untouched; the registration fixes them, and a revert that edits
+    #      them is a new experiment wearing the old one's name.
+    #
+    # WHY `require_pending_pick=False` FOR H1, and what it costs: the guard
+    # exists so a refresh cannot rewrite a price a pending picks run will read.
+    # H1 needs REPEATED observations of the same fixture across hours, including
+    # after its pick is taken, so the guard would truncate every trajectory at
+    # the pick. Setting it False is therefore required — and the exposure is
+    # real: a refresh between discovery and picks could move a price the picks
+    # run then reads. It is acceptable here only because the H1 window (360) and
+    # the picks run (00:00 cron, delivered ~04:30) do not overlap in practice —
+    # measured 2026-10-09, the daily-picks runs land 03:58-05:04 and H1's slots
+    # are the 2-hourly closing-lines times.
+    if args.h1:
+        window = args.window if args.window is not None else 360
+        min_interval = args.min_interval if args.min_interval is not None else 120
+        require_pending_pick = False
+    else:
+        window = args.window if args.window is not None else int(
+            cfg.get("betting.odds_refresh_window_minutes", 120))
+        min_interval = args.min_interval if args.min_interval is not None else int(
+            cfg.get("betting.odds_refresh_min_interval_minutes", 180))
+        require_pending_pick = not args.any_fixture
 
     raise SystemExit(asyncio.run(_run(
         window, min_interval, args.dry_run,
-        require_pending_pick=not args.any_fixture)))
+        require_pending_pick=require_pending_pick,
+        h1=args.h1, max_credits=args.max_credits)))
 
 
 if __name__ == "__main__":

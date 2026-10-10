@@ -22730,3 +22730,269 @@ silently — which means a step *gaining* it must be declared.
 `tests/test_odds_quota_and_refresh.py`, `tests/test_red_run_policy.py`.
 `model_version` UNCHANGED at `8da2fd`; `s5.15`, 35 picks. No predicate, schema or
 migration change.*
+
+---
+
+# 2026-10-10 — H1 CANNOT START. The caller was built; the apparatus cannot hold its own input.
+
+## PART A — THE CALLER IS WIRED, AND WIRING IT FOUND THREE DEFECTS
+
+`scripts/refresh_and_capture.py` now carries `--h1` (window **360**,
+min-interval **120**, `h1_collection=True`, the stop ON) and `--max-credits`.
+The registered values are **passed in the `--h1` branch**, never defaulted, so
+the revert is *stop passing the flag* — the normal values sit in the `else`
+branch and no constant moves.
+
+Verified on the live path, zero credits: `--h1 --dry-run` printed
+`H1_STOP state=COLLECTING halt=False reason=n=0/39 credits=38/168` from
+`refresh_imminent`, not from a harness.
+
+**And that line was the first defect.** `credits=38/168` charged H1 with 38
+credits spent by **normal pricing**, before H1 had made a request.
+
+## THREE DEFECTS, MEASURED BEFORE ANY SPEND
+
+> ### 1. The reservation was reported and never enforced
+> `remaining()` reserved margin + 168 and said **232**. `claim_requests` — the
+> only site that spends — claimed against `safety_margin` alone. Asked for 200
+> requests inside the window it granted **200 = 400 credits**, eating all 168.
+> The `remaining()` docstring asserted that `claim_requests` "walks down from
+> this number"; it walked down from what the **caller** asked for. Now 116
+> requests / 232 credits, with the other direction tested: outside the window
+> normal pricing still gets the whole 400.
+
+> ### 2. One quantity, two definitions, the caveat on the printing side
+> `collection_state` passed `credits_used()` — **month-to-date total** — as H1's
+> spend. H1's usable budget was **130, not 168**: 21 league-days instead of 28.
+> Worse than the arithmetic: had normal pricing alone reached 168, H1 would have
+> halted `RESERVATION_EXHAUSTED` **having spent zero**, with a stated reason
+> that was false.
+>
+> `render` already knew — "month-to-date is not collection-to-date" — and that
+> caveat was **disarmed**: gated on `since < month_key()`, and with `--since`
+> defaulting to the 10-01 reset the flag read **False** precisely while the
+> window started 10-09 with 38 credits gone. A caveat that knows the right
+> thing and cannot fire is not a safeguard.
+>
+> Repaired by **measuring**, not inferring: `PROVIDER_H1` counts only a
+> `for_h1=True` claim, and `claim_requests` **refuses to spend what it cannot
+> attribute** (claim released, 0 granted). That refusal is what makes a missing
+> row safe to read as zero.
+
+> ### 3. A guard enumerated a path and protected nothing — THREE instances
+> `BarrenLeagueCache.__init__(path=DEFAULT_PATH)` bound the module value at
+> `def` time, so conftest's monkeypatch of that global could never take effect.
+> `PRODUCTION_STATE_PATHS` **listed** the path and protected it in no way.
+>
+> Found by its collateral, which is the part worth keeping: the new reachability
+> test drove `refresh_imminent` with a fetcher returning `[]`, recorded three
+> empty fetches and wrote **`data/odds_barren_leagues.json` at 08:57 for real**.
+> Two unrelated tests then read that file and failed —
+> `test_dry_run_spends_nothing` and
+> `test_refresh_reconciles_from_response_headers`, neither of which mentions
+> barren leagues.
+>
+> An **AST scan** now asserts the general property, and it found **two more on
+> its first run**: `probability_calibration.save/load`. The first version of
+> that scan was **vacuous** — it compared each default against
+> `getattr(module, attr)`, which the autouse fixture has *already patched*, so
+> it reported zero offenders with the defect present. A control caught it:
+> reinstating the defect failed only the specific test. Reading the source is
+> immune because the source does not change when an object is patched.
+
+## THE BLOCKER — H1's ANALYSIS READS A TABLE THAT CANNOT HOLD A TRAJECTORY
+
+`load_observations` queries **`odds`**, which carries
+`CREATE UNIQUE INDEX ix_odds_match_bookie_market ON public.odds (match_id,
+bookmaker, market_type, selection)` — **confirmed in production**, not inferred
+from the model. A second observation of a series **overwrites** the first, a
+qualifying triple needs **three**, so `n` is **structurally zero on every
+input, forever**.
+
+`models.py` says it in its own words, about the table built to fix it:
+
+> "`odds` is unique on that key and is overwritten, which is why it holds two
+> observations and never a third… **Nothing reads this table yet.**"
+
+**MEASURED, THREE WAYS:**
+
+| source | since | series | instants-per-series | qualifying |
+|---|---|---|---|---|
+| `odds` (what H1 reads) | 10-09 | 10,066 | **{1: 10066}** | **0** |
+| `odds_snapshots` (unread) | 10-09 | 14,665 | {1: 14548, **2: 100, 3: 17**} | **0** |
+| `odds_snapshots` (unread) | 10-01 | 18,329 | {1: 17776, 2: 536, 3: 17} | **0** |
+
+Not one series in `odds` has **ever** been observed twice. The snapshot table
+*does* hold paths — and still yields zero: of 570 consecutive gaps, 436 clear
+the 30-minute floor (median **637 min**), but only **17 series reach three
+instants and all 17 have gaps of 0.0 minutes** — duplicate writes on one
+fixture, not a trajectory.
+
+**A SECOND, INDEPENDENT BLOCKER, by simulation against real fixtures.** The
+dedup test is `Odds.timestamp >= now - min_interval`, so a league refreshed at
+the previous slot is **always** skipped on a cron spaced exactly
+`min_interval` apart. Against `17 11,13,15,17,19,21,23 * * *` the effective
+cadence is **240 min**, which fits **2** observations in a 360-min window:
+
+```
+2026-10-10, window 360:
+  REGISTERED min_interval=120   credits=130  touched=116  QUALIFYING=  0  points={1:29, 2:87}
+             min_interval=110   credits=176  touched=116  QUALIFYING= 36  points={1:25, 2:55, 3:36}
+```
+
+Zero against thirty-six, on a ten-minute change to one value. **Both blockers
+must clear**: the simulation's 36 is what the cadence *could* yield and is
+unreachable while the read goes to `odds`.
+
+## WHAT GOES IN FRONT OF NIKI, AND WHY IT IS NOT A FIX I TOOK
+
+1. **Point the analysis at `odds_snapshots`.** The data is already being
+   written — 127,069 rows since 08-25 — so this is a read change, not a schema
+   or collection change. `test_nothing_reads_the_snapshot_table_yet` guards that
+   table and would have to be retired by the remedy it prompts (CLR-2).
+2. **`min_interval` must be strictly below the cron spacing.** 120 against a
+   120-minute cron collects nothing. This is a **registered value**, and the
+   revert plan says to leave the window pair untouched — so it is not mine to
+   move.
+3. **The budget fits roughly one day, not eight.** 154 credits buys 36
+   trajectories on 10-10 across 21 leagues; the reservation is 168. That is
+   inside the 33–39 sizing but **clusters every observation on one date**, which
+   is a validity question the sizing did not price.
+
+`TARGET_N` is reachable. It is not reachable *as registered*, and not by
+spending — 7 of 8 window days remain and no credit has been spent.
+
+## PART B — THE TRIAL DID NOT RUN, DELIBERATELY
+
+Rule 6: *spent credits that produce unusable evidence are a defect, not a cost.*
+A trial under the registered values would spend and collect **zero** qualifying
+trajectories — proven above, not predicted. The stated cap was **6 credits**
+(`--max-credits 6`, three league requests). It was not spent.
+
+## PART C — THE DAILY CHECK, 2026-10-10
+
+Observations **0**, trajectories **0**, keys with ≥3 points **0**, H1
+attributed credits **0 of 168**, pool 38. Projected n at 10-17 **under the
+registered values: 0**. Said on the day it became clear, not on 10-17.
+
+## REACHABILITY — FIVE OF SEVEN, AND TWO HONEST NOS
+
+Driven by **seeded database state** through
+`refresh_imminent(h1_collection=True)`, never by patching the stop:
+`COLLECTING`, `RESERVATION_EXHAUSTED`, `NO_DATA`, `BUDGET_UNREADABLE`,
+`UNEVALUATED` all reachable from the caller.
+
+- **`COMPLETE` is NOT reachable** — the unique index forbids seeding a third
+  instant. The test asserts the `IntegrityError` and that `odds_snapshots`
+  accepts the same three rows.
+- **`CEILING_HIT` is NOT reachable** — it needs `CREDIT_CEILING < reservation`,
+  i.e. 200 < 168, and `collection_stop` defaults `reservation` to the
+  **constant**. "Five terminal states, all reachable" was the claim; four plus
+  a dead branch is the fact.
+- **Exposure recorded, not fixed:** the stop reads the constant, not
+  `h1_reservation(today)`, so outside 10-09…10-17 — when the allocator has
+  reserved nothing — it still permits 168 credits of H1 spend.
+
+## PART D — THE ENTRIES
+
+> **PNC-1, at the top level, twice.** A producer with no consumer looks exactly
+> like a working feature, and the more thoroughly the producer is tested the
+> more convincingly it does. The stop, the allocator, the reservation and five
+> terminal states shipped green across three stages with **nothing calling
+> them**. One level down, `odds_snapshots` has been **written on every refresh
+> since 2026-08-25** and read by nobody — and its own docstring says so. The
+> first instance cost a window; the second makes the experiment impossible.
+
+> **A population count derived from a paginated query carries the page size.**
+> `37 9 * * *` reported **n=39** under `--limit 120` and **n=16** under
+> `--limit 60`. A retired regime's n is a function of the query window and must
+> be quoted with it, or the same cron yields two different distributions.
+
+> **Before acting on a deadline, verify the timezone of the clock that produced
+> it.** The error's direction is **abandonment**: a probe read in local time
+> (+3) would have put the earliest kickoff at 17:45 instead of 18:30 and the
+> 10-09 card would have looked already lost. Probe, production `FS_DISCOVERY`
+> and the DB were reconciled to UTC *before* the dispatch decision.
+
+> **AND ONE AS LUCK.** 22 of 25 latent date-dependent quota tests survived
+> 10-09 only because their budgets were small enough that withholding 168
+> changed no assertion. Enforcing the reservation in the claim moved **7 of
+> them** from latent to failing within one commit — the set's membership
+> changes when unrelated code changes, and nobody is told. Closed at the root:
+> an autouse fixture makes `h1_reservation()` return **0 for an undated call**
+> and the truth for a dated one, so a test that states no regime gets no
+> allocation. Its own limit is recorded — it reaches the enforcement path, not
+> a module that bound the name at import.
+
+## PART E — THE DISTRIBUTION, WITH THE TREND ARGUMENT STATED
+
+`0 0 * * *` now n=9: delay max 5h04m, margin binding **+179m** against a
+30-minute threshold. Measured drift is **+2.585 min/day**, so **time alone
+predicts a *higher* mean**. The observed mean moved **down** (−32.9 min, Welch
+t = −3.36, sd 36.7 → 20.7). Running *against* the trend makes the regime change
+the better explanation than drift — **stated as an argument, not a proof**:
+n=9 over nine consecutive days against n=32 over thirty-two is still a
+comparison of two time periods, and a concurrent platform change is not
+excluded.
+
+## PART G — THE CI AUDIT: VERDICT, NOT MACHINERY
+
+Ten non-success `ci-audit` runs since 10-02. **Nine are one finding**:
+`audit alarm — 37885390196 daily-picks DID_NOT_RUN`, every run from 10-09
+05:14 to 10-10 05:43. Zero foreign `##[error]` annotations; the three-way
+partition reports `unexplained_nonzero_exit = 0` throughout, and
+`steps_failed`/`steps_not_run` agree with it. **Red by design.**
+
+The tenth is **37369828831** (10-05 20:27): job **cancelled**, log **empty at
+0 lines**, no steps recorded. **MACHINERY**, scored `UNAUDITABLE` — the purest
+"absent instrumentation is not a zero", since every counter reads 0 on an empty
+log. Context: that evening's runs took 5.8–16.4 min against a normal 0.6–1.1, a
+platform-side degradation rather than our code.
+
+> ### G1 — the `resolved` marker's FIRST EXERCISE, and the remainder is EMPTY
+> `37885390196` resolved by **`582751d+0ed4cad`** with a checkable reason:
+> `Run tests` failed on **two date-dependent assertions and nothing else** —
+> the suppression expiry (10-09, by design) and three quota tests inheriting the
+> allocator's first active day. No correctness test failed. Re-run over the same
+> window: **exit 0, nothing alarmed.** Nine reds were one already-fixed finding
+> re-alarming because the marker had never been used.
+>
+> **CLR-2 holds in practice.** The run still prints its `DID_NOT_RUN` verdict
+> *and* `= RESOLVED by 582751d+0ed4cad: …`. A resolution never rewrote what
+> happened; only alarm membership changed.
+
+> ### G2 — not an always-firing alarm, and `UNAUDITABLE` is OUTSIDE `alarmed`
+> The audit was **CLEAN on every run from 10-06 to 10-08** and went red only
+> when a real finding appeared, so it carries information. It is **not** the
+> `fixtures_zero_active`-for-the-fifth-time case.
+>
+> `UNAUDITABLE` is **excluded from `alarmed`**, and the mechanism is omission:
+> CI passes `--fail-on BROKEN,DID_NOT_RUN`, which does not name it.
+> `PROVISIONAL_VERDICTS` governs ledger handling, not the alarm. So the
+> three-way partition is preserved — a third state that alarms would be a fourth
+> state — at a stated cost: a **cancelled run with no log alarms nothing**, and
+> 37369828831 was found by hand.
+
+## DECLARATION
+
+**H1 CANNOT START.** Not for credits, not for the caller — that is built,
+tested and reverted in one flag. H1's analysis reads `odds`, which a production
+unique index makes incapable of holding more than one observation per series,
+and the registered `min_interval=120` on a 120-minute cron collects two points
+where three are required. **0 credits of 168 spent.** 7 of 8 window days
+remain. Both remedies are named and neither is mine to take.
+
+**CI AUDIT 2026-10-10 — CLEAN after resolution**, 1 resolved run recorded with
+commit and reason, remainder **empty**; 1 machinery run (`UNAUDITABLE`, 10-05)
+outside the alarm by design.
+
+*Recorded 2026-10-10. `scripts/refresh_and_capture.py`,
+`scripts/h1_collection_check.py`, `scripts/ci_audit.py`,
+`src/data/odds_quota.py`, `src/data/api_budget.py`,
+`src/scrapers/barren_leagues.py`, `src/models/probability_calibration.py`,
+`tests/conftest.py`, `tests/test_h1_credit_attribution.py` (new),
+`tests/test_h1_caller_reachability.py` (new),
+`tests/test_h1_collection_check.py`, `tests/test_no_test_writes_prod_state.py`.
+`model_version` UNCHANGED at `8da2fd`; `s5.15`, **146** picks stamped (35 -> 146
+under the SAME fingerprint). Full suite **1741 passed**. No schema or migration
+change — the unique index was MEASURED, not altered.*

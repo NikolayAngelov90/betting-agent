@@ -195,20 +195,65 @@ def test_reaching_the_target_says_so():
     assert "TARGET REACHED" in out and "Restore the window" in out
 
 
-def test_the_credit_ceiling_says_so_even_below_target():
-    """Whichever comes first. A ceiling hit at n=3 still stops the run."""
+def test_the_credit_bound_says_so_even_below_target():
+    """Whichever comes first. A bound hit at n=3 still stops the run.
+
+    CHANGED 2026-10-09, and the change is the point: this used to key on
+    `used` — the MONTH'S TOTAL across every consumer — so normal pricing's
+    spend could print H1's stop condition. It now keys on `h1_used`, the
+    attributed number, and the wording moved from "CREDIT CEILING" to "CREDIT
+    BOUND" because the binding number is `effective_bound(reservation)`: the
+    168 reservation inside the window, the 200 registered ceiling outside it.
+    Naming the ceiling when the reservation bound would be the same
+    two-numbers-one-name defect one line further down.
+    """
     out = "\n".join(render_in_window(3, {"TheOddsAPI": {1, 2, 3}}, {}, {},
-                              raw_rows=900, used=h1.CREDIT_CEILING))
-    assert "CREDIT CEILING REACHED" in out
+                              raw_rows=900, used=h1.CREDIT_CEILING,
+                              h1_used=h1.CREDIT_CEILING))
+    assert "H1 CREDIT BOUND REACHED" in out, out
     assert "regardless of n" in out
 
 
-def test_an_unreadable_ledger_says_UNKNOWN_not_zero():
-    """Zero credits used and 'cannot tell' must not print the same."""
+def test_the_MONTHS_total_alone_does_NOT_print_H1s_stop_condition():
+    """The defect the test above was rewritten to catch.
+
+    `used` at the ceiling with `h1_used` at zero is production on 2026-10-09
+    with normal pricing busy and H1 idle. It must print no stop condition.
+    """
     out = "\n".join(render_in_window(3, {"TheOddsAPI": {1, 2, 3}}, {}, {},
-                              raw_rows=900, used=None))
-    assert "UNKNOWN" in out
-    assert "CREDIT CEILING REACHED" not in out
+                              raw_rows=900, used=h1.CREDIT_CEILING,
+                              h1_used=0))
+    assert "BOUND REACHED" not in out, (
+        "the month's total printed H1's stop condition while H1 had spent "
+        "nothing:\n" + out)
+    assert "not H1's spend" in out, (
+        "the pool total is printed without saying it is not H1's — the label "
+        "is the only thing keeping the two numbers apart on the page")
+
+
+def test_an_unreadable_ledger_says_UNKNOWN_not_zero():
+    """Zero credits used and 'cannot tell' must not print the same.
+
+    BOTH lines now, independently: the pool's total and H1's attributed spend
+    are read from different rows and either can be unreadable alone.
+    """
+    out = "\n".join(render_in_window(3, {"TheOddsAPI": {1, 2, 3}}, {}, {},
+                              raw_rows=900, used=None, h1_used=None))
+    assert "pool credits used this month: UNKNOWN" in out, out
+    assert "H1 ATTRIBUTED credits: UNKNOWN" in out, out
+    assert "FAILS CLOSED" in out, (
+        "an unreadable H1 ledger printed UNKNOWN without saying the stop "
+        "halts on it — BUDGET_UNREADABLE is the whole reason that is safe")
+    assert "BOUND REACHED" not in out
+
+
+def test_an_unreadable_POOL_total_does_not_hide_a_readable_H1_number():
+    """The two reads are independent, so the report must not collapse to one
+    UNKNOWN when only one row is unreadable."""
+    out = "\n".join(render_in_window(3, {"TheOddsAPI": {1, 2, 3}}, {}, {},
+                              raw_rows=900, used=None, h1_used=12))
+    assert "pool credits used this month: UNKNOWN" in out, out
+    assert "H1 ATTRIBUTED credits: 12" in out, out
 
 
 def test_a_second_provider_is_flagged_loudly():

@@ -497,13 +497,44 @@ def collection_state(session, since: datetime) -> CollectionStop:
     attach_fixture_identity(session, observations)
     _series, by_provider = count_qualifying_fixtures(observations)
     return collection_stop(
+        # H1's OWN spend, not the month's. `credits_used` is month-to-date
+        # TOTAL and was being compared against the 168 reservation: on
+        # 2026-10-09 that charged H1 with 38 credits spent by normal pricing
+        # before H1 had run at all. See `h1_credits_used`.
         n_fixtures=len(by_provider.get("TheOddsAPI", set())),
-        credits_spent=credits_used(session),
+        credits_spent=h1_credits_used(session),
         raw_rows=len(observations))
 
 
+def h1_credits_used(session) -> Optional[int]:
+    """Credits spent BY H1 this month, or None when the ledger cannot answer.
+
+    THE ONLY NUMBER COMPARABLE TO THE RESERVATION. `credits_used` below is the
+    month's total across every consumer; this reads the attributed counter that
+    only a `for_h1=True` quota increments.
+
+    A MISSING ROW IS ZERO, NOT UNKNOWN, and that is safe here only because
+    `OddsApiQuota.claim_requests` REFUSES to spend an H1 credit it cannot
+    attribute. Without that refusal this zero would be the silent kind — a
+    bound compared against an unwritten counter never binds. An exception
+    still returns None and the stop fails closed.
+    """
+    try:
+        from src.data.odds_quota import PROVIDER_H1, month_key
+        from sqlalchemy import text
+        row = session.execute(text(
+            "SELECT used FROM api_budget WHERE day = :d AND provider = :p"),
+            {"d": month_key(), "p": PROVIDER_H1}).fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return None
+
+
 def credits_used(session) -> Optional[int]:
-    """Credits spent this month, or None when the ledger cannot answer.
+    """Credits spent this month BY EVERY CONSUMER, or None if unreadable.
+
+    NOT H1's spend — see `h1_credits_used`. This is the pool's total and it is
+    reported, never compared against the reservation or the ceiling.
 
     `api_budget` is keyed (day, provider) where the credit ledger stores the
     MONTH in `day` — see `odds_quota.month_key`. The column is `used`, not
@@ -527,12 +558,14 @@ def credits_used(session) -> Optional[int]:
 def render(n_fixtures: int, by_provider: Dict[str, set],
            series_by_provider: Dict[str, int], dropped: dict,
            raw_rows: int, used: Optional[int],
+           h1_used: Optional[int] = None,
            month_to_date_only: bool = False,
            in_window: Optional[bool] = None) -> List[str]:
     out: List[str] = []
 
+    from src.data.odds_quota import h1_reservation
+
     if in_window is None:
-        from src.data.odds_quota import h1_reservation
         in_window = h1_reservation() > 0
 
     if raw_rows == 0:
@@ -564,21 +597,33 @@ def render(n_fixtures: int, by_provider: Dict[str, set],
                    "analyses them as separate strata or drops the second — "
                    "they are different instruments, not different samples.")
 
+    # TWO NUMBERS, NEVER ONE. The pool's total and H1's own spend were the
+    # same variable until 2026-10-09, and the comparison that mattered used the
+    # wrong one. The caveat that used to live here ("month-to-date is not
+    # collection-to-date") was CORRECT and was ALSO DISARMED: it was gated on
+    # `since < month_key()`, and with --since defaulting to the 10-01 reset the
+    # flag read False — precisely while the collection window started 10-09 with
+    # 38 credits already spent. A caveat that knows the right thing and cannot
+    # fire is not a safeguard. It is replaced by measuring the quantity.
     if used is None:
-        out.append(f"  credits: UNKNOWN (ledger unreadable) / ceiling {CREDIT_CEILING}")
-    elif month_to_date_only:
-        # The ceiling counts credits spent BY THE COLLECTION. Month-to-date is
-        # the same number only because collection starts on the reset day —
-        # a coincidence the design leans on, so it is named rather than
-        # assumed. Before the reset the two differ and the comparison is void.
-        out.append(f"  credits used this month: {used} — NOT comparable to the "
-                   f"{CREDIT_CEILING} ceiling: this window starts before the "
-                   f"month reset, so month-to-date is not collection-to-date")
+        out.append("  pool credits used this month: UNKNOWN (ledger unreadable)")
     else:
-        out.append(f"  credits used this month: {used} / ceiling {CREDIT_CEILING}")
-        if used >= CREDIT_CEILING:
-            out.append("  !! CREDIT CEILING REACHED — the stop condition is met "
-                       "regardless of n. Restore the window and interval now.")
+        out.append(f"  pool credits used this month: {used} "
+                   f"(EVERY consumer — not H1's spend, not comparable to the "
+                   f"reservation or the ceiling)")
+
+    if h1_used is None:
+        out.append(f"  H1 ATTRIBUTED credits: UNKNOWN (ledger unreadable) — the "
+                   f"stop FAILS CLOSED on this, see BUDGET_UNREADABLE")
+    else:
+        _res = h1_reservation()
+        _bound = effective_bound(_res) if _res else CREDIT_CEILING
+        out.append(f"  H1 ATTRIBUTED credits: {h1_used} / bound {_bound} "
+                   f"(reservation {_res}, registered ceiling {CREDIT_CEILING})")
+        if h1_used >= _bound:
+            out.append("  !! H1 CREDIT BOUND REACHED — the stop condition is "
+                       "met regardless of n. Restore the window and interval "
+                       "now.")
     if n_fixtures >= TARGET_N:
         out.append(f"  !! TARGET REACHED ({n_fixtures} >= {TARGET_N}) — stop "
                    f"condition met. Restore the window and interval now.")
@@ -636,13 +681,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         attach_fixture_identity(session, observations)
         series_by_provider, by_provider = count_qualifying_fixtures(observations)
         used = credits_used(session)
+        h1_used = h1_credits_used(session)
 
     # The TRIGGER is TheOddsAPI's count: the collection is single-provider by
     # construction (142 of 142 existing separated series), and a stray
     # API-Football fixture is reported above rather than counted here.
     n = len(by_provider.get("TheOddsAPI", set()))
     for line in render(n, by_provider, series_by_provider, dropped,
-                       len(observations), used,
+                       len(observations), used, h1_used,
                        month_to_date_only=since.date() < month_key()):
         print(line)
     return 0

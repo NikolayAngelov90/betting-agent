@@ -113,3 +113,43 @@ def _no_test_writes_to_production_state(tmp_path, monkeypatch):
             target.parent.mkdir(parents=True, exist_ok=True)
             target = target.with_suffix(_pathlib.Path(str(current)).suffix)
         monkeypatch.setattr(mod, attr, target, raising=False)
+
+
+# ─── THE ALLOCATOR'S REGIME IS DECLARED, NEVER INHERITED (2026-10-09) ────────
+#
+# On 2026-10-09 the H1 reservation turned itself on by calendar and THREE tests
+# in `test_odds_quota_and_refresh.py` went red without a line of code changing.
+# They were fixed by pinning `today=`. A census that same day found 22 MORE in
+# the same position — tests calling a quota method with no explicit `today=`,
+# surviving only because their budgets were small enough that withholding 168
+# changed no assertion. Latent, not safe.
+#
+# Making the claim path actually enforce the reservation (the same day, one
+# commit later) moved SEVEN of those 22 from latent to failing, which is the
+# whole argument for not leaving the class alone: its membership changes when
+# unrelated code changes, and nobody is told.
+#
+# SO THE IMPLICIT PATH RETURNS NO ALLOCATION, AND AN EXPLICIT DATE RETURNS THE
+# TRUTH. `h1_reservation()` with no argument reads the wall clock; under test
+# that is a test stating no regime, and it now gets zero. `h1_reservation(d)`
+# is a test stating WHICH regime it measures, and it gets the real answer —
+# including 168 inside the window, which is how `test_h1_credit_attribution`
+# measures the allocator on purpose.
+#
+# This is not a frozen clock. A process-wide frozen clock was tried TWICE on
+# this suite and failed both times — tests that write on the real clock and
+# read on the pinned one, and `test_history_mirror`'s incremental sync, which
+# needs the clock to ADVANCE rather than hold. Nothing here freezes time; one
+# calendar predicate stops answering a question nobody asked.
+@_pytest.fixture(autouse=True)
+def _allocation_regime_must_be_declared(monkeypatch):
+    import src.data.odds_quota as _oq
+
+    _real = _oq.h1_reservation
+
+    def _declared_only(today=None):
+        if today is None:
+            return 0
+        return _real(today)
+
+    monkeypatch.setattr(_oq, "h1_reservation", _declared_only)

@@ -171,7 +171,13 @@ class ProbabilityCalibrator:
         return min(max(cal, self.CLIP_LO), self.CLIP_HI)
 
     # -------------------------------------------------------------- persist
-    def save(self, path: Path = DEFAULT_PATH) -> None:
+    def save(self, path: Path | None = None) -> None:
+        # Resolved at CALL time: a default argument binds DEFAULT_PATH when the
+        # `def` runs, which silently defeats conftest's production-state
+        # redirect. Found 2026-10-10 by the AST scan in
+        # test_no_test_writes_prod_state.py, after the same defect in
+        # BarrenLeagueCache let a test write a real cache file.
+        path = DEFAULT_PATH if path is None else path
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -183,9 +189,15 @@ class ProbabilityCalibrator:
         logger.info(f"Probability calibration saved to {path}")
 
     @classmethod
-    def load(cls, path: Path = DEFAULT_PATH) -> "ProbabilityCalibrator":
+    def load(cls, path: Path | None = None) -> "ProbabilityCalibrator":
         """Load a persisted calibrator; returns an UNFITTED (identity) instance
         when the file is missing or unreadable."""
+        # Resolved at CALL time: a default argument binds DEFAULT_PATH when the
+        # `def` runs, which silently defeats conftest's production-state
+        # redirect. Found 2026-10-10 by the AST scan in
+        # test_no_test_writes_prod_state.py, after the same defect in
+        # BarrenLeagueCache let a test write a real cache file.
+        path = DEFAULT_PATH if path is None else path
         cal = cls()
         try:
             path = Path(path)

@@ -135,6 +135,29 @@ RESOLVED_RUNS = {
                     "the month-boundary contradiction in "
                     "test_credit_reading_freshness was bounded; the test gate "
                     "that stopped --update can no longer fire on the 1st"),
+    # THE MARKER'S FIRST REAL EXERCISE (2026-10-10). Recorded nine alarms late,
+    # which is itself the measurement: 37885390196 failed at 04:45 on 10-09 and
+    # EVERY ci-audit run from 05:14 on 10-09 to 05:43 on 10-10 alarmed on it —
+    # nine consecutive reds, one finding, cause fixed the same day.
+    #
+    # CHECKABLE REASON, not "fixed": `Run tests` failed on two DATE-DEPENDENT
+    # assertions and nothing else — test_the_suppression_has_EXPIRED (the
+    # empty-card window closed 10-09, by design) and three
+    # test_odds_quota_and_refresh tests that inherited the allocator's first
+    # active day. No correctness test failed. 582751d pinned those tests to the
+    # regime each measures; 0ed4cad moved every calendar assertion OUT of the
+    # capture-gating step, so a date-dependent failure can no longer skip
+    # `--update` and lose a card.
+    #
+    # WHAT IS *NOT* CLAIMED: the gate itself is unchanged, and a CORRECTNESS
+    # failure still stops capture. That is the accepted cost, re-affirmed on
+    # 10-09 and recorded in the ledger — not something this row resolves.
+    "37885390196": ("582751d+0ed4cad",
+                    "Run tests failed on two DATE-DEPENDENT assertions only "
+                    "(suppression expiry 10-09 + three quota tests inheriting "
+                    "the allocator's first day); both pinned to their regime, "
+                    "and calendar assertions moved out of the capture gate so "
+                    "a calendar failure can no longer skip --update"),
 }
 
 #: Matches a ledger row's run id whether or not it is bolded. The original

@@ -59,6 +59,31 @@ logger = get_logger()
 
 PROVIDER = "theoddsapi"
 
+#: THE ATTRIBUTED COUNTER for H1's own spend (added 2026-10-09).
+#:
+#: WHY A SECOND ROW AND NOT A SECOND COLUMN: `api_budget` is keyed
+#: (day, provider) and this needs no migration, which matters because the
+#: alternative was shipping a schema change into a live eight-day window.
+#:
+#: WHY IT EXISTS AT ALL — the defect it repairs, measured 2026-10-09: the stop
+#: read `credits_used()`, which is MONTH-TO-DATE TOTAL for the provider, and
+#: compared it against H1's 168 reservation. 38 credits spent by NORMAL pricing
+#: were therefore charged to H1 before H1 had spent anything, cutting its usable
+#: budget to 130 (21 league-days instead of 28). Worse than the arithmetic: had
+#: normal pricing alone reached 168, H1 would have halted
+#: `RESERVATION_EXHAUSTED` having spent ZERO — a terminal state whose stated
+#: reason ("the allocation is spent") would have been false.
+#:
+#: The report path already knew the difference and said so ("month-to-date is
+#: not collection-to-date"); the ENFORCING path did not. One quantity, two
+#: definitions, and the caveat lived on the side that only printed.
+#:
+#: This row counts ONLY credits claimed by a `for_h1=True` instance. The
+#: authoritative total still counts them too, so the free-tier guard is
+#: unchanged — H1 spend is counted twice ON PURPOSE, once for the pool and once
+#: for the account.
+PROVIDER_H1 = "theoddsapi:h1"
+
 #: Free tier. Not a target — see DEFAULT_MONTHLY_BUDGET.
 FREE_TIER_CREDITS = 500
 
@@ -190,6 +215,11 @@ class OddsApiQuota:
         self.safety_margin = int(safety_margin)
         self.max_credits_per_run = int(max_credits_per_run)
         self._store = ApiBudgetStore(db, PROVIDER, self.monthly_budget)
+        #: H1's ATTRIBUTED spend. A pure counter: its `daily_limit` is the free
+        #: tier so it can never refuse a write, because the bound lives in
+        #: `collection_stop` and a ledger ceiling here would be a second
+        #: definition of it.
+        self._h1_store = ApiBudgetStore(db, PROVIDER_H1, FREE_TIER_CREDITS)
         #: Credits claimed by THIS process, for the per-run ceiling.
         self.spent_this_run = 0
 
@@ -204,6 +234,16 @@ class OddsApiQuota:
     def used(self, today: Optional[_date] = None) -> int:
         return self._store.used(day=month_key(today))
 
+    def h1_used(self, today: Optional[_date] = None) -> Optional[int]:
+        """Credits spent BY H1 this month, or None when unattributable.
+
+        NOT `used()`. `used()` is the pool's total and includes normal pricing;
+        this is the only number comparable to `H1_RESERVED_CREDITS`.
+        """
+        if not self._h1_store.available():
+            return None
+        return self._h1_store.used(day=month_key(today))
+
     def reserved_from_me(self, today: Optional[_date] = None) -> int:
         """Credits this instance may NOT spend: the margin, plus — for normal
         operation inside the H1 window — H1's reservation.
@@ -217,8 +257,14 @@ class OddsApiQuota:
         """Spendable credits, after the safety margin AND the H1 reservation.
 
         Withholding the reservation here is what makes normal operation halt at
-        its remainder: `claim_requests` walks down from this number, so no extra
-        enforcement point is needed and there is no second ceiling to drift.
+        its remainder. `claim_requests` reserves THE SAME number, so there is
+        one definition and no second ceiling to drift.
+
+        THIS DOCSTRING WAS FALSE UNTIL 2026-10-09. It said `claim_requests`
+        "walks down from this number" — it walked down from the number the
+        CALLER asked for and claimed against `safety_margin`, so the reported
+        ceiling bound nothing. Verified by claim, not by reading: see
+        `test_normal_pricing_cannot_spend_the_H1_RESERVATION`.
         """
         return max(0, self._store.remaining(
             reserve=self.reserved_from_me(today), day=month_key(today)))
@@ -261,6 +307,21 @@ class OddsApiQuota:
                 return 0
 
         if not self.available():
+            # THE ASYMMETRY IS DELIBERATE. Normal pricing fails OPEN because a
+            # missing ledger must not cost the card its prices — stale odds are
+            # worse than unbudgeted ones. H1 fails CLOSED because it is a
+            # REGISTERED experiment with a credit bound: credits it cannot
+            # account for produce observations it cannot defend, and
+            # `collection_stop` would read an attributed zero and never halt.
+            # Spent credits that produce unusable evidence are a defect, not a
+            # cost.
+            if self.for_h1:
+                logger.error(
+                    "OddsApiQuota: api_budget unavailable and this is an H1 "
+                    "instance — REFUSING to spend. H1 credits must be "
+                    "attributable; an unmeasurable spend cannot be reported "
+                    "against the 168 reservation and would read as zero.")
+                return 0
             logger.warning(
                 "OddsApiQuota: api_budget table unavailable — falling back to "
                 "the header-based credit guard; the monthly ledger is NOT "
@@ -275,11 +336,38 @@ class OddsApiQuota:
         # orders them by priority).
         want = n_requests
         while want > 0:
-            if self._store.claim(credits_for(want), reserve=self.safety_margin,
+            # `reserved_from_me`, NOT `safety_margin`. MEASURED 2026-10-09:
+            # with the margin alone, a non-H1 instance inside the window was
+            # granted 200 of 200 requests = 400 credits against a reported
+            # `normal_ceiling` of 232 — it ate all 168 of H1's reservation. The
+            # allocation was computed in `remaining()` and ENFORCED NOWHERE,
+            # because this is the only claim site and it reserved the smaller
+            # of the two numbers. A ceiling that is reported but not enforced
+            # is not a ceiling.
+            if self._store.claim(credits_for(want),
+                                 reserve=self.reserved_from_me(today),
                                  day=day):
                 granted = want
                 break
             want -= 1
+
+        # ATTRIBUTE BEFORE RETURNING, AND REFUSE IF IT CANNOT BE DONE.
+        # This is what makes `h1_used()` equal to H1's spend BY CONSTRUCTION
+        # rather than by convention: an unattributed H1 credit is impossible,
+        # so a counter reading 0 means zero spent — not broken attribution.
+        if self.for_h1 and granted > 0:
+            attributed = self._h1_store.record_attributed(
+                credits_for(granted), day=day)
+            if attributed is None:
+                self._store.release(credits_for(granted), day=day)
+                logger.error(
+                    f"OddsApiQuota: H1 claim of {credits_for(granted)} credit(s) "
+                    f"COULD NOT BE ATTRIBUTED — the claim has been RELEASED and "
+                    f"the request is refused. Nothing was spent.")
+                return 0
+            logger.info(
+                f"H1_CREDITS_ATTRIBUTED credits={credits_for(granted)} "
+                f"h1_total={attributed}/{h1_reservation(today)} month={day:%Y-%m}")
 
         self.spent_this_run += credits_for(granted)
 
