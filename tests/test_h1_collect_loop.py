@@ -240,3 +240,109 @@ def test_the_observation_window_starts_at_the_RESERVATION_not_the_month(wired, c
     h1c.main(["--max-credits", "6", "--rounds", "1", "--gap-minutes", "120", "--allow-sqlite"])
     out = capsys.readouterr().out
     assert "observations since  : 2026-10-09" in out, out
+
+
+# ════════════════════ the workflow's own properties, pinned ═════════════════
+
+def _wf():
+    import pathlib
+
+    import yaml
+
+    d = yaml.safe_load(
+        pathlib.Path(".github/workflows/h1-collect.yml").read_text(encoding="utf-8"))
+    # PyYAML parses a bare `on:` key as the boolean True.
+    return d, (d[True] if True in d else d["on"]), list(d["jobs"].values())[0]
+
+
+def test_the_timeout_is_explicit_and_below_GitHubs_ceiling():
+    """A job hung while sleeping is indistinguishable from one that is working.
+
+    330 is ~1.36x the expected 243 minutes ((rounds-1) x gap + runtime) and
+    deliberately under the 360-minute hosted-runner cap, so the bound that
+    fires is OURS and is reported as a timeout rather than a platform kill.
+    """
+    _d, _on, job = _wf()
+    t = job["timeout-minutes"]
+    expected = (h1c.H1_ROUNDS - 1) * h1c.H1_GAP_MINUTES
+    assert t > expected, (
+        f"timeout {t} is below the {expected} minutes of waiting alone — the "
+        f"job cannot finish")
+    assert t <= 360, (
+        f"timeout {t} exceeds GitHub's 360-minute hosted-runner ceiling, so "
+        f"the platform would kill it first and the bound would be invisible")
+    assert t / expected >= 1.2, (
+        f"only {t / expected:.2f}x the waiting time — no slack for a slow "
+        f"request")
+
+
+def test_it_has_its_OWN_concurrency_group():
+    """It must not queue behind, or ahead of, daily-picks.
+
+    This job holds a runner for ~4 hours. Sharing a group with daily-picks
+    would make a late card wait for it, which is strictly worse than anything
+    H1 can suffer.
+    """
+    d, _on, _job = _wf()
+    assert d["concurrency"]["group"] == "h1-collect"
+    assert d["concurrency"]["cancel-in-progress"] is False, (
+        "a queued collection run must not be cancelled; it would lose the "
+        "credits already spent in earlier rounds")
+    import pathlib
+
+    import yaml as _y
+
+    other = _y.safe_load(
+        pathlib.Path(".github/workflows/daily-picks.yml").read_text(encoding="utf-8"))
+    assert other.get("concurrency", {}).get("group") != "h1-collect", (
+        "daily-picks now shares H1's concurrency group — a 4-hour collection "
+        "job will delay the card")
+
+
+def test_the_cron_COMPENSATES_for_the_measured_scheduler_lateness():
+    """A cron is a request for a start time, not a start time.
+
+    MEASURED 2026-10-10: this repo's crons fire 3h58m-5h04m late (mean 4h31m,
+    sd 18.2, n=9). The band a job observes is only 120 minutes wide, so the
+    cron must be set EARLY by roughly the mean delay. `0 12` targets the
+    21:45-22:00 European slot: start lands 15:58-17:04 against a required
+    [16:00, 18:00).
+    """
+    _d, on, _job = _wf()
+    crons = [c["cron"] for c in on["schedule"]]
+    assert crons == ["0 12 * * 2,3,4"], crons
+    hour = int(crons[0].split()[1])
+    # the target kickoff slot, and the start window the band requires
+    target_ko = 22 * 60
+    need_lo = target_ko - 360
+    need_hi = target_ko - (h1c.H1_ROUNDS - 1) * h1c.H1_GAP_MINUTES
+    start_lo = hour * 60 + (3 * 60 + 58)
+    start_hi = hour * 60 + (5 * 60 + 4)
+    overlap = min(start_hi, need_hi) - max(start_lo, need_lo)
+    assert overlap > 0, (
+        f"the measured start range {start_lo}-{start_hi} does not intersect "
+        f"the required {need_lo}-{need_hi} — the cron cannot hit the band")
+    assert overlap / (start_hi - start_lo) >= 0.9, (
+        f"only {overlap / (start_hi - start_lo):.0%} of the measured lateness "
+        f"range lands inside the band")
+
+
+def test_the_scheduled_path_pins_the_MEASURED_league_set():
+    """A cron cannot pass inputs, so the defaults are the selection.
+
+    Pinning the union of the four selected leagues is free: a pinned league
+    with no fixture inside the window is skipped without a request.
+    """
+    _d, _on, job = _wf()
+    run = next(s["run"] for s in job["steps"] if s.get("name") == "Collect")
+    for lg in ("england/championship", "europe/champions-league",
+               "europe/europa-league", "europe/europa-conference-league"):
+        assert lg in run, f"{lg} is no longer pinned on the scheduled path"
+    assert "--max-credits $MAXC" in run and "MAXC=24" in run, (
+        "the scheduled path lost its per-job credit ceiling")
+
+
+def test_the_collector_is_only_reached_WITH_a_credit_ceiling():
+    """`--max-credits` is required by the parser, so no path can omit it."""
+    with pytest.raises(SystemExit):
+        h1c.main(["--rounds", "1", "--allow-sqlite"])

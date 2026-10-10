@@ -23716,3 +23716,226 @@ to Part A alone, as rule 7 requires.
 (league pinning), `tests/test_h1_collect_loop.py` (new),
 `tests/test_calendar_separation.py`. No schema or migration change. No
 production write in Part B beyond the trial's own odds and snapshot rows.*
+
+---
+
+# 2026-10-10 (fifth entry) — YIELD RE-SELECTED. A weekend card is bigger and worth less.
+
+## PART A — DENSITY, AND IT INVERTS THE PREMISE
+
+`MEASURED 2026-10-10` from the Flashscore fixtures pages via the production
+scraper's own `_scrape_fixtures_page` with `max_days_ahead=8` instead of 1 —
+read-only, nothing persisted, 30 of 30 leagues returned data. The production
+`matches` table could not answer this: its discovery cutoff is
+`datetime.now() + 1 day`, a **rolling 24 hours**, so at 13:00 on 10-10 the
+table held **117 fixtures for today and ZERO for tomorrow**.
+
+### The arithmetic that decides everything
+
+A job starting at `T` with three rounds `GAP` apart observes a fixture on **all
+three** rounds only if
+
+```
+kickoff ∈ (T + (ROUNDS-1)·GAP, T + WINDOW]   =   (T+240, T+360]
+```
+
+— round 1 must be inside the 360-minute window and **round 3 must still be
+pre-kickoff**. That is a **120-minute band**, not a day. And one league-request
+prices *every* fixture in that league at once, so:
+
+```
+trajectories per credit  =  fixtures of that league INSIDE THE BAND / 6
+```
+
+### The table
+
+| day | dow | fixtures | distinct kickoff times | best T | traj | credits | **traj/credit** |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 10-15 | Thu | 37 | **2** | 14:00 | 18 | 12 | **1.50** |
+| 10-13 | Tue | 17 | **3** | 16:00 | 15 | 12 | **1.25** |
+| 10-14 | Wed | 13 | 3 | 16:00 | 11 | 12 | 0.92 |
+| 10-11 | Sun | **73** | **26** | 10:00 | 13 | 36 | **0.36** |
+| 10-16 | Fri | 23 | — | 15:00 | 11 | 36 | 0.31 |
+| 10-12 | Mon | 23 | — | 13:00 | 6 | 30 | 0.20 |
+| *10-10* | *Sat* | *90* | *—* | *11:00* | *40* | *36* | *1.11* |
+
+### THE WEEKEND ANSWER, AND IT IS THE OPPOSITE OF THE EXPECTATION
+
+The directive asked what the weekend yields against the weekdays, expecting the
+weekend to carry three times the card. **It does carry it — 73 fixtures on
+Sunday against 17 on Tuesday — and it is worth a QUARTER as much per credit.**
+
+The cause is measured, not inferred:
+
+```
+Sun 10-11   73 fixtures across TWENTY-SIX kickoff times   densest slot:  8
+Tue 10-13   17 fixtures across THREE kickoff times        densest slot:  9
+Thu 10-15   37 fixtures across TWO kickoff times          densest slot: 19
+```
+
+Domestic weekend kickoffs are **staggered for television**; European
+competition rounds are **simultaneous by design**. A trajectory needs
+simultaneity inside a 120-minute band, so **the collection is weighted
+MIDWEEK** — exactly where the card is thinnest. Thursday's 22:00 slot alone
+carries 19 fixtures, more than Sunday's densest slot by a factor of 2.4.
+
+Today (Saturday) was the single best day at 40 trajectories for 36 credits, and
+its optimal `T=11:00` had already passed when this was computed — which is why
+the trial's `france/ligue-1` choice (4 fixtures at one kickoff, **0.67
+traj/credit**) is being kept rather than redone: re-dispatching now would buy a
+worse band at the cost of credits already committed.
+
+### The re-selected plan, and the projected `n`
+
+| date | T | leagues | traj | credits |
+| --- | --- | --- | --- | --- |
+| 10-10 Sat | 12:48 (trial, in flight) | france/ligue-1 | 4 | 6 |
+| 10-13 Tue | ~16:00 | championship + champions-league | 15 | 12 |
+| 10-14 Wed | ~16:00 | champions-league + championship | 11 | 12 |
+| 10-15 Thu | ~16:00 | europa-conference + europa-league | 18 | 12 |
+| **total** | | | **48** | **42** |
+
+**PROJECTED `n` AT 10-17: 48, across FOUR DATES, for 42 of 168 credits.**
+`TARGET_N` is 39 and the floor is 33, so **the escalation closes without a
+budget decision** and 126 credits remain unspent. Four distinct dates also
+answers the clustering objection: `ρ=0.42` was estimated with **fixture** as
+the cluster unit, and four dates stop date becoming the cluster.
+
+All four leagues were verified priceable rather than assumed — TheOddsAPI has
+priced `england/championship` (11,079 rows), `europe/champions-league` (2,892),
+`europe/europa-league` (1,146) and `europe/europa-conference-league` (781). The
+ci-audit's recurring `europe/champions-league found 0 fixtures` is the
+**rolling-24h discovery cutoff**, not a pricing gap.
+
+**No fixture was dropped from a trajectory to raise the count.** The band's
+lower bound `T+240` is exactly the "unkicked at round 3" rule, and the trial's
+own count stays at 4-not-5 because its fifth fixture kicks off at 15:15, before
+round 3.
+
+### THE CRON MUST COMPENSATE FOR THE SCHEDULER, and that is a third finding
+
+A cron is **a request for a start time, not a start time**. Measured: this
+repo's crons fire **3h58m–5h04m late** (mean 4h31m, sd 18.2, n=9). The band is
+120 minutes wide, so a 66-minute spread in start time moves it by 66 minutes
+against a 120-minute target.
+
+`0 12 * * 2,3,4` targets the 21:45–22:00 European slot: the measured lateness
+puts the start at **15:58–17:04** against a required `[16:00, 18:00)` — all but
+the first two minutes of the range. Pinned by a test that computes the overlap
+from the measured figures rather than asserting the string.
+
+The cron **cannot fire before the trial completes** (first firing is Tuesday),
+so "the trial precedes the loop" still holds.
+
+## PART B — THE 49/49 IS NOT 49/49, AND IT IS NOT ONE MECHANISM
+
+My own earlier figure was a slice. The full API-Football population is **316
+keys / 255 matches / 17 bookmakers**, and it splits cleanly into two causes:
+
+### 1. A naming mismatch — 194 keys, and nothing is missing
+
+`selection = 'Home Win' / 'Draw' / 'Away Win'` instead of `'Home'/'Draw'/'Away'`
+— a **complete** market in a different vocabulary, which my detector counted as
+absent. One bookmaker (**Flashscore**), **2026-02-28 → 2026-03-08**, nine days,
+194 rows each, closed seven months ago.
+
+**Realised harm: ZERO, measured.** All **194 of 194** matches also carry
+standard `Home/Draw/Away` rows from other books, so no market is incomplete. The
+`'Home Win'` vocabulary is the **pick** vocabulary (`saved_picks.selection`),
+which leaked into `odds` from one writer; odds consumers query `'Home'` and
+simply never see those rows. A dead vocabulary, not a hole.
+
+### 2. A coverage hole — 122 keys, roughly symmetric
+
+`Away`-only 34, `Home`-only 27, `Draw`-only 24, `Draw+Home` 22, `Away+Draw` 15.
+Kickoffs **2026-03-14 → 2026-03-15** — a two-day window, also closed.
+Near-symmetric, which is what a feed gap looks like and what the 1X2 defect's
+`missing_HOME = 0` was not.
+
+**Realised harm: ZERO at the match level.** All **61 of 61** matches have other
+books carrying standard rows, so not one match loses its 1X2 market; a subset of
+books have partial coverage and a partial book is `not_computable` under the
+overround control, which drops it correctly.
+
+### The decision: NOT MARKED, and why that is not the 1X2 decision
+
+> A mechanism's severity and its realised harm are separate measurements.
+
+The exposure touches **254 matches in the fitting set (0.615%)** — larger in
+count than the 1X2 case's 24 (0.058%) — and is **categorically milder**: no
+value is wrong, nothing is inverted, every affected match retains a complete
+1X2 market, both windows closed seven months ago, and no live path can
+reproduce either. A second small exposure is a different decision from a second
+corruption, so no `training_exclusion_reason` and no `evidence_status` is
+written. The 95 picks on those matches are untouched.
+
+**One residual recorded rather than closed:** the `'Home Win'` vocabulary in
+`odds` is invisible to every odds consumer. It is harmless here because the
+window is closed and coverage was redundant, but a writer that can emit the
+pick vocabulary into the odds table is a live shape — it simply has not fired
+since 03-08.
+
+## PART C — THE TRIAL'S ACTUAL RESULT: STILL IN FLIGHT
+
+Run **38053287510**. Round 1 measured at 12:48 UTC (pool 84→86, attributed
+`theoddsapi:h1` = 2, 440 snapshot keys, **0 duplicated in one second**, **100 of
+100 1X2 keys complete**). Rounds 2 and 3 fall at ~14:48 and ~16:48 UTC; the
+ledger still reads 2 credits, so round 2 had not fired when this was written.
+
+**The instants, their actual gaps, the keys with ≥3 observations and the
+evidence-validity check are deliberately NOT reported here.** They are the
+measurement the trial exists to produce, and a predicate's verdict is not a
+substitute for the gaps themselves.
+
+## PART D — THE THREE ENTRIES
+
+> **A mechanism's severity and its realised harm are separate measurements.**
+> The 1X2 assignment defect wrote away prices into home slots for seven months;
+> no pick was taken at a corrupted price, both 1X2 picks matched to 0.000, zero
+> attributions rest on a corrupted row, and the fitting-set exposure was 0.058%.
+> Naming the harm from the mechanism has now happened twice in ten days — and a
+> third time today, in the opposite direction: the 49/49 population looked like
+> a second corruption and measured as a dead vocabulary plus two days of
+> redundant partial coverage, harm zero.
+
+> **Canonicalisation is not symmetric-safe. Third instance.** Stage 21 found it
+> in the alias map (`Standard Liege` / `St. Liege`); A5 found it in the suffix
+> stripper (`Dundee Utd` / `Dundee FC`, margin exactly 0.0000). A one-directional
+> map applied to both sides of a symmetric comparison can delete the token the
+> comparison depends on. A tie now refuses and is counted.
+
+> **Rules that order an action and forbid its consequence are a trap.** Rule 7
+> ordered the bump; invariant 6b pins `CODE_REVISION`, so every bump trips it;
+> rule 8 said stop. Resolved correctly on 6b's own docstring, with the argument
+> written beside the moved pin and the test unrelaxed. From here, rule 8 names
+> 6b as exempt when rule 7 orders a bump.
+
+## DECLARATION
+
+**YIELD RE-SELECTED.** Density measured for 10-11 → 10-17 from the scraper, not
+the grid. **Projected `n` at 10-17 = 48 across four dates for 42 of 168
+credits**, against `TARGET_N = 39` and a floor of 33 — **the escalation closes
+without a budget decision**, and the 10-14 rule stays armed in case the measured
+rate disagrees with the projection.
+
+The weekend finding inverts the premise: **Sunday carries 73 fixtures to
+Thursday's 37 and yields a quarter as much per credit**, because weekend
+kickoffs are staggered across 26 times while European rounds are simultaneous.
+Collection is weighted midweek.
+
+**49/49 SIZED** — and it is **316 keys / 255 matches / 17 bookmakers**, two
+mechanisms, both closed seven months ago: a one-bookmaker **naming mismatch**
+(194 keys, all 194 matches redundantly covered) and a two-day **coverage hole**
+(122 keys, all 61 matches covered by other books). **Realised harm zero at the
+match level, so NOT MARKED** — a second small exposure is a different decision
+from a second corruption.
+
+**Trial 38053287510 still in flight**; its gaps are not reported until measured.
+
+Full suite **1868 passed**. Invariants pass, count not cited. Cohort
+**UNCHANGED** at `s5.16` / `ae1752` — Parts A and C must not bump, and Part B
+marked nothing, so nothing moved.
+
+*Recorded 2026-10-10. `.github/workflows/h1-collect.yml` (cron added),
+`tests/test_h1_collect_loop.py`. No production write. No schema or migration
+change.*

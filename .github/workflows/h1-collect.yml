@@ -29,6 +29,44 @@ name: H1 Collection
 # 18:30, which sits inside the 360-minute window of a 20:00 kickoff.
 
 on:
+  # ── THE CRON COMPENSATES FOR THE SCHEDULER'S OWN LATENESS ─────────────────
+  #
+  # MEASURED 2026-10-10 from `gh run list --workflow=daily-picks.yml`
+  # (scheduled events, regime `0 0 * * *`, n=9): GitHub fires this repo's crons
+  # **3h58m to 5h04m LATE**, mean 4h31m, sd 18.2 min. A cron is therefore a
+  # request for a start time, not a start time.
+  #
+  # THE BAND IS ONLY 120 MINUTES WIDE. A job starting at T observes a fixture
+  # on all three rounds only if the kickoff falls in (T+240, T+360] — round 1
+  # must be inside the 360-minute window and round 3 must still be pre-kickoff.
+  # So a 66-minute spread in start time moves the band by 66 minutes, against a
+  # 120-minute target.
+  #
+  # `0 12` TARGETS THE 21:45-22:00 EUROPEAN SLOT: start lands 15:58-17:04, and
+  # the band needs a start in [16:00, 18:00) for a 22:00 kickoff. All but the
+  # first two minutes of the measured range qualifies.
+  #
+  # TUESDAY, WEDNESDAY, THURSDAY ONLY, and that is the density finding rather
+  # than a convenience. Measured over 10-11..10-16 (Flashscore fixtures pages,
+  # `max_days_ahead=8`), trajectories per credit:
+  #
+  #     Thu 10-15  18/12 = 1.50      <- 37 fixtures at TWO kickoff times
+  #     Tue 10-13  15/12 = 1.25      <- 17 fixtures at THREE kickoff times
+  #     Wed 10-14  11/12 = 0.92
+  #     Sun 10-11  13/36 = 0.36      <- 73 fixtures at TWENTY-SIX kickoff times
+  #     Fri 10-16  11/36 = 0.31
+  #     Mon 10-12   6/30 = 0.20
+  #
+  # A WEEKEND CARD IS BIGGER AND WORTH LESS. Sunday has 73 fixtures to
+  # Thursday's 37 and yields a QUARTER of the trajectories per credit, because
+  # domestic weekend kickoffs are staggered across 26 times for television
+  # while European competition rounds are simultaneous by design — 19 fixtures
+  # at 22:00 on Thursday alone. A trajectory needs simultaneity inside a
+  # 120-minute band, so the collection is weighted MIDWEEK, which is the
+  # opposite of where the card is.
+  schedule:
+    - cron: '0 12 * * 2,3,4'
+
   workflow_dispatch:
     inputs:
       max_credits:
@@ -133,13 +171,28 @@ jobs:
         # `--max-credits` is REQUIRED by the script: a per-job ceiling stated as
         # a number before the run, so a loop defect cannot consume the window.
         run: |
-          ARGS="--max-credits ${{ inputs.max_credits }}"
-          ARGS="$ARGS --rounds ${{ inputs.rounds }}"
-          ARGS="$ARGS --gap-minutes ${{ inputs.gap_minutes }}"
-          if [ -n "${{ inputs.leagues }}" ]; then ARGS="$ARGS --leagues ${{ inputs.leagues }}"; fi
-          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          # A CRON CANNOT PASS INPUTS, so the scheduled path carries its own
+          # defaults. The pinned set is the union of the four leagues the
+          # density measurement selected; a pinned league with no fixture
+          # inside the window is SKIPPED AT ZERO COST (no request is made), so
+          # pinning the union rather than a per-day list costs nothing and
+          # removes a day-of-week branch that would need its own test.
+          MAXC="${{ inputs.max_credits }}"
+          LEAGUES="${{ inputs.leagues }}"
+          ROUNDS="${{ inputs.rounds }}"
+          GAP="${{ inputs.gap_minutes }}"
+          if [ -z "$MAXC" ]; then MAXC=24; fi
+          if [ -z "$ROUNDS" ]; then ROUNDS=3; fi
+          if [ -z "$GAP" ]; then GAP=120; fi
+          if [ -z "$LEAGUES" ]; then
+            LEAGUES="england/championship,europe/champions-league,europe/europa-league,europe/europa-conference-league"
+          fi
+          ARGS="--max-credits $MAXC --leagues $LEAGUES"
+          ARGS="$ARGS --rounds $ROUNDS --gap-minutes $GAP"
+          echo "max_credits=$MAXC rounds=$ROUNDS gap=$GAP"
+          echo "pinned: $LEAGUES"
           python -m scripts.h1_collect $ARGS
-
+          exit $?
       - name: Report the stop and the trajectories AFTER
         if: always()
         env:
