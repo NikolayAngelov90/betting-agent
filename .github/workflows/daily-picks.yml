@@ -104,7 +104,44 @@ on:
     # 2026-11-06 (projected, R^2=0.451). That is the trigger for the next
     # decision, and the pipeline split — withdrawn here as unnecessary — is the
     # instrument then. OPS-3 stays open.
-    - cron: '0 0 * * *'    # 00:00 UTC (03:00 Sofia)
+    #
+    # ── SPLIT BY DAY OF WEEK, 2026-10-10 ───────────────────────────────────
+    #
+    # NIKI ASKED FOR ~1h30 LATER. A FLAT SHIFT IS THE WORSE OF TWO OPTIONS,
+    # because THE DEADLINE IS THE EARLIEST KICKOFF AND IT DIFFERS BY DAY.
+    # Measured 2026-10-10 against an INDEPENDENT reference (Flashscore fixtures
+    # pages, probed with max_days_ahead=8, converted from Europe/Kyiv to UTC
+    # after verifying the offset against the production `matches` table):
+    #
+    #     weekend earliest kickoff   10:15 UTC  (Sun 10-11, Sun 10-18)
+    #                                10:30 UTC  (Sat 10-10, Sat 10-17)
+    #     weekday earliest kickoff   12:00 UTC  (Mon 10-12)   <- BINDING
+    #                                15:00 UTC  (Fri 10-16)
+    #                                16:45 UTC  (Tue/Wed/Thu)
+    #
+    # THE REFERENCE DOES NOT REPRODUCE THE 14:30 UTC FIGURE ON FILE. It gives
+    # 12:00 UTC for the binding weekday, 2h30 EARLIER and therefore stricter,
+    # so 12:00 is what the weekday cron is sized against. A figure verified
+    # against the data that produced it is not verified.
+    #
+    # MINIMUM ACCEPTABLE MARGIN, STATED BEFORE COMPUTING: 60 minutes on
+    # mean+3sd against the day type's own deadline. The old 30-minute trigger
+    # was set against a single deadline; 60 is ~3sd of the measured delay
+    # (18.2 min) plus room for the run-duration spread (29-72 min).
+    #
+    # MEASURED LATENESS, regime `0 0 * * *`, scheduled events, n=9:
+    # 3h58m-5h04m, mean 4h31m, sd 18.2 min. Duration 29-72 min, mean 45.3.
+    #
+    #     weekday `0 4`  ready(max) 10:16  ready(3sd) 10:42  margin +104 / +76
+    #     weekday `0 5`  ready(max) 11:16  ready(3sd) 11:42  margin  +44 / +16  FAIL
+    #     weekend `0 0`  ready(max) 06:16  ready(3sd) 06:42  margin +239 / +212
+    #
+    # So `0 4` IS THE LATEST WEEKDAY CRON THAT CLEARS 60 MINUTES. It moves the
+    # weekday start from ~04:31 to ~08:31 — four hours, far more than the 1h30
+    # requested — and leaves the weekend, which carries the bigger card and the
+    # earlier deadline, untouched.
+    - cron: '0 0 * * 6,0'   # Sat/Sun 00:00 UTC (03:00 Sofia) - UNCHANGED
+    - cron: '0 4 * * 1-5'   # Mon-Fri 04:00 UTC (07:00 Sofia) - starts ~08:31
   workflow_dispatch: # Allow manual trigger
 
 # Serialize runs so a manual dispatch can never write to the DB at the same

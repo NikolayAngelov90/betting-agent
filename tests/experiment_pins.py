@@ -128,19 +128,41 @@ History:
                     docstring says a selection change "has to argue with a
                     test"; the argument is above, and the pin moves with it
                     rather than the test being relaxed.
+
+    s5.17 2026-10-10  THE CRON IS SPLIT BY DAY OF WEEK.
+                    `0 0 * * *` -> `0 0 * * 6,0` + `0 4 * * 1-5`.
+                    Selection-affecting by the s5.2/s5.15 precedent: the cron
+                    decides WHEN prices are taken.
+                    WHY A SPLIT AND NOT THE FLAT 1h30 ASKED FOR: the deadline
+                    is the earliest kickoff and it differs by day - weekend
+                    10:15 UTC, weekday 12:00 UTC, both from an INDEPENDENT
+                    reference (Flashscore pages, offset to UTC verified against
+                    the production matches table). That reference does NOT
+                    reproduce the 14:30 weekday figure on file; it is 2h30
+                    stricter, and the stricter value is used.
+                    Minimum margin STATED BEFORE COMPUTING: 60 min on mean+3sd.
+                    `0 4` clears at +104/+76; `0 5` fails at +44/+16.
+                    Weekday lead time 6h44m -> 2h44m (-240 min); weekend
+                    UNCHANGED at 4h59m. Discovered-fixture population does NOT
+                    move - the binding site is a FRIDAY run whose D+1 Saturday
+                    earliest kickoff is 10:30 against a ~08:36 cutoff, 114 min.
+                    All six date-derived sites re-enumerated; none resolves to a
+                    different calendar date.
+                    RULE 8 EXEMPTS INVARIANT 6b here because rule 7 orders the
+                    bump; the argument is this entry and the test is NOT relaxed.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.16"
+CODE_REVISION_PIN = "s5.17"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.ae1752"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.818026"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 #: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16
 #: and 12 by 889f8ba on 09-17. That is the defect the always-bump rule closes.
-PREVIOUS_CODE_REVISION = "s5.15"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.8da2fd"
+PREVIOUS_CODE_REVISION = "s5.16"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.ae1752"
 
 
 #: How many completed-match queries are exempt from the training-exclusion

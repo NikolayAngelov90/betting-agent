@@ -46,8 +46,25 @@ from src.utils.logger import utcnow
 #: H1's registered window. Passed, never defaulted.
 H1_WINDOW_MINUTES = 360
 
-#: Strictly below the in-job gap — see the module docstring.
-H1_MIN_INTERVAL_MINUTES = 90
+#: ZERO, and that is a robustness decision rather than a relaxation.
+#:
+#: The amended pre-registration requires `min_interval` strictly below the
+#: achieved spacing; 0 satisfies that with the whole gap as slack. The reason
+#: to go all the way to 0 is CROSS-WORKFLOW COUPLING, found by reading
+#: `_leagues_refreshed_since`: it filters on
+#: `Odds.bookmaker LIKE 'TheOddsAPI%'` and a timestamp, and **nothing else** —
+#: it is WRITER-AGNOSTIC. So a `closing-lines` run, which fires at `17 11,13,
+#: 15,17,19,21,23` and has been observed starting 16:56-17:25, would mark a
+#: shared league "refreshed within the last 90 min" and H1's NEXT ROUND WOULD
+#: BE SILENTLY SKIPPED — truncating the trajectory to two instants, which is
+#: exactly the shape that yields nothing.
+#:
+#: H1 does not need the dedup. The dedup exists so a 2-hourly cron does not pay
+#: twice for the same freshness; H1's spacing is enforced by its own in-job
+#: waits, so the only thing the dedup can do here is let another workflow's
+#: timing decide whether H1 collects. The per-job `--max-credits` cap bounds
+#: the spend either way.
+H1_MIN_INTERVAL_MINUTES = 0
 
 #: The in-job gap between requests. 120 puts the two intervals at 1.0 ratio.
 H1_GAP_MINUTES = 120
@@ -170,8 +187,10 @@ def main(argv=None) -> int:
           f"{args.rounds} request(s), {args.gap_minutes}-minute in-job waits"
           + ("  [DRY RUN]" if args.dry_run else ""))
     print("=" * 78)
-    print(f"  window {args.window} min, min-interval {args.min_interval} min "
-          f"(strictly below the gap)")
+    print(f"  window {args.window} min, min-interval "
+          f"{args.min_interval} min (0 = the in-job waits are the only "
+          f"spacing; the per-league dedup is writer-agnostic and another "
+          f"workflow could otherwise skip a round)")
     print(f"  per-job credit cap  : {args.max_credits}")
     print(f"  reservation today   : {h1_reservation()}")
     print(f"  observations since  : {since:%Y-%m-%d}")

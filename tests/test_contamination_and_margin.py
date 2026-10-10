@@ -202,9 +202,13 @@ def test_an_EMPTY_series_is_UNEVALUATED_not_safe():
 def test_the_margin_line_is_printed_UNCONDITIONALLY():
     """Every day, alarm or not — the AF_LEAGUE_FILTER lesson again."""
     src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
-    body = src.split("_series, _cron = collect_lag_series()", 1)[1][:600]
-    assert "print(format_schedule_margin(_margin))" in body
-    assert body.index("print(format_schedule_margin(_margin))") < \
+    # 2026-10-10: the single `collect_lag_series()` call became a
+    # per-day-type pair when the cron split. The property under test is
+    # UNCHANGED - the margin prints before anything can branch on `alarm` -
+    # so the anchor moves and the assertion does not.
+    body = src.split("collect_lag_series_by_daytype()", 1)[1][:600]
+    assert "print(format_schedule_margins(_margins))" in body
+    assert body.index("print(format_schedule_margins(_margins))") < \
         body.index("alarm"), "the margin line is printed only when it alarms"
 
 
@@ -297,7 +301,15 @@ def test_a_run_under_a_DIFFERENT_cron_is_excluded_not_rescaled():
 def test_current_cron_minutes_refuses_a_MULTI_cron_workflow():
     """Two crons mean nearest-preceding attribution, which CENSORS the delay —
     the `closing-lines` defect. Refuse rather than pick one."""
-    assert ci.current_cron_minutes() == 0, "daily-picks is not on 00:00 UTC"
+    assert ci.current_cron_minutes() is None, (
+        "the single-cron reader resolved a value for a SPLIT workflow - "
+        "that is nearest-preceding attribution, which censors the delay")
+    # The refusal is now EXERCISED BY PRODUCTION rather than hypothetical,
+    # and refusing is no longer sufficient: a day type is exactly the axis
+    # on which the two crons do NOT compete, because the week is
+    # partitioned and no run can have both as its nearest predecessor.
+    by_type = ci.current_crons_by_daytype()
+    assert by_type == {"weekend": 0, "weekday": 4 * 60}, by_type
     assert ci.MARGIN_TRAILING_DAYS == 28
 
 

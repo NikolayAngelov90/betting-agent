@@ -62,12 +62,20 @@ def _step(d, name):
 
 # ── PART A: the clock ────────────────────────────────────────────────────────
 
-def test_the_cron_is_midnight_UTC():
-    """A LITERAL, pinned. Moving it is a cohort decision, not a tweak."""
-    assert _crons(_wf()) == ["0 0 * * *"], (
-        "the daily-picks cron moved. That changes when prices are taken, which "
-        "is selection-affecting by the s5.2 precedent — bump CODE_REVISION and "
-        "re-derive the margin below before changing this assertion")
+def test_the_cron_is_SPLIT_BY_DAY_OF_WEEK():
+    """LITERALS, pinned. Moving either is a cohort decision, not a tweak.
+
+    WAS `["0 0 * * *"]` UNTIL 2026-10-10. The old assertion demanded a bump
+    and a re-derivation before it could be changed; both happened - s5.17,
+    and the margin re-derived against TWO deadlines, because the deadline is
+    the earliest kickoff and it differs by day (weekend 10:15 UTC, weekday
+    12:00 UTC, from an independent reference). The NAME changes with the
+    shape so a reader cannot mistake this for the single-cron guard.
+    """
+    assert _crons(_wf()) == ["0 0 * * 6,0", "0 4 * * 1-5"], (
+        "the daily-picks crons moved. That changes when prices are taken, "
+        "which is selection-affecting by the s5.2 precedent - bump "
+        "CODE_REVISION and re-derive BOTH margins before changing this")
 
 
 def test_the_cron_clears_the_measured_deadline_on_BOTH_worst_cases():

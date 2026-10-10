@@ -1038,7 +1038,75 @@ TRACKED_KEYS: List[str] = [
 #:       ceiling, so nothing was refused. Counterfactually, September spent its
 #:       full 400 in eleven days, so against 232 **168 credits (42%) would have
 #:       been refused**, ~84 of 198 league requests.
-CODE_REVISION = "s5.16"
+#: s5.17 (2026-10-10) - BUMP. THE CRON IS SPLIT BY DAY OF WEEK.
+#:
+#:       `daily-picks.yml` goes from `0 0 * * *` to
+#:       `0 0 * * 6,0` + `0 4 * * 1-5`. Selection-affecting by the s5.2 and
+#:       s5.15 precedent: the cron decides WHEN prices are taken, so it moves
+#:       every pick's taken price and its lead time to kickoff.
+#:
+#:       WHY A SPLIT RATHER THAN THE FLAT ~1h30 SHIFT THAT WAS ASKED FOR: THE
+#:       DEADLINE IS THE EARLIEST KICKOFF AND IT DIFFERS BY DAY. Measured
+#:       2026-10-10 against an INDEPENDENT reference (Flashscore fixtures pages
+#:       probed with max_days_ahead=8, converted from Europe/Kyiv to UTC after
+#:       verifying that offset against the production `matches` table, which
+#:       stores UTC):
+#:
+#:         weekend  10:15 UTC (Sun), 10:30 (Sat)      -> 10:15 binds
+#:         weekday  12:00 UTC (Mon)                   -> 12:00 binds
+#:                  15:00 (Fri), 16:45 (Tue/Wed/Thu)
+#:
+#:       THE REFERENCE DOES NOT REPRODUCE THE 14:30 WEEKDAY FIGURE ON FILE. It
+#:       gives 12:00, 2h30 STRICTER, and the stricter measured value is what the
+#:       weekday cron is sized against.
+#:
+#:       A flat shift would have spent the weekend's thinner margin to buy the
+#:       weekdays nothing they needed. The split gives four hours on five days
+#:       instead of ninety minutes on seven, and leaves untouched the day type
+#:       that carries the bigger card AND the earlier deadline.
+#:
+#:       MINIMUM ACCEPTABLE MARGIN, STATED BEFORE COMPUTING: 60 minutes on
+#:       mean+3sd against the day type's own deadline. `0 4` clears it at
+#:       +104 (max) / +76 (3sd); `0 5` FAILS at +44 / +16. So `0 4` is the
+#:       LATEST weekday cron that clears the stated bar.
+#:
+#:       MEASURED LEAD-TIME CHANGE, per day type:
+#:
+#:         weekend  UNCHANGED. ready ~05:16, lead to 10:15 = 4h59m.
+#:         weekday  ready 05:16 -> 09:16; lead to 12:00 goes 6h44m -> 2h44m,
+#:                  a -240 min change, exactly the cron shift. BETTER for
+#:                  closing-line proximity, WORSE for reliability - the same
+#:                  trade s5.15 recorded, and the CLV side is still
+#:                  UNMEASURABLE at 0% coverage rather than neutral.
+#:
+#:       THE DISCOVERED-FIXTURE POPULATION DOES NOT MOVE. `max_days_ahead` is
+#:       `now + 1 day`, one-sided, evaluated a few minutes into the run. The
+#:       weekday cutoff moves to D+1 ~08:36. The binding case is a FRIDAY run,
+#:       whose D+1 is SATURDAY with an earliest kickoff of 10:30 UTC: margin
+#:       114 min. Mon-Thu runs have D+1 earliest kickoffs of 15:00-16:45. No
+#:       site admits a different fixture population.
+#:
+#:       ALL SIX DATE-DERIVED SITES RE-ENUMERATED for an 04:00 weekday start,
+#:       and none resolves to a different calendar date:
+#:         card date        day-aligned, execution-date invariant     NO
+#:         settlement       DB results; `now-24h` band 07:58-09:04 on
+#:                          D-1 contains ZERO kickoffs (earliest 10:15)  NO
+#:         credits period   `_credits_period(date.today())`           NO
+#:         run marker       keyed on `date.today().isoformat()`       NO
+#:         audit window     `--since yesterday`, own cron 0 12,
+#:                          executes 17:52-19:30; both day types in scope  NO
+#:         max_days_ahead   cutoff D+1 ~08:36 vs Sat 10:30            NO (114 min)
+#:
+#:       SETTLEMENT ORDERING, stated in minutes: the latest kickoff is 19:30 UTC
+#:       (22:30 Europe/Kyiv, measured), so D-1's last match ends ~21:30. A
+#:       weekday run starts 07:58-09:04 on D, clearing it by 628-694 minutes.
+#:
+#:       THE MARGIN TRIGGER IS NOW TWO-VALUED. `DEADLINE_MIN_BY_DAYTYPE` holds
+#:       both, each series is collected under its OWN cron and its own day type,
+#:       they are NEVER pooled, and the trigger fires on the WORSE of the two.
+#:       The weekday series starts EMPTY and is reported UNEVALUATED rather than
+#:       clear, because no run has yet fired under `0 4`.
+CODE_REVISION = "s5.17"
 
 
 def _stable(value: Any) -> Any:

@@ -859,7 +859,26 @@ _LEAGUE_IN_FINDING = re.compile(r"^discovery: ([a-z0-9/-]+) found 0 fixtures")
 #: not the data that produced it: Sparta Rotterdam v Feyenoord on 2026-08-09
 #: reads 12:15 CEST there and 10:15 UTC here, and it is openfootball's own
 #: earliest eredivisie kickoff of the season.
-SCHEDULE_DEADLINE_MIN = 10 * 60 + 15
+#: ── TWO DEADLINES, 2026-10-10 ───────────────────────────────────────────────
+#:
+#: The deadline is the EARLIEST KICKOFF, and it differs by day type. Measured
+#: against an INDEPENDENT reference (Flashscore fixtures pages probed with
+#: max_days_ahead=8, converted from Europe/Kyiv to UTC after verifying the
+#: offset against the production `matches` table, which stores UTC):
+#:
+#:     weekend  10:15 UTC (Sun), 10:30 (Sat)   -> 10:15 binds
+#:     weekday  12:00 UTC (Mon)                -> 12:00 binds
+#:              15:00 (Fri), 16:45 (Tue-Thu)
+#:
+#: THE REFERENCE DOES NOT REPRODUCE THE 14:30 FIGURE that was on file for
+#: weekdays; it gives 12:00, which is 2h30 stricter. The stricter measured
+#: value is used, because a figure verified against the data that produced it
+#: is not verified.
+DEADLINE_MIN_BY_DAYTYPE = {"weekend": 10 * 60 + 15, "weekday": 12 * 60}
+
+#: The WORSE of the two, kept under its old name so a single-cron regime and
+#: every existing caller still reads one conservative number.
+SCHEDULE_DEADLINE_MIN = min(DEADLINE_MIN_BY_DAYTYPE.values())
 
 #: Time from run start to picks complete on a FULL card (>=40 fixtures).
 #: MEASURED 2026-10-01, n=4: 67.4-88.1 min, mean 76.4, sd 10.2.
@@ -887,8 +906,14 @@ MARGIN_REMEDY = ("weekend-specific cron (Sat/Sun earlier); Mon-Fri binds at "
                  "14:30 not 10:15, so the split is the second option not the first")
 
 
-def schedule_margin(series, cron_minutes: int):
-    """`dict` of the margin to the weekend deadline, from a measured lag series.
+def schedule_margin(series, cron_minutes: int,
+                    deadline_min: int = SCHEDULE_DEADLINE_MIN,
+                    day_type: str = None):
+    """`dict` of the margin to ONE deadline, from a measured lag series.
+
+    `deadline_min` defaults to the WORSE of the two day-type deadlines, so a
+    caller that does not say which day type it means gets the conservative
+    answer rather than a wrong one.
 
     `series` is `[(date, lag_minutes), ...]` for runs whose OWN headSha carries
     the cron in force — the `390a4be` rule, because a lag is only comparable
@@ -898,7 +923,8 @@ def schedule_margin(series, cron_minutes: int):
     mean is what hid a negative margin for a month.
     """
     if not series:
-        return {"n": 0, "reason": "no runs under the current cron yet"}
+        return {"n": 0, "reason": "no runs under the current cron yet",
+                "deadline_min": deadline_min, "day_type": day_type}
     lags = [l for _, l in series]
     n = len(lags)
     mean = sum(lags) / n
@@ -907,10 +933,12 @@ def schedule_margin(series, cron_minutes: int):
            "mean_plus_3sd": mean + 3 * sd, "cron": cron_minutes}
     for key, delay, picks in (("margin_max", max(lags), FULL_CARD_PICKS_MAX),
                               ("margin_3sd", mean + 3 * sd, FULL_CARD_PICKS_3SD)):
-        out[key] = SCHEDULE_DEADLINE_MIN - (cron_minutes + delay + picks)
+        out[key] = deadline_min - (cron_minutes + delay + picks)
     # FAIL CLOSED on the worse of the two.
     out["binding"] = min(out["margin_max"], out["margin_3sd"])
     out["alarm"] = out["binding"] < MARGIN_ALARM_MIN
+    out["deadline_min"] = deadline_min
+    out["day_type"] = day_type
     return out
 
 
@@ -928,6 +956,78 @@ def current_cron_minutes(sha: str = None):
         return None
     m = re.match(r"^(\d+)\s+(\d+)\s+\*\s+\*\s+\*$", crons[0].strip())
     return int(m.group(2)) * 60 + int(m.group(1)) if m else None
+
+
+def current_crons_by_daytype(sha: str = None) -> dict:
+    """`{'weekend': minutes|None, 'weekday': minutes|None}` from the workflow.
+
+    Added 2026-10-10 with the split. `current_cron_minutes` returns None for
+    anything that is not exactly one `m h * * *`, which a split schedule never
+    is — so without this the margin would report UNEVALUATED from the day the
+    split landed, and "the schedule cannot be assessed" would be
+    indistinguishable from "the schedule is fine".
+
+    A cron whose day-of-week field is `*` applies to BOTH day types.
+    """
+    path = ".github/workflows/daily-picks.yml"
+    text = (_sh("git", "show", f"{sha}:{path}") if sha
+            else pathlib.Path(path).read_text(encoding="utf-8"))
+    out = {"weekend": None, "weekday": None}
+    for expr in re.findall(r"^\s*- cron:\s*'([^']+)'", text, re.M):
+        parts = expr.strip().split()
+        if len(parts) != 5 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        minutes = int(parts[1]) * 60 + int(parts[0])
+        dow = parts[4]
+        # Which day types does this cron cover? 0 and 7 are Sunday, 6 Saturday.
+        days = set()
+        if dow == "*":
+            days = set(range(7))
+        else:
+            for piece in dow.split(","):
+                if "-" in piece:
+                    a, b = piece.split("-")
+                    days |= set(range(int(a), int(b) + 1))
+                elif piece.isdigit():
+                    days.add(int(piece) % 7)
+        if days & {0, 6}:
+            out["weekend"] = minutes
+        if days & {1, 2, 3, 4, 5}:
+            out["weekday"] = minutes
+    return out
+
+
+def schedule_margins_by_daytype(series_by_type: dict, crons: dict) -> dict:
+    """One margin per day type, and the TRIGGER FIRES ON THE WORSE.
+
+    A weekday series and a weekend series are DISTINCT POPULATIONS under the
+    same change: they have different crons, different deadlines and different
+    n. They are reported apart and never pooled — the same rule that keeps the
+    `37 9`, `0 3` and `0 0` series separate.
+    """
+    out = {}
+    for day_type, cron_minutes in crons.items():
+        if cron_minutes is None:
+            continue
+        out[day_type] = schedule_margin(
+            series_by_type.get(day_type, []), cron_minutes,
+            deadline_min=DEADLINE_MIN_BY_DAYTYPE[day_type],
+            day_type=day_type)
+    # A DAY TYPE WITH NO SERIES IS UNEVALUATED, NOT SAFE. The weekday series
+    # starts EMPTY the moment the split lands, because membership requires the
+    # run's own headSha to carry the cron in force and no weekday run has fired
+    # under `0 4` yet. Reporting that as a passing margin would be the exact
+    # "absent instrumentation is not a zero" error.
+    evaluated = {k: v for k, v in out.items() if "binding" in v}
+    out["unevaluated"] = sorted(k for k in out if k not in evaluated)
+    if evaluated:
+        worst = min(evaluated.values(), key=lambda m: m["binding"])
+        out["worse"] = worst["day_type"]
+        out["alarm"] = bool(worst["alarm"])
+    else:
+        out["worse"] = None
+        out["alarm"] = False
+    return out
 
 
 def collect_lag_series(today: _dt.date = None, limit: int = 120):
@@ -971,6 +1071,75 @@ def collect_lag_series(today: _dt.date = None, limit: int = 120):
             sched -= _dt.timedelta(days=1)
         series.append((c.date(), (c - sched).total_seconds() / 60.0))
     return series, cron_now
+
+
+def collect_lag_series_by_daytype(today: _dt.date = None, limit: int = 120):
+    """`({'weekend': series, 'weekday': series}, crons)` under the CURRENT crons.
+
+    MEMBERSHIP BY EACH RUN'S OWN headSha, and now also by the run's OWN DAY OF
+    WEEK. A weekday run and a weekend run fire from different crons against
+    different deadlines, so pooling them is the `390a4be` error one axis over:
+    a 04:00 weekday run read as a four-hour outlier of a 00:00 series.
+    """
+    today = today or _dt.date.today()
+    crons = current_crons_by_daytype()
+    out = {"weekend": [], "weekday": []}
+    try:
+        runs = json.loads(_sh(
+            "gh", "run", "list", "--workflow", "daily-picks.yml",
+            "--limit", str(limit),
+            "--json", "createdAt,headSha,event") or "[]")
+    except json.JSONDecodeError:
+        return out, crons
+    for r in runs:
+        if r.get("event") != "schedule":
+            continue
+        try:
+            c = _dt.datetime.fromisoformat(
+                r["createdAt"].replace("Z", "+00:00")).replace(tzinfo=None)
+        except (KeyError, ValueError):
+            continue
+        if (today - c.date()).days > MARGIN_TRAILING_DAYS:
+            continue
+        day_type = "weekend" if c.date().weekday() >= 5 else "weekday"
+        cron_now = crons.get(day_type)
+        if cron_now is None:
+            continue
+        # The run must have CARRIED this cron for its lag to be comparable.
+        carried = current_crons_by_daytype(r.get("headSha") or "")
+        if carried.get(day_type) != cron_now:
+            continue
+        sched = c.replace(hour=cron_now // 60, minute=cron_now % 60,
+                          second=0, microsecond=0)
+        if c < sched:
+            sched -= _dt.timedelta(days=1)
+        out[day_type].append((c.date(), (c - sched).total_seconds() / 60.0))
+    return out, crons
+
+
+def format_schedule_margins(margins: dict) -> str:
+    """Both day types, apart, with the trigger on the WORSE of the two."""
+    if not margins:
+        return ("schedule_margin[UNEVALUATED: no cron resolved for either day "
+                "type — this is NOT a clean bill]")
+    lines = []
+    for day_type in ("weekend", "weekday"):
+        m = margins.get(day_type)
+        if not m:
+            lines.append(f"  {day_type:8s} UNEVALUATED (no cron)")
+            continue
+        dl = m["deadline_min"]
+        lines.append(f"  {day_type:8s} deadline {dl // 60:02d}:{dl % 60:02d}  "
+                     + format_schedule_margin(m))
+    worse = margins.get("worse")
+    unev = margins.get("unevaluated") or []
+    lines.append(f"  TRIGGER fires on the WORSE day type: {worse}"
+                 + ("  ** DECISION FIRES **" if margins.get("alarm") else ""))
+    if unev:
+        lines.append(
+            f"  !! {', '.join(unev)} is UNEVALUATED, not safe - no run has yet "
+            f"fired under its cron, so its margin is UNKNOWN rather than clear")
+    return chr(10).join(lines)
 
 
 def format_schedule_margin(m) -> str:
@@ -1630,10 +1799,12 @@ def main() -> int:
     # STAGE 23. The schedule margin, EVERY day, alarm or not. `2026-11-06` is a
     # fit with R^2=0.451 and must never stand alone as a date; this is the
     # measured number beside it.
-    _series, _cron = collect_lag_series()
-    _margin = schedule_margin(_series, _cron if _cron is not None else 0)
+    _by_type, _crons = collect_lag_series_by_daytype()
+    _margins = schedule_margins_by_daytype(_by_type, _crons)
     print()
-    print(format_schedule_margin(_margin))
+    print(format_schedule_margins(_margins))
+    _margin = _margins.get(_margins.get("worse")) or {}
+    _cron = _crons.get(_margins.get("worse"))
     if _cron is None:
         print("!! daily-picks carries no single `m h * * *` cron — the margin is "
               "UNEVALUATED, not safe")

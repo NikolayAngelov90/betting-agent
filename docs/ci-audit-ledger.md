@@ -23939,3 +23939,217 @@ marked nothing, so nothing moved.
 *Recorded 2026-10-10. `.github/workflows/h1-collect.yml` (cron added),
 `tests/test_h1_collect_loop.py`. No production write. No schema or migration
 change.*
+
+---
+
+# 2026-10-10 (sixth entry) — CRON SPLIT. The deadline differs by day, so the schedule does too.
+
+## PART 0 — H1 IS INDEPENDENT, AND THE TRACE MATTERS MORE THAN THE VERDICT
+
+H1's candidates come from `_imminent_league_fixtures`, which reads
+`matches.is_fixture` — rows **written by `daily-picks --update`**. So H1 *does*
+depend on that run, and the dependency is an **ordering** one, not a credit one.
+
+Two facts settle it:
+
+1. **The discovery cutoff is a ROLLING 24 HOURS**, not a calendar day:
+   `cutoff = datetime.now() + timedelta(days=max_days_ahead)`. That is why the
+   production table held **117 fixtures for 10-10 and ZERO for 10-11** at 13:00
+   — a 04:31 run reaches only to 04:31 the next day, and Sunday's earliest
+   kickoff is 10:15. Each day's fixtures are discovered **on that day**, so H1
+   must run after that day's `--update`.
+2. **The re-selected H1 jobs start 12:58–14:04 UTC** (cron `0 9`, measured
+   lateness). A weekday `0 4` run completes by **10:16 UTC** worst case. The
+   gap is **2h42m**, and even a `0 6` weekday cron would finish by 12:16.
+
+**Credits cannot interact**: H1 spends `for_h1=True` against its own 168 and
+normal pricing is capped at the 232 remainder, enforced in `claim_requests`.
+Moving the cron changes neither.
+
+**Which fixtures H1 can observe does not change either** — a later run reaches
+*further* into D+1, never less far.
+
+So: **independent, and the split proceeds.** Had the H1 jobs stayed at the
+08:00 start my Saturday-density analysis first suggested, this would have
+blocked — the dependency is real and it was the re-selection to midweek
+European slots that dissolved it.
+
+## PART A — TWO CRONS, AND THE MINIMUM STATED BEFORE COMPUTING
+
+> **MINIMUM ACCEPTABLE MARGIN: 60 minutes, on mean+3sd, against the day type's
+> own deadline.** Stated before the computation and pinned as
+> `MIN_ACCEPTABLE_MARGIN` so it cannot be retrofitted. The old 30-minute
+> trigger was set against a single deadline; 60 is ~3sd of the measured delay
+> (18.2 min) plus room for the 29–72 min duration spread.
+
+### The deadlines, verified against an INDEPENDENT reference
+
+Rule 2 forbids verifying a figure against the data that produced it. The
+reference is the **Flashscore fixtures pages**, probed with `max_days_ahead=8`
+— a different source from the `matches` table the 14:30 figure came from.
+
+**And the offset had to be established before any figure could be read off it.**
+The probe renders in the browser's timezone, Europe/Kyiv (UTC+3). Verified
+against the production table, which stores UTC: `france/ligue-1` reads
+**15:15 / 18:45×4** in the DB against **18:15 / 21:45×4** in the probe, and
+`spain/laliga` **14:15 / 16:30 / 19:00** against **17:15 / 19:30 / 22:00** —
+exactly **+3:00 on twelve fixtures across three leagues**.
+
+| day type | earliest kickoff (UTC) | binds |
+| --- | --- | --- |
+| weekend | **10:15** (Sun 10-11, Sun 10-18), 10:30 (Sat 10-10, Sat 10-17) | **10:15** |
+| weekday | **12:00** (Mon 10-12), 15:00 (Fri), 16:45 (Tue/Wed/Thu) | **12:00** |
+
+**THE REFERENCE DOES NOT REPRODUCE THE 14:30 WEEKDAY FIGURE ON FILE.** It gives
+**12:00 UTC**, which is **2h30 stricter**. The stricter measured value is what
+the weekday cron is sized against; the weekend 10:15 figure *is* reproduced
+exactly (Sunday 13:15 Kyiv = 10:15 UTC), which is independent corroboration of
+both the offset and that figure.
+
+### The arithmetic
+
+`MEASURED`, regime `0 0 * * *`, scheduled events only, **n=9**: delay from cron
+**3h58m–5h04m**, mean 4h31m, **sd 18.2 min**. Duration 29–72 min, mean 45.3,
+sd 10.9. Every figure below is `observed`, not nominal.
+
+| candidate | start (max) | ready (max) | ready (3sd) | margin max / 3sd | |
+| --- | --- | --- | --- | --- | --- |
+| weekend `0 0` **unchanged** | 05:04 | 06:16 | 06:42 | **+239 / +212** | OK |
+| weekend `30 0` | 05:34 | 06:46 | 07:12 | +209 / +182 | OK |
+| weekday `0 3` | 08:04 | 09:16 | 09:42 | +164 / +136 | OK |
+| weekday **`0 4`** | 09:04 | 10:16 | 10:42 | **+104 / +76** | **OK** |
+| weekday `0 5` | 10:04 | 11:16 | 11:42 | +44 / +16 | **FAIL** |
+
+**`0 4` is the latest weekday cron that clears the stated 60-minute minimum**,
+and a test computes that from the measured figures rather than asserting the
+string — it fails if one hour later would *also* clear, so the claim "latest"
+cannot rot.
+
+### The shipped pair
+
+```
+- cron: '0 0 * * 6,0'   # Sat/Sun 00:00 UTC — UNCHANGED
+- cron: '0 4 * * 1-5'   # Mon-Fri 04:00 UTC — starts ~08:31
+```
+
+Niki asked for ~1h30. **The weekdays get four hours** and the weekend keeps the
+margin it needs. A flat shift would have spent the weekend's thinner margin to
+buy the weekdays nothing: the weekend carries both the bigger card **and** the
+earlier deadline.
+
+A test asserts the two crons **partition the week** — a gap loses a card
+silently, an overlap runs the pipeline twice against one database.
+
+## PART B — SETTLEMENT, ORDERING, AND ALL SIX DATE-DERIVED SITES
+
+**Settlement clearance, in minutes.** The latest kickoff is **19:30 UTC**
+(22:30 Kyiv, measured — *not* the 19:45 on file), so D−1's last match ends
+~21:30. A weekday run starts 07:58–09:04 on D: **clearance 628–694 minutes.**
+
+**The two crons can never overlap**: the week is partitioned by day-of-week, so
+no run can have both as its nearest predecessor. That is also why
+`current_cron_minutes` refusing a multi-cron workflow — the `closing-lines`
+censoring defect — is still right *and* no longer sufficient:
+`current_crons_by_daytype` resolves each day type separately, because a day type
+is exactly the axis on which the two crons do not compete. The concurrency group
+(`daily-picks`) is unchanged and is **separate from H1's** (`h1-collect`),
+deliberately: H1 holds a runner ~4 hours and must never queue a card behind it.
+
+### The enumeration, re-run for an 04:00 weekday start
+
+| site | derivation | changes? | why |
+| --- | --- | --- | --- |
+| card date | `today_start`/`today_end`, day-aligned | **NO** | execution-date invariant |
+| settlement | DB results; `now−24h` band D−1 **07:58–09:04** | **NO** | earliest kickoff of any day type is 10:15 — **zero kickoffs in the band** |
+| credits period | `_credits_period(date.today())` | **NO** | execution-date invariant |
+| run marker | `briefings_sent.json` keyed on `date.today()` | **NO** | execution-date invariant |
+| audit window | `--since yesterday`, own cron `0 12`, executes 17:52–19:30 | **NO** | both day types in scope |
+| `max_days_ahead` | `now + 1 day`, cutoff D+1 **~08:36** | **NO** | **114 min** — see below |
+
+**The binding site is a FRIDAY run.** Mon–Thu runs have a D+1 weekday whose
+earliest kickoff is 15:00–16:45 UTC, never close. Friday's D+1 is **Saturday,
+earliest 10:30 UTC**, against a cutoff at ~08:36: **114 minutes**. A test
+carries that number and fails below 60, with the remedy named — exclude Friday
+from the weekday cron. Nothing admits a different fixture population today.
+
+## PART C — LEAD TIME AND COHORT
+
+| day type | ready (mean) | deadline | lead time | change |
+| --- | --- | --- | --- | --- |
+| weekend | 05:16 | 10:15 | **4h59m** | **unchanged** |
+| weekday | 05:16 → **09:16** | 12:00 | 6h44m → **2h44m** | **−240 min** |
+
+Weekday picks move **closer to kickoff** — better for closing-line proximity,
+worse for reliability. The same trade `s5.15` recorded, and the CLV side is
+still **UNMEASURABLE at 0% coverage** rather than neutral.
+
+**`s5.16` → `s5.17`; `ae1752` → `818026`; 0 picks stamped.** Selection-affecting
+by the s5.2/s5.15 precedent — the cron decides *when* prices are taken.
+**Rule 8 exempts invariant 6b** because rule 7 ordered the bump; the argument is
+written beside the moved pin in `experiment_pins.py` and **the test was not
+relaxed**. One pin source feeds all seven revision guards.
+
+Three guards failed on the change and all three were updated **with the
+argument, not relaxed** — including `test_the_cron_is_midnight_UTC`, whose own
+message demanded "bump CODE_REVISION and re-derive the margin before changing
+this assertion". It is renamed `test_the_cron_is_SPLIT_BY_DAY_OF_WEEK` so a
+reader cannot mistake it for the single-cron guard.
+
+## PART D — THE MARGIN TRIGGER IS NOW TWO-VALUED
+
+`DEADLINE_MIN_BY_DAYTYPE = {"weekend": 615, "weekday": 720}`, and
+`SCHEDULE_DEADLINE_MIN` is kept as **the worse of the two**, so any caller that
+does not say which day type it means gets the conservative answer rather than a
+wrong one.
+
+```
+weekend  deadline 10:15  schedule_margin[n=3 window=28d delay max=4h31m
+                         mean+3sd=5h17m | margin max=+256m 3sd=+191m
+                         binding=+191m threshold=30m]
+weekday  deadline 12:00  schedule_margin[UNEVALUATED: no runs under the
+                         current cron yet]
+TRIGGER fires on the WORSE day type: weekend
+!! weekday is UNEVALUATED, not safe - no run has yet fired under its cron
+```
+
+**The weekday series starts EMPTY and is reported UNEVALUATED, not clear.**
+Membership requires each run's own `headSha` to carry the cron in force, and no
+weekday run has fired under `0 4`. Calling that a passing margin would be
+"absent instrumentation is not a zero" in the one place it would be invisible.
+A test asserts an unevaluated day type **cannot win the comparison** for worse.
+
+**Four series now, never pooled**, each labelled by its cron with its own n and
+query window: `37 9 * * *` (n=39 at `--limit 120`, 16 at 60 — and `11h21m`
+belongs to *this* regime), `0 3 * * *` (n=32, closed), `0 0 * * *` (n=9 as a
+single cron), and now `0 0 * * 6,0` / `0 4 * * 1-5` as **two distinct
+populations under one change**.
+
+## DECLARATION
+
+**CRON SPLIT.** `0 0 * * 6,0` (weekend, unchanged) + `0 4 * * 1-5` (weekday,
+starts ~08:31). Margins **+239/+212** weekend against 10:15 UTC and
+**+104/+76** weekday against 12:00 UTC, both clearing a **60-minute minimum
+stated before computing**; `0 5` fails at +44/+16, so `0 4` is the latest
+acceptable. Lead time **unchanged** on the weekend and **6h44m → 2h44m** on
+weekdays. Cohort **`s5.17` / `818026`**, 0 picks stamped, invariant 6b exempt
+per rule 7 with the argument written and the test unrelaxed.
+
+**The weekday deadline is 12:00 UTC, not the 14:30 on file** — the independent
+reference gives a figure 2h30 stricter, and the stricter one was used. The
+weekend 10:15 figure *was* reproduced exactly, which corroborates both it and
+the +3:00 probe offset.
+
+**The margin is exhausted at the measured drift** (+2.585 min/day, R²=0.451,
+`projected`): the weekday margin of +76 min on mean+3sd is consumed in **~29
+days, around 2026-11-08**, and the weekend's +212 in **~82 days, around
+2027-01-01**. The weekday series must be re-measured before then, and it is
+**UNEVALUATED until a weekday run fires under the new cron**.
+
+Full suite **1881 passed**. Invariants pass, count not cited.
+
+*Recorded 2026-10-10. `.github/workflows/daily-picks.yml`, `scripts/ci_audit.py`,
+`src/models/model_version.py`, `tests/experiment_pins.py`,
+`tests/test_cron_split_by_daytype.py` (new), `tests/test_schedule_margin.py`,
+`tests/test_contamination_and_margin.py`, `scripts/h1_collect.py`,
+`.github/workflows/h1-collect.yml`. No schema or migration change. No
+production write.*

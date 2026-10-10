@@ -42,16 +42,31 @@ on:
   # So a 66-minute spread in start time moves the band by 66 minutes, against a
   # 120-minute target.
   #
-  # `0 12` TARGETS THE 21:45-22:00 EUROPEAN SLOT: start lands 15:58-17:04, and
-  # the band needs a start in [16:00, 18:00) for a 22:00 kickoff. All but the
-  # first two minutes of the measured range qualifies.
+  # `0 9` TARGETS THE 19:00 UTC EUROPEAN SLOT: start lands 12:58-14:04, and the
+  # band needs a start in [13:00, 15:00) for a 19:00 kickoff. All but the first
+  # two minutes of the measured range qualifies.
+  #
+  # CORRECTED FROM `0 12` THE SAME DAY. The density probe reads Flashscore
+  # pages, which render in the BROWSER's timezone — Europe/Kyiv, UTC+3 — and I
+  # took its timestamps for UTC. Verified against the production `matches`
+  # table, which stores UTC: france/ligue-1 reads 15:15 and 18:45x4 in the DB
+  # against 18:15 and 21:45x4 in the probe, and spain/laliga 14:15/16:30/19:00
+  # against 17:15/19:30/22:00 — exactly +3:00 on 12 fixtures across 3 leagues.
+  # The European slot is 19:00 UTC, not 22:00. Second instance in three days of
+  # "verify the timezone of the clock that produced it", and the first where the
+  # error pointed the other way: the figure looked LATER than reality, so the
+  # cron was set three hours too late and the band would have opened after
+  # kickoff. Fixture COUNTS and trajectories-per-credit are frame-invariant and
+  # are unaffected; only the clock times moved.
   #
   # TUESDAY, WEDNESDAY, THURSDAY ONLY, and that is the density finding rather
   # than a convenience. Measured over 10-11..10-16 (Flashscore fixtures pages,
   # `max_days_ahead=8`), trajectories per credit:
   #
   #     Thu 10-15  18/12 = 1.50      <- 37 fixtures at TWO kickoff times
+#                                     (16:45 and 19:00 UTC)
   #     Tue 10-13  15/12 = 1.25      <- 17 fixtures at THREE kickoff times
+#                                     (16:45, 18:45, 19:00 UTC)
   #     Wed 10-14  11/12 = 0.92
   #     Sun 10-11  13/36 = 0.36      <- 73 fixtures at TWENTY-SIX kickoff times
   #     Fri 10-16  11/36 = 0.31
@@ -61,11 +76,11 @@ on:
   # Thursday's 37 and yields a QUARTER of the trajectories per credit, because
   # domestic weekend kickoffs are staggered across 26 times for television
   # while European competition rounds are simultaneous by design — 19 fixtures
-  # at 22:00 on Thursday alone. A trajectory needs simultaneity inside a
+  # at 19:00 UTC on Thursday alone. A trajectory needs simultaneity inside a
   # 120-minute band, so the collection is weighted MIDWEEK, which is the
   # opposite of where the card is.
   schedule:
-    - cron: '0 12 * * 2,3,4'
+    - cron: '0 9 * * 2,3,4'
 
   workflow_dispatch:
     inputs:

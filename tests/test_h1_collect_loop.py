@@ -207,6 +207,34 @@ def test_min_interval_is_STRICTLY_below_the_in_job_gap():
     assert h1c.H1_GAP_MINUTES - h1c.H1_MIN_INTERVAL_MINUTES >= 30, (
         "less than 30 minutes of slack against the measured scheduler jitter "
         "(sd 16.8 min, max +42.2)")
+    # And it is 0 on purpose: `_leagues_refreshed_since` is WRITER-AGNOSTIC, so
+    # a closing-lines run inside H1's window would otherwise skip a round and
+    # truncate the trajectory to two instants.
+    assert h1c.H1_MIN_INTERVAL_MINUTES == 0, (
+        "min_interval is non-zero again - another workflow's refresh can now "
+        "decide whether H1 collects, because the dedup does not look at which "
+        "writer refreshed the league")
+
+
+def test_the_dedup_really_is_WRITER_AGNOSTIC():
+    """The premise for min_interval=0, asserted on the source.
+
+    `_leagues_refreshed_since` filters on `Odds.bookmaker LIKE 'TheOddsAPI%'`
+    and a timestamp and nothing else, so ANY workflow's refresh marks a league
+    fresh. If it ever grows a writer or purpose column the coupling is gone and
+    min_interval could carry a real value again - at which point this test
+    fails and the decision gets revisited instead of silently standing.
+    """
+    import inspect
+
+    from src.scrapers.theodds_scraper import TheOddsScraper
+
+    src = inspect.getsource(TheOddsScraper._leagues_refreshed_since)
+    assert "BOOKMAKER_PREFIX" in src, src
+    for marker in ("workflow", "purpose", "for_h1"):
+        assert marker not in src, (
+            f"the dedup now distinguishes {marker!r} - re-evaluate "
+            f"H1_MIN_INTERVAL_MINUTES, which is 0 only because it could not")
 
 
 def test_three_rounds_at_the_gap_FIT_inside_the_registered_window():
@@ -304,16 +332,22 @@ def test_the_cron_COMPENSATES_for_the_measured_scheduler_lateness():
 
     MEASURED 2026-10-10: this repo's crons fire 3h58m-5h04m late (mean 4h31m,
     sd 18.2, n=9). The band a job observes is only 120 minutes wide, so the
-    cron must be set EARLY by roughly the mean delay. `0 12` targets the
-    21:45-22:00 European slot: start lands 15:58-17:04 against a required
-    [16:00, 18:00).
+    cron must be set EARLY by roughly the mean delay. `0 9` targets the 19:00
+    UTC European slot: start lands 12:58-14:04 against a required
+    [13:00, 15:00).
+
+    THE TARGET IS IN UTC, and it was 22:00 for three hours on 2026-10-10
+    because the density probe reads Flashscore pages that render in
+    Europe/Kyiv (UTC+3). Verified against the production `matches` table, which
+    stores UTC. A cron set to the local figure would have opened its band AFTER
+    kickoff.
     """
     _d, on, _job = _wf()
     crons = [c["cron"] for c in on["schedule"]]
-    assert crons == ["0 12 * * 2,3,4"], crons
+    assert crons == ["0 9 * * 2,3,4"], crons
     hour = int(crons[0].split()[1])
     # the target kickoff slot, and the start window the band requires
-    target_ko = 22 * 60
+    target_ko = 19 * 60   # 19:00 UTC == 22:00 Europe/Kyiv
     need_lo = target_ko - 360
     need_hi = target_ko - (h1c.H1_ROUNDS - 1) * h1c.H1_GAP_MINUTES
     start_lo = hour * 60 + (3 * 60 + 58)
