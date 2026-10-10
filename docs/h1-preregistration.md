@@ -394,5 +394,8 @@ immune to slot dropping. Cost at three requests per league-day:
 seven days fits inside the 168-credit reservation. Choosing that mechanism is a
 decision, not a fix, and it is not taken here.
 
-*Amended 2026-10-10. No credit spent, no collection begun, `min_interval`
-unchanged at 120 pending a spacing mechanism.*
+*Amended 2026-10-10 in commit `abb053e`. No credit spent, no collection begun,
+`min_interval` unchanged at 120 pending a spacing mechanism. The measurements
+above are reproducible from that commit: the slot series via
+`gh run list --workflow=closing-lines.yml --limit 200`, the simulation against
+`scripts/h1_collection_check.qualifying_triple` as shipped there.*
