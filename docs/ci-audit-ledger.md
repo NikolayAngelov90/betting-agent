@@ -24153,3 +24153,196 @@ Full suite **1881 passed**. Invariants pass, count not cited.
 `tests/test_contamination_and_margin.py`, `scripts/h1_collect.py`,
 `.github/workflows/h1-collect.yml`. No schema or migration change. No
 production write.*
+
+---
+
+# 2026-10-10 (seventh entry) — TRIAL MEASURED (n=4, gaps 121.1/120.9). And neither 12:00 nor 14:30 is the weekday deadline.
+
+## PART C (owed) — THE TRIAL'S ACTUAL RESULT
+
+Run **38053287510**, `success`, 12:47 → 16:51 UTC. Not the predicate's verdict —
+the instants and their gaps.
+
+| round | instant (UTC) | leagues | credits | odds rows | job total |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **12:48:19** | 1 | 2 | 440 | 2/6 |
+| 2 | **14:49:21** | 1 | 2 | 440 | 4/6 |
+| 3 | **16:50:30** | 1 | 2 | 352 | 6/6 |
+
+```
+ACTUAL request gaps (min) : [121.1, 120.9]
+credits spent             : 6/6          <- exactly the cap stated beforehand
+final stop                : n=4/39 credits=6/168  state=COLLECTING halt=False
+```
+
+Gaps **121.1 / 120.9** — ratio **1.0017**, both far above the 30-minute floor.
+The stop was evaluated before every round and tracked its own spend correctly:
+`0/168 → 2/168 → 4/168 → 6/168`.
+
+### The yield is 4, and 4 is what was stated before the run
+
+| match | league | kickoff | excluded? | series ≥3 instants | TheOddsAPI | span |
+| --- | --- | --- | --- | --- | --- | --- |
+| 52816 | france/ligue-1 | 18:45 | **(none)** | 86 | **86** | 242.2 min |
+| 52817 | france/ligue-1 | 18:45 | (none) | 88 | **88** | 242.2 |
+| 52818 | france/ligue-1 | 18:45 | (none) | 86 | **86** | 242.2 |
+| 52820 | france/ligue-1 | 18:45 | (none) | 88 | **88** | 242.2 |
+
+**VALID EVIDENCE, each limb checked rather than assumed:**
+
+* **not excluded** — `training_exclusion_reason` is NULL on all four;
+* **correctly attributed** — `toa_3plus == series_3plus` on every match, so the
+  stratum is 100% TheOddsAPI with no provider mixing;
+* **not paper-tainted** — the observations are `odds_snapshots` rows, which
+  carry no paper/live flag; `is_paper` lives on picks and does not reach them;
+* **readable by the analysis as shipped** — the stop itself reported `n=4`,
+  through `load_observations` → `attach_fixture_identity` →
+  `count_qualifying_fixtures`, not through a separate query of mine.
+
+**The fifth fixture did not become a trajectory and was not counted as one.**
+52728 (Lille–Le Havre) kicks off **15:15**, before round 3. The row counts
+corroborate it arithmetically: **5 × 88 = 440** in rounds 1–2, **4 × 88 = 352**
+in round 3. The pre-stated 4-not-5 held.
+
+**No new defect surfaced.** That is reported as *no new defect on this input*,
+not as proof the path works — everything past three-instant existence had never
+run on real data before 12:48 today, and one clean trial is one input.
+
+## ADDENDUM — THE 12:00 / 14:30 DISCREPANCY, SIZED
+
+### It is localised to TWO FIXTURES
+
+The reference's **only** sub-14:30 weekday entries, across 113 weekday fixtures
+it lists for 10-12 → 10-16:
+
+| kickoff UTC | local (Kyiv) | league | date |
+| --- | --- | --- | --- |
+| **12:00** | 15:00 | `spain/laliga2` | Mon 2026-10-12 |
+| **14:15** | 17:15 | `spain/laliga2` | Mon 2026-10-12 |
+
+Everything else it lists on a weekday is **15:00 UTC or later**. `PROVENANCE`:
+Flashscore fixtures pages, probed 2026-10-10 via the production scraper with
+`max_days_ahead=8`; Europe/Kyiv → UTC at the +3:00 offset verified on 12
+fixtures across 3 leagues against the production table.
+
+### Our data holds them — in kind, and by the same league
+
+Those two dates are in the future and our discovery horizon is a rolling 24
+hours, so the two rows themselves are **not yet present** — absent because
+unreached, not absent because missing. The answerable question is whether our
+history contains that *shape*, and it does:
+
+`spain/laliga2` has a **clean** weekday fixture at **14:15 UTC on Friday
+2026-05-01** — the same league, the same time, a public holiday. So
+`spain/laliga2` is one of the configured 30 and it does play weekday afternoons.
+
+### The phantom signature had to be stripped first, and it dominates the raw count
+
+| league | raw sub-14:30 weekday rows | **phantom (sub-second `match_date`)** |
+| --- | --- | --- |
+| finland/veikkausliiga | 112 | **111** |
+| bulgaria/efbet-league | 25 | **25** |
+| netherlands/eredivisie | 20 | **20** |
+| portugal/primeira-liga | 20 | **20** |
+| europe/champions-league | 19 | **19** (all at 07:57–07:58) |
+
+Counting those as kickoffs would have put the weekday deadline at **07:53** and
+sized the whole schedule against an ingestion artefact. **The contamination
+census does NOT need re-running**: this is the same sub-second `match_date`
+defect already sized at 510 rows, and these are its known residue rather than a
+new population.
+
+### Clean figures: 14:30 is a PERCENTILE, not a minimum
+
+`MEASURED` 2026-10-10, clean rows only, 2026-02-01 onward, `world/*` excluded:
+
+| | weekdays | weekends |
+| --- | --- | --- |
+| days with fixtures | **148** | 66 |
+| earliest of all | **09:59** | 10:00 |
+| days starting before 14:30 | **18 (12.2%)** | 65 (98.5%) |
+| days starting before 12:00 | 3 | 46 |
+| **days breaching `0 4`'s ready(3sd) of 10:42** | **2** | — |
+
+The 18 weekday dates are **public holidays and habitual midweek-afternoon
+leagues**:
+
+```
+2026-06-18 Thu  09:59   1 fx  finland/veikkausliiga (Midsummer week)
+2026-04-06 Mon  10:15  95 fx  EASTER MONDAY          <== breaches
+2026-04-03 Fri  11:30  61 fx  GOOD FRIDAY
+2026-05-25 Mon  12:30  13 fx  Whit Monday
+2026-05-01 Fri  13:00  26 fx  Labour Day
++ 13 more 13:00-14:00  turkey/super-lig, greece/super-league, romania/liga-1
+```
+
+### THE VERDICT: reading 3, and sharper than stated
+
+**Both are right about different things, and neither figure is the deadline.**
+
+* **14:30 is ≈ the 88th percentile of weekdays**, not their minimum. It
+  describes a *typical* weekday and was used as a bound.
+* **The reference's 12:00 is the minimum of one upcoming week** — a sample of
+  five days.
+* The weekday earliest kickoff is **bimodal**: ordinary weekdays bind at 16:45
+  UTC (European competition) or 15:00–19:00 (domestic midweek); **holiday
+  weekdays bind like weekends, at 10:15–14:15**.
+
+Not reading 1 — the clean rows are genuine fixtures and the phantoms are an
+already-sized defect. Not reading 2 — `spain/laliga2` is configured, so no
+population difference explains those two cells.
+
+### AND THE MARGIN WE ARE DEFENDING IS NOT THE REAL ONE ON ~1.4% OF WEEKDAYS
+
+`0 4` has ready(3sd) at **10:42 UTC**. On **Easter Monday 2026-04-06 — a
+95-fixture card with the earliest kickoff at 10:15** — picks would have been
+delivered **27 minutes AFTER the first kickoff**. 2026-06-18 is worse at −43
+min but carried one fixture. Good Friday's 11:30 gives **+48 min**, positive but
+**below the 60-minute minimum** stated beforehand.
+
+So **3 of 148 weekdays (2.0%) fall below the stated minimum and 2 are
+negative.** The directive's premise — that `0 4` is safe under either reading —
+holds for the two readings offered and **fails under the third**, on the tail.
+
+**NO SCHEDULE CHANGES TODAY, and the exposure has a date.** The next weekday
+holiday with an early card is **Easter 2027: Friday 2027-04-02 and Monday
+2027-04-05**. 2026-12-26 (Boxing Day) falls on a **Saturday** and uses the
+unchanged weekend cron; 2027-01-01 is a Friday but the festive programme's
+earliest is ~12:30, which clears. So there is **no breach before 2027-04-02**.
+
+**THE PRINCIPLED REMEDY, and it goes to Niki rather than into a fix: the
+deadline is DATA, not a constant.** All three figures — 10:15, 12:00, 14:30 —
+are samples of a quantity that varies by date, and the margin should be computed
+against the **discovered earliest kickoff for the upcoming day**, which the
+pipeline already knows by the time `--update` finishes. A per-day-type constant
+cannot express a holiday, and a holiday calendar would be a second list to
+maintain. Interim alternative if zero exposure is wanted: `0 2 * * 1-5` clears
+even the observed 09:59, at the cost of two of the four hours gained.
+
+## DECLARATION
+
+**TRIAL MEASURED.** Gaps **121.1 / 120.9 min**, **6/6 credits**, **n=4** valid
+trajectories — none excluded, 100% TheOddsAPI, span 242.2 min, read back by the
+shipped analysis. The pre-stated 4-not-5 held and the row counts corroborate it
+(440 = 5×88, 352 = 4×88). No new defect on this input, which is not proof the
+path works.
+
+**DISCREPANCY SIZED — reading 3.** Localised to **two `spain/laliga2` fixtures
+on Mon 10-12**. Our data holds that shape (same league, 14:15 UTC, Labour Day).
+**14:30 is the ≈88th percentile of weekdays, not the minimum; the true minimum
+is 09:59** and the distribution is bimodal on public holidays. The raw count had
+to be stripped of the sub-second phantom signature first, which dominates it
+(111 of 112 in one league) and would have put the deadline at 07:53.
+
+**THE DEFENDED MARGIN IS WRONG ON THE TAIL:** 2 of 148 weekdays breach `0 4`'s
+ready(3sd), the worst being **Easter Monday with 95 fixtures at −27 min**. No
+schedule changes today; **the next breach is 2027-04-02**, and the remedy —
+deriving the deadline from discovered fixtures instead of a constant — is
+Niki's call.
+
+Full suite **1884 passed**. Invariants pass, count not cited. Cohort
+**UNCHANGED** at `s5.17` / `818026` — this addendum measures and pins, it
+changes no predicate.
+
+*Recorded 2026-10-10. `tests/test_cron_split_by_daytype.py`. No production
+write. No schema or migration change.*
