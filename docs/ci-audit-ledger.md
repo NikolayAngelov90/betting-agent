@@ -24569,3 +24569,226 @@ alarms, and H1 is mid-collection.
 `tests/test_prospective_deadline.py` (new),
 `tests/test_contamination_and_margin.py`. No production write. No schema or
 migration change.*
+
+---
+
+# 2026-10-10 (ninth entry) — PROBE WIRED. And the narrow window buys correctness, not load.
+
+H1 untouched: no change to the collection, the stop, the reservation or the H1
+cron.
+
+## PART A — SCOPED TO THE REQUIREMENT, AND ONE CLAIM OF MINE WAS WRONG
+
+`scripts/fixture_horizon_probe.py`: **2 days**, **all 30 leagues**.
+
+All 30 is not negotiable — the deadline is a **minimum**, so any league can set
+it, and the measured binding leagues on Easter Monday were
+`netherlands/eerste-divisie` and `poland/ekstraklasa`, neither of which anyone
+would have nominated. Probing a subset substitutes an assumption about which
+leagues can bind for a measurement of which do.
+
+**MEASURED COST**, 2026-10-10, 2-day window, 30 leagues:
+
+```
+pages fetched : 30/30
+REFUSED       : 0
+wall time     : 155.1s
+```
+
+### THE 8-DAY COMPARISON, AND THE CORRECTION IT FORCED
+
+I wrote in the workflow that the 2-day window is "a quarter of that traffic".
+**That is false.** `_click_load_more` clicks to its own 15-second budget
+**regardless of `max_days_ahead`**, which filters rows *after* they are
+fetched — so a 2-day probe and an 8-day probe load **the same 30 pages**.
+
+So the window buys **correctness**, not load: it bounds what the probe claims
+to know. The comparison the directive asked for is therefore **equal by
+construction**, and I deliberately did **not** re-run the 8-day version to
+produce a second wall-clock figure, because provider load is the thing under
+scrutiny and spending it to confirm an identity would be the wrong trade. A
+test now asserts `_click_load_more` still ignores the window, so if that ever
+changes the traffic claim gets re-measured instead of standing stale.
+
+**THE HONEST COST IS A DOUBLING.** `daily-picks` already fetches these 30
+fixtures pages once a day; this adds a second pass. **30 → 60 page-loads/day**
+against Flashscore. Stated in the workflow header, not only here.
+
+## PART B — PERSISTENCE DISPROVED BY OBSERVATION
+
+`tests/test_fixture_horizon_probe.py` counts rows in **every table the schema
+defines**, before and after a probe run, and compares. Not a reading of the
+source — the source check is there too, but as the earlier warning, not the
+proof.
+
+> A guard that enumerates a path and protects nothing has appeared three times
+> in this project, and `path=DEFAULT_PATH` binding at definition time is why.
+
+**POSITIVE CONTROL:** the same census, with a write injected into the scrape
+call, **must fail** — and does, catching `matches` going from n to n+1. Without
+it, `after == before` would pass against a probe that wrote freely if the census
+were counting the wrong thing.
+
+`cohort_status.py` is **unchanged by a probe run**: `s5.17` / `818026`, 0 picks
+stamped, before and after.
+
+## PART C — THE PROVIDER LOAD, BASELINED BEFORE SHIPPING
+
+> A read-only operation on our data can still be a write to the relationship
+> with a provider. Read-only names the wrong boundary.
+
+**BASELINE**, `measured` from CI logs over the 5 most recent scheduled
+`daily-picks` runs = **150 league-page fetches**, taken **before** the probe
+shipped:
+
+| signal | count |
+| --- | --- |
+| `Fixtures page failed` | **0** |
+| `Fixtures page retry also failed` (terminal refusal) | **0** |
+| `[Flashscore] Timeout on` | **0** |
+| leagues scraped | **30/30 every run** |
+
+So the pre-probe refusal and timeout rate is **0%**.
+
+**STOP CONDITION, STATED BEFORE THE POST-SHIP MEASUREMENT.** The probe is
+disabled and the deadline falls back to the **12:00 weekday constant** if any
+of these holds:
+
+1. terminal refusals **> 2** in a single run;
+2. the **7-day mean** of terminal refusals **> 1.0** per run;
+3. leagues scraped **< 28 of 30** on **two consecutive** runs.
+
+Against a 0/150 baseline, (1) is a 6.7% single-run league loss and (2) a
+sustained 3.3% — both far above the transient noise the scraper's own one-shot
+retry already absorbs, and all three strictly above a zero baseline so none
+fires on a healthy run. A test pins that relationship rather than the literals.
+
+### Schedule and clearances, in minutes
+
+Cron **`0 18 * * *`** → with the measured 3h58m–5h04m lateness it starts
+**21:58–23:04** and finishes by ~23:12. Own job, own concurrency group
+(`fixture-horizon-probe`), `timeout-minutes: 20` (~3× the observed 2.6 min; a
+browser hung on a page must die, not drift).
+
+| against | ends | **clearance** |
+| --- | --- | --- |
+| H1 collection `0 9 * * 2,3,4` (+240 min of rounds) | ~17:00 | **298 min** |
+| `daily-picks` weekday `0 4` | 10:16 | **701 min** |
+| `daily-picks` weekend `0 0` | 06:16 | **945 min** |
+| the NEXT `daily-picks` run — the one it warns about | starts 03:58 | **286 min of operator lead time** |
+
+**`0 9` was the probe's first choice and would have started in the same window
+as H1's own `0 9`.** Caught before shipping, and the test now computes these
+clearances from the measured lateness rather than asserting the cron string.
+
+## PART D — WIRED, AND THE CLOCK GUARD FIRED FOR REAL
+
+The probe computes the margin itself and owns the alarm, so nothing is
+persisted between jobs and no artifact is passed.
+
+**B1's cases re-run through the WIRED path** — probe → `verify_offset` →
+`earliest_for` → `prospective_margin`, not the pure function alone:
+
+| case | kickoff | verdict |
+| --- | --- | --- |
+| Good Friday 2026-04-03 | 11:30 | **ALARM** |
+| Easter Monday 2026-04-06 | 10:15 | **ALARM** |
+| Good Friday 2027-04-02 | 11:30 | **ALARM** |
+| Easter Monday 2027-04-05 | 10:15 | **ALARM** |
+| ordinary weekday 2026-10-13 | 16:45 | **CLEAR** |
+| ordinary weekend 2026-10-11 | 10:00 | **CLEAR** |
+
+`UNKNOWN — NOT safe` **survives the wiring**: a refused league yields `None`
+(never `[]`, never a value), and the margin reports UNKNOWN with no binding
+figure.
+
+### THE TIMEZONE GUARD FIRED ON ITS FIRST REAL RUN
+
+```
+timezone : probe clock is +180 min from UTC (verified against `matches`)
+prospective_margin[serves=2026-10-11 UNKNOWN: the probe's timezone is
+                   +180 min, not UTC - NOT safe]
+```
+
+Run on my Europe/Kyiv machine the probe **measured** its own offset against the
+production table and **refused to emit a deadline**. That is the fifth instance
+of "establish the clock" in three days and the first time the check caught it
+prospectively rather than after a cron went out three hours wrong. The job pins
+`TZ: UTC`, which is **necessary and not sufficient** — the probe still verifies,
+so a runner-image change cannot break it silently.
+
+The alert keeps the clearing action in its text, named as **the operator's**,
+with the statement that **there is no automated alternative today**.
+
+## AND A THIRD INSTANCE OF THE STRING-TIMESTAMP DEFECT, IN ONE DAY
+
+`EXTRACT(MICROSECONDS FROM ...)` is PostgreSQL-only, so the phantom filter now
+runs in **Python** in both `discovered_deadline` and `verify_offset` — the same
+portability lesson as `greatest()`/`max()` in `api_budget`. And raw `text()`
+SQL returns DATETIME as **strings** on SQLite: that bit `load_observations`
+this morning, then `verify_offset` an hour later. One `as_datetime` now serves
+both.
+
+> **Successor contract:** `h1_collection_check.load_observations` still carries
+> its own nested `_as_dt`. It is **deliberately not unified** — H1 is
+> mid-collection and this stage must not touch its analysis path. Unify after
+> **2026-10-17**, when the window closes.
+
+## PART E — THE THREE ENTRIES
+
+> **A parameter's name is not its semantics.** `max_days_ahead=1` is a rolling
+> 24 hours from the run, not the next calendar day; no fixture has ever been
+> known more than 14.6 hours before kickoff. Fifth instance this month of a
+> nominal value taken as an operating one, and the first where the nominal was
+> a **name** rather than a number — which does not submit to the same check and
+> needs its own: **a parameter is measured before a capability is inferred from
+> it.** The same read caught `_click_load_more` ignoring that parameter
+> entirely, which is why the traffic claim above is corrected rather than
+> repeated.
+
+> **A fallback value is never laxer than the value that justified the decision
+> it backs.** The weekday fallback stays at the external 12:00 rather than our
+> own ~12th percentile of 14:30, which would have loosened a guard while
+> appearing to improve it. The probe's stop condition falls back to that same
+> 12:00, and a test ties the two together so the fallback cannot drift from
+> what sized the cron.
+
+> **Weekday and weekend fail differently at similar minima.** Weekend `0 0` is
+> ready 06:42 and clears a 10:00 kickoff by **+198**; weekday `0 4` is ready
+> 10:42 and misses a 10:15 kickoff by **−27**. The percentiles are both low;
+> only one is urgent. `14:30` is the ~12th weekday percentile and `10:15` the
+> ~5th weekend percentile — neither is a bound, and the earlier reading of 88th
+> was the tail inverted.
+
+## DECLARATION
+
+**PROBE WIRED.** 2-day window, all 30 leagues, **measured cost 30/30 pages, 0
+refused, 155.1s**. The narrow window buys **correctness, not load** — the
+8-day comparison is equal by construction because `_click_load_more` ignores
+the window, and the honest cost is a **doubling of the Flashscore fixtures-page
+load, 30 → 60/day**, stated in the workflow.
+
+**No persistence, proved by observation**: a row census over every table,
+unchanged across a probe run, with a positive control that fails on an injected
+write. `cohort_status` unchanged by a probe run.
+
+**Baseline 0 terminal refusals / 0 timeouts / 30-of-30 leagues over 150
+league-page fetches**, taken before shipping, with the stop condition stated
+before the post-ship measurement and falling back to the 12:00 weekday
+constant. Own job, own group, `timeout-minutes: 20`, cron `0 18` — clearances
+**298 / 701 / 945** minutes from H1 and both `daily-picks` crons, and **286
+minutes of operator lead time** before the run it warns about. `0 9` would have
+collided with H1 and was caught before shipping.
+
+**B1's six cases pass through the wired path** — four holiday alarms, an
+ordinary weekday and an ordinary weekend clear — and `UNKNOWN — NOT safe`
+survives both a refused league and an unverified clock. **The clock guard fired
+on its first real run**, measuring +180 min and refusing to emit.
+
+Full suite **1924 passed**. Invariants pass, count not cited. Cohort
+**UNCHANGED** at `s5.17` / `818026`, 0 picks stamped — H1 is mid-collection.
+
+*Recorded 2026-10-10. `scripts/fixture_horizon_probe.py` (new),
+`.github/workflows/fixture-horizon-probe.yml` (new),
+`scripts/schedule_deadline.py`, `tests/test_fixture_horizon_probe.py` (new).
+No production write. No schema or migration change.*

@@ -1,0 +1,154 @@
+name: Fixture Horizon Probe
+
+# READ-ONLY probe for the PROSPECTIVE schedule margin.
+#
+# WHY IT EXISTS. The margin needs tomorrow's earliest kickoff and the database
+# cannot supply it: `max_days_ahead=1` is a ROLLING 24 HOURS from the moment of
+# the run, so measured 2026-10-10 the table held 117 fixtures for that day and
+# ZERO for the next, the furthest `match_date` in the whole table was 19:30
+# that evening, and no fixture has EVER been known more than 14.6 hours before
+# kickoff.
+#
+# WHY NOT WIDEN `max_days_ahead` INSTEAD: that changes which fixtures enter the
+# card, which is a cohort event by the `s5.15` precedent. This probe persists
+# NOTHING — proved by a row census over every table, with a positive control
+# that fails when a write is injected.
+#
+# > A read-only operation on our data can still be a write to the relationship
+# > with a provider. Read-only names the wrong boundary.
+#
+# THE PROVIDER LOAD IS THE REAL COST, so it is bounded and watched:
+#   * window is 2 DAYS, the requirement, not the 8 the density demonstration
+#     used. BUT THAT BUYS NO TRAFFIC REDUCTION, and the first draft of this
+#     comment claimed it did. `_click_load_more` clicks to its own 15-second
+#     budget regardless of `max_days_ahead`, which filters rows AFTER they are
+#     fetched — so a 2-day and an 8-day probe load the SAME 30 pages. The
+#     narrow window is for correctness (it bounds what the probe claims to
+#     know), not for load.
+#   * SO THE HONEST COST IS A DOUBLING: daily-picks already fetches these 30
+#     fixtures pages once a day, and this adds a second pass. 30 -> 60
+#     page-loads/day against Flashscore. MEASURED 2026-10-10: 30/30 pages,
+#     0 refused, 155.1s wall.
+#   * BASELINE, measured from CI logs BEFORE this shipped, over the last 5
+#     scheduled daily-picks runs = 150 league-page fetches:
+#         Fixtures page failed .............. 0
+#         Fixtures page retry also failed ... 0
+#         [Flashscore] Timeout on ........... 0
+#         leagues scraped ................... 30/30 every run
+#     So the pre-probe refusal and timeout rate is 0%.
+#   * STOP CONDITION, STATED BEFORE THE POST-SHIP MEASUREMENT. The probe is
+#     DISABLED and the deadline falls back to the 12:00 weekday constant if ANY
+#     of these holds on the daily audit's reading:
+#         (a) terminal refusals ("retry also failed") > 2 in a single run;
+#         (b) the 7-day mean of terminal refusals > 1.0 per run;
+#         (c) leagues scraped < 28 of 30 on two consecutive runs.
+#     Against a 0/150 baseline, (a) is a 6.7% single-run league loss and (b) a
+#     sustained 3.3% — both far above transient noise, which the scraper's own
+#     one-shot retry already absorbs.
+
+on:
+  # 18:00 UTC. The measured scheduler lateness is 3h58m-5h04m, so this lands
+  # 21:58-23:04 and finishes by ~23:12.
+  #
+  # IT OVERLAPS NOTHING, and the clearances are stated rather than assumed:
+  #
+  #   H1 collection   `0 9 * * 2,3,4` starts 12:58-14:04 and its three rounds
+  #                   run 240 min, ending by ~17:00.  CLEARANCE 298 min.
+  #                   (`0 9` was the probe's first choice and would have started
+  #                   in the SAME window as H1 — caught before shipping.)
+  #   daily-picks     weekday `0 4` starts 07:58-09:04, ends by 10:16.
+  #                   CLEARANCE 701 min.
+  #   daily-picks     weekend `0 0` starts 03:58-05:04, ends by 06:16.
+  #                   CLEARANCE 945 min.
+  #   NEXT daily-picks run, the one this probe is warning about: starts 03:58
+  #   (weekend) or 07:58 (weekday). LEAD TIME for the operator 286 min.
+  #
+  # And a 2-day window from ~22:00 on day D has a cutoff of D+2 22:00, which
+  # covers every kickoff on D+1 — the day the next run serves.
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      days_ahead:
+        description: 'Probe window in days. The requirement is 2.'
+        default: '2'
+      report_only:
+        description: 'Never exit non-zero (no alert, no red run)'
+        type: boolean
+        default: false
+
+# ITS OWN GROUP. It must not queue behind or ahead of anything, and it holds a
+# runner for only a few minutes.
+concurrency:
+  group: fixture-horizon-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+
+    # The 8-day, 30-league demonstration on 2026-10-10 completed well inside
+    # ten minutes; the 2-day window fetches the same 30 pages with a narrower
+    # parse. 20 is ~3x the observed wall time and is deliberately small: a
+    # browser hung on a page must die, not drift.
+    timeout-minutes: 20
+
+    env:
+      # THE CLOCK IS SET AND THEN VERIFIED. Flashscore renders in the BROWSER's
+      # timezone: the 2026-10-10 density probe ran on a Europe/Kyiv machine and
+      # returned UTC+3, and an assumed offset is how the H1 collection cron was
+      # set three hours late. Pinning TZ is necessary and NOT sufficient — the
+      # probe cross-checks itself against `matches`, which stores UTC, and
+      # refuses to emit a deadline unless the offset it measures is zero.
+      TZ: UTC
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        # Selenium and Chrome are needed here and nowhere else in this job set.
+        # Same `sqlalchemy<2.1` bound as the other workflows: 2.1 changed the
+        # default DBAPI for a bare `postgresql://` URL to psycopg v3.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c constraints.txt "sqlalchemy>=2.0.0,<2.1" psycopg2-binary pyyaml python-dotenv loguru selenium webdriver-manager beautifulsoup4 requests numpy
+
+      - name: Create directories
+        run: mkdir -p data/models logs
+
+      - name: Create config from example
+        run: cp config/config.example.yaml config/config.yaml
+
+      - name: Confirm the clock the job will hand the browser
+        run: |
+          echo "TZ=$TZ"
+          date -u '+runner UTC: %Y-%m-%d %H:%M:%S'
+          python -c "import datetime,time;print('python local:',datetime.datetime.now().isoformat(),'tzname:',time.tzname)"
+
+      - name: Probe and evaluate the prospective margin
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+          TABLES_CREATED: '1'
+        run: |
+          ARGS="--days-ahead ${{ inputs.days_ahead || '2' }}"
+          if [ "${{ inputs.report_only }}" = "true" ]; then ARGS="$ARGS --report-only"; fi
+          python -m scripts.fixture_horizon_probe $ARGS
+
+      - name: Alert when the prospective margin is short
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        # The clearing action travels in the ALERT TEXT, not only in the
+        # ledger — `fixtures_zero_active` was noise because the remedy lived
+        # somewhere the reader was not.
+        run: |
+          python -m scripts.ci_alert "Tomorrow's picks may land AFTER the first kickoff. ACTION: dispatch daily-picks manually tomorrow morning (gh workflow run daily-picks.yml) — a dispatched run skips the measured 3h58m-5h04m scheduler lateness and is the ONLY action that changes this margin. It is the operator's: there is no automated alternative today. If instead the probe refused or could not verify its clock, the margin is UNKNOWN and NOT safe, and the deadline falls back to the 12:00 weekday constant. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

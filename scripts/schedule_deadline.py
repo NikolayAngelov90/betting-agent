@@ -80,11 +80,31 @@ OBSERVED_EARLIEST_MIN = {
     "weekend": 10 * 60,         # 2026-02-01..2026-10-10
 }
 
-_PHANTOM_FREE = """
-      AND EXTRACT(MICROSECONDS FROM m.match_date) = 0
-      AND m.match_date::time > '06:00:00'
-      AND m.league NOT LIKE 'world/%%'
-"""
+#: Kept as documentation of what the filter means; the filter itself runs in
+#: Python because `EXTRACT(MICROSECONDS ...)` is PostgreSQL-only.
+_PHANTOM_RULE = ("match_date with sub-second precision is a `datetime.now()` "
+                 "ingestion stamp, not a kickoff; 00:00 rows are placeholders")
+
+
+def as_datetime(v):
+    """Coerce a raw-SQL DATETIME to `datetime`, or return it unchanged.
+
+    THIRD INSTANCE TODAY of the same defect. Raw `text()` SQL returns DATETIME
+    columns as **strings** on SQLite and as `datetime` on psycopg2, so any
+    arithmetic on them raises `TypeError: unsupported operand type(s) for -`
+    in tests while working in production. It bit `load_observations` this
+    morning and then `verify_offset` an hour later. One coercion, imported by
+    both, so there is no fourth.
+    """
+    if isinstance(v, _dt.datetime) or v is None:
+        return v
+    if isinstance(v, str):
+        try:
+            return _dt.datetime.fromisoformat(
+                v.replace("Z", "+00:00").strip()).replace(tzinfo=None)
+        except ValueError:
+            return None
+    return v
 
 
 def day_type(day: _dt.date) -> str:
@@ -104,18 +124,28 @@ def discovered_deadline(session, day: _dt.date) -> Optional[int]:
     """
     from sqlalchemy import text
 
-    row = session.execute(text("""
-        SELECT min(m.match_date)
-        FROM matches m
+    # THE PHANTOM FILTER IS APPLIED IN PYTHON, NOT IN SQL, and that is a
+    # portability decision with a precedent: `EXTRACT(MICROSECONDS FROM ...)`
+    # is PostgreSQL-only and SQLite has no equivalent, so a SQL-side filter
+    # works in production and raises in every test. Same shape as the
+    # `greatest()` / `max()` lesson in `api_budget`. A day holds at most ~120
+    # fixtures, so fetching them and filtering here costs nothing.
+    rows = session.execute(text("""
+        SELECT m.match_date FROM matches m
         WHERE m.is_fixture = true
           AND m.match_date >= :lo AND m.match_date < :hi
-    """ + _PHANTOM_FREE), {"lo": _dt.datetime.combine(day, _dt.time.min),
-                           "hi": _dt.datetime.combine(
-                               day + _dt.timedelta(days=1), _dt.time.min)}
-    ).first()
-    if not row or row[0] is None:
+          AND m.league NOT LIKE 'world/%'
+    """), {"lo": _dt.datetime.combine(day, _dt.time.min),
+           "hi": _dt.datetime.combine(day + _dt.timedelta(days=1),
+                                      _dt.time.min)}).fetchall()
+    clean = [as_datetime(r[0]) for r in rows]
+    clean = [d for d in clean
+             if d is not None
+             and d.microsecond == 0        # not a phantom
+             and d.hour >= 6]              # not a 00:00 placeholder
+    if not clean:
         return None
-    ko = row[0]
+    ko = min(clean)
     return ko.hour * 60 + ko.minute
 
 
