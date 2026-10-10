@@ -963,6 +963,63 @@ TRACKED_KEYS: List[str] = [
 #:       NOT a model change. No learner, feature, threshold or selection rule was
 #:       touched. The cohort boundary exists because the PRICES differ, not
 #:       because the predictions do.
+#: ── 2026-10-10 — TWO CHANGES, **NO BUMP**, BOTH WITH THEIR MEASURED EFFECT ───
+#:
+#:       Recorded here rather than silently, because both touch the PICK
+#:       POPULATION while touching no learner, feature, threshold or selection
+#:       rule. The Stage 19 precedent governs: a change that returns the system
+#:       to its DECLARED behaviour is a correctness fix, not a policy change,
+#:       and does not open a cohort. The measured effect is recorded anyway —
+#:       `s5.3` set that precedent by carrying its 1.6% cap figure.
+#:
+#:       NEITHER IS BUMPED BY ME. A bump inside a sized window invalidates the
+#:       sizing, so this is reported for decision rather than taken.
+#:
+#:  (1) 1X2 OUTCOME ASSIGNMENT. `_save_game_odds` classified each `h2h`
+#:       outcome with a chain testing the HOME name first, using the FUZZY
+#:       `_team_names_similar`. `_tok_match` accepts substring containment, so
+#:       `"ce"` matches `"ceuta"`; with a one-token name the token ratio is
+#:       1/1. The AWAY outcome therefore satisfied the home branch and was
+#:       written as "Home" — and `odds` is UNIQUE on
+#:       (match_id, bookmaker, market_type, selection), so the second write
+#:       OVERWROTE the first and the live Home price BECAME the away price.
+#:
+#:       MEASURED EFFECT (production, 2026-10-10, TheOddsAPI 1X2, 2,171
+#:       matches): 44,719 (match, bookmaker) keys, 44,210 complete;
+#:       **486 keys across 28 matches carry Home with NO Away**, and
+#:       `missing_HOME` is exactly **0** — the directionality the `elif` order
+#:       predicts, and the reason this is a misclassification rather than a
+#:       feed gap. **12 of the 28 carry a saved pick; 4 of those are on the
+#:       2026-10-10 card.** So 28 of 2,171 matches (1.3%) were priced with one
+#:       side's price on the other side's selection.
+#:
+#:       The fix is a SHAPE change, not a threshold change: two outcomes and
+#:       two teams is an assignment problem, resolved by `_name_affinity`
+#:       argmax over the two pairings. `_team_names_similar` is UNCHANGED —
+#:       fixture matching applies it as a conjunction over home AND away, where
+#:       a false positive on one side is caught by the other.
+#:
+#:       NOT BUMPED because no prediction input's DEFINITION changed; a price
+#:       that was wrong is now right. The counter-argument is real and is
+#:       recorded: going forward, 1X2 for those matches differs, so the pick
+#:       population differs. If that is judged a cohort event, the bump is
+#:       `s5.16` and this entry is its justification.
+#:
+#:  (2) RESERVATION ENFORCEMENT. `claim_requests` claimed against
+#:       `safety_margin` alone while `remaining()` reported the allocation, so
+#:       the 168-credit H1 reservation was reported and never enforced. It now
+#:       claims `reserved_from_me()`.
+#:
+#:       MEASURED EFFECT TO DATE: **ZERO.** October stands at 84 credits used
+#:       against a 232 normal ceiling (ledger read 2026-10-10), so the
+#:       enforcement has refused nothing and cannot have changed any pick.
+#:
+#:       COUNTERFACTUAL, on the one month where the budget DID bind: September
+#:       spent its full 400 in ELEVEN days (ledger `used=400`, last write
+#:       2026-09-11). Against a 232 ceiling, **168 of those 400 credits (42%)
+#:       would have been refused** — roughly 84 of 198 league requests. So the
+#:       effect is zero in the live window and large in a busy month, and that
+#:       asymmetry is the number worth carrying rather than "no effect".
 CODE_REVISION = "s5.15"
 
 

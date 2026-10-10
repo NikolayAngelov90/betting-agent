@@ -223,15 +223,59 @@ def load_observations(session, since: datetime) -> Tuple[List[dict], dict]:
     """
     from sqlalchemy import text
 
+    # ── READS `odds_snapshots`, NOT `odds` (changed 2026-10-10) ─────────────
+    #
+    # `odds` carries a UNIQUE index on
+    # (match_id, bookmaker, market_type, selection) — verified in production —
+    # and is OVERWRITTEN in place. It holds at most ONE instant per series, a
+    # qualifying triple needs THREE, so `n` was structurally ZERO on every
+    # input, forever. Measured 2026-10-10: 10,066 pre-kickoff series in `odds`
+    # since 10-09, instants-per-series histogram {1: 10066} — not one series
+    # ever observed twice.
+    #
+    # `odds_snapshots` is append-only, has been written on every refresh since
+    # 2026-08-25, and was built in Stage 18 for exactly this question. It was
+    # unread for 46 days while the analysis queried the table that cannot hold
+    # its input. PNC-1: a producer with no consumer looks like a working
+    # feature, and a test asserting nothing consumed it pinned that in place as
+    # a specification.
+    #
+    # The column is `observed_at`, not `timestamp`. Position 4 stays the
+    # instant so every downstream index is unchanged.
     rows = session.execute(text("""
         SELECT o.match_id, o.bookmaker, o.market_type, o.selection,
-               o.timestamp, o.odds_value, m.match_date
-        FROM odds o
+               o.observed_at, o.odds_value, m.match_date
+        FROM odds_snapshots o
         JOIN matches m ON m.id = o.match_id
-        WHERE o.timestamp >= :since
+        WHERE o.observed_at >= :since
           AND m.training_exclusion_reason IS NULL
-          AND o.timestamp < m.match_date
+          AND o.observed_at < m.match_date
     """), {"since": since}).fetchall()
+
+    # ── COERCE THE INSTANT TO A DATETIME (added 2026-10-10) ─────────────────
+    #
+    # Raw `text()` SQL on SQLite returns DATETIME columns as STRINGS; psycopg2
+    # returns `datetime`. `qualifying_triple` subtracts two of them, so on
+    # SQLite the check died with
+    # `TypeError: unsupported operand type(s) for -: 'str' and 'str'` and
+    # `refresh_imminent` fail-closed to UNEVALUATED — a halt for a type error,
+    # reported as "could not evaluate the stop".
+    #
+    # IT WAS LATENT, AND HIDDEN BY THE DEFECT ABOVE. The subtraction only runs
+    # on a series with THREE instants, and `odds` could never hold two, so no
+    # input reached it. Repointing the read at the append-only table made
+    # trajectories possible and exposed this on the same day. A crash that
+    # needs correct data to fire is invisible while the data is wrong.
+    def _as_dt(v):
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            return datetime.fromisoformat(v.replace("Z", "+00:00").strip()
+                                          ).replace(tzinfo=None)
+        return v
+
+    rows = [(r[0], r[1], r[2], r[3], _as_dt(r[4]), r[5], _as_dt(r[6]))
+            for r in rows]
 
     # Overround is a property of a whole market at one INSTANT, and an instant
     # is a cluster of writes — not a timestamp. See MARKET_ASSEMBLY_SECONDS.

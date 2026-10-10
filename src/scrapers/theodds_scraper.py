@@ -265,174 +265,231 @@ def _normalise(name: str) -> str:
     return name.lower().strip()
 
 
+import unicodedata
+from difflib import SequenceMatcher
+
+_ALIASES: Dict[str, str] = {
+    # England
+    "man city": "manchester city",
+    "man united": "manchester united",
+    "man utd": "manchester united",
+    "spurs": "tottenham hotspur",
+    "tottenham": "tottenham hotspur",
+    "wolves": "wolverhampton wanderers",
+    "wolverhampton": "wolverhampton wanderers",
+    "newcastle": "newcastle united",
+    "west ham": "west ham united",
+    "leicester": "leicester city",
+    "brighton": "brighton & hove albion",
+    "brighton hove albion": "brighton & hove albion",
+    "sheffield utd": "sheffield united",
+    "nottingham": "nottingham forest",
+    "nott'm forest": "nottingham forest",
+    "nott'm f": "nottingham forest",
+    # Spain
+    "ath bilbao": "athletic bilbao",
+    "ath madrid": "atletico madrid",
+    "atl. madrid": "atletico madrid",
+    "atl madrid": "atletico madrid",
+    "atletico de madrid": "atletico madrid",
+    "real betis balompie": "real betis",
+    "rcd espanyol": "espanyol",
+    "deportivo alaves": "alaves",
+    # Italy
+    "inter milan": "inter",
+    "internazionale": "inter",
+    "internazionale milano": "inter",
+    "ac milan": "milan",
+    "juventus fc": "juventus",
+    "as roma": "roma",
+    "ss lazio": "lazio",
+    "acf fiorentina": "fiorentina",
+    "hellas verona": "verona",
+    # Germany
+    "borussia m'gladbach": "borussia monchengladbach",
+    "m'gladbach": "monchengladbach",
+    "bayer leverkusen": "leverkusen",
+    "hertha bsc": "hertha",
+    "vfb stuttgart": "stuttgart",
+    "tsg hoffenheim": "hoffenheim",
+    "sc freiburg": "freiburg",
+    "rb leipzig": "leipzig",
+    "eintracht frankfurt": "frankfurt",
+    "1. fc koln": "koln",
+    "1. fc union berlin": "union berlin",
+    "sv werder bremen": "werder bremen",
+    # France
+    "paris sg": "paris saint-germain",
+    "psg": "paris saint-germain",
+    "paris saint germain": "paris saint-germain",
+    "olympique de marseille": "marseille",
+    "olympique lyonnais": "lyon",
+    "as monaco fc": "monaco",
+    "ogc nice": "nice",
+    "stade rennais": "rennes",
+    "stade brestois": "brest",
+    "stade de reims": "reims",
+    # Netherlands
+    "psv eindhoven": "psv",
+    "ajax amsterdam": "ajax",
+    "az alkmaar": "az",
+    "feyenoord rotterdam": "feyenoord",
+    "fc twente": "twente",
+    "sc heerenveen": "heerenveen",
+    # Portugal
+    "sporting cp": "sporting",
+    "sporting clube de portugal": "sporting",
+    "sl benfica": "benfica",
+    "fc porto": "porto",
+    "sc braga": "braga",
+    # Turkey
+    "galatasaray sk": "galatasaray",
+    "fenerbahce sk": "fenerbahce",
+    "besiktas jk": "besiktas",
+    "trabzonspor as": "trabzonspor",
+    # Greece
+    "olympiakos": "olympiacos piraeus",
+    "olympiacos": "olympiacos piraeus",
+    "olympiakos piraeus": "olympiacos piraeus",
+    "paok salonika": "paok",
+    "paok thessaloniki": "paok",
+    # Romania
+    "din. bucuresti": "dinamo bucuresti",
+    "din bucuresti": "dinamo bucuresti",
+    "fcsb": "steaua bucuresti",
+    "fc steaua bucuresti": "steaua bucuresti",
+    # European cups (common TheOdds API variants)
+    "rb salzburg": "salzburg",
+    "red bull salzburg": "salzburg",
+    "shakhtar donetsk": "shakhtar",
+    "bsc young boys": "young boys",
+    "fc celtic": "celtic",
+    "celtic fc": "celtic",
+    "rangers fc": "rangers",
+    "sporting lisbon": "sporting",
+    "benfica": "benfica",
+    "porto": "porto",
+    # Belgium — Jupiler Pro League
+    "union saint-gilloise": "st. gilloise",
+    "royale union saint-gilloise": "st. gilloise",
+    "union sg": "st. gilloise",
+    # Standard Liège: TheOddsAPI sends "Standard Liège" → canon "standard liege";
+    # DB may store bare "Standard" → canon "standard". Token match {"standard","liege"}
+    # vs {"standard"} = 0.5 < 0.7 threshold → no match. Alias collapses all forms.
+    "standard liege": "standard",
+    "r. standard de liege": "standard",
+    "r standard de liege": "standard",
+    "standard de liege": "standard",
+    # Further Belgium aliases for completeness
+    "rsc anderlecht": "anderlecht",
+    "royale union sportive anderlecht": "anderlecht",
+    "club brugge kv": "club brugge",
+    "krc genk": "genk",
+    "kaa gent": "gent",
+    "oh leuven": "oud-heverlee leuven",
+    # Poland — Ekstraklasa (TheOdds API uses short name; DB stores API-Football display name)
+    "nieciecza": "termalica b-b.",
+    "bruk-bet termalica nieciecza": "termalica b-b.",
+    # Portugal — TheOddsAPI uses "Vitória SC" for Vitória SC Guimarães; DB stores "Guimaraes"
+    "vitoria sc": "guimaraes",
+    # Greece — DB stores short names; TheOddsAPI sends city-qualified names
+    "ofi crete": "ofi",
+    "ofi crete fc": "ofi",
+    "panserraikos fc": "panserraikos",
+    "panserraikos fc thessaloniki": "panserraikos",
+    # Netherlands — DB stores "PSV Eindhoven"; TheOdds may send bare "PSV"
+    "psv": "psv eindhoven",
+}
+
+def _strip_accents(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s)
+        if unicodedata.category(c) != "Mn"
+    )
+
+#: Below this MEAN affinity a 1X2 market is refused rather than
+#: assigned. See the assignment block in `_save_game_odds`.
+_OUTCOME_MIN_AFFINITY = 0.30
+
+
+def _canon_team_name(n: str) -> str:
+    n = _strip_accents(n.lower().strip())
+    n = _ALIASES.get(n, n)
+    for suffix in (" fc", " cf", " sc", " ac", " fk", " sk", " bk",
+                   " city", " town", " united", " utd", " rovers",
+                   " wanderers", " athletic", " albion", " hotspur"):
+        if n.endswith(suffix):
+            n = n[: -len(suffix)].strip()
+            break
+    for prefix in ("fc ", "cf ", "sc ", "ac ", "fk ", "sk ", "bk ",
+                   "as ", "ss ", "us ", "rc ", "cd ", "ud ", "sd "):
+        if n.startswith(prefix):
+            n = n[len(prefix):].strip()
+            break
+    return n
+
+
+def _tok_match(ta: str, tb: str) -> bool:
+    """One token against another: equal, substring, or 0.75 sequence ratio.
+
+    THE SUBSTRING RULE IS WHY `_name_affinity` EXISTS. `"ce" in "ceuta"` is
+    True, so a one-token name scores a perfect token ratio against any name
+    carrying a prefix-compatible token. Kept here unchanged because fixture
+    matching depends on its exact behaviour; the outcome classifier no longer
+    uses it alone.
+    """
+    if ta == tb:
+        return True
+    if ta in tb or tb in ta:
+        return True
+    return SequenceMatcher(None, ta, tb).ratio() >= 0.75
+
+
+def _token_ratio(c_a: str, c_b: str) -> float:
+    t_a, t_b = set(c_a.split()), set(c_b.split())
+    shorter, longer = (t_a, t_b) if len(t_a) <= len(t_b) else (t_b, t_a)
+    if not shorter:
+        return 0.0
+    matches = sum(1 for tok in shorter
+                  if any(_tok_match(tok, long_tok) for long_tok in longer))
+    return matches / len(shorter)
+
+
+def _name_affinity(name_a: str, name_b: str) -> float:
+    """GRADED name similarity in [0, 1], for ASSIGNING outcomes to selections.
+
+    Added 2026-10-10. `_team_names_similar` answers "could these be the same
+    club" and is right for fixture matching, where it is applied as a
+    CONJUNCTION over home AND away and a false positive on one side is caught
+    by the other. It is wrong for classifying a market's outcomes, which is an
+    ASSIGNMENT problem: two outcomes, two teams, and the question is which
+    pairing is better — not whether each passes a threshold.
+
+    WHY THE SEQUENCE RATIO CARRIES THE DECISION. The token ratio saturates: for
+    Ceuta vs Sabadell it returns 1.0 for BOTH candidate pairings, because
+    `"ce"` is a substring of `"ceuta"` and the one-token side scores 1/1. The
+    sequence ratio separates them — 0.769 against 0.375 — so it is the primary
+    signal and token overlap only breaks ties.
+    """
+    if name_a == name_b:
+        return 1.0
+    c_a, c_b = _canon_team_name(name_a), _canon_team_name(name_b)
+    if c_a == c_b:
+        return 1.0
+    seq = SequenceMatcher(None, c_a, c_b).ratio()
+    return seq + 0.001 * _token_ratio(c_a, c_b)
+
+
 def _team_names_similar(name_a: str, name_b: str) -> bool:
     """Reuse FlashscoreScraper's fuzzy match logic without importing the class.
 
     Handles abbreviations, diacritics, prefixes/suffixes, and known aliases.
     Returns True when two names likely refer to the same club.
     """
-    import unicodedata
-    from difflib import SequenceMatcher
-
     if name_a == name_b:
         return True
 
-    _ALIASES: Dict[str, str] = {
-        # England
-        "man city": "manchester city",
-        "man united": "manchester united",
-        "man utd": "manchester united",
-        "spurs": "tottenham hotspur",
-        "tottenham": "tottenham hotspur",
-        "wolves": "wolverhampton wanderers",
-        "wolverhampton": "wolverhampton wanderers",
-        "newcastle": "newcastle united",
-        "west ham": "west ham united",
-        "leicester": "leicester city",
-        "brighton": "brighton & hove albion",
-        "brighton hove albion": "brighton & hove albion",
-        "sheffield utd": "sheffield united",
-        "nottingham": "nottingham forest",
-        "nott'm forest": "nottingham forest",
-        "nott'm f": "nottingham forest",
-        # Spain
-        "ath bilbao": "athletic bilbao",
-        "ath madrid": "atletico madrid",
-        "atl. madrid": "atletico madrid",
-        "atl madrid": "atletico madrid",
-        "atletico de madrid": "atletico madrid",
-        "real betis balompie": "real betis",
-        "rcd espanyol": "espanyol",
-        "deportivo alaves": "alaves",
-        # Italy
-        "inter milan": "inter",
-        "internazionale": "inter",
-        "internazionale milano": "inter",
-        "ac milan": "milan",
-        "juventus fc": "juventus",
-        "as roma": "roma",
-        "ss lazio": "lazio",
-        "acf fiorentina": "fiorentina",
-        "hellas verona": "verona",
-        # Germany
-        "borussia m'gladbach": "borussia monchengladbach",
-        "m'gladbach": "monchengladbach",
-        "bayer leverkusen": "leverkusen",
-        "hertha bsc": "hertha",
-        "vfb stuttgart": "stuttgart",
-        "tsg hoffenheim": "hoffenheim",
-        "sc freiburg": "freiburg",
-        "rb leipzig": "leipzig",
-        "eintracht frankfurt": "frankfurt",
-        "1. fc koln": "koln",
-        "1. fc union berlin": "union berlin",
-        "sv werder bremen": "werder bremen",
-        # France
-        "paris sg": "paris saint-germain",
-        "psg": "paris saint-germain",
-        "paris saint germain": "paris saint-germain",
-        "olympique de marseille": "marseille",
-        "olympique lyonnais": "lyon",
-        "as monaco fc": "monaco",
-        "ogc nice": "nice",
-        "stade rennais": "rennes",
-        "stade brestois": "brest",
-        "stade de reims": "reims",
-        # Netherlands
-        "psv eindhoven": "psv",
-        "ajax amsterdam": "ajax",
-        "az alkmaar": "az",
-        "feyenoord rotterdam": "feyenoord",
-        "fc twente": "twente",
-        "sc heerenveen": "heerenveen",
-        # Portugal
-        "sporting cp": "sporting",
-        "sporting clube de portugal": "sporting",
-        "sl benfica": "benfica",
-        "fc porto": "porto",
-        "sc braga": "braga",
-        # Turkey
-        "galatasaray sk": "galatasaray",
-        "fenerbahce sk": "fenerbahce",
-        "besiktas jk": "besiktas",
-        "trabzonspor as": "trabzonspor",
-        # Greece
-        "olympiakos": "olympiacos piraeus",
-        "olympiacos": "olympiacos piraeus",
-        "olympiakos piraeus": "olympiacos piraeus",
-        "paok salonika": "paok",
-        "paok thessaloniki": "paok",
-        # Romania
-        "din. bucuresti": "dinamo bucuresti",
-        "din bucuresti": "dinamo bucuresti",
-        "fcsb": "steaua bucuresti",
-        "fc steaua bucuresti": "steaua bucuresti",
-        # European cups (common TheOdds API variants)
-        "rb salzburg": "salzburg",
-        "red bull salzburg": "salzburg",
-        "shakhtar donetsk": "shakhtar",
-        "bsc young boys": "young boys",
-        "fc celtic": "celtic",
-        "celtic fc": "celtic",
-        "rangers fc": "rangers",
-        "sporting lisbon": "sporting",
-        "benfica": "benfica",
-        "porto": "porto",
-        # Belgium — Jupiler Pro League
-        "union saint-gilloise": "st. gilloise",
-        "royale union saint-gilloise": "st. gilloise",
-        "union sg": "st. gilloise",
-        # Standard Liège: TheOddsAPI sends "Standard Liège" → canon "standard liege";
-        # DB may store bare "Standard" → canon "standard". Token match {"standard","liege"}
-        # vs {"standard"} = 0.5 < 0.7 threshold → no match. Alias collapses all forms.
-        "standard liege": "standard",
-        "r. standard de liege": "standard",
-        "r standard de liege": "standard",
-        "standard de liege": "standard",
-        # Further Belgium aliases for completeness
-        "rsc anderlecht": "anderlecht",
-        "royale union sportive anderlecht": "anderlecht",
-        "club brugge kv": "club brugge",
-        "krc genk": "genk",
-        "kaa gent": "gent",
-        "oh leuven": "oud-heverlee leuven",
-        # Poland — Ekstraklasa (TheOdds API uses short name; DB stores API-Football display name)
-        "nieciecza": "termalica b-b.",
-        "bruk-bet termalica nieciecza": "termalica b-b.",
-        # Portugal — TheOddsAPI uses "Vitória SC" for Vitória SC Guimarães; DB stores "Guimaraes"
-        "vitoria sc": "guimaraes",
-        # Greece — DB stores short names; TheOddsAPI sends city-qualified names
-        "ofi crete": "ofi",
-        "ofi crete fc": "ofi",
-        "panserraikos fc": "panserraikos",
-        "panserraikos fc thessaloniki": "panserraikos",
-        # Netherlands — DB stores "PSV Eindhoven"; TheOdds may send bare "PSV"
-        "psv": "psv eindhoven",
-    }
-
-    def _strip_accents(s: str) -> str:
-        return "".join(
-            c for c in unicodedata.normalize("NFD", s)
-            if unicodedata.category(c) != "Mn"
-        )
-
-    def _canon(n: str) -> str:
-        n = _strip_accents(n.lower().strip())
-        n = _ALIASES.get(n, n)
-        for suffix in (" fc", " cf", " sc", " ac", " fk", " sk", " bk",
-                       " city", " town", " united", " utd", " rovers",
-                       " wanderers", " athletic", " albion", " hotspur"):
-            if n.endswith(suffix):
-                n = n[: -len(suffix)].strip()
-                break
-        for prefix in ("fc ", "cf ", "sc ", "ac ", "fk ", "sk ", "bk ",
-                       "as ", "ss ", "us ", "rc ", "cd ", "ud ", "sd "):
-            if n.startswith(prefix):
-                n = n[len(prefix):].strip()
-                break
-        return n
-
-    c_a, c_b = _canon(name_a), _canon(name_b)
+    c_a, c_b = _canon_team_name(name_a), _canon_team_name(name_b)
     if c_a == c_b:
         return True
     if SequenceMatcher(None, c_a, c_b).ratio() >= 0.75:
@@ -736,21 +793,89 @@ class TheOddsScraper:
                     market_key = market["key"]  # "h2h" or "totals"
 
                     if market_key == "h2h":
+                        # ── ASSIGNMENT, NOT FIRST-THRESHOLD-WINS (2026-10-10) ──
+                        #
+                        # THE DEFECT THIS REPLACES, measured in production: the
+                        # old chain tested `_team_names_similar(oname,
+                        # home_name)` FIRST, so any outcome whose name fuzzily
+                        # matched the HOME name was written as "Home" — including
+                        # the AWAY team's outcome. `_tok_match` accepts substring
+                        # containment, so `"ce"` matches `"ceuta"` and a
+                        # one-token name scores 1/1. Ceuta vs Sabadell therefore
+                        # wrote TWO "Home" rows and NO "Away" row.
+                        #
+                        # BLAST RADIUS, 2026-10-10: 486 (match, bookmaker) keys
+                        # across 28 matches carry 1X2 with Home present and Away
+                        # ABSENT, and `missing_HOME` is exactly 0 — the
+                        # directionality the `elif` order predicts. 12 of the 28
+                        # carry a saved pick, 4 of them on today's card. In
+                        # `odds` the second write UPDATES the first, so the live
+                        # Home price was the AWAY team's price.
+                        #
+                        # WHY ASSIGNMENT IS THE RIGHT SHAPE. Two outcomes, two
+                        # teams: the question is which PAIRING is better, not
+                        # whether each name passes a threshold. The game was
+                        # already matched to this fixture upstream by
+                        # `_team_names_similar` applied as a CONJUNCTION over
+                        # home AND away, so identity is established before we
+                        # get here and this step only has to order the two.
                         home_name = game.get("home_team", "")
                         away_name = game.get("away_team", "")
+                        draw_price = None
+                        team_outcomes = []
                         for outcome in market.get("outcomes", []):
-                            oname = outcome.get("name", "")
+                            oname = (outcome.get("name") or "").strip()
                             oprice = outcome.get("price")
                             if oprice is None:
                                 continue
-                            if _team_names_similar(oname, home_name):
-                                selection = "Home"
-                            elif oname.lower() == "draw":
-                                selection = "Draw"
-                            elif _team_names_similar(oname, away_name):
-                                selection = "Away"
+                            if oname.lower() == "draw":
+                                draw_price = oprice
                             else:
-                                continue
+                                team_outcomes.append((oname, oprice))
+
+                        picked = {}
+                        if len(team_outcomes) == 2:
+                            (n1, p1), (n2, p2) = team_outcomes
+                            direct = (_name_affinity(n1, home_name)
+                                      + _name_affinity(n2, away_name))
+                            swap = (_name_affinity(n1, away_name)
+                                    + _name_affinity(n2, home_name))
+                            if direct >= swap:
+                                picked["Home"], picked["Away"] = p1, p2
+                            else:
+                                picked["Home"], picked["Away"] = p2, p1
+                            # A SAFETY NET, NOT THE DECISION. The argmax is
+                            # correct whatever the absolute scores; this only
+                            # refuses a market that is not a two-team h2h at
+                            # all. Deliberately low, because the API's naming
+                            # can differ sharply from the DB's and dropping a
+                            # real market costs a price.
+                            if max(direct, swap) / 2.0 < _OUTCOME_MIN_AFFINITY:
+                                picked = {}
+                                self._h2h_unassigned = getattr(
+                                    self, "_h2h_unassigned", 0) + 1
+                                logger.warning(
+                                    f"TheOddsAPI 1X2 REFUSED for match "
+                                    f"{match_id} / {bm_key}: outcomes "
+                                    f"{[n for n, _ in team_outcomes]!r} score "
+                                    f"{max(direct, swap) / 2.0:.2f} against "
+                                    f"{home_name!r} vs {away_name!r} — writing "
+                                    f"no 1X2 rather than a guessed side")
+                        elif team_outcomes:
+                            # NOT A ZERO AND NOT A GUESS. One or three+ team
+                            # outcomes is a market shape we do not understand;
+                            # counted and named rather than partially written.
+                            self._h2h_unassigned = getattr(
+                                self, "_h2h_unassigned", 0) + 1
+                            logger.warning(
+                                f"TheOddsAPI 1X2 SKIPPED for match {match_id} / "
+                                f"{bm_key}: {len(team_outcomes)} non-draw "
+                                f"outcome(s), expected 2 — "
+                                f"{[n for n, _ in team_outcomes]!r}")
+                        if draw_price is not None:
+                            picked["Draw"] = draw_price
+
+                        for selection, oprice in picked.items():
                             written += self._upsert_odds(
                                 sess, match_id, bm_key, "1X2", selection, oprice,
                                 existing_index=existing_index,

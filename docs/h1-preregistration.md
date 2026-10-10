@@ -261,3 +261,138 @@ conditions 2 and 3 depends on it, and so does the candidate rule's bite. Stated
 here so the dependency is visible rather than assumed.
 
 *Restated 2026-09-20. No credit spent, no config changed, no collection begun.*
+
+---
+
+## AMENDMENT 1 — 2026-10-10. THE CADENCE PREMISE IS FALSE AS MEASURED.
+
+**Recorded before collection, as required. No credit has been spent on H1.**
+
+### What the registration assumed
+
+> "The design achieves that by construction: with a refresh cadence of 120
+> minutes, t0→t1 and t1→t2 are each ~120 minutes."
+
+That sentence is the only place the design's **slot spacing** is justified, and
+it is stated as holding *by construction*. It does not hold. The construction
+was the `closing-lines` cron — `47 10 * * *` plus
+`17 11,13,15,17,19,21,23 * * *`, eight nominal slots 120 minutes apart — and
+the scheduler does not run it.
+
+### What actually fires — MEASURED 2026-10-10
+
+Source: `gh run list --workflow=closing-lines.yml --limit 200`, `event=schedule`
+only. The listing returned exactly 200 rows, so it is **TRUNCATED and every
+count below is a lower bound**; it spans 2026-09-11 → 2026-10-10.
+
+| quantity | nominal | **measured** |
+| --- | --- | --- |
+| slots per day | 8 | **median 4, mean 4.2, min 1, max 6** (n=47 days) |
+| delay from the nominal slot | 0 | median **+13.7 min**, mean +13.4, sd 16.8, range −16.2…+42.2 |
+| consecutive gap | 120 min | median **207 min** |
+| gaps below 120 min | 0 | **29 of 91** — and all 29 are also below 90 |
+
+The **shape** matters more than the averages. Every day with a real card shows
+the same pattern, in minutes between consecutive slots:
+
+```
+2026-09-13  [824, 12, 196, 194]      2026-09-18  [ 19, 208, 194]
+2026-09-14  [935, 20, 239, 175]      2026-09-19  [771,  24, 216, 208]
+2026-09-15  [ 16, 281, 197]          2026-09-20  [796,  19, 211, 199]
+2026-09-16  [ 14, 281, 213]          2026-10-03  [781,  12, 212, 207]
+2026-09-17  [ 12, 287, 194]          2026-10-09  [ 14, 349]
+```
+
+An overnight gap, then **a pair 12–24 minutes apart**, then roughly 200-minute
+gaps. The pair is **below `MIN_GAP_MINUTES = 30`**, so the two runs in it are one
+separated instant, not two: the second slot is spent and buys no separation.
+A fixture's 360-minute window therefore contains at most **two** separated
+instants, and a qualifying triple needs three.
+
+### The consequence, simulated against measured slots and real fixtures
+
+Twelve days with ≥10 fixtures (the empty-card period excluded), real fixture
+rows from production, the slot times above, and the **authoritative**
+`qualifying_triple`:
+
+```
+min_interval=120  credits=316  QUALIFYING=0
+min_interval=110  credits=316  QUALIFYING=0
+min_interval=100  credits=316  QUALIFYING=0
+min_interval= 90  credits=316  QUALIFYING=0
+min_interval= 60  credits=316  QUALIFYING=0
+min_interval= 30  credits=316  QUALIFYING=0
+```
+
+**`min_interval` is not the binding constraint, at any value.** 316 credits
+would buy zero trajectories.
+
+### Correcting a figure reported on 2026-10-09
+
+The previous entry reported "0 qualifying at `min_interval=120`, 36 at 110".
+That simulation used the **nominal** cron times. It is arithmetically correct
+for a schedule that fires as written, and the premise is false: against measured
+slots both values give 0. The predicate accounts for none of the difference —
+re-run with the authoritative `qualifying_triple` the nominal simulation still
+returns 0 and 36, so the entire change is nominal-versus-measured slot times.
+**A simulation carries the provenance of its inputs, and "nominal cron" is an
+assumption, not a measurement.**
+
+### What a qualifying triple actually requires
+
+`qualifying_triple` needs each gap ≥ 30 min and `hi/lo` **strictly** < 2.0,
+inside the 360-minute window. Measured by evaluating the predicate:
+
+| gaps (min) | span | verdict |
+| --- | --- | --- |
+| 13 / 217 | 230 | rejected — the first gap is below MIN_GAP |
+| 30 / 60 | 90 | rejected — ratio exactly 2.0 is **not** < 2.0 |
+| 45 / 90 | 135 | rejected — ratio exactly 2.0 |
+| 60 / 120 | 180 | rejected — ratio exactly 2.0 |
+| 100 / 120 | 220 | **qualifies** |
+| 120 / 120 | 240 | **qualifies** |
+| 90 / 150 | 240 | **qualifies** |
+| 150 / 180 | 330 | **qualifies** |
+
+So the requirement is **three slots 90–150 minutes apart inside the six hours
+before kickoff**, with the two intervals within a factor of two of each other.
+
+### The amendment
+
+**No change to `min_interval` is made, because the measurement does not justify
+one.** Amending it would be a threshold picked to look like a fix while the
+mechanism — slot spacing — went unaddressed.
+
+What is amended is the **premise**: the registration's "by construction" claim
+is withdrawn and replaced by a requirement that must be satisfied by the
+collection mechanism, whatever that turns out to be:
+
+> **H1-C1 (amended).** The three observations must be spaced 90–150 minutes
+> apart, each gap ≥ 30 minutes and the two gaps within a factor < 2.0, inside
+> the 360 minutes before kickoff. **This spacing must be produced
+> deterministically and verified per fixture, not inferred from a cron
+> expression.** `min_interval` must then be set strictly below the achieved
+> spacing with margin for jitter; at a 120-minute spacing and the measured
+> jitter (sd 16.8 min, max +42.2), **90** satisfies that. The number is
+> conditional on the spacing mechanism and is not adopted until one exists.
+
+**This is a sizing defect, not a threshold chosen on an outcome.** The filter
+(`min_interval`) and the cadence (the cron) were specified independently and
+cancel; nothing about H1's effect size, σ, ρ or `TARGET_N` is touched, and no
+collected observation was examined to pick any number here. Every figure above
+is `measured` or `simulated` with its date and query window, as recorded.
+
+### Open, and in front of Niki
+
+The GitHub scheduler drops roughly half the slots and batches what it does fire,
+so **no cron expression can deliver the required spacing reliably** — that is
+what the 12–24 minute pairs are. The repository is **public**, so Actions
+minutes are free and unmetered, which makes a single scheduled job that issues
+its three requests with in-job waits the only mechanism measured here that is
+immune to slot dropping. Cost at three requests per league-day:
+`3 × 2 = 6 credits per league-day`, so **~22 credits/day is 3–4 leagues** and
+seven days fits inside the 168-credit reservation. Choosing that mechanism is a
+decision, not a fix, and it is not taken here.
+
+*Amended 2026-10-10. No credit spent, no collection begun, `min_interval`
+unchanged at 120 pending a spacing mechanism.*

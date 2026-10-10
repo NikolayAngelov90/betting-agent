@@ -22996,3 +22996,277 @@ outside the alarm by design.
 `model_version` UNCHANGED at `8da2fd`; `s5.15`, **146** picks stamped (35 -> 146
 under the SAME fingerprint). Full suite **1741 passed**. No schema or migration
 change — the unique index was MEASURED, not altered.*
+
+---
+
+# 2026-10-10 (second entry) — H1 CANNOT COLLECT. Looking for a duplicating writer found a misclassifier that corrupted live prices.
+
+## PART A — THE WRITER'S VERDICT: **LIVE, AND IT WAS NOT DUPLICATION**
+
+The 17 zero-gap series were the **shadow of a selection misclassifier**, and the
+mechanism was still running: last duplicate written **2026-10-10 04:55:38**.
+
+`_save_game_odds` classified each `h2h` outcome with a chain testing the HOME
+name first, using the fuzzy `_team_names_similar`:
+
+```
+if   _team_names_similar(oname, home_name): selection = "Home"
+elif oname.lower() == "draw":               selection = "Draw"
+elif _team_names_similar(oname, away_name): selection = "Away"
+```
+
+`_tok_match` accepts **substring containment**, so `"ce"` matches `"ceuta"`; with
+a one-token name the token ratio is 1/1 = 1.0. The **away** outcome therefore
+satisfied the **first** branch. Verified on the comparison the code actually
+makes — API outcome name against API header name:
+
+```
+sim(away='CE Sabadell FC', home='AD Ceuta FC') = True     <== the defect
+sim(away='Villarreal',     home='Real Madrid') = True
+sim(away='Paris SG',       home='Paris FC')    = True
+sim(away='Dundee FC',      home='Dundee Utd')  = True
+sim(away='Genk',           home='Gent')        = True
+sim(away='Wolves',         home='West Ham')    = True
+sim(away='Alanyaspor',     home='Antalyaspor') = True
+```
+
+**`odds` is UNIQUE on (match_id, bookmaker, market_type, selection), so the
+second write OVERWROTE the first and the live Home price BECAME the away
+team's price.** The snapshot duplicates were the same event seen in an
+append-only table.
+
+### BLAST RADIUS — measured 2026-10-10, production, TheOddsAPI 1X2
+
+| quantity | value |
+| --- | --- |
+| (match, bookmaker) keys | 44,719 over 2,171 matches |
+| complete (H+D+A) | 44,210 |
+| **missing AWAY, Home present** | **486 keys / 28 matches** |
+| **missing HOME** | **0** |
+| matches carrying a saved pick | **12 of 28** |
+| of those, on today's card | **4** — Real Madrid–Villarreal, Lille–Le Havre, Ceuta–Sabadell, Sunderland–Brighton |
+| snapshot keys with >1 row in ONE second | 585 keys, 664 excess rows, 577 with **different** values |
+
+**`missing_HOME = 0` is the signature.** A feed gap would be symmetric; testing
+`home_name` first makes it strictly directional. That single number is what
+turns "some markets are incomplete" into "the away price is being written as
+Home".
+
+### THE FIX IS A SHAPE CHANGE, NOT A THRESHOLD CHANGE
+
+Two outcomes and two teams is an **assignment** problem — which pairing is
+better, not whether each name passes a bar. `_name_affinity` grades it and the
+better pairing wins:
+
+```
+direct  aff('AD Ceuta FC','Ceuta')=0.770 + aff('CE Sabadell FC','Sabadell')=0.843 = 1.613
+swap    aff('AD Ceuta FC','Sabadell')=0.376 + aff('CE Sabadell FC','Ceuta')=0.376 = 0.752
+```
+
+A **boolean or token-based argmax cannot separate them** — the token ratio
+returns 1.0 for both pairings. The sequence ratio does, so it carries the
+decision and token overlap only breaks ties.
+
+`_team_names_similar` is **unchanged**, verified byte-for-behaviour: fixture
+matching applies it as a **conjunction** over home AND away, where a false
+positive on one side is caught by the other. It is right there and wrong here.
+The canonicalisation was lifted to module level so both rules share **one**
+definition.
+
+Refusals are **counted, not silent** (`_h2h_unassigned`): a market with other
+than two non-draw outcomes is skipped and named, and an internally inconsistent
+payload below the affinity floor is refused rather than guessed. 20 tests,
+including all ten production-corrupted pairs and a control proving the old
+chain's premise was true.
+
+> **The writer no longer duplicates**, asserted directly: one API call now
+> writes exactly one snapshot row per selection, and two calls append two.
+
+## PART B — THE ANALYSIS READS `odds_snapshots`
+
+`load_observations` now queries the append-only table. **`COMPLETE` became
+reachable from the caller the same day** — it never was before, because `odds`
+rejects a series' second instant outright, so no database state could produce
+`n > 0`.
+
+`test_nothing_reads_the_snapshot_table_yet` is **retired with its successor
+contract**, and the contract inverts rather than disappears:
+
+> A test asserting that nothing consumes a producer records PNC-1 as a
+> **specification**. It cannot distinguish "not wired yet" from "must never be
+> wired", and it defends the first as if it were the second.
+
+**CLR-2, stated:** the clearing action was **wiring the consumer**, and wiring it
+changed the predicate — the old guard could not be cleared by the remedy it
+prompted, because any correct fix made it fail. What it actually protected,
+**cohort neutrality**, is kept: only declared consumers may read the history,
+each with a reason, and `test_no_snapshot_READER_sits_on_the_prediction_path`
+keeps `src/models/` and `src/features/` out. A model reading the price path is
+still a cohort event.
+
+### AND IT EXPOSED A LATENT CRASH THE SAME DAY
+
+Raw `text()` SQL returns DATETIME as **strings** on SQLite and `datetime` on
+psycopg2. `qualifying_triple` subtracts them, so on SQLite the check died with
+`TypeError: unsupported operand type(s) for -: 'str' and 'str'` and the caller
+fail-closed to `UNEVALUATED` — a halt for a type error wearing the label "could
+not evaluate the stop". **It was unreachable while the data was wrong**: the
+subtraction only runs on a series with three instants, and `odds` could never
+hold two. *A crash that needs correct data to fire is invisible while the data
+is broken.* Coerced and pinned.
+
+## PART C — THE AMENDMENT: `min_interval` IS NOT THE MECHANISM
+
+Recorded in `docs/h1-preregistration.md` **before collection**, as required.
+
+The registration justified its spacing *by construction*: "with a refresh
+cadence of 120 minutes, t0→t1 and t1→t2 are each ~120 minutes." **That premise
+is false.** Measured from `gh run list --workflow=closing-lines.yml --limit 200`
+(`event=schedule`, listing TRUNCATED at 200 so every count is a lower bound,
+window 2026-09-11 → 2026-10-10):
+
+| quantity | nominal | measured |
+| --- | --- | --- |
+| slots/day | 8 | **median 4**, mean 4.2, min 1, max 6 (n=47 days) |
+| delay from slot | 0 | median **+13.7 min**, sd 16.8, range −16.2…+42.2 |
+| consecutive gap | 120 min | median **207 min** |
+
+The **shape** is the finding. Every real-card day: an overnight gap, then **a
+pair 12–24 minutes apart**, then ~200-minute gaps.
+
+```
+2026-09-13 [824, 12, 196, 194]   2026-09-19 [771, 24, 216, 208]
+2026-09-17 [ 12, 287, 194]       2026-10-03 [781, 12, 212, 207]
+2026-09-18 [ 19, 208, 194]       2026-10-09 [ 14, 349]
+```
+
+**The pair is below `MIN_GAP_MINUTES = 30`**, so the two runs in it are *one*
+separated instant and the second slot buys nothing. A fixture's 360-minute
+window therefore holds at most **two** separated instants; a triple needs three.
+
+Simulated against **measured** slots and **real** fixtures, 12 days with ≥10
+fixtures (empty-card period excluded), using the **authoritative**
+`qualifying_triple`:
+
+```
+min_interval = 120 / 110 / 100 / 90 / 60 / 30   ->   QUALIFYING = 0 at every value
+credits that would have been spent: 316
+```
+
+**316 credits would buy zero trajectories.** `min_interval` is not the binding
+constraint at any value, so **no amendment to it is made** — amending it would
+be a threshold picked to look like a fix while the mechanism went unaddressed.
+What is amended is the premise, replaced by a requirement the collection
+mechanism must satisfy and that must be **verified per fixture, not inferred
+from a cron expression**.
+
+### CORRECTING YESTERDAY'S FIGURE
+
+The previous entry reported "0 qualifying at 120, **36** at 110". That used
+**nominal** cron times. Re-run with the authoritative predicate the nominal
+simulation still returns 0 and 36, so the predicate accounts for **none** of
+the difference — the whole of it is nominal-versus-measured slots. The
+arithmetic was right and the premise was wrong. **A simulation carries the
+provenance of its inputs, and "nominal cron" is an assumption.**
+
+### WHAT A TRIPLE ACTUALLY NEEDS, by evaluating the predicate
+
+`hi/lo` must be **strictly** < 2.0, so 30/60, 45/90 and 60/120 are all
+**rejected** at ratio exactly 2.0. Qualifying shapes: 100/120, 120/120, 90/150,
+150/180 — i.e. **three slots 90–150 minutes apart inside the six hours before
+kickoff**.
+
+## PART D — SPREADING, AND WHY IT IS NOT A PREFERENCE
+
+**Recorded: the sizing never priced the clustering question.** `ρ=0.42` was
+estimated with **fixture** as the cluster unit and the bootstrap resamples
+fixtures. Collecting all 36 trajectories on one date makes **date** the cluster
+— a league-wide move, a feed outage or one book's repricing is common to all of
+them — and `deff` stops describing the design. Spreading is what keeps ρ=0.42
+applicable, not a scheduling nicety.
+
+Plan, costed: **6 credits per league-day** (3 requests × 2), so ~5 trajectories/day
+is **3–4 leagues ≈ 22 credits/day**, and seven days ≈ 154 credits inside the
+168 reservation. **Not started** — there is no mechanism that delivers the
+spacing.
+
+## PART E — THE TRIAL DID NOT RUN. CAP STATED: **6 CREDITS**
+
+`--max-credits 6` (three league requests), stated before the fact and not spent.
+Under the schedule as it fires, three separated observations cannot occur, so
+the trial would have bought a non-trajectory — **rule 4**, and rule 3: a
+trajectory with zero separation is not a trajectory.
+
+A shortened trial was available and **declined**: gaps of 35/60 minutes pass the
+predicate (ratio 1.71), so ~95 minutes of wall-clock would have produced a
+"qualifying" triple. It would not be the registered quantity — σ and ρ were
+sized on a 360-minute window — so it would be unusable evidence bought with
+real credits.
+
+**The attribution fix is confirmed on the live path, zero credits:**
+`H1_STOP … credits=0/168` where it read `credits=38/168` yesterday, with the
+pool reading 84/450 at the same moment. There is **no `theoddsapi:h1` ledger
+row at all**, so H1's spend is a measured zero rather than an assumed one.
+
+## PART F — THE ENTRIES
+
+> **PNC-1, second instance in two days, and the worse one.** Stage 18 built
+> `odds_snapshots` for H1; H1 read `odds`. A test asserting nothing read the
+> snapshot table pinned the defect in place as a specification — it could not
+> tell "not wired yet" from "must never be wired", and it defended the first as
+> if it were the second.
+
+> **The reservation was reported and never enforced.** `remaining()` returned
+> 232 while `claim_requests` claimed against `safety_margin` alone, granting
+> 400 credits. The docstring asserting it "walks down from this number" was
+> false — the fourth stale reason string this month, and **the first that was
+> never true rather than merely outdated**.
+
+> **A guard that enumerates a path and protects nothing**, three instances:
+> `path=DEFAULT_PATH` binds at definition time, so the monkeypatch never
+> applied. The AST scan's first version was **itself vacuous** — it compared
+> against the already-patched sentinel — and a control caught it.
+
+> **Reservation enforcement: no cohort bump, with the measured effect
+> recorded.** Enforcing it returns the system to its declared behaviour, which
+> by the Stage 19 precedent is not a policy change. Effect **to date: zero** —
+> October stands at 84 credits against a 232 ceiling, so nothing has been
+> refused. Counterfactual on the one month the budget bound: September spent its
+> full 400 in **eleven days**, so against 232 **168 credits (42%) would have
+> been refused**, ~84 of 198 league requests. Zero in the live window and large
+> in a busy month — that asymmetry is the number, not "no effect". The 1X2 fix
+> is recorded the same way in `model_version.py`, with its 28-match / 12-pick
+> effect, and **neither is bumped by me**: a bump inside a sized window
+> invalidates the sizing, so it goes to Niki.
+
+## DECLARATION
+
+**H1 CANNOT COLLECT.** The writer's verdict is **LIVE AND FIXED** — it was a
+selection misclassifier, not duplication, and it was corrupting production
+prices up to 04:55 today. The analysis now reads `odds_snapshots` and
+`COMPLETE` is reachable from the caller for the first time. What blocks
+collection is **slot spacing**: the scheduler delivers ~4 slots/day as a
+12–24-minute pair plus ~200-minute gaps, the pair falls below `MIN_GAP`, and
+**every** `min_interval` from 120 down to 30 yields **zero** qualifying
+trajectories against measured slots. `min_interval` is unchanged at 120 because
+the measurement does not justify moving it.
+
+**0 credits of 168 spent. 7 of 8 window days remain.** The repository is
+**public**, so Actions minutes are free and unmetered, which makes one scheduled
+job issuing its three requests with in-job waits the only mechanism measured
+here that is immune to the scheduler dropping slots. Choosing it is a decision,
+not a fix.
+
+**IN FRONT OF NIKI, AND THE FIRST ITEM IS NOT ABOUT H1:** 28 matches carry a
+corrupted 1X2 market, 12 of them with a saved pick and 4 on today's card. The
+prices are fixed going forward; the 28 historical matches are **marked here, not
+altered**, and whether they need a `training_exclusion_reason` is a data
+decision with 12 settled picks attached to it.
+
+*Recorded 2026-10-10. `src/scrapers/theodds_scraper.py`,
+`scripts/h1_collection_check.py`, `src/models/model_version.py`,
+`docs/h1-preregistration.md`, `tests/test_h2h_outcome_assignment.py` (new),
+`tests/test_h1_caller_reachability.py`, `tests/test_price_history_accumulates.py`.
+Full suite **1765 passed**. Invariants passed, count not cited. `model_version`
+UNCHANGED at `8da2fd`; `s5.15`, 146 picks stamped. No schema or migration
+change — the unique index was MEASURED, not altered.*

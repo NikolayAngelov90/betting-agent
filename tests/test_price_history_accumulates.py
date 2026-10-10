@@ -140,21 +140,99 @@ def _code_lines(text: str) -> str:
     return "\n".join(out)
 
 
-def test_nothing_reads_the_snapshot_table_yet():
-    """Cohort neutrality. If a model starts reading history, that is a cohort
-    event and it needs a decision, not a deploy."""
+#: Files permitted to reference the snapshot history. EVERY ENTRY NEEDS A
+#: REASON, because this list is the whole content of the successor contract
+#: below.
+_SNAPSHOT_READERS = {
+    # the table and the writer
+    "models.py": "defines OddsSnapshot",
+    "price_history.py": "the only writer",
+    # the RESEARCH consumer, wired 2026-10-10
+    "h1_collection_check.py": (
+        "H1's analysis. It MEASURES the price path; it does not feed a "
+        "prediction, so it is not a cohort event"),
+}
+
+
+def test_only_DECLARED_consumers_read_the_snapshot_history():
+    """SUCCESSOR CONTRACT, written 2026-10-10 when the predicate flipped.
+
+    THIS TEST USED TO ASSERT THAT **NOTHING** READ THE TABLE. That was right
+    for 46 days and then became the defect: Stage 18 built `odds_snapshots` so
+    Stage 19 could study the price path, H1 is that study, and H1 read `odds`
+    instead — which is UNIQUE on
+    (match_id, bookmaker, market_type, selection) and overwritten, so it holds
+    one instant per series and `n` was structurally zero forever.
+
+    > A test asserting that nothing consumes a producer records PNC-1 as a
+    > SPECIFICATION. It cannot distinguish "not wired yet" from "must never be
+    > wired", and it defends the first as if it were the second.
+
+    CLR-2, STATED: the clearing action is WIRING THE CONSUMER, and wiring it
+    changes this predicate. The old guard could not be cleared by the remedy it
+    prompted — any correct fix made it fail — so it is replaced rather than
+    deleted, and what it actually protected is kept.
+
+    WHAT IT PROTECTED, AND STILL DOES: cohort neutrality. A MODEL reading
+    history is a cohort event needing a decision, not a deploy. So the contract
+    inverts from "nobody reads it" to "only declared consumers read it, and no
+    consumer sits on the prediction path" — the second half is the test below.
+    """
     offenders = []
     for base in ("src", "scripts"):
         for path in pathlib.Path(base).rglob("*.py"):
-            if path.name in ("models.py", "price_history.py"):
+            if path.name in _SNAPSHOT_READERS:
                 continue
             txt = _code_lines(path.read_text(encoding="utf-8"))
             if "OddsSnapshot" in txt or "odds_snapshots" in txt:
                 offenders.append(str(path))
     assert not offenders, (
-        "something reads the snapshot history: " + ", ".join(offenders) +
-        "\nNothing may read it without a cohort decision — Stage 18 stored it "
-        "so Stage 19 could study it, not so the model could use it.")
+        "an UNDECLARED file reads the snapshot history: " + ", ".join(offenders)
+        + "\nAdd it to _SNAPSHOT_READERS with a reason, and check it is not on "
+          "the prediction path — Stage 18 stored this so Stage 19 could study "
+          "it, not so the model could use it.")
+
+
+def test_no_snapshot_READER_sits_on_the_prediction_path():
+    """The half of the old guard that still has teeth.
+
+    The research consumer is allowed; a feature builder or a model is not. If
+    `src/models/` or `src/features/` ever reads the price path, that is a
+    cohort event and `CODE_REVISION` must move — which is a decision, not a
+    deploy.
+    """
+    forbidden = []
+    for name, _reason in _SNAPSHOT_READERS.items():
+        for path in pathlib.Path("src").rglob(name):
+            parts = path.parts
+            if "models" in parts and path.name != "models.py":
+                forbidden.append(str(path))
+            if "features" in parts:
+                forbidden.append(str(path))
+    assert not forbidden, (
+        "a declared snapshot reader lives on the prediction path: "
+        + ", ".join(forbidden) + " — bump CODE_REVISION or move the read out")
+    # and the research consumer must be a SCRIPT, not library code
+    assert pathlib.Path("scripts/h1_collection_check.py").exists(), (
+        "h1_collection_check.py moved — re-check which tree it now lives in")
+
+
+def test_the_analysis_reads_SNAPSHOTS_and_NOT_the_overwritten_table():
+    """The positive half: H1 must read the append-only table, by inspection.
+
+    Asserted on the source rather than by running a query, so it holds without
+    a database and fails loudly if the read is ever pointed back at `odds`.
+    """
+    txt = _code_lines(
+        pathlib.Path("scripts/h1_collection_check.py").read_text(encoding="utf-8"))
+    assert "FROM odds_snapshots" in txt, (
+        "H1's analysis no longer reads odds_snapshots — if it reads `odds`, n "
+        "is structurally zero because that table keeps one instant per series")
+    assert "FROM odds o" not in txt, (
+        "H1's analysis reads the OVERWRITTEN `odds` table again")
+    assert "o.observed_at" in txt, (
+        "the instant column is `observed_at` on odds_snapshots; `timestamp` "
+        "belongs to `odds`")
 
 
 def test_odds_table_shape_is_unchanged_for_existing_consumers():

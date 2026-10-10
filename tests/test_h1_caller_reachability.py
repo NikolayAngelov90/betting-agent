@@ -15,14 +15,17 @@ So nothing here patches `collection_state` or `collection_stop`. Each state is
 driven by SEEDED DATABASE STATE through `refresh_imminent(h1_collection=True)`,
 the call the `--h1` flag makes, and read back off the returned plan.
 
-THE ANSWER IS FIVE OF SIX, AND THE SIXTH IS AN HONEST NO:
+THE ANSWER IS SIX OF SEVEN, AND THE SEVENTH IS AN HONEST NO.
+`COMPLETE` BECAME REACHABLE ON 2026-10-10 when `load_observations` was
+repointed at the append-only `odds_snapshots`; before that no database
+state could produce it, because `odds` rejects a series' second instant:
 
     COLLECTING             reachable   the normal running state
     RESERVATION_EXHAUSTED  reachable   H1's attributed spend reaches 168
     NO_DATA                reachable   the bound with zero observations
     BUDGET_UNREADABLE      reachable   the ledger cannot be read
     UNEVALUATED            reachable   the stop itself raises
-    COMPLETE               reachable   n >= TARGET_N from seeded trajectories
+    COMPLETE               reachable   since 2026-10-10 — see the note below
     CEILING_HIT            NOT REACHABLE — see the test at the bottom.
 
 `CEILING_HIT` needs `CREDIT_CEILING < reservation`, i.e. 200 < 168, and
@@ -41,7 +44,7 @@ import pytest
 from sqlalchemy import text
 
 import src.data.database as db_mod
-from src.data.models import Base, Match, Odds, Team
+from src.data.models import Base, Match, Odds, OddsSnapshot, Team
 from src.data.odds_quota import (
     H1_RESERVED_CREDITS,
     PROVIDER_H1,
@@ -103,19 +106,37 @@ def _seed_fixture(session, mid, kickoff, league="england/premier-league"):
 
 
 def _seed_one_instant(session, mid, kickoff, off=-300):
-    """ONE complete `btts` instant, overround 1.026 — inside the band.
+    """ONE complete `btts` instant into the APPEND-ONLY table.
 
-    One, not three, and the limit is the schema rather than the test: `odds` is
-    UNIQUE on (match_id, bookmaker, market_type, selection), so a second
-    instant for the same series raises IntegrityError. That is the finding this
-    file records, and it is also why `raw_rows > 0` is the most this helper can
-    establish — enough to separate RESERVATION_EXHAUSTED from NO_DATA, which is
-    exactly the distinction those two states carry.
+    Written to `odds_snapshots`, because that is what `load_observations` reads
+    since 2026-10-10. Enough to separate RESERVATION_EXHAUSTED from NO_DATA,
+    which is exactly the distinction those two states carry.
     """
     ts = kickoff + timedelta(minutes=off)
     for sel in ("Yes", "No"):
-        session.add(Odds(match_id=mid, bookmaker=BOOK, market_type="btts",
-                         selection=sel, odds_value=1.95, timestamp=ts))
+        session.add(OddsSnapshot(match_id=mid, bookmaker=BOOK,
+                                 market_type="btts", selection=sel,
+                                 odds_value=1.95, observed_at=ts))
+
+
+def _seed_trajectory(session, mid, kickoff, offsets=(-300, -180, -60)):
+    """A QUALIFYING TRIPLE — three separated instants, overround 1.026.
+
+    THIS HELPER COULD NOT EXIST BEFORE 2026-10-10. `odds` is UNIQUE on
+    (match_id, bookmaker, market_type, selection), so the second instant raised
+    IntegrityError and `COMPLETE` was unreachable from the caller for that
+    reason alone. Pointing `load_observations` at the append-only table is what
+    made the experiment's own success state reachable.
+
+    Gaps 120/120: both above MIN_GAP (30) and ratio 1.0, strictly below the 2.0
+    ceiling — a qualifying triple by the registration's own predicate.
+    """
+    for off in offsets:
+        ts = kickoff + timedelta(minutes=off)
+        for sel in ("Yes", "No"):
+            session.add(OddsSnapshot(match_id=mid, bookmaker=BOOK,
+                                     market_type="btts", selection=sel,
+                                     odds_value=1.95, observed_at=ts))
 
 
 def _set_h1_spend(mgr, credits):
@@ -191,45 +212,54 @@ def test_BUDGET_UNREADABLE_is_reachable_from_the_caller(tmp_path, monkeypatch):
     assert plan["halted"] is True
 
 
-def test_COMPLETE_IS_NOT_REACHABLE_because_odds_CANNOT_HOLD_A_TRAJECTORY(tmp_path):
-    """THE FINDING. H1 reads a table that is physically incapable of its input.
+def test_COMPLETE_is_NOW_reachable_from_the_caller(tmp_path, monkeypatch):
+    """The state the whole experiment exists to reach — reachable since
+    2026-10-10, and unreachable before it for a structural reason.
 
-    `load_observations` — H1's only data source — queries `odds`, which carries
-    `Index(..., unique=True)` on (match_id, bookmaker, market_type, selection).
-    A second observation of the same series OVERWRITES the first. So `odds`
-    holds at most ONE instant per series, a qualifying triple needs THREE, and
-    `n` is therefore structurally ZERO on every input, forever.
+    Driven by seeding TARGET_N qualifying triples into `odds_snapshots` and
+    running the caller's own call. Until the analysis was repointed this test
+    could not be written: `odds` forbids the second instant outright, so no
+    database state could produce n > 0.
+    """
+    mgr = _mgr(tmp_path, "complete.db")
+    with mgr.get_session() as s:
+        for i in range(TARGET_N):
+            ko = NOW + timedelta(minutes=120 + i)
+            _seed_fixture(s, 100 + i, ko)
+            _seed_trajectory(s, 100 + i, ko)
+        s.commit()
+    plan = _run(_scraper(mgr, monkeypatch))
+    assert plan["h1_stop"] == "COMPLETE", plan
+    assert plan["halted"] is True
+    assert f"n={TARGET_N}" in plan["h1_reason"], plan["h1_reason"]
+    assert plan["credits_claimed"] == 0, "it reached the target and still spent"
 
-    `models.py` states this in its own words, about the table built to fix it:
 
-        "`odds` is unique on that key and is overwritten, which is why it holds
-         two observations and never a third... Nothing reads this table yet."
+def test_odds_CANNOT_hold_a_trajectory_and_that_is_why_n_was_zero(tmp_path):
+    """THE FINDING, kept as its own test now that the remedy has landed.
 
-    PNC-1, filed in a docstring and then forgotten: `odds_snapshots` is the
-    append-only price path, it is WRITTEN on every refresh, and the analysis
-    reads the other table. No window, interval, credit or cron change can
-    repair that, which is why the caller was wired, tested, and still cannot
-    produce evidence.
+    `odds` carries `Index(..., unique=True)` on
+    (match_id, bookmaker, market_type, selection), so a second observation of a
+    series OVERWRITES the first. H1 read that table for 46 days while
+    `odds_snapshots` — built in Stage 18 for exactly this question — went
+    unread. Measured 2026-10-10: 10,066 pre-kickoff series in `odds` since
+    10-09, instants-per-series histogram {1: 10066}; not one series ever
+    observed twice.
 
-    CORROBORATED IN PRODUCTION 2026-10-10: 10,066 pre-kickoff observations
-    since 10-09, 10,066 series, instants-per-series histogram `{1: 10066}` —
-    not one series observed twice. The same query against `odds_snapshots`
-    gives `{1: 14548, 2: 100, 3: 17}`, so the paths exist where nothing reads.
+    Pinned so that repointing the analysis back at `odds` fails loudly here
+    rather than quietly returning n=0 forever.
     """
     mgr = _mgr(tmp_path, "schema.db")
     ko = NOW + timedelta(minutes=120)
     with mgr.get_session() as s:
         _seed_fixture(s, 1, ko)
         s.commit()
-
-    # one instant lands
     with mgr.get_session() as s:
         s.add(Odds(match_id=1, bookmaker=BOOK, market_type="btts",
                    selection="Yes", odds_value=1.95,
                    timestamp=ko - timedelta(minutes=300)))
         s.commit()
 
-    # a SECOND instant for the same series cannot
     import sqlalchemy.exc
     with pytest.raises(sqlalchemy.exc.IntegrityError):
         with mgr.get_session() as s:
@@ -335,3 +365,42 @@ def test_the_stop_ignores_the_CALENDAR_gate_and_that_is_a_live_exposure():
         "if this now halts, the stop has been tied to the calendar gate — "
         "update the ledger entry, the exposure is closed")
     assert "reservation 168" in stop.reason
+
+
+def test_the_instant_is_a_DATETIME_whatever_the_driver_returns(tmp_path):
+    """Raw `text()` SQL on SQLite hands back STRINGS; psycopg2 hands back
+    datetimes. `qualifying_triple` subtracts them.
+
+    Before the coercion this raised
+    `TypeError: unsupported operand type(s) for -: 'str' and 'str'` and
+    `refresh_imminent` fail-closed to UNEVALUATED — a halt for a type error
+    wearing the label "could not evaluate the stop".
+
+    IT WAS LATENT AND THE OTHER DEFECT HID IT: the subtraction only runs on a
+    series with three instants, and `odds` could never hold two, so no input
+    ever reached it. Asserted on the loader directly so it does not depend on
+    `COMPLETE` being reachable to be caught.
+    """
+    from scripts.h1_collection_check import load_observations, qualifying_triple
+
+    mgr = _mgr(tmp_path, "dtype.db")
+    ko = NOW + timedelta(minutes=120)
+    with mgr.get_session() as s:
+        _seed_fixture(s, 1, ko)
+        _seed_trajectory(s, 1, ko)
+        s.commit()
+
+    with mgr.get_session() as s:
+        obs, _dropped = load_observations(s, datetime(2026, 10, 9))
+
+    assert obs, "the loader returned nothing — the seed or the band changed"
+    for o in obs:
+        assert isinstance(o["ts"], datetime), (
+            f"instant came back as {type(o['ts']).__name__}: {o['ts']!r} — "
+            f"qualifying_triple subtracts these and will raise TypeError")
+        assert isinstance(o["match_date"], datetime), type(o["match_date"])
+
+    times = [o["ts"] for o in obs]
+    assert qualifying_triple(times) is not None, (
+        "three instants 120 minutes apart did not qualify — check MIN_GAP and "
+        "MAX_INTERVAL_RATIO against the seeded offsets")
