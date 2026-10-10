@@ -23489,3 +23489,230 @@ quietly.
 `tests/test_h2h_outcome_assignment.py`, `tests/test_price_history_accumulates.py`.
 Production writes: `matches.training_exclusion_reason` ×28,
 `saved_picks.evidence_status` ×13. No schema or migration change.*
+
+---
+
+# 2026-10-10 (fourth entry) — H1 ON IN-JOB WAITS. The trial is in flight.
+
+## PART B — THE MECHANISM, AND ITS FOUR CONDITIONS
+
+`scripts/h1_collect.py` + `.github/workflows/h1-collect.yml`. One job, three
+requests, in-job waits, `--max-credits` **required** so a per-job ceiling is a
+number stated before the run.
+
+**`min_interval` is 90 against a 120-minute gap**, and that is the amended
+pre-registration's condition rather than a preference: the filter must sit
+strictly below the achieved spacing or the per-league dedup rejects the very
+observations the loop creates. 30 minutes of slack against the measured
+scheduler jitter (sd 16.8 min, max +42.2). The spacing is now deterministic, so
+the number follows from the mechanism — which is what the amendment said had to
+exist before any number was adopted.
+
+### LEAGUE PINNING, and it is not cosmetic
+
+A trajectory is three observations of the **same fixture**. Without a pinned
+set the credit cap keeps whichever leagues the candidate ordering puts first,
+and a different league each round scatters single observations across many
+fixtures — spent credits that produce unusable evidence. `refresh_imminent` now
+takes `leagues=`, and both a dropped league and a pinned league with no
+imminent fixture land in `skipped`, so "nothing to collect" and "not asked for"
+stay different facts.
+
+### Condition 1 — `timeout-minutes: 330`, as a multiple
+
+Expected duration is `(rounds − 1) × gap + runtime = 2 × 120 + ~3 = ~243 min`.
+**330 is ~1.36× that**, and deliberately **below GitHub's 360-minute
+hosted-runner ceiling** so the bound that fires is ours and is reported as a
+timeout rather than an opaque platform kill. A job hung while sleeping is
+indistinguishable from one that is working, which is the whole reason the
+number is stated. The slack absorbs a slow request; it does not absorb a second
+round of waiting, which is intended.
+
+### Condition 2 — its own concurrency group, interaction stated not discovered
+
+It must **not** share a group with `daily-picks`: this job holds a runner ~4
+hours, and a shared group would queue a late card behind it — strictly worse
+than anything H1 can suffer.
+
+* **Credits cannot collide.** H1 spends `for_h1=True` against its own 168, and
+  normal pricing is capped at the 232 remainder, enforced in `claim_requests`
+  since this morning.
+* **Prices can.** `--h1` passes `require_pending_pick=False`, disabling the
+  picks-run guard, because H1 needs observations of a fixture *after* its pick
+  is taken — the guard would truncate every trajectory at the pick. So a
+  refresh between discovery and pick generation could move a price the picks run
+  then reads. **Bounded by timing, not by a lock:** `daily-picks` fires 00:00
+  and has delivered 03:58–05:04 over n=9, against a job intended for ~14:30.
+  Overlap needs the scheduler ~10 hours late, which the current cron's series
+  has not shown.
+* **A pick already taken is not at risk** — `taken_odds` is persisted at pick
+  time.
+
+### Condition 3 — the stop between waits, AND THE TEST CAUGHT ME GETTING IT WRONG
+
+The first version checked the stop at the top of each round. **That is after
+the wait.** Driving the attributed counter to the reservation after round 1, the
+loop **slept 120 minutes and then noticed**. The bound was never at risk —
+`refresh_imminent` re-checks before every request — but the runner was held for
+two hours to learn something already known.
+
+A second check now sits **between the spend and the wait**. Proven through the
+real `collection_state` / `h1_credits_used` / `collection_stop` by writing the
+ledger row mid-sequence; nothing patches the stop. The opposite direction is
+tested too — an unexhausted loop *does* wait twice — so the halt assertion
+cannot pass vacuously, and the cap-reached path also skips its waits rather than
+spend-then-idle.
+
+### Condition 4 — the 10-14 rule, written today as a FIRING test
+
+`test_the_H1_RATE_DECISION_is_DUE`, marked `calendar`, fails from **2026-10-14**
+— three days before the window closes. A decision that depends on somebody
+remembering a date is an outage with no owner, and on 10-17 the choice is
+already made by the calendar.
+
+It names its threshold (**n=33**), its date, and both options: extend past
+10-17, which moves `H1_RESERVATION_UNTIL` and is a **budget** decision, or
+accept a reduced `n` **with its power stated**. Successor contract: **delete the
+test** once the decision is recorded, never move the date. It carries the
+`calendar` marker so it does **not** gate capture — a red run there means a
+decision is due, not that the pipeline failed. The calendar selector now
+collects **3**, not 2.
+
+### NO CRON YET, deliberately
+
+`workflow_dispatch` only, so a scheduled run can never be the first execution of
+this path. The trial precedes the loop; the cron lands after the trial reports
+its measured gaps. When it does: a **14:30 UTC** start puts requests at ~14:30 /
+16:30 / 18:30, inside the 360-minute window of a 20:00 kickoff.
+
+## B1 — DEFECTS REVEALED BY CLEARING, REPORTED AS REVEALED
+
+> A defect downstream of a blocker is invisible while the blocker holds.
+> Clearing a blocker reveals defects; it does not produce a working path.
+
+Two so far today, both **revealed, not new**:
+
+1. **The string-timestamp crash.** Raw `text()` SQL returns DATETIME as strings
+   on SQLite; `qualifying_triple` subtracts them. It could only fire on a series
+   with three instants, and `odds` could never hold two — so repointing the read
+   at the append-only table exposed it the same hour.
+2. **The stop-after-the-wait defect above.** It could only matter once a loop
+   with waits existed.
+
+Everything in H1's analysis past the point where real trajectories exist has
+still **never run on real data**. The trial is the first execution of that path,
+and a first clean trial is **not** proof the path works.
+
+## PART E — THE TRIAL, DISPATCHED. CAP STATED: **6 CREDITS**
+
+Run **38053287510**, `workflow_dispatch`, 2026-10-10 12:47 UTC.
+
+```
+--leagues france/ligue-1  --rounds 3  --gap-minutes 120  --max-credits 6
+```
+
+**Why `france/ligue-1`:** 4 fixtures, all kicking off **18:45 UTC**. With
+rounds at ~13:05 / 15:05 / 17:05 that is **340 / 220 / 100 minutes before
+kickoff** — all three inside the 360-minute window, and the single kickoff time
+means every one of the four fixtures sees all three instants. 3 requests × 2
+credits = **6**, the stated cap exactly.
+
+**The attribution fix confirmed before the spend**, on the live path: the stop
+printed `credits=0/168` where this morning it read `38/168`, with the pool at
+84/450 and **no `theoddsapi:h1` ledger row existing at all** — a measured zero,
+not an assumed one.
+
+### ROUND 1 MEASURED — and it confirms BOTH of this morning's fixes in production
+
+| quantity | measured, 2026-10-10 12:48 UTC |
+| --- | --- |
+| pool ledger `theoddsapi` | 84 -> **86** (+2) |
+| **attributed** `theoddsapi:h1` | row created, **2** |
+| fixtures touched | **5** france/ligue-1 (four at 18:45, one at 15:15) |
+| books | 21 |
+| snapshot rows per fixture | 88 |
+| snapshot keys written | 440 |
+| **keys duplicated inside one second** | **0** (worst = 1) |
+| 1X2 keys | **100 of 100 COMPLETE** |
+| missing Away / missing Home / duplicated side | **0 / 0 / 0** |
+
+Both of this morning's repairs are now confirmed on live production data rather
+than in a test:
+
+* **Credit attribution.** The spend appears in BOTH ledgers — 2 in H1's own
+  account and +2 in the pool — which is the design: the free tier stays
+  protected while the reservation is charged only for H1's own requests.
+* **The 1X2 assignment fix.** 100 of 100 keys complete with zero duplicated
+  sides, where before the fix every book in an ambiguous payload wrote two
+  `Home` rows and no `Away`. **Match 52728 (Lille–Le Havre) is one of the 28
+  corrupted matches**, and its 1X2 was written correctly this round.
+
+One honest caveat on the trial's yield: the fifth fixture (52728) kicks off at
+**15:15**, before round 3, so it can receive only two pre-kickoff instants and
+will not qualify. The four 18:45 fixtures are the ones that can produce a
+triple. Expected yield therefore **4 trajectories, not 5** — stated before the
+run finishes so it cannot be presented afterwards as the target.
+
+**IN FLIGHT at the time of writing.** Two 120-minute waits means the job
+completes ~16:50 UTC. The measured instants and their **actual gaps** are
+reported by the job's own summary and by `h1_collection_check --since
+2026-10-09` in its final step; they are not asserted here, because the whole
+point of the trial is that they are measured rather than predicted.
+
+## PART C — THE FOUR ENTRIES
+
+> **An asymmetric absence rules out a symmetric cause.** A feed gap, a naming
+> mismatch and a coverage hole are all symmetric. `missing_Away = 486`,
+> `missing_HOME = 0` implicates the ORDER OF THE TESTS, not the data — and the
+> API-Football population, drawn from the same table by the same query with a
+> different writer, is 49/49. The control is what makes the inference safe.
+
+> **When a scalar score is identical for both candidates, no threshold on it
+> can separate them.** The token ratio returned 1.0 for both pairings, so the
+> problem was never a threshold — it was an assignment. `_team_names_similar`
+> was left untouched because fixture matching applies it as a CONJUNCTION over
+> home AND away, where each side catches the other's false positives. The same
+> lesson recurred one level down: `Dundee Utd` and `Dundee FC` both
+> canonicalise to `"dundee"`, so the margin is exactly 0.0000 and **no** score
+> over those strings can separate them either. That one refuses.
+
+> **A nominal schedule is not an observed cadence.** The "120-minute cron"
+> fires a median of 4 slots/day as a 12–24 minute pair plus ~200-minute gaps.
+> **Fourth instance this month** of a nominal figure used as an operating one,
+> after the `09:45` deadline, the `0.5h–11h21m` envelope, and `11h21m` quoted
+> without its regime. Every calculation on a schedule is `assumed` until the
+> firing times are measured.
+
+> **`min_interval` was never the mechanism.** The "36 at 110" figure used
+> nominal cron times; against measured slots every value from 120 down to 30
+> yields zero. The arithmetic was right and the premise was wrong, so the
+> premise is withdrawn rather than the number adjusted — and **no
+> pre-registration amendment to the number is made**, because there was nothing
+> to amend. What the amendment records instead is a spacing requirement that
+> must be verified per fixture.
+
+## DECLARATION
+
+**H1 COLLECTING — mechanism live, trial in flight, cron deliberately absent.**
+The blocker named this morning is cleared: the analysis reads the append-only
+table, `COMPLETE` is reachable from the caller, and the spacing is produced
+in-job at a deterministic 120 minutes with `min_interval` at 90. All four
+conditions are met, and **condition 3 was met only because its test caught the
+first version checking the stop after the wait.**
+
+Trial **38053287510** dispatched with a **6-credit cap** on `france/ligue-1`,
+three rounds 120 minutes apart against a single 18:45 kickoff. **Measured gaps
+and the projected `n` at 10-17 follow from that run and are deliberately not
+asserted here.** The 10-14 decision rule is already in place as a firing test,
+so if the rate falls short it arrives in front of Niki on 10-14 rather than on
+10-17.
+
+Full suite **1863 passed**. Invariants pass, count not cited. Cohort
+**UNCHANGED by Part B**: `s5.16` / `ae1752`, 0 picks stamped — the bump belongs
+to Part A alone, as rule 7 requires.
+
+*Recorded 2026-10-10. `scripts/h1_collect.py` (new),
+`.github/workflows/h1-collect.yml` (new), `src/scrapers/theodds_scraper.py`
+(league pinning), `tests/test_h1_collect_loop.py` (new),
+`tests/test_calendar_separation.py`. No schema or migration change. No
+production write in Part B beyond the trial's own odds and snapshot rows.*
