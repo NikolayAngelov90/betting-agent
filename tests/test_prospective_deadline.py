@@ -290,36 +290,45 @@ def test_the_ALERT_TEXT_carries_the_clearing_action_not_just_the_ledger():
     """Rule 4. `fixtures_zero_active` was noise because the remedy lived in the
     ledger while the alert said only that something was wrong.
 
-    Asserted on the alarm string the audit actually builds and appends to
-    `alarmed`, which is what lands in the `::error::` annotation.
+    THE PROPERTY MOVED on 2026-10-11 and this test moved with it. The
+    prospective alarm was briefly built inside `ci_audit`, where it could never
+    evaluate - that step passes no `DATABASE_URL` and installs no driver, so it
+    read `UNKNOWN` on every run. It now lives in
+    `scripts/fixture_horizon_probe.py`, which has both.
     """
     import inspect
+    import pathlib as _p
 
-    from scripts.ci_audit import report_discovered_margins
+    from scripts.fixture_horizon_probe import main as probe_main
 
-    src = inspect.getsource(report_discovered_margins)
+    src = inspect.getsource(probe_main)
     assert "CLEARING_ACTION" in src, (
         "the prospective alarm no longer interpolates the clearing action, so "
         "the alert says a margin is short without saying what to do")
-    # and the alarm names the DATE and the KICKOFF it is about
-    for token in ("m['serves']", "deadline_min", "binding"):
+    for token in ("serves", "deadline_min", "binding"):
         assert token in src, (
             f"the alarm text omits {token} - a margin without its date and "
             f"deadline cannot be acted on")
+    assert "::error::" in src, "the alarm is not surfaced as an annotation"
+
+    wf = _p.Path(".github/workflows/fixture-horizon-probe.yml").read_text(
+        encoding="utf-8")
+    assert "dispatch daily-picks manually" in wf
+    assert "no automated alternative" in wf
+    assert "operator" in wf
 
 
 def test_the_prospective_alarm_only_fires_for_TOMORROW():
     """Today's margin is retrospective: the run has already started, so an
     alarm on it cannot be acted on and would fire alongside every real one.
 
-    Pinned because the obvious implementation alarms on both and doubles the
-    noise for no added action.
+    The probe evaluates exactly one day - the one the NEXT run serves.
     """
     import inspect
 
-    from scripts.ci_audit import report_discovered_margins
+    from scripts.fixture_horizon_probe import main as probe_main
 
-    src = inspect.getsource(report_discovered_margins)
-    assert 'label == "tomorrow"' in src, (
-        "the prospective alarm is no longer restricted to tomorrow - today's "
-        "margin is retrospective and alarming on it adds noise, not action")
+    src = inspect.getsource(probe_main)
+    assert "timedelta(days=1)" in src, (
+        "the probe no longer targets tomorrow specifically")
+    assert "tomorrow" in src

@@ -24792,3 +24792,305 @@ Full suite **1924 passed**. Invariants pass, count not cited. Cohort
 `.github/workflows/fixture-horizon-probe.yml` (new),
 `scripts/schedule_deadline.py`, `tests/test_fixture_horizon_probe.py` (new).
 No production write. No schema or migration change.*
+
+---
+
+# 2026-10-11 — AUDIT MACHINERY BROKEN. Three reds, one finding, ~13.3 hours unaudited.
+
+H1 untouched: no change to the collection, the stop, the reservation or the H1
+cron.
+
+## PART A — CLASSIFIED: MACHINERY, and it was mine
+
+| run | started | headSha | finding, verbatim |
+| --- | --- | --- | --- |
+| 38084251020 | 2026-10-10 20:34 | `844b0ea` | `Traceback` → `ModuleNotFoundError: No module named 'scripts'` |
+| 38097714888 | 2026-10-11 00:13 | `844b0ea` | identical |
+| 38116935609 | 2026-10-11 06:05 | `844b0ea` | identical |
+
+The last clean audit was **38070806724, 2026-10-10 17:12, on `90200fb`**. The
+reds begin with the next commit.
+
+### Verdict or machinery, and where the three signals disagree
+
+| signal | reads | would classify as |
+| --- | --- | --- |
+| `exit_annotations` | 2 (`Process completed with exit code 1` ×2) | — |
+| `self_emitted_annotations` | the `::error::CI audit alarmed` echo | **VERDICT** |
+| `foreign_annotations` | **0** | — |
+| `unexplained_nonzero_exit` | **0** | **VERDICT** |
+| `steps_failed` / `steps_not_run` | **0 / 0** | **CLEAN** |
+| `tracebacks` | **≥1** | **MACHINERY** |
+
+**The three-way `##[error]` partition would have called this a verdict.** Every
+annotation is self-emitted and every exit is explained, which is exactly the
+shape of a legitimate finding. `steps_failed` reads 0 because the audit step
+carries `continue-on-error: true` and therefore reports
+`conclusion: success` — the `outcome`-vs-`conclusion` trap again.
+
+**`tracebacks` is the only signal that separates them**, and that is itself the
+finding about the instrument: the partition was built to subtract known-benign
+emissions, and a crash emits exactly the benign pattern.
+
+### Before the ledger write — there is no ledger write
+
+`ci-audit.yml` has **no ledger step**. The audit's **stdout is its only
+artifact**, and these three produced none. So:
+
+> **NOTHING HAS BEEN AUDITED SINCE 2026-10-10 17:12 — ~13.3 HOURS.**
+
+What went past unexamined, `measured` 2026-10-11:
+
+| workflow | runs since the last clean audit | non-success |
+| --- | --- | --- |
+| daily-picks | 1 | 0 |
+| closing-lines | 2 | 0 |
+| paper-trading-report | 0 | — |
+| h1-collect | 0 | — |
+| fixture-horizon-probe | 0 | — |
+| ci-audit | 4 | **3 (these)** |
+
+Nothing was lost — but that is a fact established **now**, by hand, which is
+precisely what the audit exists to do automatically.
+
+### ONE finding, not three
+
+Same traceback, same cause, three firings. The same shape as last week's nine
+reds on one `DID_NOT_RUN`, and the default hypothesis held.
+
+**Not already resolved and re-alarming.** `RESOLVED_RUNS` holds `36843668865`
+and `37885390196`; none of these three is in it. The marker's second episode
+remains **unexercised**, and correctly so — **a crash is not cleared by a row
+saying it was fixed. It is cleared by fixing it.** Recording a crash as
+`resolved` would be the marker doing the opposite of its purpose.
+
+### The cause, and it reproduces locally
+
+On 2026-10-10 I added a module-level
+`from scripts.schedule_deadline import ...` to `ci_audit.py`. The workflow ran
+**`python scripts/ci_audit.py`**, which puts `scripts/` on `sys.path[0]` rather
+than the repo root:
+
+```
+$ python -m scripts.ci_audit --help     -> usage: ci_audit.py ...
+$ python scripts/ci_audit.py --help     -> ModuleNotFoundError
+```
+
+**The same job already invoked `python -m scripts.ci_alert`.** Two invocation
+forms inside one file, and only one of them was exercised by anything.
+
+### Four repairs
+
+1. **A `sys.path` bootstrap in `ci_audit.py`** so the invocation form cannot
+   matter. This is the real fix: *a crash boundary inside a module cannot catch
+   its own import failing.*
+2. **The workflow uses `-m`**, consistent with `ci_alert` beside it.
+3. **Exit 2 is a CRASH, exit 1 a FINDING.** The step exports its code and the
+   fail step says *"CI AUDIT CRASHED — this is MACHINERY, not a finding.
+   NOTHING was audited by this run… Do not read the absence of findings as a
+   clean bill of health."* The old message sent the reader looking for run ids
+   that did not exist.
+4. **A subprocess guard** — `tests/test_entrypoints_are_invocable.py`. **The
+   suite could never have caught this**: `pytest` imports `scripts.ci_audit` as
+   a module from the repo root, which is the invocation that works, and every
+   existing test of that file passed throughout. The guard runs the real
+   commands as subprocesses.
+
+### And the guard immediately found two more
+
+`scripts/h1_collect.py` and `scripts/refresh_and_capture.py` also fail under the
+script form, on a module-level `src.` import. **Latent, not live** — every
+workflow invokes `python -m`, measured across all six files. They are **pinned**
+in `SCRIPT_FORM_LATENT` with a successor contract for **after 2026-10-17**,
+because `h1_collect.py` IS the live H1 collector and a no-op edit to a file
+running a sized experiment is still an edit. The pin fails if the set grows
+**or** if one starts working, so the contract gets discharged rather than
+forgotten.
+
+## PART B — THE PROBE'S CLOCK: NOT YET EVALUABLE, AND THAT IS THE ANSWER
+
+**The probe has ZERO scheduled runs.** Its cron is `0 18 * * *` and it shipped
+in `844b0ea` after 18:00 UTC on 10-10, so the first firing is tonight. There is
+**no `verify_offset` history in CI to report** — the question cannot be answered
+yet, and substituting the local run for it would be the wrong answer dressed as
+a number.
+
+* **The only run is local**: offset **+180 min**, deadline correctly **not
+  emitted**.
+* **The offset is REAL, not spurious.** This machine is Europe/Kyiv (UTC+3),
+  and +180 agrees exactly with the twelve-fixture, three-league check that
+  established +3:00 on 10-10. The verification is comparing the probe's
+  rendered kickoffs against `matches`, which stores UTC, and they disagree by
+  exactly one timezone.
+* **Is `TZ=UTC` in effect?** **Unmeasured** — it cannot be read from a runner
+  that has not run. The job sets it and carries a step that prints `TZ`,
+  `date -u` and Python's `time.tzname`, so the measurement will exist after
+  tonight's firing. Read from the workflow it is set; that is not the same
+  claim.
+* **CLR-2:** the clearing action is `TZ=UTC` in the job, **already shipped**.
+  On a UTC runner the offset is 0 and the deadline is emitted. **The refusal is
+  correct behaviour over a bad input and is not relaxed.** If the offset
+  persists tonight, the alarm is legitimate and the audit is doing its job.
+
+## PART C — MEMBERSHIP: THE SAME DEFECT A THIRD AND FOURTH TIME
+
+`WORKFLOWS` held four entries. **Neither `h1-collect.yml` nor
+`fixture-horizon-probe.yml` was among them.** Both workflows were created by me
+on 2026-10-10 and neither was registered — **structural, not deliberate**,
+exactly as `ci-audit.yml`'s own absence was before 2026-09-27, which cost eight
+unrecorded reds.
+
+Both are now in `WORKFLOWS`, and the audit immediately produced what had been
+invisible:
+
+```
+!! no ledger history for h1-collect: per-source discovery checks are
+   UNEVALUATED for it, not passed
+38053287510  h1-collect  2026-10-10T12:47  CLEAN
+```
+
+The H1 trial had been running outside the audit's sight entirely, and it reads
+as **permanently unaudited** in exactly the way `ci-audit` did — which the
+audit now says out loud rather than leaving to be noticed.
+
+**`fixture-horizon-probe` joins `NEVER_ALARM_WORKFLOWS`, for a different reason
+than `ci-audit` and with the cost stated.** `ci-audit` is there to break a
+feedback loop; the probe is there because **its red is already its alert** — it
+exits 1 on a legitimate finding and fires its own Telegram alert naming the
+clearing action, so the audit alarming again would report "the probe went red",
+which reads as "the probe is broken" when it is working as designed. **The cost
+is the same one `ci-audit` pays: a genuinely broken probe will not alarm here.**
+Bounded, not absent — its own `if: failure()` step alerts on a crash, and its
+runs are listed and take ledger rows, which is where the eight unrecorded
+`ci-audit` reds were eventually found by hand.
+
+**`h1-collect` is deliberately NOT silenced.** It exits 0 on every terminal stop
+state, so a red there means a crash or a timeout — a sized experiment losing a
+day, and nothing else reports it.
+
+**And creating a workflow is now the same act as registering it.**
+`test_every_workflow_on_disk_is_AUDITED_or_EXCLUDED` fails the suite until a new
+file under `.github/workflows/` is either listed in `WORKFLOWS` or named in
+`UNAUDITED_WORKFLOWS` **with a reason**. That is the only repair that stops a
+fifth instance.
+
+## PART D — ATTRIBUTION: ALREADY BY DAY OF WEEK, NOW STATED IN THE OUTPUT
+
+The fix shipped with the split on 2026-10-10: `collect_lag_series_by_daytype`
+classifies each run by **its own day of week** and requires **its own headSha**
+to have carried that cron. Driven rather than asserted, the error it avoids:
+
+```
+a WEEKEND 04:31 start against `0 4`  ->   31 min   (true 271, -240 of error)
+a WEEKDAY 08:31 start against `0 0`  ->  511 min   (true 271, +240 of error)
+```
+
+Not a sign flip but a 240-minute magnitude error in **both directions**, and
+*a magnitude imposed by an attribution rule is not an observation.* **No figure
+since the split is mis-attributed**: the weekend series reads n=4 with
+`delay max 4h31m`, which is 271 minutes from `0 0` — correct for a 04:31 start.
+
+**The rule is now printed with the series**, because a figure that depends on a
+rule carries the rule:
+
+```
+ATTRIBUTION: each run is matched to the cron that governs ITS OWN DAY OF WEEK,
+and only if its own headSha carried that cron. ... The week is partitioned by
+day of week, so no run can have both crons as a predecessor.
+```
+
+**The weekday series is still `n=0 UNEVALUATED`** — confirmed 2026-10-11. The
+split landed 10-10 ~17:00 and 10-11 is a Sunday, so the first weekday run under
+`0 4` is **Monday 2026-10-12**. Not clear, not zero.
+
+## PART E — THE ALARM SURFACE, ENUMERATED
+
+| state | where | alarms? | why |
+| --- | --- | --- | --- |
+| `BROKEN` | run verdict | **YES** | named in `--fail-on` |
+| `DID_NOT_RUN` | run verdict | **YES** | named in `--fail-on` |
+| `DEGRADED` | run verdict | no | deliberately omitted — red there trains people to ignore red |
+| `IN_PROGRESS` | run verdict | no | provisional: no verdict *yet* |
+| `UNAUDITABLE` | run verdict | no | **by omission** from `--fail-on` |
+| workflow `state != active` | workflow | **YES** | appended outside `--fail-on` |
+| schedule margin < threshold | margin | **YES** | appended outside `--fail-on` |
+| margin `UNEVALUATED` (weekday) | margin | no | no series under the cron yet |
+| prospective `ALARM` | **the probe** | **YES** | the probe exits 1 and alerts itself |
+| prospective `UNKNOWN — NOT safe` | the probe | no | card not discovered, or clock unverified |
+| `DID_NOT_START` | H1 apparatus | no | not on the audit's alarm path at all |
+| exit 2 `CRASH` | process | reds the job, **not** in `alarmed` | machinery, announced as such |
+
+**`alarmed.append` sites in `ci_audit`: exactly THREE** — workflow state, run
+verdict, schedule margin — **pinned by count**, so the surface cannot grow
+without someone writing down what it now contains.
+
+**`UNAUDITABLE` is outside by omission and still intended.** An unauditable run
+is not a known failure and alarming on it would fire on every platform hiccup.
+The cost, restated: **a cancelled run with an empty log alarms nothing**, and
+37369828831 (10-05) was found by hand.
+
+**NO NEW ALWAYS-FIRING ALARM.** The two states that print on every run —
+`tomorrow UNKNOWN — NOT safe` and the weekday series' `UNEVALUATED` — alarm on
+**neither**, because no action follows from either. Had they alarmed, the audit
+would have gone red daily from the moment they shipped. That is the fifth
+`fixtures_zero_active` avoided rather than committed.
+
+## A SECOND DEFECT OF MINE FROM YESTERDAY, FOUND WHILE CLASSIFYING
+
+The discovered/prospective margin I wired into `ci_audit` on 2026-10-10 **could
+never have produced its number**. That step passes `GH_TOKEN` and nothing else,
+and `ci_audit.py` deliberately loads no `.env` because the step installs no
+packages. Without `DATABASE_URL` it fell back to **SQLite**, which holds no
+fixtures, so the line read `UNKNOWN: the card for that day is not discovered` on
+**every run** — a permanently uninformative figure presented as a measurement.
+
+It only looked right in my hands because my shell had `.env` loaded. Through the
+real invocation it was always UNKNOWN, and I reported it as working.
+
+**Removed rather than supplied.** Giving that step a database means credentials
+**and** psycopg2 **and** SQLAlchemy on every audit run, to duplicate a check the
+probe already performs with both already in place. `ci_audit` keeps its
+stdlib-only property, guarded by a **comment-blind** scan that fails if
+`src.data.database`, `get_db(`, `psycopg2` or `sqlalchemy` reappears in its
+executable lines — comment-blind because a literal in prose is provenance, and
+deleting provenance to satisfy a scan is the wrong repair.
+
+## DECLARATION
+
+**AUDIT MACHINERY BROKEN — and now fixed.** The failure was at **import**, so it
+is before any output: **nothing was audited for ~13.3 hours**, from 2026-10-10
+17:12 to 2026-10-11 06:30. Examined by hand in this entry: 1 daily-picks run, 2
+closing-lines runs, both clean; 0 runs for paper-trading, h1-collect and the
+probe.
+
+**THREE REDS, ONE FINDING** — the same `ModuleNotFoundError` three times, cause
+`844b0ea`, mine. **Machinery, not verdict**, and the `##[error]` partition would
+have said verdict: every annotation self-emitted, every exit explained,
+`steps_failed` 0 because of `continue-on-error`. **Only `tracebacks` separated
+them.** Not resolved and not re-alarming; the marker's second episode stays
+unexercised because a crash is cleared by a fix, not by a row.
+
+**Clearing action for each:** (1) the three reds — the `sys.path` bootstrap plus
+the `-m` invocation, shipped, and both forms now verified by subprocess; (2) the
+probe's `+180` offset — `TZ=UTC` in the job, shipped, unmeasured until tonight's
+first firing; (3) the two latent script-form failures — pinned, successor
+contract after 10-17.
+
+**Membership: the third and fourth instance.** Both new workflows were outside
+`WORKFLOWS` and are now in, the probe never-alarming with its cost stated,
+`h1-collect` deliberately alarming, and a guard that makes creating a workflow
+and registering it one act.
+
+**Attribution** is day-of-week based and the rule is printed; the ±240-minute
+error it avoids is driven in a test. **Weekday series `n=0 UNEVALUATED`**, first
+firing Monday 10-12.
+
+Full suite **1959 passed**. Invariants pass, count not cited. Cohort
+**UNCHANGED** at `s5.17` / `818026` — instrumentation only, and H1 is
+mid-collection.
+
+*Recorded 2026-10-11. `scripts/ci_audit.py`, `.github/workflows/ci-audit.yml`,
+`tests/test_entrypoints_are_invocable.py` (new), `tests/test_alarm_surface.py`
+(new), `tests/test_cron_split_by_daytype.py`,
+`tests/test_prospective_deadline.py`, `tests/test_contamination_and_margin.py`.
+No production write. No schema or migration change.*

@@ -372,3 +372,83 @@ def test_the_phantom_signature_is_what_made_the_raw_count_misleading():
     assert WEEKDAY_EARLIEST_OBSERVED > 7 * 60 + 58, (
         "the weekday minimum has dropped into the phantom band (07:57-07:58) — "
         "the clean filter is no longer excluding ingestion timestamps")
+
+
+# ═════ PART D — mis-attribution produces a figure with the wrong magnitude ══
+
+def test_attribution_is_by_the_runs_OWN_day_of_week():
+    """The `closing-lines` censoring problem one level up.
+
+    With two crons on one workflow, nearest-preceding attribution is ambiguous.
+    Driven with the two concrete errors rather than asserted:
+
+        a WEEKEND 04:31 start against `0 4`  ->  31 min  (true 271, -240)
+        a WEEKDAY 08:31 start against `0 0`  -> 511 min  (true 271, +240)
+
+    Both are "an observation" only if the attribution rule is right; otherwise
+    they are an artefact of the rule, and a ceiling or a magnitude imposed by a
+    rule is not an observation.
+    """
+    import datetime as dt
+
+    def lag(start_min, cron_min):
+        c = dt.datetime(2026, 10, 12) + dt.timedelta(minutes=start_min)
+        sched = c.replace(hour=cron_min // 60, minute=cron_min % 60,
+                          second=0, microsecond=0)
+        if c < sched:
+            sched -= dt.timedelta(days=1)
+        return (c - sched).total_seconds() / 60.0
+
+    weekend_start, weekday_start = 4 * 60 + 31, 8 * 60 + 31
+    assert lag(weekend_start, 0) == 271.0
+    assert lag(weekend_start, 4 * 60) == 31.0, (
+        "a weekend run attributed to the weekday cron no longer understates "
+        "its lateness by 240 min — re-derive the error before trusting this")
+    assert lag(weekday_start, 4 * 60) == 271.0
+    assert lag(weekday_start, 0) == 511.0
+
+    # the shipped collector classifies by the run's own weekday
+    import inspect
+
+    from scripts.ci_audit import collect_lag_series_by_daytype
+
+    src = inspect.getsource(collect_lag_series_by_daytype)
+    assert 'c.date().weekday() >= 5' in src, (
+        "the series no longer classifies by the run's own day of week")
+    assert 'carried.get(day_type) != cron_now' in src, (
+        "membership no longer requires the run's OWN headSha to have carried "
+        "the cron — pooling two regimes is the `390a4be` error")
+
+
+def test_the_attribution_RULE_is_stated_in_the_output():
+    """A figure that depends on a rule carries the rule."""
+    from scripts.ci_audit import format_series_census
+
+    text = format_series_census({"weekend": [], "weekday": []},
+                                {"weekend": 0, "weekday": 240})
+    assert "ATTRIBUTION" in text
+    assert "DAY OF WEEK" in text
+    assert "-240" in text and "+240" in text, (
+        "the output does not state the magnitude of the error the rule avoids")
+
+
+def test_the_weekday_series_is_still_UNEVALUATED_until_a_run_fires():
+    """Confirmed 2026-10-11: no weekday run has fired under `0 4`.
+
+    The split landed 2026-10-10 ~17:00 and 10-11 is a Sunday, so the first
+    weekday run under the new cron is Monday 2026-10-12. Until then the series
+    is n=0 and the report must say UNEVALUATED, not clear and not zero.
+    """
+    from scripts.ci_audit import (
+        format_series_census, schedule_margins_by_daytype,
+    )
+
+    out = schedule_margins_by_daytype({"weekend": [(None, 271.0)] * 4,
+                                       "weekday": []},
+                                      {"weekend": 0, "weekday": 240})
+    assert out["weekday"]["n"] == 0
+    assert "weekday" in out["unevaluated"]
+    census = format_series_census({"weekend": [(None, 271.0)] * 4,
+                                   "weekday": []},
+                                  {"weekend": 0, "weekday": 240})
+    assert "n=0 UNEVALUATED, not clear" in census

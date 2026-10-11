@@ -42,15 +42,54 @@ import subprocess
 import sys
 from collections import defaultdict
 from typing import Dict, List, NamedTuple, Optional
+# ── THE REPO ROOT GOES ON sys.path BEFORE ANY `scripts.` IMPORT ────────────
+#
+# `python scripts/ci_audit.py` puts `scripts/` on sys.path[0]; `python -m
+# scripts.ci_audit` puts the repo root there. A module-level
+# `from scripts.x import y` therefore works under one invocation and raises
+# ModuleNotFoundError at IMPORT under the other.
+#
+# That shipped on 2026-10-10 and produced THREE reds reported as "CI audit
+# alarmed - see the audit step for the run ids" when there were no run ids and
+# nothing had been audited for ~13 hours. The same job already invoked
+# `python -m scripts.ci_alert`, so the two forms disagreed inside one file and
+# only one of them was exercised.
+#
+# A CRASH BOUNDARY CANNOT CATCH THIS - the import runs before any handler in
+# this module is reachable - so the fix is to make the invocation form
+# IRRELEVANT rather than to pick one and hope.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
+# Only the labelled percentile table is needed here; it is stdlib-only, so
+# this step keeps its no-install property.
 from scripts.schedule_deadline import (
     DEADLINE_PERCENTILES as _DEADLINE_PERCENTILES,
-    MIN_ACCEPTABLE_MARGIN_MIN,
 )
 
 LEDGER = pathlib.Path("docs/ci-audit-ledger.md")
 LOGS = pathlib.Path("ci_logs")
+#: ── EVERY WORKFLOW, AND THE SET IS GUARDED ────────────────────────────────
+#:
+#: `h1-collect.yml` and `fixture-horizon-probe.yml` were added 2026-10-11, and
+#: THE OMISSION WAS STRUCTURAL FOR THE THIRD AND FOURTH TIME. `ci-audit.yml`
+#: itself was absent from this tuple until 2026-09-27 and cost eight unrecorded
+#: reds; the same shape then repeated for both workflows created on 2026-10-10,
+#: because creating a workflow and registering it are two acts and only one of
+#: them is forced by anything.
+#:
+#: `test_every_workflow_on_disk_is_AUDITED_or_EXCLUDED` now makes them one:
+#: a new file under `.github/workflows/` fails the suite until it is either
+#: listed here or named in `UNAUDITED_WORKFLOWS` with a reason.
 WORKFLOWS = ("daily-picks.yml", "closing-lines.yml", "paper-trading-report.yml",
-             "ci-audit.yml")
+             "ci-audit.yml", "h1-collect.yml", "fixture-horizon-probe.yml")
+
+#: Workflow files deliberately outside the audit, each with its reason. Empty
+#: today: every workflow is audited. An entry here is a decision, not an
+#: oversight, and the guard above is what makes that distinction real.
+UNAUDITED_WORKFLOWS: Dict[str, str] = {}
 
 #: Workflows that are LISTED and LEDGERED but never ALARMED on.
 #:
@@ -74,7 +113,26 @@ WORKFLOWS = ("daily-picks.yml", "closing-lines.yml", "paper-trading-report.yml",
 #: The cost is stated rather than hidden: a genuinely broken ci-audit will not
 #: alarm about itself. Its failures are visible in the ledger and in the Actions
 #: list, which is where the eight were found by hand.
-NEVER_ALARM_WORKFLOWS = ("ci-audit",)
+#: `fixture-horizon-probe` joins on 2026-10-11, for a DIFFERENT reason than
+#: `ci-audit` and with the same cost stated.
+#:
+#: `ci-audit` is here to break a feedback loop. The probe has no loop; it is
+#: here because ITS RED IS ALREADY ITS ALERT. The probe exits 1 on a legitimate
+#: finding — tomorrow's margin is short — and on a refused clock, and it fires
+#: its own Telegram alert naming the clearing action. The audit alarming on
+#: that again would report "the probe went red", which a reader misreads as
+#: "the probe is broken" when the probe is working exactly as designed.
+#:
+#: THE COST, the same one `ci-audit` pays: a GENUINELY broken probe will not
+#: alarm here. It is bounded rather than absent — the probe's own
+#: `if: failure()` step alerts on a crash too, and its runs are LISTED and take
+#: ledger rows, which is where the eight unrecorded `ci-audit` reds were
+#: eventually found by hand.
+#:
+#: `h1-collect` is deliberately NOT here. It exits 0 on every terminal stop
+#: state, so a red there means a crash or a timeout — a real finding about a
+#: sized experiment losing a day, and nothing else reports it.
+NEVER_ALARM_WORKFLOWS = ("ci-audit", "fixture-horizon-probe")
 
 #: How far back "recently produced data" looks. Not a threshold on the metric —
 #: a window on the pipeline's own history.
@@ -1141,7 +1199,18 @@ RETIRED_SERIES = (
 
 def format_series_census(series_by_type: dict, crons: dict) -> str:
     """All five, apart, with n and basis. Printed every run."""
-    lines = ["scheduler series (FIVE populations, never pooled):"]
+    lines = [
+        "scheduler series (FIVE populations, never pooled):",
+        "  ATTRIBUTION: each run is matched to the cron that governs ITS OWN "
+        "DAY OF WEEK,",
+        "  and only if its own headSha carried that cron. Nearest-preceding "
+        "attribution would",
+        "  misread a weekend 04:31 start as 31 min late against `0 4` "
+        "(-240 min of error) and a",
+        "  weekday 08:31 start as 511 min late against `0 0` (+240). The week "
+        "is partitioned by",
+        "  day of week, so no run can have both crons as a predecessor.",
+    ]
     for cron, n, window, basis in RETIRED_SERIES:
         lines.append(f"  RETIRED  {cron:16s} n={n:34s} deadline basis: {basis}")
         lines.append(f"           {'':16s}   {window}")
@@ -1158,63 +1227,6 @@ def format_series_census(series_by_type: dict, crons: dict) -> str:
         if cron_min is None:
             lines.append(f"           {'':16s}   no cron resolved for this day type")
     return chr(10).join(lines)
-
-
-def report_discovered_margins(series_by_type: dict, crons: dict) -> dict:
-    """Today's margin against the DISCOVERED card, and tomorrow's prospectively.
-
-    Returns `{"lines": [...], "alarm": str|None}`.
-
-    TOMORROW IS `UNKNOWN` AND THAT IS A MEASURED FACT, not a gap in this code.
-    `max_days_ahead` is a ROLLING 24 HOURS from the moment of the run, so a
-    weekday run firing ~08:31 reaches only to ~08:36 the next day, and a
-    weekday card starts at 15:00-19:30. Measured 2026-10-10: the furthest
-    `match_date` in the whole table was 19:30 THAT DAY, and no fixture has ever
-    been priced more than 14.6 hours before kickoff (recent mean 8.5). So the
-    day-ahead deadline is not knowable from the database, and this says so
-    rather than substituting a constant.
-    """
-    from scripts.schedule_deadline import (
-        CLEARING_ACTION, day_type, discovered_deadline, format_prospective,
-        prospective_margin,
-    )
-
-    out = {"lines": [], "alarm": None}
-    today = _dt.date.today()
-    tomorrow = today + _dt.timedelta(days=1)
-
-    try:
-        from src.data.database import get_db
-
-        db = get_db()
-        session_cm = db.get_session()
-    except Exception as exc:
-        out["lines"].append(
-            f"discovered_margin[UNEVALUATED: no database ({type(exc).__name__}) "
-            f"- NOT safe]")
-        return out
-
-    _durations = MARGIN_RUN_DURATIONS
-    with session_cm as session:
-        for label, day in (("today", today), ("tomorrow", tomorrow)):
-            dtp = day_type(day)
-            try:
-                deadline = discovered_deadline(session, day)
-            except Exception as exc:
-                out["lines"].append(
-                    f"  {label:9s} UNEVALUATED: {type(exc).__name__} - NOT safe")
-                continue
-            delays = [lag for _d, lag in (series_by_type.get(dtp) or [])]
-            m = prospective_margin(deadline, crons.get(dtp), delays,
-                                   _durations, serves=day)
-            out["lines"].append(f"  {label:9s} " + format_prospective(m))
-            if m["verdict"] == "ALARM" and label == "tomorrow":
-                out["alarm"] = (
-                    f"PROSPECTIVE schedule margin {m['binding']:+.0f}m for "
-                    f"{m['serves']} (discovered kickoff "
-                    f"{m['deadline_min'] // 60:02d}:{m['deadline_min'] % 60:02d}) "
-                    f"below {m['min_margin']}m. {CLEARING_ACTION}")
-    return out
 
 
 def collect_lag_series_by_daytype(today: _dt.date = None, limit: int = 120):
@@ -1950,20 +1962,21 @@ def main() -> int:
     _margin = _margins.get(_margins.get("worse")) or {}
     _cron = _crons.get(_margins.get("worse"))
 
-    # ── THE DEADLINE IS DATA (2026-10-10) ───────────────────────────────────
+    # ── THE DISCOVERED/PROSPECTIVE MARGIN LIVES IN THE PROBE, NOT HERE ─────
     #
-    # The line above measures the delay distribution against a LABELLED
-    # PERCENTILE. These two measure it against the DISCOVERED CARD, which is
-    # the figure that actually binds, and they report the deadline beside the
-    # margin so the number carries what it was measured against.
-    print()
-    print(format_series_census(_by_type, _crons))
-    print()
-    _prospective = report_discovered_margins(_by_type, _crons)
-    for _line in _prospective["lines"]:
-        print(_line)
-    if _prospective["alarm"]:
-        alarmed.append(_prospective["alarm"])
+    # A DB-dependent line was added here on 2026-10-10 and it could NEVER have
+    # produced its number: this step passes `GH_TOKEN` and nothing else, and
+    # `ci_audit.py` deliberately loads no `.env` because the step installs no
+    # packages ("imports the standard library only"). Without `DATABASE_URL` it
+    # silently fell back to SQLite, which holds no fixtures, so the line read
+    # `UNKNOWN: the card for that day is not discovered` on every run — a
+    # permanently uninformative figure presented as a measurement.
+    #
+    # Giving this step the database would mean credentials AND psycopg2 AND
+    # SQLAlchemy on every audit run, to duplicate a check the probe already
+    # performs with both already in place. So it is removed rather than
+    # supplied: `scripts/fixture_horizon_probe.py` owns the prospective margin
+    # and alarms on it, and the series census below stays stdlib-only.
     if _cron is None:
         print("!! daily-picks carries no single `m h * * *` cron — the margin is "
               "UNEVALUATED, not safe")
@@ -1988,5 +2001,34 @@ def main() -> int:
     return 0
 
 
+#: Exit codes, so a red run says WHICH KIND it is.
+#:
+#: A red `ci-audit` is a VERDICT by design: it exits 1 when it finds something.
+#: But an uncaught exception also exits 1, and on 2026-10-10 three consecutive
+#: reds were a `ModuleNotFoundError` at import reported as "CI audit alarmed -
+#: see the audit step for the run ids" when there were no run ids and nothing
+#: had been audited at all. The workflow could not tell the two apart because
+#: the process gave it the same number.
+EXIT_CLEAN, EXIT_FINDING, EXIT_CRASH = 0, 1, 2
+
+
+def _main_guarded() -> int:
+    """`main()` with its own crash boundary, so machinery announces itself."""
+    try:
+        return main()
+    except SystemExit:
+        raise
+    except BaseException as exc:                 # noqa: BLE001 - deliberate
+        import traceback
+
+        traceback.print_exc()
+        print(f"\n::error::CI AUDIT CRASHED "
+              f"This is MACHINERY, not a finding: NOTHING was audited by this "
+              f"run, and nothing has been audited since the last run that "
+              f"exited 0 or 1. Do not read the absence of findings as a "
+              f"clean bill of health.")
+        return EXIT_CRASH
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_main_guarded())

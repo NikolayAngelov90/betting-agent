@@ -94,9 +94,20 @@ jobs:
         #     alarm on what is RECENT      --since  (here)
         #     record EVERYTHING once       --unaudited  (the manual pass)
         run: |
-          python scripts/ci_audit.py \
+          # `python -m`, matching `ci_alert` in this same job. The script
+          # form puts `scripts/` on sys.path[0] instead of the repo root,
+          # which broke a module-level `scripts.` import on 2026-10-10 and
+          # cost three reds and ~13h of unaudited runs. `ci_audit.py` now
+          # also bootstraps sys.path itself, so BOTH forms work and this
+          # line is belt to that braces rather than the only defence.
+          set +e
+          python -m scripts.ci_audit \
             --since "$(date -u -d 'yesterday' +%Y-%m-%d)" \
             --fail-on BROKEN,DID_NOT_RUN
+          code=$?
+          set -e
+          echo "audit_exit=$code" >> "$GITHUB_OUTPUT"
+          exit $code
         continue-on-error: true
 
       - name: Alert on an audit finding
@@ -116,5 +127,13 @@ jobs:
         # first. A red run whose alert never sent is the shape Stage 12.1 found.
         if: always() && steps.audit.outcome == 'failure'
         run: |
-          echo "::error::CI audit alarmed — see the audit step for the run ids."
+          # EXIT 2 IS A CRASH, EXIT 1 IS A FINDING. Reporting a crash as
+          # "alarmed - see the audit step for the run ids" is what happened
+          # on 2026-10-10: there were no run ids, and the message invited
+          # the reader to look for findings that did not exist.
+          if [ "${{ steps.audit.outputs.audit_exit }}" = "2" ]; then
+            echo "::error::CI AUDIT CRASHED - this is MACHINERY, not a finding. NOTHING was audited by this run, and nothing has been audited since the last run that exited 0 or 1. Do not read the absence of findings as a clean bill."
+          else
+            echo "::error::CI audit alarmed - see the audit step for the run ids."
+          fi
           exit 1
