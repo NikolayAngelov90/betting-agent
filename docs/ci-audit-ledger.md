@@ -25297,3 +25297,301 @@ Full suite **1966 passed**. Invariants pass, count not cited. Cohort
 `tests/test_alarm_surface.py`, `tests/test_entrypoints_are_invocable.py`,
 `tests/test_contamination_and_margin.py`. No production write. No schema or
 migration change.*
+
+---
+
+# 2026-10-11 (third entry) — PNC-1 DETECTOR BUILT. Coverage 3/13 = 23%, and the taxonomy of misses is the deliverable.
+
+Instrumentation only. H1 untouched: no change to the collection, the stop, the
+reservation or the H1 cron — and H1's four findings are **DEFERRED with a
+date**, not exempted.
+
+## PART A — THE SCAN
+
+`scripts/pnc_scan.py`. An AST pass over `src/` and `scripts/` reporting every
+function, method, class and module- or class-level name defined and never
+referenced outside its own definition. Four buckets, counted
+(`measured` 2026-10-11 on `36cbc7a`):
+
+| bucket | n | meaning |
+| --- | --- | --- |
+| `NO CONSUMER` | **33** | referenced nowhere outside its own definition |
+| `TEST-ONLY CONSUMER` | **0** | referenced only from tests — PNC-1's signature |
+| `ORPHAN CLUSTER` | **14** | consumed, but no path from any entry point reaches it |
+| `DEFERRED` | **4** | acknowledged, blocked until 2026-10-17 |
+| `DECLARED INTENTIONAL` | **6** | a recorded exemption with a reason |
+| `DECLARED ENTRY POINT` | **22** | excluded, invocation form named |
+| other declared exclusions | 366 | dunder, dispatch decorator, ORM, polymorphic, `__all__` |
+| consumed | 1,205 | |
+
+`TEST-ONLY CONSUMER` is a **bucket, never an exclusion** — it is what all three
+of this week's instances looked like.
+
+### ENTRY POINTS ENUMERATED BY INVOCATION FORM, AND THE FORM IS DISCOVERED
+
+21 entry points: **7 module-form**, **1 both**, **13 human-only**. The module
+and script forms are parsed out of `.github/workflows/*.yml`; the **human** form
+is *derived* — a file with a `__main__` guard that no workflow invokes is, by
+construction, invoked only by a person.
+
+> Listing entry points by hand is precisely how `cohort_status.py` stayed
+> outside the entry-point guard while six machine-invoked siblings were
+> covered, and it was broken in the human form for weeks.
+
+### EXCLUSIONS ARE DECLARED, AND TWO WERE MEASURED INTO EXISTENCE
+
+The first run returned 39 findings; 4 were **framework dispatch** — SQLAlchemy
+`@validates`, `@event.listens_for`, and `ast.NodeVisitor`'s `visit_*` methods.
+A framework calls by registration, so a reference can never exist and its
+absence proves nothing. Declared with reasons rather than suppressed by name.
+
+## PART B — PROVEN ON THE THIRTEEN, AND THE NUMBER IS LOW
+
+### COVERAGE: 3 / 13 = 23% (of the subset a name-or-table pass can reach: 3/3)
+
+| id | kind | verdict | provenance |
+| --- | --- | --- | --- |
+| `format-series-census` | N | **FOUND** | TEST-ONLY @ `ci_audit.py:1200`, measured at `bafe876` |
+| `h1-stop-no-caller` | N | **FOUND (partial)** | `allocate` TEST-ONLY + `COLLECTION_TERMINAL_STATES` ORPHAN, at `0ed4cad` |
+| `odds-snapshots-unread` | T | **FOUND** | flagged at `8ab8b21`, **clean at `abb053e`** and today |
+| the other ten | V / F / T | **OUT OF SCOPE** | each with its reason |
+
+**The taxonomy is the output.** Only one of four shapes is a reference-count
+question:
+
+    KIND N  a defined name nothing references        2 instances - both found
+    KIND T  a table written and never queried        1 instance  - found
+    KIND V  a value appended/written nobody reads    6 instances - OUT
+    KIND F  a field on a record no consumer reads    2 instances - OUT
+
+`alarmed.append(...)` with no `if alarmed` is a **statement**, not a name, and
+every name in it is referenced. `remaining` vs `updated` is a field-level flow
+question. The `step(s) FAILED` text is an unreachable branch. Four of the
+thirteen need reachability over *branches*, which this does not do.
+
+### THE `odds_snapshots` CONTROL IS A BEFORE/AFTER PAIR ON THE REAL HISTORY
+
+Not synthetic: flagged at `8ab8b21`, **absent at `abb053e`** — the commit that
+pointed the analysis at the table — and absent today. The pass that found it is
+separate (`--tables`) because *a table is not a Python name, and the reader
+that would have been unreferenced was never written*.
+
+### TWO OF THE THIRTEEN WERE MISCLASSIFIED BY ME, AND THE MEASUREMENT SAID SO
+
+* **`report_discovered_margins`** — I filed it as PNC-1. It **had a consumer**
+  at `ci_audit.py:1962`. The defect was the **inverse**: a consumer whose
+  producer could never evaluate, because the step passes no `DATABASE_URL`.
+* **`scrape_league_fixtures`** — the ledger's "never called" was a claim about
+  one **run mode**; it is called at `betting_agent.py:588` and
+  `flashscore_scraper.py:546`.
+
+Both are now `findable=False` with the correction recorded. **This is the only
+reason 3/13 is not 5/13**: the detector corrected my own register.
+
+### THE CONTROLS
+
+* **POSITIVE** — an uncalled function injected into a throwaway tree appears in
+  `NO CONSUMER`; deleted, it disappears. Both halves, because `no_consumer == []`
+  would otherwise pass against a scan reporting nothing at all.
+* **NEGATIVE** — no declared entry point appears in any bucket, in any form.
+* plus a positive/negative pair on the **orphan-cluster** pass (two functions
+  calling each other clear the moment `main` calls in) and on the **table**
+  pass (a written-never-read table clears when a `FROM` appears).
+
+### THREE DEFECTS IN THE DETECTOR, FOUND BY ITS OWN MEASUREMENTS
+
+1. **IT SUPPRESSED ITS OWN FINDINGS.** The first version counted every
+   identifier-like string as a reference, so `KNOWN_INSTANCES` —
+   `symbol="format_series_census"` — made each recorded instance look consumed.
+   The first historical run reported **MISS on two instances it had just been
+   built to find**.
+
+   > **A detector whose own records are indistinguishable from the evidence it
+   > reads cannot measure itself.**
+
+   A string is now a consumer only inside a reflection call, where the string
+   *is* the call.
+
+2. **A VACUOUS FILTER RETURNING A CONFIDENT FINDING.** The table pass's regex
+   began with a literal **backspace byte**: `\b` in a non-raw Python string is
+   `chr(8)`, so the pattern matched nothing and `odds_snapshots` was reported as
+   unread although `h1_collection_check.py:248` queries it. Caught **only
+   because that one answer was already known to be wrong** — which is the whole
+   argument for measuring a detector against known instances.
+
+3. **COVERAGE MEASURED AGAINST THE WRONG TREE.** The first `--coverage`
+   evaluated every row against *today's* tree, where a fixed instance is by
+   definition absent — scoring `format_series_census` a MISS one day after
+   finding it. A row's verdict now comes from the commit where the instance was
+   **live**, carrying `measured at <sha> on <date>`.
+
+### AND ONE MORE CROSS-CHECK, BY A DIFFERENT MECHANISM
+
+All 42 name findings were re-checked by **regex over the same tree**, which
+disagreed on 6. All six were artifacts of the *cross-check*, not the scan: a
+docstring usage example, two **keyword-argument writes** (`recommended_stake=`),
+the word `ATTRIBUTIONS` inside a regex literal, two sibling branch assignments,
+and the English word "exhausted" in log text. **Scan 6-0.** Keyword arguments
+are deliberately not references: `recommended_stake=round(kelly, 2)` is a
+**write**, and counting it would have erased the finding.
+
+## PART C — WHAT IT DOES WHEN IT FIRES: IT REPORTS
+
+**The backlog is 48** — 33 `NO CONSUMER`, 14 `ORPHAN CLUSTER`, 1 `KIND T`.
+
+> An alarm that fires on a pre-existing backlog every day is
+> `fixtures_zero_active` for the sixth time, and it reaches "ignored" in three
+> days. So: **this reports, and does not alarm.**
+
+The gate is a **RATCHET**, not an alarm: the three counts are pinned in
+`tests/test_pnc_detector.py::test_the_backlog_does_not_GROW`, which fires on
+**growth** only, and whose failure text names the three clearing actions. It
+also fails if a count *falls*, so a fixed finding forces the floor down instead
+of leaving slack.
+
+### THE TRIAGE
+
+**WIRE IT — a consumer was intended and is missing (10):**
+
+* **`injury_observations`** (KIND T) — written at `price_history.py:66`, read by
+  nothing in production. **A fourteenth instance, and the same shape that cost
+  47 days**, found on the detector's first real run.
+* **`_MODEL_HMAC_USING_DEFAULT`** — set `True`/`False` across two branches and
+  **read nowhere**. The insecure-default condition is *detected and discarded*.
+* **six `BetRecommendation` fields** — `recommended_stake`, `injury_impact`,
+  `h2h_insight`, `form_insight`, `home_xg_avg`, `away_xg_avg`. Built into a
+  context dict in `betting_agent.py`, passed in as keyword arguments, and never
+  read back. The CLI and Telegram read the *dict*, not the record.
+* **`discovered_deadline`** + `_PHANTOM_RULE` — **shipped yesterday** for the
+  discovered-card margin; the probe computes its deadline with `earliest_for`
+  instead, so this has no caller. Found by the detector on the day after.
+
+**DELETE — superseded or dead (34):** `collect_lag_series` +
+`current_cron_minutes` + `DEADLINE_BASIS_BY_DAYTYPE` (superseded by the
+by-day-type pair); **`MatchReportGenerator` and its seven methods** — an entire
+reporting subsystem whose head is unreferenced and whose tail is an orphan
+cluster; **the Flashscore odds-scraping chain** (`scrape_and_save_odds`,
+`_scrape_odds_page`, `_scrape_odds_page_cf`, `_parse_odds_from_soup`,
+`_parse_ou_odds`, `_scrape_all`) — odds come from API-Football and The Odds API;
+`chunked` + `IN_CHUNK_SIZE`; four `DatabaseManager` helpers; `Config.scraping`
+— a convenience property shadowed by the dotted-key `.get()` every caller
+actually uses; and the remainder.
+
+**DECLARED INTENTIONAL — a recorded exemption with a reason (6):** the four
+state enumerations (`COLLECTION_STATES`, `APPARATUS_STATES`,
+`COLLECTION_TERMINAL_STATES`, `DISCOVERY_STATES`) exist so a state set is
+**read rather than reconstructed** — the `fixtures_zero_active` lesson —
+and their consumer is deliberately the test that enumerates them;
+`OBSERVED_EARLIEST_MIN`, kept beside `DEADLINE_PERCENTILES` so a fallback can
+never drift laxer than the figure that justified the cron; `UNAUDITED_WORKFLOWS`,
+an intentionally empty registry that gains a production consumer the day it
+gains an entry.
+
+**DEFERRED, WITH A DATE — 2026-10-17 (4):** `allocate`, `release_requests`,
+`stamp_first_seen`, `Refusal.exhausted`. All on H1's path. Wiring or deleting
+any of them mid-collection changes the apparatus under a running experiment.
+**Reported in their own bucket with the date, and a successor contract that they
+must be re-triaged after it** — deferral is not allowed to become permanent by
+inertia.
+
+**The deletions are NOT in this commit.** This stage is instrumentation; removing
+34 symbols is a change with its own blast radius and belongs to its own stage
+with its own gates.
+
+### CLR-2 — THE CLEARING ACTION, AND THAT IT CHANGES THE PREDICATE
+
+| action | why the predicate moves |
+| --- | --- |
+| wire a consumer | the name gains a production reference — proved by the orphan pass's negative half |
+| delete the producer | no definition remains to count — proved by the positive control's second half |
+| declare it intentional | it leaves the bucket **carrying its reason into `excluded`**, where a reader sees it — proved by `test_DECLARING_a_finding_CHANGES_THE_PREDICATE` |
+
+An empty reason is rejected: every registry entry is asserted to carry one.
+
+## PART D — THE FIVE ENTRIES
+
+> **`or ""` converts an unreadable input into a confident negative.** The series
+> exclusion printed "no runs under the current cron yet" — a positive claim
+> about the schedule — from a tool that could not read fourteen shas. Sixth
+> instance of a default that makes a failure look like a success, and the first
+> where the default produced a **statement** rather than a value. An unreadable
+> sha now returns `None`, distinct from "carried no cron", counted and reported
+> with its clearing action.
+
+> **A defect masked by a usage pattern surfaces when the pattern changes, not
+> when the code changes.** The membership rule never changed; the commit rate
+> did. Runs had shared the then-HEAD sha for weeks.
+
+> **A test on a formatter's output proves the formatter, not that anything is
+> formatted.** PNC-1's signature is a green test on an uncalled producer, and it
+> has now appeared thirteen times. This is why `TEST-ONLY CONSUMER` is a bucket
+> and not an exemption — and why the detector's own `KNOWN_INSTANCES` table had
+> to stop counting as evidence.
+
+> **An ordering assertion needs an order, not a width.** The 1400-character
+> search window was a threshold wearing a scope's clothes, and a comment moved
+> the target past it.
+
+> **An entry point whose only caller is a person is the one no test exercises.**
+> `python scripts/cohort_status.py` was broken in the form a human types while
+> six machine-invoked entry points were guarded. Enumerate by invocation form —
+> and derive the human form from the tree, because a hand-written list is what
+> omitted it.
+
+### AND A CORRECTION TO THE STANDING RULES
+
+> **`cohort_status.py`'s signal is the FINGERPRINT, not the verdict string.**
+> `print("VERDICT: BUMP")` is branchless and pinned by a test — deliberately,
+> since s5.14 retired AMEND — so an instruction keyed on it carries no
+> information. Every "if it bumps, stop and report" in prior stages should have
+> read **"if the fingerprint moves"**. Accepted and adopted: the gate from here
+> is `s5.17 / 818026`, and the member count (**65**, up from 0 on 10-10) is
+> context.
+
+## DECLARATION
+
+**PNC-1 DETECTOR BUILT.** `scripts/pnc_scan.py`: an AST pass plus a separate
+schema pass, with four counted buckets, exclusions declared with reasons, and
+entry points **enumerated by invocation form** (7 module, 1 both, 13 human —
+the human form *derived* from the tree, not listed).
+
+**MEASURED COVERAGE 3/13 = 23%**, and 3 of 3 of the subset a name-or-table pass
+can reach — each verdict measured at the commit where the instance was **live**:
+`format_series_census` at `bafe876`, `allocate` at `0ed4cad`,
+`odds_snapshots` at `8ab8b21` with a **before/after pair on the real history**.
+**Fewer than half, stated plainly.** Ten of thirteen are out of scope and each
+carries its reason: 6 are values nobody reads, 2 are fields, 1 is not Python,
+and **2 were misclassified by me and corrected by the measurement** — which is
+the only reason the number is not inflated.
+
+**Controls:** positive and negative on all three passes — an injected uncalled
+function appears and disappears; no declared entry point is ever reported; an
+orphan pair clears when `main` calls in; a written-never-read table clears when
+a `FROM` appears. Plus an independent regex cross-check that disagreed **6
+times and lost 6 times**.
+
+**Three defects in the detector, caught by its own measurements:** it
+**suppressed its own findings** (its coverage table read as evidence); its table
+regex began with a literal **backspace byte** and was a vacuous filter
+returning a confident false finding; and `--coverage` first scored every row
+against today's tree, calling `format_series_census` a MISS one day after
+finding it.
+
+**IT REPORTS AND DOES NOT ALARM.** The backlog is **48**, which is a backlog and
+not an incident. The gate is a **ratchet** on growth, with the three clearing
+actions in its failure text, and it also fails when a count *falls* so a fix
+forces the floor down. **A fourteenth instance was found on the first real run**
+— `injury_observations`, written and read by nothing, the same shape that cost
+47 days — along with a discarded insecure-HMAC flag, six write-only
+`BetRecommendation` fields, and `discovered_deadline`, which I shipped
+**yesterday** with no caller.
+
+Full suite **1981 passed** — including an existing guard that correctly caught
+the detector itself for naming `odds_snapshots` without declaring why.
+Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.17` /
+`818026`; picks stamped 65.
+
+*Recorded 2026-10-11. `scripts/pnc_scan.py` (new),
+`tests/test_pnc_detector.py` (new), `tests/test_price_history_accumulates.py`.
+No production write. No schema or migration change. No deletion of any flagged
+symbol — that is its own stage.*

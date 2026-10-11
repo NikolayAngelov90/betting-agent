@@ -152,6 +152,15 @@ _SNAPSHOT_READERS = {
     # table and feeds no prediction.
     "mark_1x2_assignment_corruption.py": (
         "dates the 1X2 corruption from the duplicate-Home signature"),
+    # the DETECTOR, 2026-10-11. It names the table in its coverage table and
+    # in a comment; it issues no query and opens no session. It was caught by
+    # THIS guard on its first full run, which is the guard working: a file that
+    # mentions the snapshot history must say why, even when the reason is
+    # "to report that nobody reads it".
+    "pnc_scan.py": (
+        "the PNC-1 detector. It records `odds_snapshots` as the KIND T "
+        "instance it was built to find - 47 days written and unread - and "
+        "reads the SCHEMA, never the rows. No session, no prediction"),
     # the RESEARCH consumer, wired 2026-10-10
     "h1_collection_check.py": (
         "H1's analysis. It MEASURES the price path; it does not feed a "
