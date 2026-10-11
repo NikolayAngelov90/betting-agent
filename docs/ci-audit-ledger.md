@@ -25239,6 +25239,30 @@ series reporting, a gate's import path, and tests.
 > property that held — the exact failure mode this stage was convened to tell
 > apart from a real finding.
 
+## ADDENDUM — VERIFIED IN CI, AND THE REMAINING `UNEVALUATED` IS NOW A TRUE ONE
+
+Run `38124803103` (headSha `a4163c0`), **success**:
+
+```
+LIVE  0 0 * * 6,0   n=4                          deadline basis: ~5th percentile
+LIVE  0 4 * * 1-5   n=0 UNEVALUATED, not clear   deadline basis: ~5th-percentile proxy
+every scheduled run in the window had a READABLE sha - no run was excluded
+weekend  deadline 10:15  schedule_margin[n=4 ... binding=+171m threshold=30m]
+weekday  deadline 12:00  schedule_margin[UNEVALUATED: no runs under the current cron yet]
+```
+
+CI now matches this machine exactly — `n=4`, `binding=+171m`. Two further
+things the run establishes:
+
+1. **The weekday `UNEVALUATED` is now trustworthy.** Before the fix that
+   string meant either "no run has fired under `0 4`" or "every run was
+   dropped unread", and nothing distinguished them. The exclusion counter
+   reporting **zero** is what makes the surviving UNEVALUATED a statement about
+   the schedule rather than about the tool. The first weekday run under `0 4`
+   is Monday **2026-10-12**.
+2. **The attribution rule printed in CI for the first time**, having existed
+   unprinted since the split landed.
+
 ## DECLARATION
 
 **SERIES EXCLUSION MEASURED AND CLOSED.** The CI series was not empty, it was
