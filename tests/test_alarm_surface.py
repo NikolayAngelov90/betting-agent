@@ -24,11 +24,20 @@ MEASURED 2026-10-11 by driving each one:
 | prospective `UNKNOWN - NOT safe` | the probe | no | the card is not discovered, or the clock is unverified |
 | `DID_NOT_START` | H1 apparatus | no | not on the audit's alarm path at all |
 | exit 2 `CRASH` | process | reds the job, **not** in `alarmed` | machinery, announced as such |
+| series census `DEGRADED` (unreadable shas) | margin | no | **machinery**: guarded by a TEST on `fetch-depth`, not by a runtime alarm |
 
 THE TWO DAILY NON-ALARMS ARE THE POINT. `tomorrow UNKNOWN - NOT safe` and the
 weekday series' `UNEVALUATED` both print on **every** run and alarm on
 **neither**, because no action follows from either. Had they alarmed, the audit
 would have gone red every day from the moment they shipped.
+
+THE THIRTEENTH ROW, added 2026-10-11, is deliberately a NON-alarm. An
+unreadable headSha empties the series, and the empty series printed as
+`UNEVALUATED: no runs under the current cron yet` for fourteen runs. The fix is
+`fetch-depth: 0` plus a test that pins it, because the condition can only
+return if someone edits the workflow — which a test catches before merge and an
+alarm would only catch after a day of blind reporting. The census still prints
+the exclusion count and its clearing action on every run.
 """
 
 import datetime as dt
@@ -166,3 +175,25 @@ def test_the_FULL_alarm_surface_is_enumerated_here():
         f"3 (workflow state, run verdict, schedule margin). The prospective "
         f"margin is NOT here: it lives in the probe, which has the database "
         f"this step deliberately does not. Sites: " + repr(appends))
+
+
+def test_a_DEGRADED_series_census_does_NOT_alarm_and_that_is_deliberate():
+    """Row 13. Machinery degradation is announced, not alarmed — the same
+    disposition as exit 2, and for the same reason: no pipeline run failed.
+
+    What makes the non-alarm safe is that the condition is pinned by
+    `test_the_audit_checks_out_FULL_history_and_the_reason_is_recorded`, so it
+    cannot return silently. The runtime line exists for the case where the
+    audit is run by hand on a shallow clone, where no test is in the loop.
+    """
+    degraded = ci.format_series_census(
+        {"weekend": [], "weekday": [], ci.UNREADABLE_KEY: ["a" * 40]},
+        {"weekend": 0, "weekday": 240})
+    assert "EXCLUDED" in degraded and "fetch-depth: 0" in degraded
+    # it is reported by the census, which is NOT on the alarm path
+    assert "::error::" not in degraded
+    out = ci.schedule_margins_by_daytype(
+        {"weekend": [], "weekday": [], ci.UNREADABLE_KEY: ["a" * 40]},
+        {"weekend": 0, "weekday": 240})
+    assert out["alarm"] is False
+    assert "UNAUDITABLE" not in _fail_on() and "DEGRADED" not in _fail_on()

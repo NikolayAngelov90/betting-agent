@@ -39,6 +39,12 @@ ENTRY_POINTS = [
     "scripts/fixture_horizon_probe.py",
     "scripts/refresh_and_capture.py",
     "scripts/mark_1x2_assignment_corruption.py",
+    # Added 2026-10-11. It was absent, and it is the ONLY entry point whose
+    # sole caller is a person — the commit rules require it before every
+    # commit — so the module form that masked the defect in the others was
+    # never exercised here. `python scripts/cohort_status.py` raised
+    # `ModuleNotFoundError: No module named src`.
+    "scripts/cohort_status.py",
 ]
 
 #: Entry points whose SCRIPT form is known to fail on a module-level `src.`

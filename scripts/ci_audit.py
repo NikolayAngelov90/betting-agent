@@ -1061,6 +1061,13 @@ def current_cron_minutes(sha: str = None):
     return int(m.group(2)) * 60 + int(m.group(1)) if m else None
 
 
+#: Where `collect_lag_series_by_daytype` reports the shas it could NOT read.
+#: A separate key and not a silent exclusion, because the exclusion wore the
+#: `UNEVALUATED: no runs under the current cron yet` label and was read as
+#: "the cron is new" for as long as the shallow clone lasted.
+UNREADABLE_KEY = "__unreadable__"
+
+
 def current_crons_by_daytype(sha: str = None) -> dict:
     """`{'weekend': minutes|None, 'weekday': minutes|None}` from the workflow.
 
@@ -1075,6 +1082,19 @@ def current_crons_by_daytype(sha: str = None) -> dict:
     path = ".github/workflows/daily-picks.yml"
     text = (_sh("git", "show", f"{sha}:{path}") if sha
             else pathlib.Path(path).read_text(encoding="utf-8"))
+    # UNREADABLE IS NOT "A DIFFERENT CRON". `_sh` returns "" when `git show`
+    # fails, which it does for every sha outside a SHALLOW CLONE —
+    # `actions/checkout` defaults to `fetch-depth: 1`.
+    #
+    # MEASURED 2026-10-11: that made the whole series empty in CI and reported
+    # it as `UNEVALUATED: no runs under the current cron yet`, which is
+    # indistinguishable from "the cron is new". It had looked fine for weeks
+    # only because every run in the 28-day window shared the then-HEAD sha —
+    # older CI runs show n=6 and n=4 — and it broke the moment commits became
+    # frequent. A membership rule that degrades silently over-excludes, and
+    # over-exclusion wearing the UNEVALUATED label is worse than either.
+    if sha and not text.strip():
+        return None
     out = {"weekend": None, "weekday": None}
     for expr in re.findall(r"^\s*- cron:\s*'([^']+)'", text, re.M):
         parts = expr.strip().split()
@@ -1226,6 +1246,22 @@ def format_series_census(series_by_type: dict, crons: dict) -> str:
                      f"deadline basis: {pct} ({prov.split(';')[0]})")
         if cron_min is None:
             lines.append(f"           {'':16s}   no cron resolved for this day type")
+    # THE EXCLUSION, COUNTED. An n that fell because a sha was unreadable is
+    # not the same observation as an n that fell because no run fired, and
+    # until 2026-10-11 both printed as `n=0 UNEVALUATED`.
+    bad = series_by_type.get(UNREADABLE_KEY) or []
+    if bad:
+        lines.append(
+            f"  !! {len(bad)} run(s) EXCLUDED because their headSha could not "
+            f"be read, so their cron is unknown and their lag is not "
+            f"attributable. This is a DEGRADED census, not a small one. "
+            f"CLEARING ACTION: run the audit on a full clone "
+            f"(`actions/checkout` with `fetch-depth: 0`); shas: "
+            + ", ".join(sh[:7] for sh in bad[:6])
+            + (" ..." if len(bad) > 6 else ""))
+    else:
+        lines.append("  every scheduled run in the window had a READABLE sha "
+                     "- no run was excluded for an unknown cron")
     return chr(10).join(lines)
 
 
@@ -1238,8 +1274,9 @@ def collect_lag_series_by_daytype(today: _dt.date = None, limit: int = 120):
     a 04:00 weekday run read as a four-hour outlier of a 00:00 series.
     """
     today = today or _dt.date.today()
-    crons = current_crons_by_daytype()
+    crons = current_crons_by_daytype() or {"weekend": None, "weekday": None}
     out = {"weekend": [], "weekday": []}
+    unreadable = set()
     try:
         runs = json.loads(_sh(
             "gh", "run", "list", "--workflow", "daily-picks.yml",
@@ -1263,6 +1300,9 @@ def collect_lag_series_by_daytype(today: _dt.date = None, limit: int = 120):
             continue
         # The run must have CARRIED this cron for its lag to be comparable.
         carried = current_crons_by_daytype(r.get("headSha") or "")
+        if carried is None:
+            unreadable.add(r.get("headSha") or "?")
+            continue
         if carried.get(day_type) != cron_now:
             continue
         sched = c.replace(hour=cron_now // 60, minute=cron_now % 60,
@@ -1270,6 +1310,7 @@ def collect_lag_series_by_daytype(today: _dt.date = None, limit: int = 120):
         if c < sched:
             sched -= _dt.timedelta(days=1)
         out[day_type].append((c.date(), (c - sched).total_seconds() / 60.0))
+    out[UNREADABLE_KEY] = sorted(unreadable)
     return out, crons
 
 
@@ -1957,6 +1998,12 @@ def main() -> int:
     # measured number beside it.
     _by_type, _crons = collect_lag_series_by_daytype()
     _margins = schedule_margins_by_daytype(_by_type, _crons)
+    print()
+    # PNC-1, FOUND 2026-10-11. `format_series_census` carried the attribution
+    # rule and the per-series n, and NOTHING CALLED IT — it was exercised only
+    # by its own test, so the rule it states had never been printed in CI.
+    # Thirteenth instance of a producer with no consumer in this project.
+    print(format_series_census(_by_type, _crons))
     print()
     print(format_schedule_margins(_margins))
     _margin = _margins.get(_margins.get("worse")) or {}

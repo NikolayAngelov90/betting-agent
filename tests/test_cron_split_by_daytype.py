@@ -452,3 +452,105 @@ def test_the_weekday_series_is_still_UNEVALUATED_until_a_run_fires():
                                    "weekday": []},
                                   {"weekend": 0, "weekday": 240})
     assert "n=0 UNEVALUATED, not clear" in census
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE MEMBERSHIP RULE DEGRADED SILENTLY — measured 2026-10-11
+#
+# `UNEVALUATED: no runs under the current cron yet` was printed in CI for a
+# window that contained FOURTEEN scheduled runs. The rule reads each run's cron
+# from its own headSha with `git show <sha>:path`, `_sh` returns "" when that
+# fails, and `actions/checkout` defaults to `fetch-depth: 1` — so outside HEAD
+# every sha was unreadable and every run was dropped.
+#
+# MEASURED on one variable, same repo and same `gh` query:
+#
+#     full clone     weekend n=4   0 runs excluded
+#     --depth 1      weekend n=0   14 runs excluded, reported as "no runs yet"
+#
+# It had looked healthy for weeks because every run in the window shared the
+# then-HEAD sha; five commits in two days was enough to empty it. An exclusion
+# wearing the label of an absence is worse than either one alone.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_the_audit_checks_out_FULL_history_and_the_reason_is_recorded():
+    """`fetch-depth: 0`, pinned where it is needed and not where it is not.
+
+    This is the guard that replaces a runtime alarm: the degradation cannot
+    recur without this test failing, which is tighter than noticing a line.
+    """
+    import pathlib
+
+    import yaml
+
+    wf = yaml.safe_load(pathlib.Path(".github/workflows/ci-audit.yml")
+                        .read_text(encoding="utf-8"))
+    steps = list(wf["jobs"].values())[0]["steps"]
+    checkout = [s for s in steps if "checkout" in str(s.get("uses", ""))]
+    assert len(checkout) == 1, checkout
+    assert (checkout[0].get("with") or {}).get("fetch-depth") == 0, (
+        "ci-audit is back on a shallow clone. The scheduler series reads each "
+        "run's cron from its own headSha, so a shallow clone makes every "
+        "non-HEAD run unreadable and the series reports itself as empty.")
+
+
+def test_an_UNREADABLE_sha_is_not_a_DIFFERENT_cron():
+    """The third state, at the only place it can be distinguished.
+
+    `{'weekend': None, 'weekday': None}` says "this sha carried no recognisable
+    cron". `None` says "this sha could not be read at all". Collapsing them is
+    what made the exclusion invisible.
+    """
+    from scripts.ci_audit import current_crons_by_daytype
+
+    assert current_crons_by_daytype("0" * 40) is None, (
+        "an unreadable sha again returns a dict, which the membership rule "
+        "cannot tell from a sha that carried a different cron")
+    # the control: HEAD is readable and yields real crons
+    import subprocess
+
+    head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                          encoding="utf-8", errors="replace").stdout.strip()
+    carried = current_crons_by_daytype(head)
+    assert isinstance(carried, dict) and carried.get("weekend") is not None
+
+
+def test_the_EXCLUDED_runs_are_COUNTED_and_carry_a_clearing_action():
+    """Hard rule: an exclusion imposed by an attribution rule is not an
+    observation, and every alarm names an action a person can take."""
+    from scripts.ci_audit import UNREADABLE_KEY, format_series_census
+
+    degraded = format_series_census(
+        {"weekend": [], "weekday": [], UNREADABLE_KEY: ["a" * 40, "b" * 40]},
+        {"weekend": 0, "weekday": 240})
+    assert "2 run(s) EXCLUDED" in degraded
+    assert "DEGRADED census, not a small one" in degraded
+    assert "fetch-depth: 0" in degraded, "no clearing action in the text"
+
+    # POSITIVE CONTROL. Without this, the line above would also print on a
+    # healthy census and carry no information — `fixtures_zero_active` again.
+    clean = format_series_census({"weekend": [], "weekday": []},
+                                 {"weekend": 0, "weekday": 240})
+    assert "EXCLUDED" not in clean
+    assert "READABLE sha" in clean
+
+
+def test_the_series_census_HAS_A_CONSUMER():
+    """PNC-1, found 2026-10-11 and the thirteenth instance in this project.
+
+    `format_series_census` carried the attribution rule and the per-series n,
+    and nothing in `main` called it — it was exercised only by its own test
+    above, so the rule had never been printed in CI even once. A formatter
+    whose only caller is its test is a definition, not output.
+    """
+    import inspect
+
+    import scripts.ci_audit as ci
+
+    src = inspect.getsource(ci)
+    calls = [l for l in src.splitlines()
+             if "format_series_census(" in l and "def " not in l]
+    assert any("print(" in l for l in calls), (
+        "format_series_census is no longer printed; the attribution rule and "
+        f"the per-series n are produced and discarded. Sites: {calls!r}")

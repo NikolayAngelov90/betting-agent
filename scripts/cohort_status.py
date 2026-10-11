@@ -37,10 +37,38 @@ do not recall it.
 
 from __future__ import annotations
 
+import os
 import sys
+
+# THE REPO ROOT, SO THE INVOCATION FORM CANNOT MATTER. `python scripts/x.py`
+# puts `scripts/` on sys.path[0]; only `python -m scripts.x` puts the root. So
+# the documented form worked and the obvious one raised
+# `ModuleNotFoundError: No module named src` from inside main().
+#
+# MEASURED 2026-10-11: that is what this gate did when it was run as
+# `python scripts/cohort_status.py` - a traceback instead of a cohort reading,
+# in the one tool the commit rules require to be run BY HAND before every
+# commit. Fourth instance of this defect in two days, and the only one whose
+# sole caller is a person: no workflow invokes it, so the module form that
+# saved the others was never in the loop here.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def main() -> int:
+    # `--help` BEFORE anything else, so the entry-point guard can exercise this
+    # file's import and argument parsing without a database. Without it the
+    # guard in tests/test_entrypoints_are_invocable.py cannot cover this gate,
+    # which is how the sys.path defect above survived: the guard enumerates six
+    # entry points and this one was not among them.
+    import argparse
+
+    argparse.ArgumentParser(
+        prog="cohort_status",
+        description="Report the current cohort fingerprint and its member "
+                    "count. The verdict is always BUMP - see the module "
+                    "docstring for why s5.14 retired AMEND.",
+    ).parse_args()
+
     # Loaded INSIDE main, never at import. A module-level load_dotenv() undoes
     # conftest's DATABASE_URL strip and has previously let a test suite reach
     # production — see tests/test_db_isolation.py and the ledger entry.

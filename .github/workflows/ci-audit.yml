@@ -48,6 +48,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          # FULL HISTORY. The series' membership rule reads the cron FROM EACH
+          # RUN'S OWN headSha (`git show <sha>:...`), which is how two schedule
+          # regimes are kept from pooling. `fetch-depth: 1` makes every sha but
+          # HEAD unreadable, and the rule then silently over-excludes: measured
+          # 2026-10-11, the whole series read `UNEVALUATED: no runs under the
+          # current cron yet`. It had looked healthy for weeks only because
+          # every run in the window shared the then-HEAD sha.
+          fetch-depth: 0
         # The ledger IS the history. `produced_recently()` reads
         # `docs/ci-audit-ledger.md`, so a shallow checkout of the default branch
         # is both necessary and sufficient.

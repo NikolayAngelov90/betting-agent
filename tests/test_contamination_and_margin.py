@@ -214,8 +214,13 @@ def test_the_margin_line_is_printed_UNCONDITIONALLY():
     # 2026-10-11 (it needed a database this step does not have). The
     # PROPERTY is unchanged throughout - the margin prints before anything
     # can branch on `alarm`.
+    # AND THE WINDOW IS GONE. `[:1400]` was a third moving part: on
+    # 2026-10-11 a comment added between the anchor and the print pushed
+    # "alarm" past 1400 characters and the test failed with
+    # `ValueError: substring not found` — a FALSE RED on a property that
+    # still held. An ordering assertion needs an order, not a width.
     body = src.split("_by_type, _crons = collect_lag_series_by_daytype()",
-                     1)[1][:1400]
+                     1)[1]
     assert "print(format_schedule_margins(_margins))" in body
     assert body.index("print(format_schedule_margins(_margins))") < \
         body.index("alarm"), "the margin line is printed only when it alarms"

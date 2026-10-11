@@ -25094,3 +25094,182 @@ mid-collection.
 (new), `tests/test_cron_split_by_daytype.py`,
 `tests/test_prospective_deadline.py`, `tests/test_contamination_and_margin.py`.
 No production write. No schema or migration change.*
+
+---
+
+# 2026-10-11 (second entry) — THE SERIES WAS NOT EMPTY, IT WAS EXCLUDED. Plus PNC-1 in the formatter that carries the attribution rule.
+
+H1 untouched: no change to the collection, the stop, the reservation or the H1
+cron.
+
+## THE DEFECT, ISOLATED TO ONE VARIABLE
+
+Yesterday's repair made the audit run in CI. The restored run then printed, for
+both day types:
+
+```
+schedule_margin[UNEVALUATED: no runs under the current cron yet]
+```
+
+while the same command on this machine read `n=4` for the weekend series. One
+of those two is wrong, and "no runs under the current cron yet" is a claim
+about the world, not about the tool.
+
+**MEASURED 2026-10-11** by cloning this repository to `--depth 1` and running
+the collector against the same `gh run list` query, so the ONLY variable is
+clone depth:
+
+| clone | weekend series | runs excluded | what it printed |
+| --- | --- | --- | --- |
+| full | **n=4** | 0 | `n=4 ... binding=+171m` |
+| `--depth 1` | **n=0** | **14** | `UNEVALUATED: no runs under the current cron yet` |
+
+The membership rule reads each run's cron from **its own headSha**
+(`git show <sha>:.github/workflows/daily-picks.yml`) — that is how the `0 0`
+and `0 4` regimes are kept from pooling. `_sh` returns `r.stdout or ""` when
+the command fails, `actions/checkout` defaults to `fetch-depth: 1`, and so
+**every sha but HEAD was unreadable and every run was silently dropped.**
+
+> **An exclusion wearing the label of an absence is worse than either alone.**
+> `n=0 UNEVALUATED` was true of the tool and false of the schedule, and it is
+> the one phrasing that invites no action — the weekday series is *supposed*
+> to read that way this week.
+
+**WHY IT LOOKED HEALTHY FOR WEEKS.** Older CI runs did produce real figures —
+`37861098374` n=6, `37732216225` n=6, `37419826527` n=4 — because every run
+inside their 28-day windows shared the then-HEAD sha, so `git show HEAD:path`
+succeeded by coincidence. Five commits in two days was enough to break it.
+**The rule did not change; the commit rate did.** That is the signature of a
+guard that depends on something nobody is watching.
+
+### THE FIX, AND WHY IT IS A TEST RATHER THAN AN ALARM
+
+1. `fetch-depth: 0` on ci-audit's checkout, with the reason in the workflow.
+2. `current_crons_by_daytype` returns **`None`** for an unreadable sha, which
+   is now distinct from `{'weekend': None, 'weekday': None}` — "could not
+   read" versus "carried no recognisable cron". *Third-state family, instance
+   thirteen.*
+3. The collector **counts** the excluded shas and the census reports them:
+   `14 run(s) EXCLUDED ... This is a DEGRADED census, not a small one.
+   CLEARING ACTION: run the audit on a full clone`, with a **positive
+   control** — a readable window prints `every scheduled run in the window had
+   a READABLE sha`, so the line carries information in both states.
+
+The condition does **not** join `alarmed` (still three append sites). It can
+only return if someone edits the workflow, and a test catches that before
+merge where an alarm would catch it after a day of blind reporting. Recorded as
+**row 13** of the alarm surface with that reasoning, not left to inference.
+
+## PNC-1 AGAIN — AND IN THE FORMATTER THAT CARRIES THE ATTRIBUTION RULE
+
+Fixing the above required reading the census, which is where this surfaced:
+
+> **`format_series_census` had no caller.**
+
+It builds the five-population census and prepends Part D's attribution rule
+with its ±240-minute error figures. `main` never called it. It was exercised
+only by its own test, so **the rule it states had never printed in CI once** —
+the test asserting "the attribution RULE is stated in the output" was asserting
+a property of a string nobody read. Thirteenth instance of a producer with no
+consumer in this project, and the first where the orphan was the thing that
+explains a number rather than the number.
+
+Now printed, with a guard that fails if the call site is ever removed again.
+
+## TWO TESTS FAILED BECAUSE OF THIS WORK, AND BOTH WERE RIGHT
+
+- `test_every_subprocess_capture_declares_utf8` caught **my own new test**
+  calling `subprocess.run(..., text=True)` without `encoding="utf-8"`. Fixed in
+  my test, not in the guard.
+- `test_the_margin_line_is_printed_UNCONDITIONALLY` failed with
+  `ValueError: substring not found` because it searched a **fixed 1400-character
+  window** after its anchor and my comment pushed the target past it. A **FALSE
+  RED on a property that still held.** The window is removed: an ordering
+  assertion needs an order, not a width. That anchor had already moved twice.
+
+## THE COHORT GATE WAS BROKEN IN THE FORM A PERSON TYPES
+
+`python scripts/cohort_status.py` raised `ModuleNotFoundError: No module named
+src` — the same `sys.path` defect as yesterday's audit crash, in the one tool
+the commit rules require **by hand before every commit**. Fourth instance in
+two days, and the worst placed: no workflow invokes it, so the `-m` form that
+masked the defect elsewhere was never in the loop here. The entry-point guard
+enumerated **six** files and this was not among them — the registration gap,
+one layer up from the two workflows it caught last week.
+
+Fixed with the same root-path bootstrap, plus a `--help` that exits before any
+database access so the existing guard can cover it, and registered.
+
+## THE COHORT READING, AND WHAT ITS VERDICT CAN AND CANNOT SAY
+
+`s5.17` / `stage5_baseline_20260807.818026` — **UNCHANGED**, as required.
+
+Two things to state plainly rather than leave implied:
+
+1. **Picks stamped moved 0 → 65** (of 2,256 saved picks), `measured`
+   2026-10-11 against Supabase. Entry 59 recorded 0 on 10-10; daily-picks has
+   stamped 65 since. The cohort now **has members**, which is exactly the
+   condition that makes the next prediction-affecting change require a bump.
+2. **`VERDICT: BUMP` is a literal.** `print("VERDICT: BUMP")` has no branch and
+   has printed on every run since s5.14 retired AMEND — deliberately, and
+   pinned by `test_cohort_status_has_ONE_verdict_and_it_is_BUMP`. So the
+   verdict string cannot be the signal "must not bump" keys on; the signals are
+   the **fingerprint** (unchanged) and the **member count** (context). Noted
+   because an invariant output is the one thing that reads as an assurance
+   while carrying no information.
+
+Nothing in `src/` was touched: this stage changed one workflow, the audit's
+series reporting, a gate's import path, and tests.
+
+## THE THREE ENTRIES
+
+> **A membership rule that can fail to read its input must report that it
+> failed.** Silent over-exclusion is indistinguishable from the absence it
+> mimics, and it chose the one label — `UNEVALUATED` — that the operator had
+> already been told to expect this week. The counter is now part of the output,
+> both when it is zero and when it is not.
+
+> **A guard can be correct and still rot, if its correctness depends on a rate
+> nobody measures.** The sha-membership rule worked for weeks on the accident
+> that commits were rare. Nothing about the rule changed when it broke. Ask of
+> every guard what external rate it is quietly assuming.
+
+> **An ordering assertion needs an order, not a width.** A fixed character
+> window after an anchor is a third moving part, and it produced a red on a
+> property that held — the exact failure mode this stage was convened to tell
+> apart from a real finding.
+
+## DECLARATION
+
+**SERIES EXCLUSION MEASURED AND CLOSED.** The CI series was not empty, it was
+**excluded**: 14 of 14 scheduled runs dropped because a shallow clone made
+their shas unreadable, reported as `UNEVALUATED: no runs under the current cron
+yet`. Isolated to one variable by a `--depth 1` clone of this repo — full clone
+**n=4 / 0 excluded**, shallow **n=0 / 14 excluded**. Fixed with `fetch-depth:
+0`, a distinct `None` for an unreadable sha, and a counted exclusion carrying
+its clearing action, with a positive control on the healthy state. Guarded by a
+test rather than an alarm, and recorded as **row 13** of the enumerated alarm
+surface — `alarmed` append sites still **3**.
+
+**PNC-1, thirteenth instance:** `format_series_census` — which carries the
+attribution rule and the per-series n — had **no caller** and had never printed
+in CI. Now printed and guarded.
+
+**Two reds during this work were both correct**: the project's own subprocess-
+decoding guard caught my new test, and the unconditional-margin test produced a
+**false red** from a fixed 1400-character search window, now removed.
+
+**The cohort gate itself was broken in script form** (`ModuleNotFoundError: No
+module named src`) — fourth instance in two days, in the only entry point whose
+sole caller is a person, and absent from the guard that enumerates them. Fixed
+and registered.
+
+Full suite **1966 passed**. Invariants pass, count not cited. Cohort
+**UNCHANGED** at `s5.17` / `818026`; picks stamped **0 → 65**, measured
+2026-10-11.
+
+*Recorded 2026-10-11. `.github/workflows/ci-audit.yml`, `scripts/ci_audit.py`,
+`scripts/cohort_status.py`, `tests/test_cron_split_by_daytype.py`,
+`tests/test_alarm_surface.py`, `tests/test_entrypoints_are_invocable.py`,
+`tests/test_contamination_and_margin.py`. No production write. No schema or
+migration change.*
