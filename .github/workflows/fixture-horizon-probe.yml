@@ -167,10 +167,6 @@ jobs:
       - name: Alert when the prospective margin is short
         id: probe_alert
         if: always() && steps.probe.outputs.probe_exit != '0'
-
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         # The clearing action travels in the ALERT TEXT, not only in the
         # ledger — `fixtures_zero_active` was noise because the remedy lived
         # somewhere the reader was not.

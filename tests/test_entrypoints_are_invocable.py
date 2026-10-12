@@ -321,3 +321,75 @@ def test_the_audit_step_needs_no_DATABASE_and_asks_for_none():
         "the audit step now takes a database; if that is deliberate it also "
         "needs psycopg2 and SQLAlchemy installed, and the no-install property "
         "in this workflow's header is no longer true")
+
+
+# ─────────────────────────── A WORKFLOW PyYAML ACCEPTS AND GITHUB REFUSES
+#
+# MEASURED 2026-10-12. A duplicate `env:` key was pushed to
+# `fixture-horizon-probe.yml` and the test that "validated" the file PASSED,
+# because `yaml.safe_load` takes the LAST duplicate and says nothing. GitHub
+# refused the whole file:
+#
+#     HTTP 422: failed to parse workflow: (Line: 183, Col: 9):
+#     'env' is already defined
+#
+# So the workflow could not be dispatched OR fire on its cron — a broken
+# workflow that every local check called fine.
+#
+#     A parser that is more permissive than the one in production turns a
+#     validation test into a formality.
+
+def _strict_loader():
+    """A SafeLoader that REFUSES duplicate mapping keys, as GitHub does."""
+    import yaml
+
+    class _Strict(yaml.SafeLoader):
+        pass
+
+    def _no_dupes(loader, node, deep=False):
+        seen = set()
+        for k, _v in node.value:
+            key = loader.construct_object(k, deep=deep)
+            if key in seen:
+                raise yaml.YAMLError(
+                    f"duplicate key {key!r} at line {k.start_mark.line + 1}")
+            seen.add(key)
+        return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+    _Strict.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dupes)
+    return _Strict
+
+
+@pytest.mark.parametrize("wf", sorted(
+    p.name for p in pathlib.Path(".github/workflows").glob("*.yml")))
+def test_no_workflow_has_a_DUPLICATE_KEY(wf):
+    """The check `yaml.safe_load` cannot make.
+
+    CLEARING ACTION is in the message: delete one of the two blocks. A
+    duplicate `env:` usually means a second block was added beside an existing
+    one rather than merged into it.
+    """
+    import yaml
+
+    path = pathlib.Path(".github/workflows") / wf
+    try:
+        yaml.load(path.read_text(encoding="utf-8"), Loader=_strict_loader())
+    except yaml.YAMLError as exc:
+        pytest.fail(
+            f"{wf} has a duplicate key, which GitHub refuses with HTTP 422 "
+            f"while yaml.safe_load accepts it silently: {exc}. CLEARING "
+            f"ACTION: merge the two blocks into one.")
+
+
+def test_the_STRICT_loader_really_CATCHES_a_duplicate(tmp_path):
+    """Positive control. Without it the test above passes against a loader
+    that is as permissive as the one it replaces — which is the whole defect."""
+    import yaml
+
+    f = tmp_path / "dupe.yml"
+    f.write_text("a:\n  env:\n    X: 1\n  env:\n    Y: 2\n", encoding="utf-8")
+    # the PERMISSIVE loader accepts it, which is the problem
+    assert yaml.safe_load(f.read_text(encoding="utf-8")) == {"a": {"env": {"Y": 2}}}
+    with pytest.raises(yaml.YAMLError):
+        yaml.load(f.read_text(encoding="utf-8"), Loader=_strict_loader())
