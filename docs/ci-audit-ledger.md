@@ -25595,3 +25595,339 @@ Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.17` /
 `tests/test_pnc_detector.py` (new), `tests/test_price_history_accumulates.py`.
 No production write. No schema or migration change. No deletion of any flagged
 symbol — that is its own stage.*
+
+---
+
+# 2026-10-12 — HMAC SIZED (the guarantee never held). STAGE 18 SHIPPED THREE UNREAD SUBSTRATES. TALLIES AUDITED: two of fourteen survive.
+
+Read-only except for corrected count citations and the new register. Nothing
+wired, nothing deleted. H1 untouched; its four PNC-1 findings stay DEFERRED to
+2026-10-17.
+
+**No key, token or secret value appears anywhere in this entry, in the diff, or
+in any file this stage touched.**
+
+## PART A — `_MODEL_HMAC_USING_DEFAULT`: HMAC SIZED, AND THE GUARANTEE HAS NEVER HELD
+
+### WHAT IT SIGNS
+
+`_safe_save` / `_safe_load` in `src/models/ml_models.py` sign the **two ML model
+pickles** — `data/models/ml_models.pkl` and `goals_model.pkl` — each with a
+sibling `.sig`. `_safe_load` verifies, then calls `pickle.loads`. So what the
+HMAC stands between is **a forged pickle and arbitrary code execution** in a
+runner that holds `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY` and
+`ODDS_API_KEY`. It is not decorative, and nothing about `model_version` or the
+cohort fingerprint depends on it — the fingerprint is a config hash.
+
+### THE DEFAULT KEY IS A SOURCE LITERAL IN A PUBLIC REPOSITORY
+
+`measured` 2026-10-12: `gh repo view` → **`visibility=PUBLIC`**, created
+2026-02-15. The default key is a literal in `ml_models.py`. Its value is not
+reproduced here.
+
+The 2026-04-25 hardening (`140a932`) says, in its own comment, that *"the
+previous deterministic fallback was source-visible and therefore offered no
+protection"* — and replaced it with **a different source-visible literal**,
+gated behind an opt-in.
+
+### THE GUARANTEE HAS NEVER HELD, AND THE GUARD THAT WOULD SAY SO IS DISABLED
+
+Four measurements, all `measured` 2026-10-12:
+
+1. **`MODEL_HMAC_KEY` is not a configured secret.** `gh secret list` returns
+   eight names; it is not among them. (Names only.)
+2. **`daily-picks.yml:180` sets `MODEL_HMAC_KEY: ${{ secrets.MODEL_HMAC_KEY }}`**
+   — which, for a secret that does not exist, renders as an **empty string**.
+3. **`os.environ.get("MODEL_HMAC_KEY")` returning `""` is falsy**, so control
+   falls to the opt-in branch. Driven directly: with `MODEL_HMAC_KEY=""` and
+   the opt-in set, `_MODEL_HMAC_USING_DEFAULT` is **`True`**.
+4. **`daily-picks.yml:181` sets `BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'`** on the
+   same workflow — so the `else: raise RuntimeError(...)`, the one thing that
+   would have announced this, **can never fire there**. Confirmed by driving it:
+   with neither variable set, the RuntimeError does raise.
+
+> **The belt is disabled by the braces, on the very workflow that is supposed
+> to carry the real key.** An empty secret is indistinguishable from an absent
+> one, and the opt-in that exists for local development is set in production.
+
+Five further workflows — `closing-lines`, `fixture-horizon-probe`,
+`h1-collect`, `paper-trading-report` — set **only** the opt-in. `tests/conftest.py`
+does the same, correctly.
+
+### HOW MANY ARTEFACTS, AND FOR HOW LONG
+
+The pickles are **gitignored** but they **persist**: `daily-picks.yml` restores
+`data/models/` from cache key `betting-models-${{ github.run_number }}` with
+`restore-keys: betting-models-`, and saves it back at the end of every run. So
+run *N* loads run *N−1*'s pickles and `pickle.loads` them.
+
+| | `measured` 2026-10-12 |
+| --- | --- |
+| daily-picks runs | **324**, 2026-02-15 → 2026-10-11 |
+| cache entries holding `data/models/` | one per run; `betting-models-324` and `-323` live now, 6.97 MiB each |
+| signature artefacts per entry | 2 (`ml_models.sig`, `goals_model.sig`) |
+| signed with a non-default key | **zero** |
+| the hardening's age | shipped `140a932` 2026-04-25 — **170 days** without ever taking effect |
+
+Before 2026-04-25 the fallback was, by its own description, equally
+source-visible. **So the tamper-evidence guarantee has not held at any point in
+the project's life.**
+
+### TWO FURTHER HOLES, FOUND WHILE SIZING THIS
+
+> **A missing signature is treated as fine.** If the `.sig` file is absent,
+> `_safe_load` logs a warning and **loads the pickle unverified**. A correct
+> key is bypassed by deleting one file. "No signature" is not "verified"; it is
+> **unverifiable**, and the third state is not named here.
+
+> **`INTEGRITY FAILURE` is watched by nothing.** Both handlers
+> (`ml_models.py:591`, `:915`) log at ERROR and `return`, and the agent
+> continues on Poisson + Elo. `ci_audit` has no assertion for it and no alert
+> references it. So the one benefit that does **not** depend on key secrecy —
+> catching accidental corruption or a key rotation — is itself unobservable.
+> This is the founding shape of this ledger: *an alarm with no wire to
+> production is a definition, not an alarm.*
+
+### THE EXPOSURE, BOUNDED HONESTLY
+
+Every workflow triggers on `schedule` + `workflow_dispatch` **only** — no
+`push`, no `pull_request`, no `pull_request_target` (`measured` 2026-10-12, all
+six). So no untrusted event runs code in this repository's context, and writing
+a `betting-models-*` cache entry requires repository write access or dispatch
+permission. **An attacker with either does not need a forged pickle; they can
+edit the source.** The practical exposure is therefore low.
+
+That bounds the severity. It does not rescue the claim: the code asserts the
+check "provides a real guarantee", and it does not and never has.
+
+### THE DECISION: RECORD, THEN REFUSE — AND IT IS A SEPARATE STAGE
+
+The finding is **not backlog.** What the condition should do, in order:
+
+1. **RECORD** — consume `_MODEL_HMAC_USING_DEFAULT` at the point of signing and
+   stamp the `.sig` with which key regime produced it, so a default-signed
+   artefact is distinguishable from a real one. Without this, remediation
+   cannot tell the two apart.
+2. **REFUSE** — in CI, fail when the opt-in is set *and* `MODEL_HMAC_KEY` is
+   empty rather than absent. An empty secret is the failure mode that actually
+   occurred and the one the current `or`-shaped test cannot see.
+3. **Name the third state** — `.sig` absent must be `UNVERIFIED`, not a warning
+   on the success path.
+4. **Wire `INTEGRITY FAILURE`** to the audit's assertion set.
+
+**None of that is in this commit.** Generating a secret, setting it, and
+re-signing 324 runs' worth of cached artefacts is a change with a blast radius,
+and it must not happen while H1 is collecting.
+
+## PART B — STAGE 18 SUBSTRATE COUNT: **THREE**, of which **TWO** are still unread
+
+Stage 18 built three things. `measured` 2026-10-12 against Supabase:
+
+| # | substrate | rows | window | read by |
+| --- | --- | --- | --- | --- |
+| C1 | `odds_snapshots` | **139,948** | 2026-08-25 → 10-11 | `h1_collection_check.py:248`, **wired 2026-10-10 after 47 days** |
+| C2 | `odds.first_seen_at` | **123,043** (25.2% of 488,312) | — | **NOTHING** |
+| C3 | `injury_observations` | **5,136**, 211 teams | 2026-08-27 → 10-11, **46 days** | **NOTHING** |
+
+**The answer is three, not one.** All three shipped unread; one has since been
+wired; two are accumulating today.
+
+### C2 CARRIES A SECOND DEFECT: ITS GUARANTEE RESTS ON A FUNCTION NOBODY CALLS
+
+`stamp_first_seen` (`price_history.py:45`) says *"this is the only site that
+sets it"*. It is not: `apifootball_scraper.py:2174` and `theodds_scraper.py:981`
+set the column inline, and **`stamp_first_seen` has no production caller at
+all** — the PNC scan has it as TEST-ONLY.
+
+The write-once property nevertheless **holds**, and I checked rather than
+assumed: `first_seen_at` is **absent from the `on_conflict_do_update` set\_
+clause**, so a refresh cannot turn first-seen into last-seen. *The guarantee is
+real; the stated reason for it is false.* A stale reason string that runs.
+
+Note the asymmetry worth recording: `opening_odds` — the **price** half of the
+same Stage 18 item — **is** read, by `value_calculator._find_opening_odds` and
+`betting_agent`. The price is consumed and the timestamp beside it is not.
+
+### WAS ANYTHING MEANT TO READ `injury_observations`? YES — C3 SAYS SO
+
+Stage 18 C3's own words: *"an injury moves a line **when the news arrives**, and
+a current-status snapshot cannot distinguish a two-week-old absence from this
+morning's announcement."* The table exists precisely so news-arrival timing
+could be used. **No consumer was ever written**, and the feature path still
+reads the current-status `Injury` table — the exact limitation C3 named.
+
+### AND THE MONITORING CONFIRMED THE PRODUCER WHILE NEVER ASKING ABOUT THE CONSUMER
+
+The ledger has been **tracking these row counts for weeks** — `injury_observations`
+0 → 4 → 286 → 636 → 756 across four entries — and an audit line reads
+*"Stage 18 — `odds_snapshots` / `injury_observations` substrate counts | those
+tables | **CLEAN**"*.
+
+> **A growth check reads as a health check.** Every one of those readings was
+> correct and every one was about the writer. "The table is filling" and "the
+> table is useful" are different questions, and only the first was ever asked.
+
+### STAGE 14'S CLAIM STILL HOLDS, CHECKED NOT ASSUMED
+
+Injuries reach the **reasoning string** — `context["injury_impact"]` is consumed
+at `value_calculator.py:1135` and appended to the reasoning that goes to the
+Claude review prompt and to Telegram — and **never the model**: the feature path
+reads the `Injury` snapshot table, and `feature_engineer.py:507` skips injury
+features during training, so no fit ever sees them.
+
+The separate PNC-1 finding on `BetRecommendation.injury_impact` is a **redundant
+carrier**, not lost signal: the same string reaches its consumer through the
+context dict, and only the dataclass field is unread.
+
+## PART C — TALLIES AUDITED. TWO OF FOURTEEN SURVIVE.
+
+New file: **`docs/rule-tallies.md`** — the enumerable register, claimed beside
+corrected. The ledger carries **101** sentences containing "instance", **35** of
+them an explicit ordinal, every one cited as a measurement.
+
+| rule | claimed | enumerable? | corrected |
+| --- | --- | --- | --- |
+| **PNC-1** | **14** | **yes — a register exists** | **11 verified**; 4 misclassified, 2 unrecorded |
+| **third-state family** | **13** | **no** | ordinals 7, 9, **9 again**; 8/10/11/12 never claimed |
+| **THE HABIT** | **7** | **no** | two counters conflated, **non-monotone in file order** |
+| **"establish the clock"** | **5** | **no** | one site; the prior four named nowhere |
+| default→failure-looks-like-success | 6 | partial | 4, 5, 6 claimed |
+| cp1251 / encoding | 5 | partial | 4, 5 claimed |
+| a definition is not an occurrence | 5 | partial | 2, 5 claimed |
+| UNI-1 | 6 | partial | 5, 6 claimed |
+| mark, never delete | 4 | partial | 3, 4 claimed — close to complete |
+| an exclusion is only as good as… | 4 | **no** | only the 4th claimed |
+| the positive-control rule | 3 | **no** | only the 3rd claimed |
+| **a guard that enumerates a path and protects nothing** | **3** | **yes** | stated as a closed set and listed — **HOLDS** |
+| membership | 4 | partial | "third and fourth" claimed together, both named |
+| **canonicalisation is not symmetric-safe** | *no ordinal* | **n/a** | quotes a **measured population**, 369 hazards with its window — **HOLDS** |
+
+### THE TWO THAT SURVIVE ARE THE TWO THAT DID NOT USE AN ORDINAL
+
+One stated its instances as a **closed set of three, listed together**. The
+other quoted a **measured population with its query window** and no ordinal at
+all. Everything maintained by accretion drifted; nothing measured did.
+
+### PNC-1, ENUMERATED: 14 CLAIMED, 11 VERIFIED
+
+**Four misclassified**, and they stay on file with a verdict, because a register
+that silently drops its errors is the accretion problem with a tidier face:
+
+* `lookup-table-not-consulted` — **a RULE filed as an instance**; the ledger
+  says it explains three defects.
+* `five-terminal-states` — **the inverse shape**: the constant is read, one
+  value is unreachable. A dead branch is a consumer with no producer.
+* `report-discovered-margins` — **the inverse shape**; it had a consumer.
+* `scrape-league-fixtures` — **a per-run-mode claim read as tree-wide**.
+
+**One re-described**: `step-failed-alert` named an unreachable branch; the PNC-1
+the ledger actually recorded at that site is *"`conclusion` is requested and
+read nowhere"* — verified **still open** at `scripts/ci_audit.py:429`.
+
+**Three verified as real-then-fixed**, each checked against today's code rather
+than taken from the ledger: `same_team_strict` is now called by the unified
+resolver (`team_resolution.py:265`); the credits gate now reads `updated`
+(`theodds_scraper.py:88`); the requirements gap is closed and today's three
+omissions are deliberate.
+
+**Two added**: `injury_observations` and `odds.first_seen_at`.
+
+### THE COVERAGE ROSE, AND NOT BECAUSE THE TOOL IMPROVED
+
+| | reported 2026-10-11 | corrected 2026-10-12 |
+| --- | --- | --- |
+| denominator | 13 | **11** |
+| found | 3 | **4** |
+| coverage | 23% | **36%** |
+
+**The denominator was wrong.** That is the clearest illustration available of
+why an accreted tally is not a measurement — the number moved four points on an
+unchanged detector.
+
+### THE COUNT WAS IN THE SOURCE, NOT ONLY THE PROSE
+
+`scripts/ci_audit.py` carried *"Thirteenth instance of a producer with no
+consumer"* and *"Third-state family, instance thirteen"* — the second with no
+basis in the ledger at all, since that family's highest enumerable ordinal is
+**nine, claimed twice**. Both are corrected to cite the register. A source
+comment is the last place to invent an ordinal: it reads as settled fact and
+nothing re-checks it.
+
+## PART D — THE FOUR ENTRIES
+
+> **A pattern that recurs despite being named is usually more than one
+> pattern.** PNC-1's instances are four kinds: a name (AST-detectable), a table
+> (schema-detectable), a value nobody reads (`alarmed.append` with no `if
+> alarmed` — needs dataflow), and a field or column written but never read. The
+> rule named one and the project was hitting four, which is why naming it did
+> not stop it. `first_seen_at` sharpened this further: the **table** has
+> readers and the **column** has none, so even the schema pass does not reach
+> it.
+
+> **A vacuous filter returns confident findings.** `\b` in a non-raw string is
+> `chr(8)`; the pattern matched nothing and reported `odds_snapshots` unread
+> while `h1_collection_check.py:248` queries it. Detectable only against an
+> input whose answer was already known to disagree. **A new detector's first
+> test is a known-wrong case, not only a known-right one.**
+
+> **A detector whose records are indistinguishable from its evidence cannot
+> measure itself.** `KNOWN_INSTANCES` entries read as references and suppressed
+> the findings they recorded.
+
+> **A running tally is a claim and needs the same verification as any other
+> number.** Four of PNC-1's fourteen were misclassified; correcting the register
+> moved the coverage from 23% to 36% on an unchanged tool. Counts maintained by
+> accretion drift upward because each addition is cheap and none is checked —
+> and the drift lands in source comments, where it reads as fact.
+
+## DECLARATION
+
+**HMAC SIZED.** It signs the two ML model pickles, and what it stands between is
+a forged pickle and `pickle.loads` in a runner holding four production
+credentials. **The guarantee has never held.** `MODEL_HMAC_KEY` is not a
+configured secret; `daily-picks.yml` passes `${{ secrets.MODEL_HMAC_KEY }}`,
+which renders empty for a missing secret; an empty string is falsy, so the
+public default is used — driven and confirmed, `_MODEL_HMAC_USING_DEFAULT` is
+`True`; and the `RuntimeError` that would announce it cannot fire because the
+same workflow sets the local-development opt-in. **324 daily-picks runs,
+2026-02-15 → 2026-10-11**, each caching a signed pair; **zero signed with a
+non-default key**; the hardening is **170 days old and has never taken effect**.
+Two further holes: a **missing `.sig` loads unverified** with a warning, and
+**`INTEGRITY FAILURE` is watched by nothing**, so even the key-independent
+benefit is unobservable. **Exposure is bounded** — all six workflows are
+`schedule`/`workflow_dispatch` only, so a cache write needs repository access,
+and anyone with that can edit the source instead. **Not backlog: record, then
+refuse, and it is its own stage** — no secret may be generated or set while H1
+collects. No key value appears anywhere in this work.
+
+**STAGE 18 SUBSTRATE COUNT: THREE.** All three shipped unread; **two still
+are.** `odds_snapshots` — 139,948 rows, unread 47 days, wired 2026-10-10.
+`odds.first_seen_at` — **123,043 rows, 25.2%, read by nothing**, written inline
+by two scrapers while its designated writer has no caller, so its "only site
+that sets it" docstring is false though write-once itself holds by the column's
+absence from the upsert's update set. `injury_observations` — **5,136 rows, 211
+teams, 46 days, read by nothing**, built because a current-status snapshot
+cannot date the news, and the consumer that needed it was never written. The
+ledger had been tracking those row counts for weeks and scoring them CLEAN: **a
+growth check reads as a health check.** Stage 14's claim holds, checked —
+injuries reach the reasoning string and never a fit.
+
+**TALLIES AUDITED.** 101 instance-claims, 35 ordinals, 14 rules, **2 survive**:
+the one that recorded a closed set of three and the one that quoted a measured
+population with its window. **PNC-1: claimed 14, verified 11** — 4
+misclassified (two the inverse shape, one a rule filed as an instance, one a
+per-mode claim), 1 re-described to the still-open `conclusion` finding, 3
+verified as real-then-fixed against today's code, 2 added. **third-state
+family: claimed 13, and the ledger's highest enumerable ordinal is 9 — claimed
+twice, for two different findings.** THE HABIT's seven conflate two counters and
+run non-monotone. "Establish the clock"'s five rest on one site. The corrected
+coverage is **4/11 = 36%**, up from 23% **because the denominator was wrong**.
+
+Full suite **1982 passed**. Invariants pass, count not cited. Fingerprint
+**UNCHANGED** at `s5.17` / `818026`; picks stamped 65.
+
+*Recorded 2026-10-12. `docs/rule-tallies.md` (new), `scripts/pnc_scan.py`,
+`scripts/ci_audit.py`, `tests/test_pnc_detector.py`,
+`tests/test_cron_split_by_daytype.py`. Read-only against production. No
+production write, no schema change, nothing wired, nothing deleted, no secret
+created, read, printed or committed.*

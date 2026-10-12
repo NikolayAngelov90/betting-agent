@@ -537,7 +537,9 @@ def test_the_EXCLUDED_runs_are_COUNTED_and_carry_a_clearing_action():
 
 
 def test_the_series_census_HAS_A_CONSUMER():
-    """PNC-1, found 2026-10-11 and the thirteenth instance in this project.
+    """PNC-1, found 2026-10-11. NOT "the thirteenth instance": that ordinal
+    was accreted, and the 2026-10-12 tally audit put the verified count at
+    11 of 14 claimed (docs/rule-tallies.md).
 
     `format_series_census` carried the attribution rule and the per-series n,
     and nothing in `main` called it — it was exercised only by its own test

@@ -3,13 +3,21 @@
     PNC-1. A value that is produced and never consumed presents as a working
     feature on every surface except the one the consumer was for.
 
-Thirteen instances have shipped in this project. **Every one was found by
-accident** — three of them in the week of 2026-10-05, by someone reading
-nearby code for an unrelated reason. This is the detector that did not exist.
+ELEVEN VERIFIED instances have shipped in this project, and **every one was
+found by accident** — three of them in the week of 2026-10-05, by someone
+reading nearby code for an unrelated reason. This is the detector that did not
+exist.
+
+ELEVEN, NOT FOURTEEN. The ledger claimed fourteen on 2026-10-11. The tally
+audit of 2026-10-12 enumerated the register and found FOUR misclassified — two
+were the inverse shape (a consumer with no producer), one was a RULE filed as
+an instance, one was a claim about a single run mode read as a claim about the
+tree — and TWO unrecorded. A count maintained by accretion drifts upward
+because each addition is cheap and none is checked.
 
 WHAT IT IS NOT. It is not a verdict. An AST pass over names cannot see most of
 PNC-1's shapes, and saying so is the point of `--coverage`: the measured
-coverage against the known thirteen is the honest output, and the TAXONOMY OF
+coverage against the eleven verified instances is the honest output, and the TAXONOMY OF
 MISSES is more useful than the hit rate. Four kinds exist and only one is a
 name:
 
@@ -694,12 +702,13 @@ def scan_tables(prod_dirs=PROD_DIRS, test_dirs=TEST_DIRS) -> List[TableFinding]:
 # commit where the instance was still live.
 
 KNOWN_INSTANCES: Tuple[dict, ...] = (
-    dict(id="alarmed-append", kind="V", at=None,
+    # ── VERIFIED, 2026-10-12 ────────────────────────────────────────────────
+    dict(id="alarmed-append", kind="V", at=None, verdict="VERIFIED",
          what="`alarmed.append(...)` landed; `if alarmed: return 1` did not",
          findable=False,
          why="a list APPEND with no read. The producer is a statement, not a "
              "name, and every name involved is referenced."),
-    dict(id="h1-stop-no-caller", kind="N", at="0ed4cad",
+    dict(id="h1-stop-no-caller", kind="N", at="0ed4cad", verdict="VERIFIED",
          what="H1's allocator/stop/terminal states, nothing called them",
          findable=True, symbol="allocate",
          measured=("FOUND", "0ed4cad", "2026-10-11",
@@ -713,6 +722,7 @@ KNOWN_INSTANCES: Tuple[dict, ...] = (
              "ledger's 'nothing called them' was true of the COLLECTION "
              "being unwired, not of every name in the apparatus."),
     dict(id="odds-snapshots-unread", kind="T", at="8ab8b21",
+         verdict="VERIFIED",
          what="`odds_snapshots` written every refresh since 2026-08-25, read "
               "by nobody", findable=True, symbol="__table:odds_snapshots__",
          measured=("FOUND", "8ab8b21", "2026-10-11",
@@ -724,58 +734,102 @@ KNOWN_INSTANCES: Tuple[dict, ...] = (
              "Found by the SEPARATE table pass (`--tables`), which is why "
              "that pass exists."),
     dict(id="format-series-census", kind="N", at="bafe876",
+         verdict="VERIFIED",
          what="`format_series_census` carried the attribution rule and had no "
               "caller", findable=True, symbol="format_series_census",
          measured=("FOUND", "bafe876", "2026-10-11",
                    "TEST-ONLY CONSUMER @ scripts/ci_audit.py:1200 - the "
                    "exact bucket, and the exact signature")),
-    dict(id="same-team-strict", kind="N", at=None,
+    dict(id="same-team-strict", kind="N", at=None, verdict="VERIFIED",
          what="`same_team_strict` never called on the footballdataorg path",
          findable=False,
-         why="called on OTHER paths, so the name has consumers. A per-callsite "
-             "scan would be needed, not a per-definition one."),
-    dict(id="remaining-vs-updated", kind="F", at=None,
-         what="the gate read `remaining` and never read `updated`",
+         why="REAL when recorded, SINCE FIXED - the unified resolver calls it "
+             "at src/data/team_resolution.py:265 (verified 2026-10-12). Not "
+             "findable by a whole-tree scan either way: it was called on "
+             "OTHER paths throughout, so the NAME always had consumers. A "
+             "per-callsite pass would be needed."),
+    dict(id="remaining-vs-updated", kind="F", at=None, verdict="VERIFIED",
+         what="the credits gate read `remaining` and never read `updated`",
          findable=False,
-         why="a FIELD on a returned record. Both names are referenced "
-             "somewhere; the gap is which consumer reads which attribute."),
-    dict(id="step-failed-alert", kind="V", at=None,
-         what="the `step(s) FAILED` alert text was never printed",
+         why="REAL when recorded, SINCE FIXED - `updated` is read at "
+             "src/scrapers/theodds_scraper.py:88 (verified 2026-10-12). A "
+             "FIELD on a persisted object; both names are referenced "
+             "somewhere, so the gap is which consumer reads which key."),
+    dict(id="conclusion-requested-unread", kind="F", at=None,
+         verdict="VERIFIED",
+         what="`conclusion` requested in the gh --json list and read nowhere",
          findable=False,
-         why="an unreachable branch, not an unreferenced name. Needs "
-             "reachability, not reference counting."),
-    dict(id="requirements-not-read", kind="T", at=None,
+         why="RE-DESCRIBED 2026-10-12. This entry used to read "
+             "'the step(s) FAILED alert text was never printed', which is an "
+             "UNREACHABLE BRANCH and a different family. The PNC-1 at that "
+             "site is the one the ledger actually stated: conclusion is "
+             "requested at scripts/ci_audit.py:429 and read nowhere. STILL "
+             "OPEN - verified 2026-10-12. Not findable: it is a JSON field "
+             "name inside a command-line string."),
+    dict(id="requirements-not-read", kind="T", at=None, verdict="VERIFIED",
          what="two workflows never read `requirements.txt`", findable=False,
-         why="not Python at all."),
-    dict(id="lookup-table-not-consulted", kind="F", at=None,
-         what="the lookup table the deciding caller never consults",
-         findable=False,
-         why="the table is read by SOME caller; the defect is the earliest "
-             "decision point skipping it."),
-    dict(id="scrape-league-fixtures", kind="N", at=None,
-         what="`scrape_league_fixtures` never called", findable=False,
-         why="MISCLASSIFIED BY ME. The ledger's 'never called' was about one "
-             "RUN MODE (read-only by construction), not the whole tree: it "
-             "is called at betting_agent.py:588 and flashscore_scraper.py:546. "
-             "A per-mode claim cannot be checked by a whole-tree scan."),
+         why="REAL when recorded, SINCE FIXED. Not Python at all, so no pass "
+             "here can see it. Today three of six workflows omit it and all "
+             "three are deliberate - ci-audit is stdlib-only by design, and "
+             "the probe and h1-collect pip-install a narrower set."),
     dict(id="nothing-reads-snapshot-test", kind="V", at="8ab8b21",
+         verdict="VERIFIED",
          what="a test ASSERTING nothing read the snapshot table, pinning "
               "PNC-1 as a specification", findable=False,
          why="an inverted guard. The scan cannot know that a passing test "
              "encodes the defect rather than the requirement."),
-    dict(id="report-discovered-margins", kind="V", at="844b0ea",
-         what="`report_discovered_margins` could never evaluate in CI",
+    dict(id="injury-observations-unread", kind="T", at=None,
+         verdict="VERIFIED", findable=True,
+         symbol="__table:injury_observations__",
+         what="`injury_observations` written since 2026-08-27, read by nothing",
+         measured=("FOUND", "36cbc7a", "2026-10-11",
+                   "flagged by --tables on its first real run; 5,136 rows / "
+                   "211 teams / 2026-08-27..10-11 measured 2026-10-12")),
+    dict(id="first-seen-at-unread", kind="F", at=None, verdict="VERIFIED",
          findable=False,
-         why="MISCLASSIFIED BY ME, corrected by the measurement: it HAD a "
-             "consumer at ci_audit.py:1962. The defect was the INVERSE of "
-             "PNC-1 - a consumer whose producer could never evaluate, "
-             "because the step passes no DATABASE_URL. Reference counting "
-             "cannot see an always-UNKNOWN return."),
-    dict(id="five-terminal-states", kind="V", at="0ed4cad",
-         what="five terminal states claimed, four reachable plus a dead "
-              "branch", findable=False,
-         why="a constant that is read; the dead one is a branch no input "
-             "selects. Reachability again."),
+         what="`odds.first_seen_at` written by two scrapers, read by nothing",
+         why="MEASURED 2026-10-12: 123,043 of 488,312 odds rows carry it "
+             "(25.2%) and no production site reads it. A COLUMN, not a "
+             "table, so the schema pass does not reach it - the table has "
+             "readers, this column does not. Its designated writer "
+             "`stamp_first_seen` has no production caller either, so its "
+             "docstring's 'this is the only site that sets it' is false; "
+             "write-once nevertheless holds, by the column's ABSENCE from "
+             "the ON CONFLICT update set."),
+
+    # ── MISCLASSIFIED BY ME, corrected by the Part C tally audit ───────────
+    #
+    # These stay in the register. A register that silently drops its errors
+    # is the accretion problem with a tidier face - the claimed count and the
+    # corrected count have to be readable side by side.
+    dict(id="lookup-table-not-consulted", kind="-", at=None,
+         verdict="MISCLASSIFIED", findable=False,
+         what="the lookup table the deciding caller never consults",
+         why="A RULE FILED AS AN INSTANCE. `A lookup table is only as good as "
+             "the earliest decision point that consults it` is a named rule, "
+             "and the ledger says it explains THREE defects. Counting the "
+             "rule as one occurrence of PNC-1 double-counts in both "
+             "directions."),
+    dict(id="five-terminal-states", kind="-", at="0ed4cad",
+         verdict="MISCLASSIFIED", findable=False,
+         what="five terminal states claimed, four reachable plus a dead branch",
+         why="THE INVERSE SHAPE. The constant IS read; one value is "
+             "unreachable because no input selects it. That is a dead branch "
+             "- a consumer with no producer - not a producer with no "
+             "consumer."),
+    dict(id="report-discovered-margins", kind="-", at="844b0ea",
+         verdict="MISCLASSIFIED", findable=False,
+         what="`report_discovered_margins` could never evaluate in CI",
+         why="It HAD a consumer at ci_audit.py:1962. The defect was the "
+             "INVERSE of PNC-1 - a consumer whose producer could never "
+             "evaluate, because the step passes no DATABASE_URL."),
+    dict(id="scrape-league-fixtures", kind="-", at=None,
+         verdict="MISCLASSIFIED", findable=False,
+         what="`scrape_league_fixtures` never called",
+         why="The ledger's 'never called' was about one RUN MODE (read-only "
+             "by construction), not the whole tree: it is called at "
+             "betting_agent.py:588 and flashscore_scraper.py:546. A per-mode "
+             "claim cannot be checked by a whole-tree scan."),
 )
 
 
@@ -794,6 +848,13 @@ def coverage_rows(found_names: Set[str]) -> List[dict]:
     """
     rows = []
     for inst in KNOWN_INSTANCES:
+        if inst.get("verdict") == "MISCLASSIFIED":
+            # Kept in the register, OUT of the denominator. A count that
+            # includes its own corrections is the accretion problem again.
+            rows.append(dict(inst, hit=False,
+                             provenance="corrected 2026-10-12 by the tally "
+                                        "audit"))
+            continue
         m = inst.get("measured")
         if m:
             rows.append(dict(inst, hit=(m[0] == "FOUND"),
@@ -853,16 +914,27 @@ def format_scan(s: Scan, show_list: bool = False) -> str:
 
 
 def format_coverage(rows: List[dict]) -> str:
-    findable = [r for r in rows if r.get("findable")]
-    hits = [r for r in rows if r["hit"]]
+    verified = [r for r in rows if r.get("verdict") != "MISCLASSIFIED"]
+    wrong = [r for r in rows if r.get("verdict") == "MISCLASSIFIED"]
+    findable = [r for r in verified if r.get("findable")]
+    hits = [r for r in verified if r["hit"]]
     L = ["COVERAGE against the known instances - MEASURED, not claimed", ""]
-    L.append(f"  known instances on file : {len(rows)}")
-    L.append(f"  findable by a NAME scan : {len(findable)}")
+    L.append(f"  entries in the register : {len(rows)}")
+    L.append(f"  MISCLASSIFIED BY ME    : {len(wrong)}   "
+             f"(kept on file, out of the denominator)")
+    L.append(f"  VERIFIED instances      : {len(verified)}  <- THE COUNT")
+    L.append(f"  findable by this scan   : {len(findable)}")
     L.append(f"  actually found          : {len(hits)}")
-    pct = 100.0 * len(hits) / len(rows) if rows else 0.0
-    L.append(f"  COVERAGE                : {len(hits)}/{len(rows)} = "
+    pct = 100.0 * len(hits) / len(verified) if verified else 0.0
+    L.append(f"  COVERAGE                : {len(hits)}/{len(verified)} = "
              f"{pct:.0f}%  (of the findable subset: "
              f"{len(hits)}/{len(findable)})")
+    L.append("")
+    L.append("  THE LEDGER CLAIMED 14 ON 2026-10-11. The tally audit of")
+    L.append("  2026-10-12 found 4 misclassified and 2 unrecorded, so the")
+    L.append("  verified count is 11 and the coverage ROSE to 36% - not")
+    L.append("  because the detector improved, but because the DENOMINATOR")
+    L.append("  was wrong. A running tally is a claim like any other.")
     L.append("")
     L.append("  THE TAXONOMY OF MISSES IS THE REAL OUTPUT, and it says this")
     L.append("  scan addresses ONE of four shapes. KIND N is a name; V is a")

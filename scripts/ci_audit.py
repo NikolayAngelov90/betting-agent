@@ -1093,6 +1093,11 @@ def current_crons_by_daytype(sha: str = None) -> dict:
     # older CI runs show n=6 and n=4 — and it broke the moment commits became
     # frequent. A membership rule that degrades silently over-excludes, and
     # over-exclusion wearing the UNEVALUATED label is worse than either.
+    # Third-state family - and NOT "instance thirteen", which an earlier
+    # draft of this comment asserted. The ledger's highest enumerable
+    # ordinal for that family is NINE, claimed twice for two different
+    # findings. docs/rule-tallies.md has the list; there is no reliable
+    # ordinal, and a source comment is the last place to invent one.
     if sha and not text.strip():
         return None
     out = {"weekend": None, "weekday": None}
@@ -2002,7 +2007,10 @@ def main() -> int:
     # PNC-1, FOUND 2026-10-11. `format_series_census` carried the attribution
     # rule and the per-series n, and NOTHING CALLED IT — it was exercised only
     # by its own test, so the rule it states had never been printed in CI.
-    # Thirteenth instance of a producer with no consumer in this project.
+    # PNC-1 again. The ordinal that stood here ("thirteenth") was an
+    # accreted count; the tally audit of 2026-10-12 enumerated the
+    # register and found 11 verified of 14 claimed - see
+    # docs/rule-tallies.md. Cite the register, not a running number.
     print(format_series_census(_by_type, _crons))
     print()
     print(format_schedule_margins(_margins))

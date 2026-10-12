@@ -1,21 +1,31 @@
 """The PNC-1 detector, with its controls — 2026-10-11.
 
-Thirteen producers have shipped without consumers in this project and **every
-one was found by accident**. `scripts/pnc_scan.py` is the pass that did not
+ELEVEN VERIFIED producers have shipped without consumers in this project and
+**every one was found by accident**. The ledger claimed FOURTEEN until the
+tally audit of 2026-10-12 enumerated the register — see `docs/rule-tallies.md`. `scripts/pnc_scan.py` is the pass that did not
 exist. These are its controls, because:
 
     A detector that cannot find the instances already known has a measured
     coverage, not a verdict.
 
-MEASURED COVERAGE, 2026-10-11, against the thirteen on file: **3/13 = 23%**,
-and 3 of 3 of the subset a name-or-table pass could ever reach. The misses are
-not a failure, they are the taxonomy:
+MEASURED COVERAGE, 2026-10-12, against the **eleven verified**: **4/11 = 36%**,
+and 4 of 4 of the subset a name-or-table pass could ever reach.
+
+    IT ROSE FROM 23% BECAUSE THE DENOMINATOR WAS WRONG, NOT BECAUSE THE
+    DETECTOR IMPROVED.
+
+Four of the fourteen claimed were misclassified — two were the INVERSE shape
+(a consumer with no producer), one was a RULE filed as an instance, one was a
+claim about a single run mode read as a claim about the tree — and two were
+unrecorded. The misses that remain are the taxonomy, not a failure:
 
     KIND N  a defined name nothing references          2 instances, both FOUND
-    KIND T  a table written and never queried          1 instance,  FOUND
-    KIND V  a value appended/written nobody reads      6 instances, OUT
-    KIND F  a field the consumer never reads           2 instances, OUT
-    (2 of the 13 were MISCLASSIFIED BY ME and corrected by the measurement.)
+    KIND T  a table written and never queried          2 instances, both FOUND
+    KIND V  a value appended/written nobody reads      2 instances, OUT
+    KIND F  a field/column no consumer reads           3 instances, OUT
+    KIND -  not Python at all                          1 instance,  OUT
+    (`first_seen_at` is a COLUMN: the table has readers, the column has none,
+     so the schema pass does not reach it.)
 
 THE SCAN REPORTS, IT DOES NOT ALARM. 48 findings stand on today's tree, which
 is a backlog and not an incident — an alarm that fires on a pre-existing
@@ -224,9 +234,14 @@ def test_the_COVERAGE_against_the_known_instances_is_MEASURED_AND_LOW():
     as a MISS one day after finding it.
     """
     rows = pnc.coverage_rows(set())
-    assert len(rows) == 13, f"the instance count moved: {len(rows)}"
-    hits = [r for r in rows if r["hit"]]
-    assert len(hits) == 3, [r["id"] for r in hits]
+    assert len(rows) == 15, f"the register size moved: {len(rows)}"
+    verified = [r for r in rows if r.get("verdict") != "MISCLASSIFIED"]
+    assert len(verified) == 11, (
+        f"the VERIFIED count moved to {len(verified)}. If an instance was "
+        f"added or re-classified, update docs/rule-tallies.md in the same "
+        f"commit - an ordinal with no enumeration is not a count.")
+    hits = [r for r in verified if r["hit"]]
+    assert len(hits) == 4, [r["id"] for r in hits]
     for r in hits:
         assert r.get("provenance", "").startswith("measured at "), r["id"]
     # every miss carries its REASON - that is the deliverable
@@ -235,18 +250,39 @@ def test_the_COVERAGE_against_the_known_instances_is_MEASURED_AND_LOW():
             assert r.get("why"), f"{r['id']} is a miss with no explanation"
 
 
-def test_the_two_instances_I_MISCLASSIFIED_are_recorded_as_such():
-    """Both were corrected BY the measurement, which is the only reason the
-    coverage number is not inflated.
+def test_the_FOUR_misclassified_entries_stay_ON_FILE():
+    """A register that silently drops its errors is the accretion problem with
+    a tidier face. The claimed count and the corrected count must be readable
+    side by side, which is why these stay in `KNOWN_INSTANCES` with a verdict
+    instead of being deleted.
 
-    `report_discovered_margins` HAD a consumer at ci_audit.py:1962 — the
-    inverse of PNC-1. `scrape_league_fixtures`' "never called" was a claim
-    about one run mode, not the tree.
+    Two were the INVERSE shape, one was a RULE filed as an instance, one was a
+    per-run-mode claim read as a tree-wide one. All four corrected 2026-10-12.
     """
     by_id = {i["id"]: i for i in pnc.KNOWN_INSTANCES}
-    for ident in ("report-discovered-margins", "scrape-league-fixtures"):
-        assert by_id[ident]["findable"] is False
-        assert "MISCLASSIFIED BY ME" in by_id[ident]["why"], ident
+    wrong = ("report-discovered-margins", "scrape-league-fixtures",
+             "lookup-table-not-consulted", "five-terminal-states")
+    for ident in wrong:
+        assert by_id[ident]["verdict"] == "MISCLASSIFIED", ident
+        assert by_id[ident]["findable"] is False, ident
+        assert len(by_id[ident]["why"]) > 60, ident
+    assert sum(1 for i in pnc.KNOWN_INSTANCES
+               if i.get("verdict") == "MISCLASSIFIED") == len(wrong)
+
+
+def test_the_TALLY_REGISTER_exists_and_carries_both_counts():
+    """Hard rule: a count that cannot be enumerated is not cited as a count.
+
+    The register is the mechanism that makes that enforceable — without it,
+    "the fourteenth instance" is a sentence, and four of the fourteen were
+    wrong.
+    """
+    doc = pathlib.Path("docs/rule-tallies.md").read_text(encoding="utf-8")
+    assert "claimed" in doc.lower() and "corrected" in doc.lower()
+    assert "**11 verified**" in doc, "the corrected PNC-1 count is not stated"
+    for rule in ("third-state family", "THE HABIT", "establish the clock",
+                 "canonicalisation is not symmetric-safe"):
+        assert rule in doc, f"{rule} is not audited in the register"
 
 
 # ── CLR-2: WHAT CLEARS A FINDING ─────────────────────────────────────────────
@@ -364,4 +400,4 @@ def test_the_scan_runs_in_BOTH_invocation_forms():
                            capture_output=True, encoding="utf-8",
                            errors="replace", timeout=180)
         assert r.returncode == 0, f"{args}: {r.stderr[-600:]}"
-        assert re.search(r"COVERAGE\s+: 3/13", r.stdout), args
+        assert re.search(r"COVERAGE\s+: 4/11", r.stdout), args
