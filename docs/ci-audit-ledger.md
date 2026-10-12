@@ -26202,3 +26202,366 @@ Full suite **1994 passed**. Invariants pass, count not cited. Fingerprint
 `scripts/pnc_scan.py`, `tests/test_alarm_surface.py`,
 `tests/test_pnc_detector.py`. No production write, no schema change, no secret
 created, read, printed or committed. Nothing wired on the H1 path.*
+
+---
+
+# 2026-10-12 (third entry) — PROBE FAILURE CLASSIFIED: MACHINERY. The coupling in the brief is INVERTED. PREDICTION: none to score. ALERT CARRIES THE NUMBERS. Plus caplog refused by a mechanism.
+
+H1 untouched: no change to the collection, the stop, the reservation or the H1
+cron.
+
+## PART A — CLASSIFIED: MACHINERY, AND THE FIRST DEFECT IS THE ONE THE BRIEF NAMED
+
+**The probe has run ONCE since it shipped.** Run `38177680734`, headSha
+`9be058f`, `schedule`, **failure**, **21 seconds** (21:45:28 → 21:45:49 UTC,
+2026-10-11). Scheduled `0 18`, started 21:45 — 3h45m late.
+
+**21 seconds against a measured 155.1s scrape baseline rules out the timeout
+and the provider-load candidates before diagnosis begins.** The cause:
+
+```
+File ".../src/scrapers/base_scraper.py", line 8, in <module>
+    import aiohttp
+ModuleNotFoundError: No module named 'aiohttp'
+```
+
+| partition | value |
+| --- | --- |
+| `exit_annotations` | **1** |
+| `self_emitted_annotations` | 0 |
+| `foreign_annotations` | 0 |
+| **`unexplained_nonzero_exit`** | **1** |
+| `tracebacks` | **1** |
+| `steps_failed` | **[]** |
+| `steps_not_run` | [] |
+
+**Where they disagree:** `steps_failed` is empty while the remainder and the
+traceback counter both fire. `steps_failed` is parsed from a workflow's own
+`step(s) FAILED` alert text, which this workflow has never printed — the same
+gap recorded for `35498465743`. The three-way partition caught what the
+step-name parser could not.
+
+### IS A REFUSAL SUPPOSED TO RED THE RUN? YES — AND THAT WAS THE DEFECT
+
+Established from the code, not the colour: `main` returned **1** for an ALARM,
+**1** for a refused clock, and a crash exited **1** through the traceback. All
+three were the same number, and the workflow's `if: failure()` step fired **one
+fixed sentence** for all of them:
+
+> "Tomorrow's picks may land AFTER the first kickoff. ACTION: dispatch
+> daily-picks manually tomorrow morning …"
+
+**A crash that computed no margin told the operator his picks would be late.**
+The text carried a disjunction — *"if instead the probe refused or could not
+verify its clock…"* — which the reader had no way to resolve. So the red was
+neither verdict nor machinery; it was **unclassifiable**, and that is the first
+defect.
+
+**FIXED.** Four codes, distinct markers, a crash boundary, three alert texts:
+
+| code | meaning | marker | annotation |
+| --- | --- | --- | --- |
+| 0 | clear | — | — |
+| **1** | **ALARM** — a discovered deadline, margin short. A FINDING. | `PROBE ALARM` | `::error::PROBE ALARM` |
+| **2** | **CRASH** — machinery; nothing probed, nothing known | `PROBE CRASHED` | (the exit annotation) |
+| **3** | **REFUSED** — by design: clock unverified, or no deadline discoverable | `PROBE REFUSED` | `::error::PROBE REFUSED` |
+
+> **A designed refusal is annotated too, and that is deliberate.** `ci_audit`'s
+> absorbed-failure signal is a remainder — `exit_annotations - min(self_emitted,
+> exits)` — so a refusal exiting 3 in silence would read as a **swallowed
+> crash**. Each annotation is paired with exactly one exit, and the **text** is
+> what separates a refusal from a finding, not the presence of the annotation.
+> Both are now registered in `SELF_EMITTED_ANNOTATIONS`; neither was before, so
+> the probe's own annotations had been counting as **foreign** in its own
+> audited log.
+
+## PART B — THE FOUR CANDIDATES, EACH MEASURED
+
+### 1. THE CLOCK — `TZ=UTC`, measured from the runner
+
+```
+TZ=UTC
+runner UTC: 2026-10-11 21:45:46
+```
+
+Measured from the runner's own `echo` and `date -u`, which agrees with the log
+stamp to the second — not read from the workflow. **`verify_offset` has never
+returned a value in CI**, because the one run died before reaching it. The
+`+180 min` refusal recorded on 2026-10-10 was on **my Europe/Kyiv machine**;
+there has never been a CI offset measurement. The earlier entry's "the clock
+guard fired on its first real run" was true of a local run and should have said
+so.
+
+### 2. THE TIMEOUT — not the cause, and now measured in CI
+
+`timeout-minutes: 20` = 1,200s. Durations: the crashed run **21s**; the first
+successful run (`38238736130`, dispatched 2026-10-12 10:50 UTC) **223.4s**.
+
+**The floor:** `_click_load_more` spends its own 15-second budget per page
+regardless of the window, so 30 pages have a floor of **450s = 7.5 min**, which
+is **37.5% of the budget**. The measured 223.4s sits at **18.6%** — below the
+floor, because not every page exhausts its budget. Headroom is **5.4×**.
+
+### 3. FLASHSCORE LOAD — the stop condition is NOT met, and that is a measurement
+
+First successful run: **pages fetched 30/30, REFUSED 0, 0 timeouts.** Against
+the pre-ship baseline of 0 refusals over 150 page fetches, nothing has moved.
+
+The three registered limbs: refusals >2 in one run (**0**); 7-day mean >1.0
+(**0**); <28/30 leagues on **two consecutive** runs (**30/30**). **No limb is
+met, so the registered disable is not executed** — and this is a measurement,
+not a re-decision. Note also that the crashed run fetched **zero** pages, which
+is a crash and not provider behaviour: attributing it to Flashscore would have
+tripped a load limb on a dependency error.
+
+### 4. SCOPE — in `WORKFLOWS`, scored BROKEN, and deliberately not alarmed
+
+The probe **is** in `WORKFLOWS` (added 2026-10-11), and the audit **did** see
+it. Run `38188298206` printed:
+
+```
+38177680734  fixture-horizon-probe 2026-10-11T21:45  BROKEN  1 traceback(s) in the log
+!! no ledger history for fixture-horizon-probe: per-source discovery checks are UNEVALUATED for it, not passed
+```
+
+So the table was right and the third instance of the invisibility defect did
+**not** happen. The alarm was silent because I put `fixture-horizon-probe` in
+`NEVER_ALARM_WORKFLOWS` on 2026-10-11, with this stated cost:
+
+> "a GENUINELY broken probe will not alarm here. It is bounded rather than
+> absent — **the probe's own `if: failure()` step alerts on a crash too**."
+
+> **That mitigation was true and useless.** The step did alert on the crash —
+> with text that read as a margin finding. "It alerts on a crash too" is only a
+> bound if the alert can *say* it is a crash, and it could not. The exclusion
+> is kept, because the premise now holds: the crash text is distinct.
+
+## PART C — WHAT THE OPERATOR LOSES, AND THE COUPLING IS THE OTHER WAY ROUND
+
+The brief states that the 12:00 fallback is stricter, so a broken probe
+produces **more** alerts. **Measured, it is the reverse.**
+
+`measured` 2026-10-12 over **n=235 days** with a real earliest kickoff
+(2026-02-01 → 2026-10-11, **33.6 weeks**), projected ready = cron + 5h04m
+lateness max + 72m duration max, threshold 60m:
+
+| deadline basis | alerts | per week |
+| --- | --- | --- |
+| **discovered card** | **23** (14 weekday, 9 weekend) | **0.69** |
+| **12:00 / 10:15 fallback** | **0** | **0.00** |
+
+Weekday ready is **10:16**; the 12:00 constant leaves a 104-minute margin that
+never breaches. The discovered card alerts on **9% of weekdays and 13% of
+weekends**, because a real earliest kickoff sometimes falls before 11:16.
+
+> **The fallback is LAXER than the thing it substitutes for, so the outage is
+> SILENT.** The earlier justification for holding the weekday fallback at 12:00
+> — "a fallback must never be laxer than the figure the schedule was justified
+> with" — compared it to our own 14:30 percentile and never to the **discovered**
+> deadline, which is what the probe supplies. A broken probe does not produce
+> more manual-dispatch alerts; it produces **0.69 fewer per week**, and nothing
+> says so.
+
+**Current state:** the prospective check has produced **no verdict in CI since
+the probe shipped** on 2026-10-10 21:02 — not `UNKNOWN`, not anything, because
+the only scheduled run crashed before computing one. **Every probe alert ever
+sent is one, and it was a crash alert whose text did not say so.**
+
+### AND THE FIRST SUCCESSFUL RUN FOUND A STRUCTURAL BLIND SPOT
+
+```
+timezone : UNVERIFIABLE - no fixture is held by both the probe and the database
+prospective_margin[serves=2026-10-13 UNKNOWN: the probe's timezone is unverifiable - NOT safe]
+```
+
+The refusal is correct. Its cause is a coupling worth recording: the probe
+verifies its clock by finding a fixture held by **both** the page and `matches`.
+`matches` holds **0 rows for 10-13 and 10-14** — the probe's whole window —
+because no `daily-picks` run has scraped them.
+
+> **The clock check cannot succeed when the card is empty or unscraped**, which
+> is precisely when the pipeline is already in trouble. The probe looks 2 days
+> ahead; `matches` has never held a fixture more than **14.6 hours** before
+> kickoff. The overlap is thin by construction, and on an empty card it is
+> nil — so the probe refuses rather than helping, exactly when help is wanted.
+> Recorded, not fixed: widening the verification to any day the DB does hold is
+> a change to the refusal, and the refusal is not relaxed in this stage.
+
+## PART D — PREDICTION: THERE WAS NOTHING TO SCORE, AND THE HARM IS UNMEASURABLE
+
+| asked | answer |
+| --- | --- |
+| projected ready-time | **none** — the probe crashed before computing one |
+| discovered deadline | **none** |
+| shortfall | **none** |
+| did a dispatch occur? | **no** |
+| when did picks land? | **they did not** |
+| was the prediction right? | **there was no prediction.** The alert was a crash notice wearing a finding's text. |
+
+**Realised harm: UNMEASURABLE, and stated as such.** Our `matches` table holds
+**0 rows for 2026-10-12**, which is consistent with both "there were no
+fixtures" and "nothing scraped them". The independent check returned
+`403 Forbidden` for season 2026 — the API-Football free plan covers 2022–2024 —
+so I cannot distinguish the two. **Inferring "no fixtures were missed" from the
+empty table would be inferring realised harm from the mechanism, which is the
+error that has already happened twice.**
+
+### SEPARATE, OPEN, AND MORE SERIOUS THAN THE PROBE
+
+> **No `daily-picks` run has fired on 2026-10-12.** It is Monday — the first
+> weekday under the `0 4 * * 1-5` cron that landed on 2026-10-10 — and at
+> **10:55 UTC** there is no run, not even in progress. That is **6h55m past the
+> nominal 04:00** and **1h51m beyond the measured lateness maximum of 5h04m**
+> (n=9). The workflow is `active` and the cron parses.
+>
+> I have **not** dispatched it: a dispatch spends provider credits while H1 is
+> mid-collection, and the card for today reads empty, so the action is the
+> operator's. Reported rather than taken.
+>
+> The weekday series was `n=0 UNEVALUATED` precisely because no run had fired
+> under `0 4`. It still is.
+
+## PART E — ALERT CARRIES THE NUMBERS
+
+Rendered, not described:
+
+```
+PICKS MAY LAND AFTER THE FIRST KICKOFF on 2026-10-13 (deadline DISCOVERED by the probe).
+
+EARLIEST KICKOFF  11:30 UTC / 14:30 EEST+0300   league: netherlands/eerste-divisie
+LAST SAFE DISPATCH 09:46 UTC / 12:46 EEST+0300
+  = kickoff - 88m time-to-picks (MEASURED upper bound, n=4, 67.4-88.1, NOT the mean) - 15m safety margin
+  projected margin -37m
+
+ACTION: gh workflow run daily-picks.yml -- before the time above. ...
+```
+
+* **the upper bound, never the mean** — `FULL_CARD_PICKS_MAX = 88.1`, measured
+  2026-10-01, n=4, range 67.4–88.1, mean 76.4. The mean would give 10:00 and
+  the bound gives 09:46: **14 minutes**, and not being late is the whole point.
+* **the safety margin is separate** — 15 min, stated as a choice beside a
+  measurement rather than folded into it.
+* **every time names its clock**, and a test walks every `HH:MM` in the body
+  and fails on any that stands bare.
+* **the basis is stated** — discovered or fallback — per hard rule 3.
+* **a pre-dawn kickoff says `THE DAY BEFORE`**, an edge the arithmetic produces
+  and a reader would otherwise misread.
+* **POSITIVE CONTROL**: rendered against a known kickoff, both numbers and both
+  timezones asserted, plus a control that the mean was not used.
+
+**One thing is NOT delivered and is stated rather than guessed:** the **fixture**
+is not named, only the league. `probe_fixtures` returns kickoff datetimes and
+nothing else, so naming home-vs-away needs the scrape to carry team names
+through — and that is a change to the probe's parse, which would re-open the
+no-persistence census.
+
+## ADDENDUM — THE caplog TRAP IS NOW A MECHANISM
+
+Documentation failed as a control three times, with the third instance
+happening **in this session**, in a file I wrote, with three files already in
+the tree describing the trap.
+
+* `caplog` is now a **collection error**. The message names `capture_loguru`,
+  a new **shared** fixture in `tests/conftest.py`, and names `CAPLOG_ALLOWED`
+  as the declared escape hatch.
+* **POSITIVE CONTROL**: a `caplog` test fails at collection with that message,
+  and `no tests ran` proves the refusal is at collection — the probe body would
+  have **passed**, since an empty `caplog.records` is exactly what the trap
+  produces.
+* **NEGATIVE CONTROL**: the same test on the fixture passes. Plus a third:
+  the one allow-listed test still collects, so the hatch is not dead code.
+* **CENSUS**, `measured` 2026-10-12: 5 files mention `caplog`, **1** uses it as
+  a fixture, and that one is **correct** — `src/scrapers/barren_leagues.py` is
+  the single module in `src/` using `logging.getLogger`.
+  **Tests asserting on an empty `caplog`: 0.** Each of the three historical
+  instances was caught in the same sitting, so none shipped; the cost was time,
+  not a wrong verdict, which is also why documentation looked like it worked.
+* the local sink copy written today is **deleted** in favour of the shared
+  fixture. Two older copies remain and are the obvious next unification.
+
+## AND I BROKE THE WORKFLOW IN THE COMMIT THAT FIXED IT
+
+The first push left a **duplicate `env:`** in the probe's workflow. Every local
+check passed — `yaml.safe_load` takes the last duplicate and says nothing.
+GitHub refused the file outright:
+
+```
+HTTP 422: failed to parse workflow: (Line: 183, Col: 9): 'env' is already defined
+```
+
+So for one commit the probe could neither be dispatched nor fire on its cron:
+**a broken workflow that validated clean.**
+
+> **A parser more permissive than the one in production turns a validation test
+> into a formality.** Fixed, and replaced with a strict loader that refuses
+> duplicate keys across all six workflows, with a positive control asserting
+> that `safe_load` accepts exactly what the strict loader rejects. All six are
+> clean.
+
+Three further errors of mine were caught by guards already in the tree: the
+Telegram secrets dropped from the alert step's `env` (so the alert would have
+failed to send), the `::error::` annotation removed from the alarm path, and an
+f-string-assembled annotation that the registry requires as a **literal**.
+
+## DECLARATION
+
+**PROBE FAILURE CLASSIFIED — MACHINERY.** One run ever, 21 seconds,
+`ModuleNotFoundError: No module named 'aiohttp'`, from a **hand-curated pip
+list** while `requirements.txt` carried `aiohttp` the whole time. Partition:
+exit 1, self-emitted 0, foreign 0, **unexplained_nonzero_exit 1**, tracebacks
+1, `steps_failed` **empty** — and that disagreement is the step-name parser's
+known gap. **The first defect was the one the brief predicted:** all three
+outcomes exited 1 and one fixed sentence served all of them, so a crash sent a
+margin finding. Now 0/1/2/3 with distinct markers, a crash boundary, two
+newly-registered annotations, and three alert texts.
+
+**THE FOUR CANDIDATES.** Clock: `TZ=UTC` **measured from the runner**;
+`verify_offset` has **never** returned a value in CI, and the `+180` refusal
+was local. Timeout: 21s then **223.4s** against a 1,200s budget, with a
+measured 7.5-minute floor from the per-page 15s budget — **5.4× headroom**,
+never the cause. Load: **30/30 pages, 0 refused, 0 timeouts**; **no limb of the
+registered stop condition is met**, so the disable is **not executed** — a
+measurement, not a re-decision. Scope: the probe **is** in `WORKFLOWS`, the
+audit **did** score it **BROKEN**, and the alarm was silent by my own
+`NEVER_ALARM_WORKFLOWS` entry whose stated bound — "its own failure step alerts
+on a crash too" — was **true and useless** until today.
+
+**THE COUPLING IN THE BRIEF IS INVERTED, MEASURED.** n=235 days / 33.6 weeks:
+the discovered deadline would have alerted **23 times (0.69/wk)** and the
+fallback **0 (0.00/wk)**. The 12:00 constant is **laxer** than the discovered
+card, so the outage **silences** alerts instead of adding them. And the first
+successful run found a structural blind spot: the clock check needs a fixture
+held by both the page and `matches`, which holds **0 rows for the probe's whole
+window** — so **it cannot verify on an empty card**, which is exactly when help
+is wanted. Recorded, not relaxed.
+
+**PREDICTION SCORED — there was nothing to score.** No projected ready-time, no
+deadline, no shortfall: the alert was a crash notice in a finding's clothes. No
+dispatch occurred and no picks landed. **Realised harm is UNMEASURABLE** — our
+card for 10-12 is empty and the independent source returns 403 for season
+2026 — and saying "nothing was missed" would be inferring harm from the
+mechanism. **Separately and more seriously: no `daily-picks` run has fired on
+2026-10-12**, the first Monday under `0 4`, at 10:55 UTC — **6h55m past nominal
+and 1h51m beyond the measured 5h04m maximum.** Not dispatched: it spends
+credits while H1 collects, and that is the operator's call.
+
+**ALERT CARRIES THE NUMBERS.** Earliest kickoff in **UTC and Europe/Sofia**
+with the league named, and the last safe dispatch at **kickoff − 88.1m
+(measured upper bound, n=4) − 15m**, both clocks named, the basis stated, a
+`THE DAY BEFORE` edge, and a rendered positive control. The **fixture** name is
+not available from the probe's parse and that is stated rather than invented.
+
+**caplog IS NOW REFUSED AT COLLECTION**, with `capture_loguru` named in the
+message, three controls, and a census finding **0** tests asserting on an empty
+list.
+
+Full suite **2012 passed**. Invariants pass, count not cited. Fingerprint
+**UNCHANGED** at `s5.17` / `818026`; picks stamped 65.
+
+*Recorded 2026-10-12. `scripts/fixture_horizon_probe.py`,
+`.github/workflows/fixture-horizon-probe.yml`, `scripts/ci_audit.py`,
+`tests/conftest.py`, `tests/test_caplog_is_refused.py` (new),
+`tests/test_probe_alert_carries_numbers.py` (new),
+`tests/test_entrypoints_are_invocable.py`, `tests/test_prospective_deadline.py`,
+`tests/test_model_integrity_observable.py`. No production write, no schema
+change. The probe remains READ-ONLY; nothing on the H1 path was touched.*
