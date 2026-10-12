@@ -533,6 +533,19 @@ PATTERNS = {
     # with a log line this file had no pattern for, and five closing-lines runs
     # scored CLEAN while captures were stopped all day.
     "picks_run_guard_declined": r"PICKS-RUN GUARD: DECLINING",
+    # MODEL INTEGRITY, wired 2026-10-12. Both markers were already printed by
+    # `src/models/ml_models.py` and read by NOTHING - not this file, not an
+    # alert. So the one benefit that does NOT depend on the HMAC key being
+    # secret, catching accidental corruption or a key rotation, was itself
+    # unobservable: the handler logs at ERROR and the agent continues on
+    # Poisson + Elo.
+    #
+    # They are plain markers rather than `::error::` DELIBERATELY - see the
+    # comment at the emitter. A self-emitted annotation with no non-zero exit
+    # of its own would let `min(self_emitted, exits)` absorb a genuine
+    # unexplained exit.
+    "model_integrity_failures": r"MODEL INTEGRITY FAILURE",
+    "model_unsigned_loads": r"MODEL SIGNATURE MISSING",
     # The experiment record that replaces the frozen live all-time in the
     # Telegram reports. Registered BEFORE the code that emits it, deliberately:
     # the picks-run guard shipped with a log line this file had no pattern for
@@ -1983,6 +1996,36 @@ def main() -> int:
         if v in fail_on and r["workflow"] not in NEVER_ALARM_WORKFLOWS \
                 and not _resolved:
             alarmed.append(f"{rid} {r['workflow']} {v}")
+
+        # ── THE FOURTH ALARM SITE, added 2026-10-12 and written down ────────
+        #
+        # Model integrity is OUTSIDE the verdict axis on purpose. A tampered
+        # or corrupt pickle does not make the run BROKEN - the agent catches
+        # it, declines to load, and produces picks from Poisson + Elo - so the
+        # run can score CLEAN while the artefact is unusable. DEGRADED is not
+        # in `--fail-on` either, so routing this through `hits` would print it
+        # and alert nobody.
+        #
+        # It is safe to alarm because it has DYNAMIC RANGE, measured BEFORE
+        # wiring: 0 integrity failures and 0 unsigned loads across 1,400 load
+        # events in 239 runs of the cached corpus (measured 2026-10-12). An
+        # alarm whose baseline equals its threshold is the
+        # `fixtures_zero_active` shape; this one's baseline is zero.
+        #
+        # CLR-2: the clearing action is in the alert text and it is an action
+        # a person takes. The emitter carries `action=` for both markers too.
+        if facts.get("model_integrity_failures"):
+            alarmed.append(
+                f"{rid} {r['workflow']} MODEL INTEGRITY FAILURE x"
+                f"{facts['model_integrity_failures']} - a signed artefact did "
+                f"not match its signature. CLEARING ACTION: investigate the "
+                f"cached pair, then re-train to re-sign. Do NOT delete it.")
+        elif facts.get("model_unsigned_loads"):
+            alarmed.append(
+                f"{rid} {r['workflow']} MODEL SIGNATURE MISSING x"
+                f"{facts['model_unsigned_loads']} - a pickle was loaded "
+                f"UNVERIFIED because no .sig sat beside it. CLEARING ACTION: "
+                f"run `--train` so the pair is re-saved with a signature.")
         print(f"{rid:<12} {r['workflow']:<14} {(r.get('startedAt') or '')[:16]:<17} "
               f"{v:<10} {((_pre + '  ') if _pre else '') + '; '.join(hits)}"[:190])
         for h in hits[1:]:

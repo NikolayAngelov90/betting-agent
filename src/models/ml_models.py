@@ -83,6 +83,48 @@ def _compute_hmac(data: bytes) -> str:
     return hmac.new(_MODEL_HMAC_KEY, data, hashlib.sha256).hexdigest()
 
 
+def _mask(digest: str) -> str:
+    """Eight characters of a 64-character hex digest, enough to compare two.
+
+    A digest is not a secret and masking it is not what protects the key — the
+    key is never derivable from HMAC output. This is here so that nothing in a
+    log, an alert or a test fixture carries a full digest, because the standing
+    rule for this project is masked form only and a rule with an exception for
+    "harmless" values is not a rule.
+    """
+    d = (digest or "").strip()
+    return f"{d[:4]}..{d[-4:]}" if len(d) > 12 else "??..??"
+
+
+#: MARKERS, NOT ANNOTATIONS, AND THE DIFFERENCE IS LOAD-BEARING.
+#:
+#: The obvious wiring was `::error::`. It would have been wrong. `ci_audit`
+#: partitions `##[error]` three ways and computes its signal as the REMAINDER:
+#:
+#:     unexplained_nonzero_exit = exit_annotations - min(self_emitted, exits)
+#:
+#: Every entry in its `SELF_EMITTED_ANNOTATIONS` registry holds because the
+#: annotation is followed by that step exiting non-zero, so each explains at
+#: most one exit. An integrity failure here does NOT exit non-zero — the
+#: handler logs and returns, and the agent continues on Poisson + Elo. A
+#: registered annotation with no exit of its own would let `min` absorb a
+#: GENUINE unexplained exit elsewhere in the same log, and the detector would
+#: go blind in exactly the way it was rebuilt to stop.
+#:
+#: So these are plain uppercase markers. `ci_audit.PATTERNS` matches them and
+#: raises the alarm, which is the same wire `UNPRICED FIXTURES` and
+#: `IMPLAUSIBLE ATTRIBUTIONS` already use.
+INTEGRITY_FAILURE_MARKER = "MODEL INTEGRITY FAILURE"
+SIGNATURE_MISSING_MARKER = "MODEL SIGNATURE MISSING"
+
+
+def _integrity_alert(marker: str, model: str, **fields) -> None:
+    """One parseable line, masked, carrying the run id and a clearing action."""
+    run = os.environ.get("GITHUB_RUN_ID", "local")
+    detail = " ".join(f"{k}={v}" for k, v in fields.items())
+    logger.error(f"{marker}: model={model} {detail} run={run}")
+
+
 def _safe_save(state: dict, filepath: Path):
     """Pickle state and write alongside an HMAC signature file."""
     data = pickle.dumps(state)
@@ -116,6 +158,13 @@ def _safe_load(filepath: Path) -> dict:
         expected = sig_path.read_text().strip()
         actual = _compute_hmac(data)
         if not hmac.compare_digest(expected, actual):
+            # EMITTED HERE, not in the two handlers: this is the only place
+            # that knows both digests, and one emitter cannot drift from
+            # itself. Masked, because the standing rule has no exceptions.
+            _integrity_alert(
+                INTEGRITY_FAILURE_MARKER, filepath.name,
+                expected=_mask(expected), actual=_mask(actual),
+                action="investigate_then_retrain_to_resign_do_not_delete")
             raise IntegrityError(
                 f"Model file {filepath} failed integrity check — "
                 f"signature mismatch.  File may have been tampered with, or "
@@ -123,10 +172,18 @@ def _safe_load(filepath: Path) -> dict:
                 f"and re-train rather than auto-deleting."
             )
     else:
-        logger.warning(
-            f"No signature file for {filepath} — loading without verification. "
-            f"Re-save models to create a signature."
-        )
+        # THE LOAD IS DELIBERATELY KEPT. Failing closed here is step 4 of the
+        # switch plan and it does not ship until this count is measured at
+        # zero over a window — an unsigned load that refuses would cost a
+        # card, and a test gate has already cost one permanently.
+        #
+        # What changes today is that the warning is no longer only a warning:
+        # "no signature" is UNVERIFIABLE, not verified, and until 2026-10-12
+        # the two were the same line in the same log that nothing read.
+        _integrity_alert(
+            SIGNATURE_MISSING_MARKER, filepath.name,
+            state="loaded_UNVERIFIED",
+            action="run_--train_to_re-save_and_create_a_signature")
     return pickle.loads(data)  # noqa: S301
 
 

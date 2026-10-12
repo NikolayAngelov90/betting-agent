@@ -343,7 +343,11 @@ def test_the_DEFERRED_set_is_H1s_and_carries_its_DATE():
 #: silently; deliberately NOT an alarm, because a check that fires every day on
 #: a pre-existing backlog is the `fixtures_zero_active` shape for the sixth
 #: time. Lower these as findings are wired or deleted.
-BACKLOG = {"no_consumer": 33, "orphan_cluster": 14, "tables": 1}
+BACKLOG = {"no_consumer": 33, "orphan_cluster": 14, "tables": 0}
+#: `tables` fell 1 -> 0 on 2026-10-12, and NOT by a fix: `injury_observations`
+#: moved into AWAITING_CONSUMER with a named consumer and a re-triage date.
+#: The floor drops because the declaration is the clearing action, which is
+#: CLR-2 working - and the substrate is still reported, in its own section.
 
 
 def test_the_backlog_does_not_GROW():
@@ -401,3 +405,84 @@ def test_the_scan_runs_in_BOTH_invocation_forms():
                            errors="replace", timeout=180)
         assert r.returncode == 0, f"{args}: {r.stderr[-600:]}"
         assert re.search(r"COVERAGE\s+: 4/11", r.stdout), args
+
+
+# ── THE DECLARED-BUT-UNREAD SUBSTRATES ──────────────────────────────────────
+
+def test_every_AWAITING_CONSUMER_entry_names_a_CONSUMER_and_a_DATE():
+    """An exemption is recorded with a named consumer and a re-triage date,
+    never as a silence.
+
+    Both entries are Stage 18 substrates that shipped unread. Deleting them
+    would be wrong — each was built because a cheaper proxy was MEASURED and
+    found insufficient (`created_at` is a backfill stamp for 91.8% of rows at
+    mean +638 days; a current-status snapshot cannot date an absence). So the
+    true state is recorded rather than resolved.
+    """
+    assert pnc.AWAITING_CONSUMER, "the registry is empty"
+    for key, meta in pnc.AWAITING_CONSUMER.items():
+        for field in ("rows", "question", "consumer", "build", "cohort",
+                      "retriage", "basis"):
+            assert meta.get(field), f"{key} has no {field}"
+        assert re.fullmatch(r"20\d\d-\d\d-\d\d", meta["retriage"]), key
+        assert meta["retriage"] > "2026-10-12", f"{key} re-triages in the past"
+        assert "measured" in meta["rows"], (
+            f"{key}'s row count carries no provenance")
+
+
+def test_DECLARING_a_substrate_CHANGES_THE_PREDICATE_and_still_REPORTS_it():
+    """CLR-2, on the table pass.
+
+    `injury_observations` was a KIND T finding on 2026-10-11. The clearing
+    action was to declare it, and declaring it removed it from the finding
+    list — otherwise the declaration would be advice rather than an action.
+    It is still printed, in its own section, with its date.
+    """
+    assert "__table:injury_observations__" in pnc.AWAITING_CONSUMER
+    flagged = {f.table for f in pnc.scan_tables()}
+    assert "injury_observations" not in flagged, (
+        "a declared substrate is still reported as an open finding")
+    assert "odds_snapshots" not in flagged, "the wired substrate regressed"
+    rows = dict(pnc.awaiting_consumer_rows())
+    assert len(rows) == 2
+
+
+def test_the_UNREAD_COLUMN_is_recorded_even_though_NO_PASS_FINDS_IT():
+    """`odds.first_seen_at` is the sharpest version of the taxonomy point.
+
+    The TABLE has readers and the COLUMN does not, so the schema pass cannot
+    reach it — a producer can be invisible to every detector here and still be
+    real. Recording it is the only thing that keeps it from being lost.
+    """
+    meta = pnc.AWAITING_CONSUMER["__column:odds.first_seen_at__"]
+    assert "H4" in meta["question"] or "H4" in meta["consumer"]
+    assert "25.2%" in meta["rows"]
+    by_id = {i["id"]: i for i in pnc.KNOWN_INSTANCES}
+    assert by_id["first-seen-at-unread"]["findable"] is False, (
+        "if a pass now finds the column, say which and update the coverage")
+
+
+def test_the_stamp_first_seen_docstring_no_longer_claims_to_be_the_ONLY_site():
+    """The lie, fixed. Two scrapers set the column inline and the function has
+    no production caller, so the write-once guarantee was being asserted by a
+    definition no execution passed through.
+
+    The guarantee itself HOLDS — the column is absent from the upsert's update
+    set — and the docstring now says that instead.
+    """
+    from src.data.price_history import stamp_first_seen
+
+    doc = stamp_first_seen.__doc__ or ""
+    assert "NOT** THE ONLY SITE" in doc or "NOT THE ONLY SITE" in doc, (
+        "the docstring no longer records that it is not the only writer")
+    assert "apifootball_scraper.py" in doc and "theodds_scraper.py" in doc, (
+        "the real writers are not named")
+    assert "on_conflict_do_update" in doc, (
+        "the actual reason write-once holds is not stated")
+    # and the reason is TRUE: the column must stay out of the update set
+    scraper = pathlib.Path("src/scrapers/apifootball_scraper.py").read_text(
+        encoding="utf-8")
+    block = scraper.split("on_conflict_do_update", 1)[1][:600]
+    assert "first_seen_at" not in block, (
+        "first_seen_at entered the ON CONFLICT update set - write-once is "
+        "broken and first-seen has become last-seen")

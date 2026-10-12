@@ -146,6 +146,62 @@ DEFERRED: Dict[str, str] = {
         "the Refusal terminal predicate, on H1's provider path.",
 }
 
+#: AWAITING A CONSUMER. Not an exemption and not a silence: a substrate built
+#: for a REGISTERED QUESTION that has not been tested yet. Deletion would be
+#: the wrong call - both were built because a cheaper proxy was measured and
+#: found insufficient - and "unread" is the true state, so it is recorded with
+#: the question, what would have to be built, and the date the decision is
+#: re-examined. Same shape as DEFERRED, with a per-entry date.
+#:
+#: THE SHAPE THIS REPLACES: three Stage 18 substrates shipped unread, and the
+#: ledger tracked their ROW COUNTS for weeks and scored them CLEAN. A growth
+#: check measures the writer. "The table is filling" and "the table is useful"
+#: are different questions and only the first was ever asked.
+AWAITING_CONSUMER: Dict[str, dict] = {
+    "__table:injury_observations__": dict(
+        rows="5,136 rows / 211 teams / 2026-08-27..10-11, measured 2026-10-12",
+        question="does the AGE of an injury move a price? A current-status "
+                 "snapshot cannot distinguish a two-week-old absence from "
+                 "this morning's announcement, which is Stage 18 C3's stated "
+                 "justification for recording observed_at at both write "
+                 "sites including the UPDATE branch.",
+        consumer="an injury-recency feature, or a research pass equivalent to "
+                 "h1_collection_check: group observations by (team, player) "
+                 "and measure price movement against the age of the status "
+                 "change. Neither exists.",
+        build="a reader over (team_id, player_id, status, observed_at) joined "
+              "to odds_snapshots on match date; no schema change needed",
+        cohort="a FEATURE would be a cohort event - Stage 14 established "
+               "injuries reach only the reasoning string and never a fit, and "
+               "that still holds (verified 2026-10-12). A research pass would "
+               "not be.",
+        retriage="2026-11-23",
+        basis="six weeks from this declaration - the first point at which "
+              "H1's analysis (window closes 2026-10-17) will have been "
+              "written up. A REVIEW date, not a build commitment.",
+    ),
+    "__column:odds.first_seen_at__": dict(
+        rows="123,043 of 488,312 odds rows (25.2%), measured 2026-10-12",
+        question="how long before kickoff was this price taken? That is H4, "
+                 "and it is UNTESTED. Stage 18 C2 measured that created_at "
+                 "cannot proxy for it: 91.8% of rows created after kickoff, "
+                 "mean +638 days.",
+        consumer="H4. No analysis reads the column; `stamp_first_seen`, its "
+                 "designated writer, has no production caller either - the "
+                 "two scrapers set the column inline.",
+        build="a lead-time distribution over (first_seen_at, match_date), "
+              "then the same against pick outcomes. No schema change needed; "
+              "coverage is 25.2% and the shortfall is itself a finding.",
+        cohort="reading it for analysis is not a cohort event; using lead "
+               "time as a FEATURE would be.",
+        retriage="2026-11-23",
+        basis="same review point. The structural choice for "
+              "`stamp_first_seen` - wire it and drop the inline writes, or "
+              "delete it - belongs to the 2026-10-17 H1 re-triage, because "
+              "either one touches the odds write path.",
+    ),
+}
+
 #: Names that a framework calls, so the absence of a reference is expected.
 FRAMEWORK_REASONS: Dict[str, str] = {
     "main": "process entry; called from the `__main__` guard or by `-m`",
@@ -691,8 +747,18 @@ def scan_tables(prod_dirs=PROD_DIRS, test_dirs=TEST_DIRS) -> List[TableFinding]:
     out = []
     for t, cls in sorted(tables.items()):
         if writes[t] and not reads[t]:
+            # CLR-2. A declared exemption leaves the finding list CARRYING ITS
+            # REASON, which is what makes "declared" an action rather than a
+            # silence. An undeclared one stays a finding forever.
+            if f"__table:{t}__" in AWAITING_CONSUMER:
+                continue
             out.append(TableFinding(t, cls, sorted(set(writes[t])), []))
     return out
+
+
+def awaiting_consumer_rows() -> List[Tuple[str, dict]]:
+    """The declared-but-unread substrates, so they are REPORTED, not hidden."""
+    return sorted(AWAITING_CONSUMER.items())
 
 
 # ── THE KNOWN INSTANCES, FOR MEASURING COVERAGE ──────────────────────────────
@@ -1021,8 +1087,17 @@ def main() -> int:
             print(f"  {f.table:24s} ({f.cls})  writes: "
                   + ", ".join(f.writes[:3]))
         if not t:
-            print("  none. Every table with a production writer also has a "
-                  "production reader.")
+            print("  none that is not declared. Every table with a production "
+                  "writer either has a production reader or an entry in "
+                  "AWAITING_CONSUMER.")
+        print()
+        print(f"AWAITING A CONSUMER - declared, unread, with a named consumer "
+              f"and a re-triage date: {len(AWAITING_CONSUMER)}")
+        for key, meta in awaiting_consumer_rows():
+            print(f"  {key}")
+            print(f"      {meta['rows']}")
+            print(f"      consumer : {meta['consumer'][:66]}")
+            print(f"      re-triage: {meta['retriage']}  ({meta['basis'][:48]})")
     if args.coverage:
         print()
         print(format_coverage(coverage_rows(found)))

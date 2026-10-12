@@ -45,10 +45,34 @@ def record_price(session, *, match_id: int, bookmaker: str, market_type: str,
 def stamp_first_seen(row, observed_at=None) -> None:
     """Set `first_seen_at` once, on a row that has never carried it.
 
-    Write-once by construction rather than by validator: this is the only site
-    that sets it, and it sets it only when absent. Existing rows are NEVER
-    backfilled — a guessed first-sight time would look like evidence and Stage
-    17 established that `created_at` is a backfill stamp for 53.5% of matches.
+    IT SETS IT ONLY WHEN ABSENT, AND IT IS **NOT** THE ONLY SITE THAT SETS IT.
+    That is a correction, made 2026-10-12. This docstring used to claim "this
+    is the only site that sets it", and the claim was false from the day it was
+    written:
+
+        src/scrapers/apifootball_scraper.py:2174   "first_seen_at": now
+        src/scrapers/theodds_scraper.py:981        first_seen_at=_now
+
+    set the column inline, and **nothing in production calls this function at
+    all** - it is TEST-ONLY, which `scripts/pnc_scan.py` reports. So the
+    guarantee was being asserted by a definition no execution passed through.
+    One rule, two definitions, and the docstring is part of the definition.
+
+    WRITE-ONCE NEVERTHELESS HOLDS, and it was checked rather than assumed:
+    `first_seen_at` is **absent from the `on_conflict_do_update` set_ clause**
+    in `_upsert_odds_rows`, so a refresh cannot turn first-seen into last-seen.
+    The property is real; the stated reason for it was not.
+
+    WHY THIS IS A DOCSTRING FIX AND NOT A STRUCTURAL ONE. The two honest
+    repairs are to wire this function and drop the inline writes, or to delete
+    it. Both touch the odds write path, and H1 is collecting until 2026-10-17 -
+    this function is in `pnc_scan.DEFERRED` for exactly that reason. The choice
+    between wiring and deleting is part of that re-triage. Until then the
+    description matches the behaviour, which is the part that was lying.
+
+    Existing rows are NEVER backfilled - a guessed first-sight time would look
+    like evidence, and Stage 17 established that `created_at` is a backfill
+    stamp for 53.5% of matches.
     """
     try:
         if getattr(row, "first_seen_at", None) is None:

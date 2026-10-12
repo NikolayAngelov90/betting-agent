@@ -25931,3 +25931,274 @@ Full suite **1982 passed**. Invariants pass, count not cited. Fingerprint
 `tests/test_cron_split_by_daytype.py`. Read-only against production. No
 production write, no schema change, nothing wired, nothing deleted, no secret
 created, read, printed or committed.*
+
+---
+
+# 2026-10-12 (second entry) — INTEGRITY OBSERVABLE. SWITCH PLANNED, nothing applied. SUBSTRATES DECLARED with consumers and dates.
+
+H1 untouched: no change to the collection, the stop, the reservation or the H1
+cron. **No secret generated, no key rotated, no verification tightened.** No
+key, digest or preimage appears in this entry, in any test fixture, or in the
+diff — checked mechanically before committing.
+
+## PART A — INTEGRITY OBSERVABLE
+
+### THE BASELINE, MEASURED BEFORE WIRING
+
+`measured` 2026-10-12 over the local audit log cache (`ci_logs/`, **807 cached
+runs** across all workflows — this is the audit's own cache, not a census of
+the 324 daily-picks runs, because GitHub retains run logs ~90 days):
+
+| signal | count |
+| --- | --- |
+| runs with a verified-path load | **239** ← the positive marker |
+| total load events | **1,400** |
+| runs with no pickle present | 13 |
+| **UNSIGNED LOADS (no `.sig`)** | **0** |
+| **INTEGRITY FAILURES** | **0** |
+
+> **The 239/1,400 line is what makes the two zeros mean anything.** Without a
+> positive marker, "0 unsigned loads" is the identical reading a corpus with no
+> model loads at all would give — the vacuous filter this project has now met
+> three times, most recently yesterday, in a regex that began with a backspace.
+
+### THE WIRE, AND THE TRAP IT AVOIDED
+
+Both markers now carry the model name, **masked** digests, the run id and a
+clearing action, and `ci_audit.PATTERNS` matches them — the same wire
+`UNPRICED FIXTURES` already uses.
+
+The obvious wiring was `::error::`. **It would have blinded the detector.**
+`ci_audit` computes its absorbed-failure signal as a remainder:
+
+```
+unexplained_nonzero_exit = exit_annotations - min(self_emitted, exits)
+```
+
+Every entry in `SELF_EMITTED_ANNOTATIONS` holds because its annotation is
+followed by that step exiting non-zero, so each explains **at most one** exit.
+An integrity failure does **not** exit non-zero — the handler logs and returns
+and the agent continues on Poisson + Elo. A registered annotation with no exit
+of its own would let `min` absorb a **genuine** unexplained exit in the same
+log, in exactly the way the three-way partition was rebuilt to prevent. So
+these are plain uppercase markers, and a test pins that they are never
+registered and that `ml_models.py` prints no `::error::` at all.
+
+### THE FOURTH AND FIFTH ALARM SITES, WRITTEN DOWN
+
+The pin at three fired, which is what it is for. Both conditions **alarm**,
+recorded as rows 14 and 15 of the enumerated surface:
+
+* model integrity sits **outside the verdict axis** — a corrupt pickle does not
+  make a run BROKEN, so a run can score CLEAN while its artefact is unusable —
+  and `DEGRADED` is not in `--fail-on`, so routing it through the findings list
+  would print it and alert nobody. Which is what it did for 170 days.
+* it is safe to alarm because the **baseline is zero**, measured above. An
+  alarm whose baseline equals its threshold is the `fixtures_zero_active`
+  shape; this one has dynamic range.
+
+### THE MISSING SIGNATURE STILL LOADS — DELIBERATELY
+
+What changed is that it **alerts**, so the frequency becomes a measured number
+before anything is tightened. Failing closed is step 4 of the plan and does not
+ship until that number has held at zero over a window. *"No signature" is
+UNVERIFIABLE, not verified, and until today they were the same line in the same
+log that nothing read.*
+
+### THE CONTROL
+
+* **POSITIVE:** a saved model's bytes are corrupted; the alert must fire with
+  the marker, the model name, the run id, **two different masked digests** and
+  an `action=`. It does.
+* **AND THE CONTROL IS NOT VACUOUS:** removing the emitter and re-running makes
+  exactly that test fail. Measured, not reasoned.
+* **NEGATIVE:** an intact model is silent — without it the positive control
+  passes against a module that alerts on every load.
+
+> ### AND THE CAPTURE MECHANISM WAS WRONG FIRST, FOR THE THIRD TIME
+>
+> The first draft asserted on `caplog`. This project logs through **loguru**,
+> which `caplog` does not see, so the records were empty and the test would
+> have reported *"the alert does not fire"* about an alert that fires. The trap
+> is documented in `test_credit_gate_first_refusal` and classified by
+> `test_logging_regime` — both already in the tree, and I reached for neither.
+> **A test that cannot observe the thing it asserts is not a test**, and an
+> empty capture reads exactly like the defect.
+
+## PART B — SWITCH PLANNED. `docs/hmac-key-switch-plan.md`. NOTHING APPLIED.
+
+### WHAT A RUN DOES, AND WHAT A FAILURE COSTS — measured
+
+| question | answer, `measured` 2026-10-12 |
+| --- | --- |
+| restore or retrain? | **restore, usually** — `--train` retrains only if `trained_at` is older than 3 days; 239 of 807 cached runs loaded, 172 saved |
+| on a verification failure? | **refuse and continue.** `ensemble.py:174` gates the ML term on `is_fitted`, so a refused load omits ML and picks are still produced from Poisson + Elo + the bookmaker blend. **Code, not a docstring claim.** |
+| cached pairs | **8**: `betting-models-317…324`, ~6.94 MiB each; a run restores the newest |
+| retrain inside the budget? | **96%.** Spans n=173: min 1.8, **median 4.5**, mean 10.5, max 71.9 min. The step's `timeout-minutes: 50` was exceeded by **7 of 173 (4.0%)**, and it is `continue-on-error: true`. |
+
+**So a failed switch costs a slower run and one ML-free pick set — not a card.**
+Three independent reasons, each measured: the failure is caught, the ensemble
+degrades, and the repairing retrain fits the budget.
+
+### THE ONE ORDERING THAT DOES COST A CARD
+
+> **Step 3 taken first kills every run at IMPORT.** The refusal is a
+> **module-level `raise RuntimeError`**, not a load-time `IntegrityError`. It
+> fires on `import src.models.ml_models`, which `src.agent.betting_agent`
+> does unconditionally — so `--update`, `--picks`, `--settle`, `--train` and
+> `--report` all die before any handler exists. Driven and confirmed: with
+> both variables unset, the import raises immediately.
+>
+> **A lost card per run, until someone noticed.** It is the only card-costing
+> error in the sequence, and it is the step that *looks* like pure cleanup.
+
+| order | cost |
+| --- | --- |
+| 1 → 2 → 3 → 4 | intended: one integrity alarm at step 1's checkpoint, one cold retrain at step 2 |
+| **3 first** | **every step dies at import — a lost card per run** |
+| 2 before 1 | one wasted retrain; the cache is re-signed with the key being escaped |
+| 1, 3, no 2 | one ML-free pick set plus one alarm, self-repairing at the next `--train` |
+| 4 before the window | ML silently lost on any run whose cache lacks a `.sig` |
+
+Each step has its checkpoint and rollback in the plan. Step 1 also requires the
+secret in **every** workflow that imports the module — `measured`, all six set
+the opt-in and only `daily-picks` names the secret — because step 2 otherwise
+creates artefacts the other five cannot verify. Step 4 must raise
+`IntegrityError` **inside** the existing `try`, or a degradation becomes a crash.
+
+### THE EXPOSURE BOUND IS A PROVIDER PROPERTY
+
+Today's low severity rests on GitHub scoping caches so a branch cannot write
+one the default branch reads, plus all six workflows triggering on
+`schedule`/`workflow_dispatch` only. **The scoping is GitHub's.** This project
+does not implement it, cannot test it, and would not be told if it changed —
+and nothing here would look different. Recorded so the bound is never cited as
+a guarantee we hold. Step 3 retires the dependency entirely.
+
+## PART C — SUBSTRATES DECLARED
+
+New registry `AWAITING_CONSUMER` in `scripts/pnc_scan.py`: the question, the
+named consumer, what must be built, the cohort status, the re-triage date and
+its basis. **Not a silence** — both are still printed, in their own section.
+
+| substrate | rows (`measured` 2026-10-12) | consumer | re-triage |
+| --- | --- | --- | --- |
+| `injury_observations` | 5,136 / 211 teams / 46 days | an injury-**recency** feature, or a research pass like `h1_collection_check`. Neither exists. | **2026-11-23** |
+| `odds.first_seen_at` | 123,043 of 488,312 (25.2%) | **H4** — "how long before kickoff was this price taken". Untested. | **2026-11-23** |
+
+**Deletion would be wrong and the reason is measured**, not sentimental: each
+was built because a cheaper proxy was tested and failed. `created_at` cannot
+proxy for first-seen — 91.8% of rows created after kickoff, mean +638 days. A
+current-status snapshot cannot date an absence. The date's basis is stated: six
+weeks, the first point at which H1's analysis will have been written up. **A
+review date, not a build commitment.**
+
+**CLR-2 holds:** declaring `injury_observations` moved the KIND T finding count
+from 1 to **0** — the declaration *is* the clearing action and it changes the
+predicate, while the substrate stays visible with its date. The ratchet's floor
+drops with it.
+
+### THE COLUMN IS THE SHARPEST VERSION OF THE TAXONOMY POINT
+
+`odds.first_seen_at` is found by **no pass here**. The *table* has readers; the
+*column* does not, so the schema pass cannot reach it. A producer can be
+invisible to every detector in this repository and still be real — which is why
+the register, not the scan, is what keeps it from being lost.
+
+### THE LIE, FIXED — AND ONLY THE DOCSTRING ROUTE WAS OPEN
+
+`stamp_first_seen` claimed *"this is the only site that sets it"*. It is not:
+`apifootball_scraper.py:2174` and `theodds_scraper.py:981` set the column
+inline and **nothing in production calls the function**. So the write-once
+guarantee was asserted by a definition no execution passed through.
+
+**The guarantee itself holds, and I checked rather than assumed**:
+`first_seen_at` is absent from `_upsert_odds_rows`' `on_conflict_do_update`
+set, so a refresh cannot turn first-seen into last-seen. A test now pins that
+absence, because that — not the docstring — is what makes it true.
+
+The two structural repairs are to wire the function and drop the inline writes,
+or to delete it. **Both touch the odds write path and H1 is collecting**; the
+function is in `DEFERRED` for exactly that reason, and the choice belongs to
+the 2026-10-17 re-triage. So the description now matches the behaviour, which
+is the part that was lying.
+
+## PART D — THE FOUR ENTRIES
+
+> **A growth check measures the writer.** Rows accumulating is evidence that
+> something writes and no evidence that anything reads. The ledger tracked
+> `odds_snapshots`, `first_seen_at` and `injury_observations` row counts for
+> weeks and scored them CLEAN; every reading was correct and every one was
+> about the writer. Stage 18's Part D verification was specified to prove
+> accumulation and was treated as proof of function — including by the prompt
+> that wrote it.
+
+> **Ordinals are the defect.** Of 14 tallied rules, 2 survived audit, and both
+> are the two that never used an ordinal: one stated a closed set of three, the
+> other a measured population with its query window. A running ordinal drifts
+> by construction, because it is the only part of a rule nobody re-derives. The
+> third-state family's claimed thirteenth came from working memory and had been
+> written into a source comment.
+
+> **A corrected denominator is not an improvement.** The detector's coverage
+> reads 3/13 → 4/11 on unchanged code. It is a correction to the measure, and
+> citing 36% as progress would be the next tally error.
+
+> **The belt was disabled by the braces.** `${{ secrets.MODEL_HMAC_KEY }}`
+> renders empty for an unconfigured secret, `""` is falsy, so the public
+> default was used — and the adjacent local-dev opt-in prevented the
+> `RuntimeError` that would have announced it, on the one workflow meant to
+> carry the real key. 170 days, 324 runs, zero signed with a non-default key.
+> **The guarantee never held rather than lapsing.**
+
+## DECLARATION
+
+**INTEGRITY OBSERVABLE.** Both markers now carry the model name, masked
+digests, the run id and a clearing action, and `ci_audit` matches them — rows
+14 and 15 of the enumerated alarm surface, the pin moved from 3 to 5 with the
+reasoning written down. **Measured unsigned-load count: 0 — across 1,400 load
+events in 239 runs of the local audit cache (807 runs), with 13 runs having no
+pickle at all.** The 239 is the positive marker that stops the zero being
+vacuous; the full 324 daily-picks runs **cannot** be measured, because logs are
+retained ~90 days, and the figure says so. **Positive control:** corrupted
+bytes produce the alert with two differing masked digests; **removing the
+emitter makes that test fail**; an intact model is silent. The obvious
+`::error::` wiring was rejected because a self-emitted annotation with no
+non-zero exit would let `min()` absorb a genuine unexplained exit. The capture
+mechanism was `caplog` first — loguru's third appearance of that trap.
+
+**SWITCH PLANNED, NOTHING APPLIED.** Four steps, each with a checkpoint and a
+rollback. **Only step 3 out of order costs a card**, and it costs one per run:
+the refusal is a module-level `raise` that fires at import, outside every
+handler, killing `--update`, `--picks`, `--settle` and `--train` alike —
+driven and confirmed. Everything else costs a slow run or one ML-free pick set,
+because a verification failure is caught, `ensemble.py:174` degrades to Poisson
++ Elo, and a repairing retrain fits the 50-minute step budget in **96%** of 173
+measured spans. 8 cached pairs, `betting-models-317…324`. The exposure bound is
+recorded as **GitHub's cache scoping, a provider property this project neither
+implements nor can test**.
+
+**SUBSTRATES DECLARED.** `injury_observations` — 5,136 rows, 211 teams, 46 days
+— consumer: an injury-recency feature or a research pass, neither of which
+exists; `odds.first_seen_at` — 123,043 rows, 25.2% — consumer: **H4,
+untested**. Both re-triage **2026-11-23**, basis stated as a review point and
+not a build commitment. Deletion refused on measured grounds: `created_at`
+cannot proxy for first-seen (91.8% after kickoff, mean +638 days) and a snapshot
+cannot date an absence. Declaring moved the KIND T count 1 → 0, which is CLR-2
+changing the predicate while the substrate stays visible. **The column is found
+by no pass here** — the table has readers, the column does not. And
+`stamp_first_seen`'s docstring no longer claims to be the only writer: it names
+the two real ones, states that write-once holds because the column is absent
+from the upsert's update set, and a test pins that absence. Wiring or deleting
+it touches the odds write path, so that choice belongs to the 2026-10-17
+re-triage.
+
+Full suite **1994 passed**. Invariants pass, count not cited. Fingerprint
+**UNCHANGED** at `s5.17` / `818026`; picks stamped 65.
+
+*Recorded 2026-10-12. `docs/hmac-key-switch-plan.md` (new),
+`tests/test_model_integrity_observable.py` (new), `src/models/ml_models.py`,
+`src/data/price_history.py` (docstring), `scripts/ci_audit.py`,
+`scripts/pnc_scan.py`, `tests/test_alarm_surface.py`,
+`tests/test_pnc_detector.py`. No production write, no schema change, no secret
+created, read, printed or committed. Nothing wired on the H1 path.*
