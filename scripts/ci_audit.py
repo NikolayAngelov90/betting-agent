@@ -176,6 +176,15 @@ SELF_EMITTED_ANNOTATIONS = (
     ("::error::audit alarm", "scripts/ci_audit.py"),
     ("::error::CI audit alarmed", ".github/workflows/ci-audit.yml"),
     ("::error::Pick generation", ".github/workflows/daily-picks.yml"),
+    # Added 2026-10-12. Both were unregistered, so the probe's own
+    # annotations counted as FOREIGN in its audited log. Each is followed by
+    # that step exiting non-zero - ALARM exits 1, REFUSED exits 3 - so each
+    # explains exactly one exit and the remainder stays honest. A refusal with
+    # a SILENT non-zero exit would read as an absorbed failure, which is why
+    # the designed refusal is annotated too; the TEXT is what separates it
+    # from a finding, not the presence of the annotation.
+    ("::error::PROBE ALARM", "scripts/fixture_horizon_probe.py"),
+    ("::error::PROBE REFUSED", "scripts/fixture_horizon_probe.py"),
 )
 
 # ────────────────────── RESOLVED RUNS (CLR-2, Stage 27, 2026-10-02) ──────────

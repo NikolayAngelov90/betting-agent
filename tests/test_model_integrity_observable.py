@@ -23,6 +23,13 @@ exercises the path. Without it, `0 unsigned loads` would be the same reading a
 corpus containing no model loads at all would give — which is the vacuous
 filter this project has now met three times.
 
+THIS FILE USED A LOCAL COPY OF THE LOGURU SINK. It now uses the SHARED
+`capture_loguru` fixture from `tests/conftest.py`, added 2026-10-12 together
+with a collection-time refusal of `caplog` — because the first draft of this
+file asserted on `caplog`, found it empty, and would have reported "the alert
+does not fire" about an alert that fires. Three local copies of the sink
+existed at that point and a fourth was being written. One rule, one definition.
+
 THE LOAD IS DELIBERATELY STILL ALLOWED when a `.sig` is absent. Failing closed
 is step 4 of the switch plan and it does not ship until the measured count has
 held at zero over a window: an unsigned load that refuses would cost a card,
@@ -34,34 +41,12 @@ what protects the key; the rule simply has no exception for values that look
 harmless.
 """
 
-import contextlib
 import importlib
 import pathlib
 import pickle
 import re
 
 import pytest
-from loguru import logger as _loguru
-
-
-@contextlib.contextmanager
-def capture_logs(level="ERROR"):
-    """Capture LOGURU records.
-
-    pytest's `caplog` sees nothing here: this project logs through loguru, not
-    stdlib logging, so an assertion built on caplog passes VACUOUSLY whatever
-    the code does. The first draft of this file used caplog, found the records
-    empty, and would have reported "the alert does not fire" about an alert
-    that fires - the same trap `test_credit_gate_first_refusal` documents, and
-    the one `test_logging_regime` exists to classify. Third time in this
-    project.
-    """
-    records = []
-    sink = _loguru.add(lambda m: records.append(m.record), level=level)
-    try:
-        yield records
-    finally:
-        _loguru.remove(sink)
 
 
 @pytest.fixture()
@@ -76,7 +61,7 @@ def ml(monkeypatch):
 # ── THE CONTROL ──────────────────────────────────────────────────────────────
 
 def test_POSITIVE_CONTROL_corrupted_bytes_alert_with_the_right_content(
-        ml, tmp_path, monkeypatch):
+        ml, tmp_path, monkeypatch, capture_loguru):
     """Corrupt a saved model's bytes; the alert must fire and say what it is.
 
     Asserting on the ALERT rather than on the exception: the exception was
@@ -89,7 +74,7 @@ def test_POSITIVE_CONTROL_corrupted_bytes_alert_with_the_right_content(
     f.write_bytes(pickle.dumps({"hello": "tampered"}))
     monkeypatch.setenv("GITHUB_RUN_ID", "99887766")
 
-    with capture_logs("ERROR") as records:
+    with capture_loguru("ERROR") as records:
         with pytest.raises(ml.IntegrityError):
             ml._safe_load(f)
 
@@ -110,12 +95,12 @@ def test_POSITIVE_CONTROL_corrupted_bytes_alert_with_the_right_content(
         "enough to compare them")
 
 
-def test_NEGATIVE_CONTROL_an_intact_model_is_SILENT(ml, tmp_path):
+def test_NEGATIVE_CONTROL_an_intact_model_is_SILENT(ml, capture_loguru, tmp_path):
     """The other half. Without it the test above passes against a module that
     alerts on every load."""
     f = tmp_path / "ml_models.pkl"
     ml._safe_save({"hello": "world"}, f)
-    with capture_logs("WARNING") as records:
+    with capture_loguru("WARNING") as records:
         state = ml._safe_load(f)
     assert state == {"hello": "world"}
     line = "\n".join(r["message"] for r in records)
@@ -123,7 +108,7 @@ def test_NEGATIVE_CONTROL_an_intact_model_is_SILENT(ml, tmp_path):
     assert ml.SIGNATURE_MISSING_MARKER not in line, line
 
 
-def test_a_MISSING_signature_alerts_and_STILL_LOADS(ml, tmp_path):
+def test_a_MISSING_signature_alerts_and_STILL_LOADS(ml, capture_loguru, tmp_path):
     """Both halves of today's decision, in one place.
 
     It alerts — so the frequency becomes a measured number — and it loads, so
@@ -134,7 +119,7 @@ def test_a_MISSING_signature_alerts_and_STILL_LOADS(ml, tmp_path):
     f.write_bytes(pickle.dumps({"unsigned": True}))
     assert not f.with_suffix(".sig").exists()
 
-    with capture_logs("ERROR") as records:
+    with capture_loguru("ERROR") as records:
         state = ml._safe_load(f)
 
     line = "\n".join(r["message"] for r in records)
@@ -216,7 +201,7 @@ def test_the_markers_are_NOT_registered_error_annotations():
         "ml_models.py emits a GitHub error annotation. It must not: see above")
 
 
-def test_NO_FULL_DIGEST_can_reach_a_log(ml):
+def test_NO_FULL_DIGEST_can_reach_a_log(ml, capture_loguru):
     """Masked form only, and the mask is checked rather than trusted."""
     full = "a" * 64
     masked = ml._mask(full)

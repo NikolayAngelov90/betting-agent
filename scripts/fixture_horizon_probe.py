@@ -41,6 +41,8 @@ rather than corrected by a guessed shift.
 from __future__ import annotations
 
 import argparse
+import os as _os
+import pathlib
 import datetime as _dt
 import sys
 import time
@@ -169,6 +171,137 @@ def earliest_for(probed: dict, day: _dt.date,
     return best
 
 
+# ── EXIT CODES: A DESIGNED REFUSAL IS NOT A CRASH ───────────────────────────
+#
+# Until 2026-10-12 all three exited 1, and the workflow's `if: failure()` step
+# fired one fixed sentence for every one of them. The first and only probe run
+# crashed on a missing dependency and sent the operator "Tomorrow's picks may
+# land AFTER the first kickoff" - a MARGIN FINDING - from a job that had
+# computed no margin at all. The text carried a disjunction ("if instead the
+# probe refused...") that the reader had no way to resolve.
+#
+#     A designed refusal must be distinguishable from a crash, in the exit
+#     status and in the log.
+#
+# Same taxonomy as `ci_audit`, one code wider, because this tool has a fourth
+# outcome that tool does not: a legitimate UNKNOWN.
+EXIT_CLEAR = 0        # a deadline was discovered and the margin is adequate
+EXIT_ALARM = 1        # a deadline was discovered and the margin is SHORT
+EXIT_CRASH = 2        # MACHINERY. Nothing was probed and nothing is known.
+EXIT_REFUSED = 3      # BY DESIGN: the clock is unverified, or a league is None
+
+#: Printed so the log is self-classifying too, not only the exit status.
+MARKER = {
+    EXIT_ALARM: "PROBE ALARM",
+    EXIT_CRASH: "PROBE CRASHED",
+    EXIT_REFUSED: "PROBE REFUSED",
+}
+
+#: THE ANNOTATION PREFIXES, AS LITERALS. `ci_audit.SELF_EMITTED_ANNOTATIONS`
+#: pins each registered pattern to the file that prints it, and a test asserts
+#: the emitter CONTAINS the literal — so building these with an f-string makes
+#: the registry "drift into guessing from the text", which is what that test
+#: says and what it caught here on 2026-10-12.
+ANNOTATION_ALARM = "::error::PROBE ALARM"
+ANNOTATION_REFUSED = "::error::PROBE REFUSED"
+
+#: Time from run start to picks complete on a FULL card.
+#: MEASURED 2026-10-01, n=4: 67.4-88.1 min, mean 76.4, sd 10.2.
+#: THE UPPER BOUND, never the mean - a dispatch sized on 76 minutes misses a
+#: card that takes 88, and the whole point of the figure is to not be late.
+PICKS_UPPER_BOUND_MIN = 88.1
+
+#: Subtracted on top of the upper bound. Stated as a number rather than folded
+#: into the bound, so the two are separable: one is measured, one is a choice.
+DISPATCH_SAFETY_MARGIN_MIN = 15
+
+OPERATOR_TZ = "Europe/Sofia"
+
+
+def _in_tz(day, minutes_utc: int, tz_name: str = OPERATOR_TZ):
+    """`(HH:MM, label)` in `tz_name`, or `(None, reason)`.
+
+    EVERY TIME NAMES ITS CLOCK. Five instances of "establish the clock" rest
+    on a single ledger site, and an alert printing a bare hour is the next one.
+    """
+    import datetime as _d
+    try:
+        from zoneinfo import ZoneInfo
+        z = ZoneInfo(tz_name)
+    except Exception as exc:                        # noqa: BLE001
+        return None, f"{tz_name} unavailable ({type(exc).__name__})"
+    aware = _d.datetime.combine(
+        day, _d.time(minutes_utc // 60, minutes_utc % 60),
+        tzinfo=_d.timezone.utc).astimezone(z)
+    return aware.strftime("%H:%M"), aware.strftime("%Z%z")
+
+
+def earliest_league_for(probed: dict, day, offset_min: int):
+    """The LEAGUE holding the earliest kickoff, so the alert can name it.
+
+    The fixture itself is NOT available: `probe_fixtures` returns kickoff
+    datetimes only, so naming home-vs-away would need the scrape to carry team
+    names through. Stated rather than guessed - see the ledger entry for what
+    that would take.
+    """
+    import datetime as _d
+    best, best_league = None, None
+    for league, kos in probed.items():
+        if league == "__meta__" or not kos:
+            continue
+        for ko in kos:
+            utc = ko - _d.timedelta(minutes=offset_min)
+            if utc.date() != day:
+                continue
+            m = utc.hour * 60 + utc.minute
+            if best is None or m < best:
+                best, best_league = m, league
+    return best_league
+
+
+def format_dispatch_alert(day, deadline_min, league, basis: str,
+                          margin=None, run_url: str = "") -> str:
+    """The alert body, WITH THE TWO NUMBERS the operator had to work out.
+
+    Before this, the text said "dispatch daily-picks manually tomorrow
+    morning" and left the reader to find the kickoff and subtract the runtime.
+    """
+    hhmm = f"{deadline_min // 60:02d}:{deadline_min % 60:02d}"
+    local, label = _in_tz(day, deadline_min)
+    last = int(deadline_min - PICKS_UPPER_BOUND_MIN
+               - DISPATCH_SAFETY_MARGIN_MIN)
+    day_before = last < 0
+    last %= 24 * 60
+    last_hhmm = f"{last // 60:02d}:{last % 60:02d}"
+    last_local, last_label = _in_tz(day, last)
+
+    lines = [
+        f"PICKS MAY LAND AFTER THE FIRST KICKOFF on {day} ({basis}).",
+        "",
+        f"EARLIEST KICKOFF  {hhmm} UTC"
+        + (f" / {local} {label}" if local else f" / {label}")
+        + (f"   league: {league}" if league else ""),
+        f"LAST SAFE DISPATCH {last_hhmm} UTC"
+        + (f" / {last_local} {last_label}" if last_local else "")
+        + (" (THE DAY BEFORE)" if day_before else ""),
+        f"  = kickoff - {PICKS_UPPER_BOUND_MIN:.0f}m time-to-picks "
+        f"(MEASURED upper bound, n=4, 67.4-88.1, NOT the mean) "
+        f"- {DISPATCH_SAFETY_MARGIN_MIN}m safety margin",
+    ]
+    if margin is not None:
+        lines.append(f"  projected margin {margin:+.0f}m")
+    lines += [
+        "",
+        "ACTION: gh workflow run daily-picks.yml -- before the time above. A "
+        "dispatched run skips the measured 3h58m-5h04m scheduler lateness and "
+        "is the ONLY action that changes this margin. It is the operator's; "
+        "there is no automated alternative today.",
+    ]
+    if run_url:
+        lines.append(f"Logs: {run_url}")
+    return chr(10).join(lines)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--days-ahead", type=int, default=PROBE_DAYS_AHEAD)
@@ -224,7 +357,11 @@ def main(argv=None) -> int:
         print("  A deadline is NOT emitted on an unestablished clock. Setting "
               "TZ=UTC in the job is what fixes this; a guessed shift is how the "
               "H1 cron was set three hours late.")
-        return 0 if args.report_only else 1
+        print(f"{ANNOTATION_REFUSED}: the clock is not established, so the "
+              f"margin is UNKNOWN and NOT safe. This is a DESIGNED REFUSAL, "
+              f"not a crash and not a finding. CLEARING ACTION: confirm TZ=UTC "
+              f"on the runner; the probe verifies rather than trusting it.")
+        return EXIT_CLEAR if args.report_only else EXIT_REFUSED
 
     deadline = earliest_for(probed, tomorrow, offset)
     by_type, crons = collect_lag_series_by_daytype()
@@ -234,15 +371,66 @@ def main(argv=None) -> int:
                            MARGIN_RUN_DURATIONS, serves=tomorrow)
     print()
     print("  " + format_prospective(m))
-    if m["verdict"] == "ALARM":
+    if m["verdict"] == "UNKNOWN":
         print()
-        print(f"::error::PROSPECTIVE schedule margin {m['binding']:+.0f}m for "
-              f"{m['serves']} (probed kickoff "
-              f"{m['deadline_min'] // 60:02d}:{m['deadline_min'] % 60:02d}) is "
-              f"below {m['min_margin']}m. {CLEARING_ACTION}")
-        return 0 if args.report_only else 1
-    return 0
+        print(f"{ANNOTATION_REFUSED}: no deadline could be discovered for "
+              f"{tomorrow} - a league returned None, or the card is not yet "
+              f"published. The margin is UNKNOWN and NOT safe. DESIGNED "
+              f"REFUSAL. CLEARING ACTION: none today; the card for a day is "
+              f"not discoverable earlier than the provider publishes it.")
+        return EXIT_CLEAR if args.report_only else EXIT_REFUSED
+
+    if m["verdict"] == "ALARM":
+        league = earliest_league_for(probed, tomorrow, offset)
+        body = format_dispatch_alert(
+            tomorrow, m["deadline_min"], league,
+            basis="deadline DISCOVERED by the probe",
+            margin=m["binding"],
+            run_url=_os.environ.get("PROBE_RUN_URL", ""))
+        print()
+        print(f"{ANNOTATION_ALARM}: a discovered deadline, and the "
+              f"margin is {m['binding']:+.0f}m against {m['min_margin']}m. "
+              f"This is a FINDING, not a malfunction. {CLEARING_ACTION}")
+        print(body)
+        _write_alert_body(body)
+        return EXIT_CLEAR if args.report_only else EXIT_ALARM
+    return EXIT_CLEAR
+
+
+def _write_alert_body(body: str) -> None:
+    """Hand the rendered body to the workflow, so the ALERT carries the
+    numbers rather than a fixed sentence written months earlier."""
+    path = _os.environ.get("PROBE_ALERT_BODY")
+    if not path:
+        return
+    try:
+        pathlib.Path(path).write_text(body, encoding="utf-8")
+    except OSError as exc:                          # pragma: no cover
+        print(f"could not write the alert body: {exc}")
+
+
+def _main_guarded(argv=None) -> int:
+    """THE CRASH BOUNDARY. Exit 2 is machinery and says so.
+
+    The first and only probe run died on `ModuleNotFoundError: aiohttp` and
+    the workflow sent a margin finding. A crash must announce itself as one.
+    """
+    try:
+        return main(argv)
+    except SystemExit:
+        raise
+    except BaseException as exc:                    # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        body = (f"{MARKER[EXIT_CRASH]} ({type(exc).__name__}): this is "
+                f"MACHINERY, not a finding. NOTHING was probed, so NOTHING is "
+                f"known about tomorrow's margin - do not read the absence of "
+                f"a deadline as a safe one. CLEARING ACTION: fix the probe; "
+                f"until it runs, the prospective check is UNEVALUATED.")
+        print(body)
+        _write_alert_body(body)
+        return EXIT_CRASH
 
 
 if __name__ == "__main__":                              # pragma: no cover
-    raise SystemExit(main())
+    raise SystemExit(_main_guarded())

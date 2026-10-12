@@ -153,3 +153,99 @@ def _allocation_regime_must_be_declared(monkeypatch):
         return _real(today)
 
     monkeypatch.setattr(_oq, "h1_reservation", _declared_only)
+
+
+# ─────────────────────────────────────────── THE caplog TRAP, REFUSED BY A HOOK
+#
+# `caplog` captures STDLIB logging. Almost everything in `src/` logs through
+# LOGURU, which caplog does not see — so an assertion built on it reads an
+# EMPTY list, and an empty list is byte-identical to "the line never fired",
+# which is usually the exact defect the test was written to exclude.
+#
+# IT HAS HAPPENED THREE TIMES, and twice there were already files in the tree
+# documenting it:
+#
+#     tests/test_credit_gate_first_refusal.py   documents the trap
+#     tests/test_discovery_instrumentation.py   documents the trap
+#     tests/test_logging_regime.py              CLASSIFIES which modules use which
+#
+# All three were in place when it happened the third time, on 2026-10-12, in
+# tests/test_model_integrity_observable.py.
+#
+#     A trap documented three times and hit three times is not a documentation
+#     gap. The control has to be the mechanism that refuses it, not the file
+#     that describes it.
+#
+# So: using `caplog` is a COLLECTION ERROR unless the test is declared below,
+# and the error names the replacement fixture so the remedy travels with the
+# refusal instead of living in a file someone has to already know about.
+
+#: Tests that may use `caplog`, each with the reason. The reason must be that
+#: the code under test logs through STDLIB logging — `test_logging_regime`
+#: classifies every module in `src/`, and as of 2026-10-12 exactly one does.
+CAPLOG_ALLOWED = {
+    "tests/test_barren_league_cache.py::test_the_refusal_is_logged":
+        "src/scrapers/barren_leagues.py is the ONE module in src/ that uses "
+        "stdlib `logging.getLogger`, which test_logging_regime asserts and "
+        "classifies. caplog is the correct instrument here, not a trap.",
+}
+
+
+@_pytest.fixture()
+def capture_loguru():
+    """THE replacement for `caplog` in this project. Captures LOGURU records.
+
+    Yields a list that fills with loguru record dicts — `r["message"]`,
+    `r["level"].name`, `r["name"]`. Use it as a context manager factory:
+
+        def test_x(capture_loguru):
+            with capture_loguru("ERROR") as records:
+                do_the_thing()
+            assert any("MARKER" in r["message"] for r in records)
+
+    It is here, in conftest, rather than copied into each file, because three
+    local copies of this helper already exist and a fourth was about to be
+    written. One rule, one definition.
+    """
+    import contextlib
+
+    from loguru import logger as _loguru
+
+    @contextlib.contextmanager
+    def _capture(level="WARNING"):
+        records = []
+        sink = _loguru.add(lambda m: records.append(m.record), level=level)
+        try:
+            yield records
+        finally:
+            _loguru.remove(sink)
+
+    return _capture
+
+
+def pytest_collection_modifyitems(config, items):
+    """Refuse `caplog` at COLLECTION, with the remedy in the message."""
+    offenders = []
+    for item in items:
+        if "caplog" not in getattr(item, "fixturenames", ()):
+            continue
+        nodeid = item.nodeid.replace(chr(92), "/")
+        if nodeid not in CAPLOG_ALLOWED:
+            offenders.append(nodeid)
+    if offenders:
+        raise _pytest.UsageError(
+            "caplog is REFUSED in this project: it captures stdlib logging, "
+            "and almost everything in src/ logs through LOGURU. An assertion "
+            "on caplog.records reads an EMPTY list, which is byte-identical "
+            "to the defect such a test is usually written to exclude. This "
+            "has happened three times.\n\n"
+            "USE THE `capture_loguru` FIXTURE INSTEAD (tests/conftest.py):\n\n"
+            "    def test_x(capture_loguru):\n"
+            "        with capture_loguru('ERROR') as records:\n"
+            "            do_the_thing()\n"
+            "        assert any('MARKER' in r['message'] for r in records)\n\n"
+            "If the code under test really does use stdlib logging — "
+            "src/scrapers/barren_leagues.py is the only such module in src/, "
+            "per tests/test_logging_regime.py — add the test to "
+            "CAPLOG_ALLOWED in tests/conftest.py with that reason.\n\n"
+            "Offending test(s):\n  " + "\n  ".join(offenders))

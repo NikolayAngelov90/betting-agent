@@ -305,17 +305,45 @@ def test_the_ALERT_TEXT_carries_the_clearing_action_not_just_the_ledger():
     assert "CLEARING_ACTION" in src, (
         "the prospective alarm no longer interpolates the clearing action, so "
         "the alert says a margin is short without saying what to do")
-    for token in ("serves", "deadline_min", "binding"):
-        assert token in src, (
-            f"the alarm text omits {token} - a margin without its date and "
-            f"deadline cannot be acted on")
-    assert "::error::" in src, "the alarm is not surfaced as an annotation"
+    assert "binding" in src, (
+        "the alarm text omits the margin itself")
+    # The literal moved OUT of this function on 2026-10-12, deliberately:
+    # `ci_audit.SELF_EMITTED_ANNOTATIONS` pins each registered pattern to the
+    # file that prints it, and its guard requires the LITERAL rather than an
+    # f-string assembly. So the property is checked in two halves - the
+    # function uses the constant, and the constant is an `::error::` literal.
+    import scripts.fixture_horizon_probe as _pr
 
-    wf = _p.Path(".github/workflows/fixture-horizon-probe.yml").read_text(
-        encoding="utf-8")
-    assert "dispatch daily-picks manually" in wf
-    assert "no automated alternative" in wf
-    assert "operator" in wf
+    assert "ANNOTATION_ALARM" in src, (
+        "the alarm is not surfaced as an annotation")
+    assert _pr.ANNOTATION_ALARM.startswith("::error::"), _pr.ANNOTATION_ALARM
+    assert _pr.ANNOTATION_REFUSED.startswith("::error::")
+    assert _pr.ANNOTATION_ALARM != _pr.ANNOTATION_REFUSED, (
+        "a designed refusal and a finding share one annotation, so the log "
+        "cannot tell them apart")
+
+    # ANCHOR MOVED 2026-10-12, PROPERTY STRENGTHENED. The date and the
+    # deadline used to be asserted by scanning this function's SOURCE for the
+    # tokens `serves` and `deadline_min`. They now live in
+    # `format_dispatch_alert`, so the check is made against the RENDERED BODY
+    # instead - which is strictly stronger, and is the lesson of this stage:
+    # an alert body never rendered in a test is a formatter with no consumer.
+    import datetime as _dt
+
+    import scripts.fixture_horizon_probe as _probe
+
+    body = _probe.format_dispatch_alert(
+        _dt.date(2026, 10, 13), 11 * 60 + 30, "x/y",
+        basis="deadline DISCOVERED by the probe", margin=-37.0)
+    assert "2026-10-13" in body, "the body omits the date it serves"
+    assert "11:30 UTC" in body, "the body omits the deadline"
+    assert "LAST SAFE DISPATCH" in body, (
+        "the body omits the last safe dispatch time, so the operator still "
+        "has to subtract the runtime himself")
+    assert "gh workflow run daily-picks.yml" in body
+    assert "no automated alternative" in body
+    assert "operator" in body
+    assert "DISCOVERED by the probe" in body, "the body omits its basis"
 
 
 def test_the_prospective_alarm_only_fires_for_TOMORROW():

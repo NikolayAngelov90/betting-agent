@@ -116,9 +116,23 @@ jobs:
         # Selenium and Chrome are needed here and nowhere else in this job set.
         # Same `sqlalchemy<2.1` bound as the other workflows: 2.1 changed the
         # default DBAPI for a bare `postgresql://` URL to psycopg v3.
+        # FROM requirements.txt, NOT A HAND-CURATED LIST. The list that stood
+        # here omitted `aiohttp`, which `src/scrapers/base_scraper.py` imports,
+        # so the ONE probe run that has ever happened died 21 seconds in with
+        # `ModuleNotFoundError: No module named aiohttp` - measured
+        # 2026-10-11, run 38177680734. `aiohttp` was in requirements.txt the
+        # whole time.
+        #
+        #     A hand-curated dependency list is a SECOND DEFINITION of the
+        #     dependency set, and the two diverge the moment an import is
+        #     added anywhere upstream.
+        #
+        # `webdriver-manager` is the one genuine extra: it is NOT in
+        # requirements.txt and only this job needs it.
         run: |
           python -m pip install --upgrade pip
-          pip install -c constraints.txt "sqlalchemy>=2.0.0,<2.1" psycopg2-binary pyyaml python-dotenv loguru selenium webdriver-manager beautifulsoup4 requests numpy
+          pip install -r requirements.txt -c constraints.txt
+          pip install -c constraints.txt webdriver-manager
 
       - name: Create directories
         run: mkdir -p data/models logs
@@ -133,22 +147,54 @@ jobs:
           python -c "import datetime,time;print('python local:',datetime.datetime.now().isoformat(),'tzname:',time.tzname)"
 
       - name: Probe and evaluate the prospective margin
+        id: probe
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
           TABLES_CREATED: '1'
+          PROBE_ALERT_BODY: ${{ runner.temp }}/probe_alert.txt
+          PROBE_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           ARGS="--days-ahead ${{ inputs.days_ahead || '2' }}"
           if [ "${{ inputs.report_only }}" = "true" ]; then ARGS="$ARGS --report-only"; fi
+          set +e
           python -m scripts.fixture_horizon_probe $ARGS
+          code=$?
+          set -e
+          echo "probe_exit=$code" >> "$GITHUB_OUTPUT"
+          exit $code
 
       - name: Alert when the prospective margin is short
-        if: failure()
+        id: probe_alert
+        if: always() && steps.probe.outputs.probe_exit != '0'
+
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         # The clearing action travels in the ALERT TEXT, not only in the
         # ledger — `fixtures_zero_active` was noise because the remedy lived
         # somewhere the reader was not.
+        # THREE EXIT CODES, THREE TEXTS. One fixed sentence for every
+        # non-zero exit is what sent the operator a margin finding from a job
+        # that had computed no margin: 1=FINDING, 2=MACHINERY, 3=REFUSAL.
+        # The probe renders the body itself when it has numbers, so the alert
+        # carries the kickoff and the last safe dispatch time rather than
+        # asking the reader to subtract a runtime.
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BODY_FILE: ${{ runner.temp }}/probe_alert.txt
+          CODE: ${{ steps.probe.outputs.probe_exit }}
         run: |
-          python -m scripts.ci_alert "Tomorrow's picks may land AFTER the first kickoff. ACTION: dispatch daily-picks manually tomorrow morning (gh workflow run daily-picks.yml) — a dispatched run skips the measured 3h58m-5h04m scheduler lateness and is the ONLY action that changes this margin. It is the operator's: there is no automated alternative today. If instead the probe refused or could not verify its clock, the margin is UNKNOWN and NOT safe, and the deadline falls back to the 12:00 weekday constant. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ -s "$BODY_FILE" ]; then
+            MSG="$(cat "$BODY_FILE")"
+          elif [ "$CODE" = "2" ]; then
+            MSG="PROBE CRASHED - this is MACHINERY, not a finding. NOTHING was probed, so NOTHING is known about tomorrow's margin; do not read the absence of a deadline as a safe one. CLEARING ACTION: fix the probe. While it is down the prospective check is UNEVALUATED, and the retrospective deadline falls back to the 12:00 weekday constant, which is LAXER than the discovered card - measured over n=235 days, the discovered deadline would have alerted 23 times and the fallback 0, so the outage SILENCES alerts rather than adding them."
+          elif [ "$CODE" = "3" ]; then
+            MSG="PROBE REFUSED by design - the clock is unverified, or no deadline could be discovered for tomorrow. The margin is UNKNOWN and NOT safe. This is the probe working, not failing."
+          else
+            MSG="Probe exited $CODE with no rendered body - unclassified, which should not happen. Treat as MACHINERY."
+          fi
+          python -m scripts.ci_alert "$MSG
+
+          Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
