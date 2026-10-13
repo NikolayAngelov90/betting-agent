@@ -20,6 +20,7 @@ It also pins the two things the probe must refuse to do:
 """
 
 import datetime as dt
+import pathlib
 
 import pytest
 from sqlalchemy import inspect as sa_inspect
@@ -529,3 +530,99 @@ def test_an_UNVERIFIED_CLOCK_blocks_the_deadline_in_main(tmp_path, monkeypatch, 
     assert "three hours late" in out, (
         "the refusal does not say WHY an unverified clock is refused")
     assert rc == 0, "--report-only must not exit non-zero"
+
+
+# ───────────────── WHY THE VERIFIER HAS NEVER HAD A NON-EMPTY INPUT
+#
+# MEASURED 2026-10-13, 2 of 2 successful probe runs:
+#
+#     timezone : UNVERIFIABLE - no fixture is held by both the probe and the
+#                database
+#
+# AND THE VERIFIER IS NOT VACUOUS. The tests above drive it to +180, to 0 and
+# to None, so it can see all three. What is empty is its INPUT, in production,
+# and the cause is not the one that looks obvious.
+#
+# It is not the DB horizon alone. `max_days_ahead` is a ROLLING window from the
+# run, so a probe firing at 00:21 with `days_ahead=2` covers 10-13 00:21 ->
+# 10-15 00:21 - which includes "today" in full. The cause is ORDERING:
+#
+#     the probe runs BEFORE the producer of its verification data
+#
+# `daily-picks` is what writes `matches`. The probe's cron is `0 18` and
+# `daily-picks`' weekday cron is `0 4`, so for the day D+1 that the probe
+# targets, the scrape that would populate D+1 runs on D+1 - hours AFTER the
+# probe has already looked. MEASURED the same day: `matches` held 23 rows for
+# 10-12 and ZERO for 10-13, 10-14 and 10-15, which is the probe's whole window.
+#
+#     The verifier's input is drawn from the population it validates, so it
+#     cannot run when that population is empty - which is exactly the state
+#     its consumer needs an answer for.
+#
+# THE PROPOSED FIX DOES NOT WORK, and this is why it is deferred rather than
+# applied: "verify against today's rows" assumes the probe's pages render
+# today. They do not - a `/fixtures/` page shows UPCOMING fixtures, and the
+# rows the database holds for today are already past. There is no overlap to
+# reach. A fix has to change WHERE the clock comes from, not which rows are
+# compared, and that is a different change with a different risk.
+
+def test_the_PROBE_RUNS_BEFORE_the_producer_of_its_verification_data():
+    """The structural cause, derived from the crons rather than asserted.
+
+    THE KNOWN-WRONG CASE: if this test ever fails, the overlap has become
+    possible and the UNVERIFIABLE refusal would no longer be structural. That
+    is the input whose correct answer disagrees with today's behaviour, and it
+    is the only one that distinguishes "the verifier is broken" from "the
+    verifier is fed an empty set".
+    """
+    import re as _re
+
+    probe_wf = pathlib.Path(".github/workflows/fixture-horizon-probe.yml").read_text(
+        encoding="utf-8")
+    picks_wf = pathlib.Path(".github/workflows/daily-picks.yml").read_text(
+        encoding="utf-8")
+
+    def _mins(text, pick):
+        out = []
+        for expr in _re.findall(r"cron: '([^']+)'", text):
+            parts = expr.split()
+            if parts[0].isdigit() and parts[1].isdigit():
+                out.append((int(parts[1]) * 60 + int(parts[0]), parts[4]))
+        return [m for m, dow in out if pick(dow)]
+
+    probe_min = _mins(probe_wf, lambda d: True)
+    weekday_min = _mins(picks_wf, lambda d: d == "1-5")
+    assert probe_min and weekday_min, (probe_min, weekday_min)
+
+    # The probe targets D+1. `daily-picks` populates D+1 by running ON D+1.
+    # So the probe's absolute moment is (D, probe_min) and the scrape's is
+    # (D+1, weekday_min) - the probe is always earlier, by construction.
+    probe_at = probe_min[0]                 # minutes into day D
+    scrape_at = 24 * 60 + weekday_min[0]    # minutes into day D, i.e. D+1
+    assert probe_at < scrape_at, (
+        f"the probe ({probe_at}) no longer precedes the scrape that "
+        f"populates its target day ({scrape_at}) - the UNVERIFIABLE refusal "
+        f"may no longer be structural, so re-measure before trusting it")
+    gap_h = (scrape_at - probe_at) / 60.0
+    assert gap_h > 6, (
+        f"the gap is only {gap_h:.1f}h; with measured lateness of up to 7h38m "
+        f"on the weekday cron the ordering could invert, and then the "
+        f"overlap is sometimes non-empty and sometimes not - which is worse "
+        f"than always empty, because the refusal becomes intermittent")
+
+
+def test_the_verifier_is_NOT_VACUOUS_and_the_distinction_is_recorded():
+    """It returns +180, 0 and None on driven inputs - the tests above do that.
+
+    This pins the DISTINCTION, because "vacuous filter" was the first reading
+    and it was wrong: a filter that cannot fire is a defect in the filter, and
+    a correct filter handed an empty population is a defect in the DESIGN. The
+    remedies are different, and only one of them is in this file.
+    """
+    src = pathlib.Path("tests/test_fixture_horizon_probe.py").read_text(
+        encoding="utf-8")
+    assert "verify_offset(s, probed) == 180" in src
+    assert "verify_offset(s, probed) == 0" in src
+    assert "verify_offset(s, probed) is None" in src, (
+        "the three-outcome drive is gone; without it the claim that the "
+        "verifier is not vacuous is unsupported")

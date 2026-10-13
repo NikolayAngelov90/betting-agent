@@ -121,3 +121,71 @@ No cron change. The mechanism is:
 This file is amended only by appending. The decision rule above is **not**
 rewritten after the result is known; if it turns out to be the wrong rule, the
 amendment says so and explains why, with the original left in place.
+
+---
+
+# APPENDED 2026-10-13, AFTER the registration commit `2f50771`
+
+Everything above was committed before this section was measured. This is the
+free test the registration named, and nothing else has been run.
+
+## RESULT — THE HOUR EFFECT IS NOT PRESENT IN THE ONE POPULATION THAT CAN SHOW IT
+
+`closing-lines`, `measured` 2026-10-13: **n=318 scheduled runs**, query window
+**2026-08-10 → 2026-10-13 (65 days)**, one calendar period, eight scheduled
+hours. Each run attributed to its nearest preceding cron.
+
+| cron (UTC) | ceiling (min) | n | mean | median | max | at ceiling |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10:47 | 30 | 2 | 23.5 | 23.5 | 26 | 0 |
+| 11:17 | 120 | 16 | 24.5 | 21.5 | 40 | 0 |
+| 13:17 | 120 | 54 | **72.7** | 81.5 | 119 | 1 |
+| 15:17 | 120 | 55 | 45.4 | 36.0 | 114 | 0 |
+| 17:17 | 120 | 42 | 41.2 | 38.0 | 83 | 0 |
+| 19:17 | 120 | 42 | 49.0 | 45.0 | 118 | 0 |
+| 21:17 | 120 | 43 | **34.4** | 22.0 | 119 | 2 |
+| 23:17 | **690** | 64 | 84.4 | 51.5 | 364 | 0 |
+
+### THE CEILING TRUNCATES; IT DOES NOT DESTROY
+
+**3 of 318 runs (0.9%)** sit at their attribution ceiling. The criterion was
+stated before measuring — destroyed if delays routinely exceed the ceiling,
+truncated otherwise — and 0.9% is truncation. **The comparison survives.**
+
+**But the maxima are NOT comparable across rows.** The 23:17 row has a
+690-minute ceiling because of the overnight gap, so it is the only row that
+*can* show a 364-minute delay; 13:17 physically cannot exceed 119. Its larger
+mean and max are a **property of the attribution rule, not an observation**.
+Only the six rows sharing a 120-minute ceiling are comparable, and the
+statistic below uses only those.
+
+### THE STATISTIC
+
+Across the six 2-hourly crons (identical ceiling, n=252):
+
+> **Pearson r(scheduled hour, mean delay) = −0.084**
+
+Essentially zero, and **slightly negative** — later hours are marginally
+*earlier*, not later. The mean ranges from 24.5 min at 11:17 to 72.7 min at
+13:17 with no ordering in the hour: the highest mean is the second-earliest
+cron and the lowest is the second-latest.
+
+### WHAT THIS DOES AND DOES NOT ESTABLISH
+
+**It does not support the hypothesis.** Within a single calendar period, delay
+does not rise with the scheduled hour. The monotone four-regime table in the
+registration is therefore more consistent with the **calendar confound** named
+there than with an hour effect.
+
+**The limitation, stated rather than buried:** `closing-lines` delays are
+**20–85 minutes**; `daily-picks` delays are **4–11 hours**. These may be
+different queueing regimes, and a null hour-effect at the half-hour scale does
+not strictly refute one at the five-hour scale. This is evidence against the
+hypothesis, not a refutation of it.
+
+**The most parsimonious reading of `0 4`'s 458 minutes** is therefore not "the
+hour did it" but **one draw from a heavy right tail** — which is exactly what
+`n=1` licenses and nothing more. The registration's decision rule stands
+unchanged, and the trial it describes is still the only thing that can settle
+it.
+

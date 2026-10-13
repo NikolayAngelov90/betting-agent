@@ -831,8 +831,28 @@ def extract(log: str) -> Dict[str, object]:
     # look routine".
     f["exit_annotations"] = len(re.findall(
         r"##\[error\]Process completed with exit code \d+", log))
+    # MATCHED IN THE RENDERED FORM, NOT THE SOURCE FORM. The registry spells
+    # each pattern `::error::X` because that is the literal the emitter must
+    # contain, and `test_every_self_emitted_annotation_names_a_REAL_emitter`
+    # checks exactly that. But GitHub CONSUMES the workflow command: what the
+    # log holds is `##[error]X`. The only place `::error::` survives verbatim
+    # is the `##[group]Run ...` echo of a step's own shell source.
+    #
+    # So the old matcher counted ECHOED SCRIPT TEXT and MISSED every real
+    # annotation. MEASURED 2026-10-13 on three alarming ci-audit runs
+    # (38337483365, 38246516896, 38308788037), identical on all three:
+    #
+    #     ##[error] total 4   exits 2   self OLD 1 -> NEW 2
+    #     unexplained_nonzero_exit  OLD 1 -> NEW 0
+    #
+    # A FALSE ABSORBED FAILURE ON EVERY RED AUDIT RUN. The detector was
+    # rebuilt in Stage 12.1 precisely to have dynamic range, and it was
+    # reporting a phantom remainder of 1 the whole time - two errors that
+    # partially cancelled, which is why the total still looked plausible.
     f["self_emitted_annotations"] = sum(
-        len(re.findall(re.escape(pat), log)) for pat, _src in SELF_EMITTED_ANNOTATIONS)
+        len(re.findall(re.escape("##[error]" + pat.split("::error::", 1)[1]),
+                       log))
+        for pat, _src in SELF_EMITTED_ANNOTATIONS if "::error::" in pat)
     f["foreign_annotations"] = (len(re.findall(r"##\[error\]", log))
                                 - f["exit_annotations"]
                                 - f["self_emitted_annotations"])
@@ -2041,6 +2061,49 @@ def verdict(facts: Dict[str, object], hits: List[str],
 
 # ────────────────────────────────────────────────────────────────────── main
 
+#: AN ACKNOWLEDGED STANDING BREACH. CLR-2, applied to a condition rather than
+#: an event.
+#:
+#: MEASURED 2026-10-13: seven consecutive `ci-audit` runs went red with the
+#: IDENTICAL line `schedule margin -85m < 30m`. Seven reds, ONE finding - the
+#: same shape as the nine reds of 10-10. The cause is a single observation (the
+#: 2026-10-12 weekday run, 458 min late) sitting inside a 28-day window, so the
+#: alarm would fire on EVERY audit run for 28 days with nothing a reader could
+#: do about it. That is `fixtures_zero_active` for the seventh time: an alarm
+#: that cries wolf until it is ignored, and it reaches that state in a day.
+#:
+#: So a breach that has been SEEN, RECORDED and has a dated decision attached
+#: is REPORTED and does not alarm. It alarms again the moment it gets WORSE
+#: than the acknowledged figure, because deterioration is an event.
+#:
+#: The clearing action is an action a person takes: the cron decision registered
+#: in `docs/scheduler-hour-hypothesis.md`, due after 2026-10-17.
+ACKNOWLEDGED_MARGIN_BREACH = {
+    "weekday": dict(
+        binding=-85.0,
+        since="2026-10-12",
+        why="ONE observation: the first weekday run under `0 4` fired 458 min "
+            "late (38243861903, 11:37:39Z), replacing the measured maximum of "
+            "304 min. Ready at 12:49 is 50 min past the 12:00 deadline the "
+            "split was sized against. n=1 supports no distribution.",
+        action="decide the weekday cron after 2026-10-17 per "
+               "docs/scheduler-hour-hypothesis.md; until then the mechanism "
+               "is this report plus manual dispatch",
+        review="2026-10-18",
+    ),
+}
+
+
+def margin_breach_is_acknowledged(day_type: str, binding: float) -> dict:
+    """The acknowledgement, or `{}`. Worse than acknowledged is NOT covered."""
+    ack = ACKNOWLEDGED_MARGIN_BREACH.get(day_type)
+    if not ack:
+        return {}
+    # MORE negative than the recorded figure is a NEW observation, and a
+    # standing acknowledgement must not absorb a deterioration.
+    return ack if binding >= ack["binding"] else {}
+
+
 def _write_alarm_body(alarmed: List[str]) -> None:
     """Hand the REASONS to the workflow, so the alert is not a guess.
 
@@ -2348,8 +2411,17 @@ def main() -> int:
         print(f"!! SCHEDULE MARGIN {_margin['binding']:+.0f} min is below the "
               f"{MARGIN_ALARM_MIN}-minute threshold. Remedy on file: "
               f"{MARGIN_REMEDY}")
-        alarmed.append(f"schedule margin {_margin['binding']:+.0f}m "
-                       f"< {MARGIN_ALARM_MIN}m")
+        _ack = margin_breach_is_acknowledged(
+            _margins.get("worse") or "", _margin.get("binding") or 0.0)
+        if _ack:
+            print(f"  margin breach ACKNOWLEDGED since {_ack['since']}: "
+                  f"{_ack['why'][:88]}")
+            print(f"  it reports and does NOT alarm until it gets worse than "
+                  f"{_ack['binding']:+.0f}m. CLEARING ACTION: {_ack['action']}"
+                  f" (review {_ack['review']})")
+        else:
+            alarmed.append(f"schedule margin {_margin['binding']:+.0f}m "
+                           f"< {MARGIN_ALARM_MIN}m")
 
     if listing_warning:
         # Printed AGAIN under the table: the number a reader carries away is
