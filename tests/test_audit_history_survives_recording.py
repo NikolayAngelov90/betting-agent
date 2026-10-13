@@ -219,11 +219,39 @@ def test_it_is_NOT_behind_fail_on(monkeypatch, capsys):
     """Not self-calibrating. A disabled scheduled workflow is wrong on the
     FIRST occurrence, like a spent credit that returned no rows — so it alarms
     without the caller opting in."""
+    # A REAL workflow name, as `gh workflow list` reports it. The fixture
+    # used "X" until 2026-10-13, when the state check was SCOPED to the
+    # workflows this repository owns: `gh workflow list` returns every record
+    # GitHub HOLDS, and a scratch workflow on a deleted branch stayed listed
+    # as `active` for at least a day after the branch was gone. An alarm on a
+    # record no action here can change cannot be cleared.
     monkeypatch.setattr(ci, "workflow_states",
-                        lambda: {"X": "disabled_manually"})
+                        lambda: {"Daily Betting Picks": "disabled_manually"})
     monkeypatch.setattr(sys, "argv", ["ci_audit", "--since", "2030-01-01"])
     assert ci.main() == 1          # no --fail-on given
     assert "disabled_manually" in capsys.readouterr().out
+
+
+def test_an_UNOWNED_workflow_record_is_REPORTED_and_NOT_alarmed(monkeypatch,
+                                                                capsys):
+    """The scoping, with its cost stated in the output rather than implied.
+
+    MEASURED 2026-10-13: `.github/workflows/zz-parse-bad.yml` was still listed
+    `active` after the branch carrying it was deleted. If GitHub later marks
+    such a record inactive, an unscoped check alarms forever on a file that
+    does not exist. New workflows are kept in scope by the separate
+    registration guard, which requires them in `WORKFLOWS`.
+    """
+    monkeypatch.setattr(ci, "workflow_states",
+                        lambda: {".github/workflows/gone.yml": "disabled_manually",
+                                 "Daily Betting Picks": "active"})
+    monkeypatch.setattr(sys, "argv", ["ci_audit", "--since", "2030-01-01"])
+    code = ci.main()
+    out = capsys.readouterr().out
+    assert code == 0, "an unowned record alarmed; it cannot be cleared"
+    assert "does not own" in out, (
+        "the unowned record is silently ignored rather than reported")
+    assert "gone.yml" in out
 
 
 def test_all_active_is_SILENT(monkeypatch, capsys):

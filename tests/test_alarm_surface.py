@@ -27,6 +27,10 @@ MEASURED 2026-10-11 by driving each one:
 | series census `DEGRADED` (unreadable shas) | margin | no | **machinery**: guarded by a TEST on `fetch-depth`, not by a runtime alarm |
 | `MODEL INTEGRITY FAILURE` | model artefact | **YES** | added 2026-10-12; baseline 0 in 1,400 load events, so it has dynamic range |
 | `MODEL SIGNATURE MISSING` | model artefact | **YES** | added 2026-10-12; same baseline. `.sig` absent means UNVERIFIABLE, not verified |
+| scheduled run NEVER EXISTED | schedule | **YES** | added 2026-10-13. A missing run has no row to verdict, so no run-based check could see it |
+| UNPARSEABLE WORKFLOW push on `main` | workflow file | **YES** | added 2026-10-13. GitHub's own signal: a run named by PATH with `conclusion: failure` |
+| the same on another branch | workflow file | no | a deleted branch's push cannot be cleared by any action |
+| today has no run YET | schedule | no | **PENDING**, not missing — a run 458 min late has been observed |
 
 THE TWO DAILY NON-ALARMS ARE THE POINT. `tomorrow UNKNOWN - NOT safe` and the
 weekday series' `UNEVALUATED` both print on **every** run and alarm on
@@ -49,6 +53,19 @@ They are safe to alarm because the baseline was measured BEFORE the wiring:
 runs** of the local audit log cache, `measured` 2026-10-12. An alarm whose
 baseline equals its threshold is the `fixtures_zero_active` shape; this one's
 baseline is zero, so it has dynamic range.
+
+ROWS 16-19, added 2026-10-13, close the gap this table could not have shown:
+**an absent run and an unparseable workflow had no detector at all.**
+`DID_NOT_RUN` is not one despite the name — it verdicts `steps_not_run` on a
+run that EXISTS, and a run that never fired has no row to verdict. Two of the
+four are deliberate NON-alarms, for the reason this table exists:
+
+* **today has no run yet** is PENDING, not missing. The first weekday run
+  under `0 4` arrived **458 minutes** late (measured 2026-10-12), so "it is
+  07:00 and nothing has run" is not evidence of absence. Alarming on it would
+  have fired on a run that was merely very late.
+* **an unparseable push on another branch** cannot be cleared: the branch can
+  be deleted, and then no action in the repository ends the alarm. CLR-2.
 
 THE THIRTEENTH ROW, added 2026-10-11, is deliberately a NON-alarm. An
 unreadable headSha empties the series, and the empty series printed as
@@ -189,10 +206,11 @@ def test_the_FULL_alarm_surface_is_enumerated_here():
     src = inspect.getsource(ci)
     appends = [l.strip() for l in src.splitlines()
                if "alarmed.append(" in l]
-    assert len(appends) == 5, (
+    assert len(appends) == 7, (
         f"the alarm surface changed: {len(appends)} append sites, expected "
-        f"5 (workflow state, run verdict, schedule margin, model integrity "
-        f"failure, model signature missing). The prospective "
+        f"7 (workflow state, run verdict, schedule margin, model integrity "
+        f"failure, model signature missing, scheduled run never existed, "
+        f"unparseable workflow on main). The prospective "
         f"margin is NOT here: it lives in the probe, which has the database "
         f"this step deliberately does not. Sites: " + repr(appends))
 

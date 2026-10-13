@@ -71,6 +71,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONIOENCODING: utf-8
+          AUDIT_ALERT_BODY: ${{ runner.temp }}/audit_alert.txt
         # THE POLICY, STATED RATHER THAN INHERITED.
         #
         # `--fail-on BROKEN,DID_NOT_RUN` and NOT DEGRADED. DEGRADED is this
@@ -128,8 +129,18 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PYTHONIOENCODING: utf-8
+          BODY_FILE: ${{ runner.temp }}/audit_alert.txt
+        # THE REASONS, NOT A GUESS AT THEM. The fixed sentence that stood here
+        # named BROKEN and DID_NOT_RUN; on 2026-10-12 the alarm was
+        # `schedule margin -85m < 30m`, which is neither.
         run: |
-          python -m scripts.ci_alert "⚠️ CI audit: a run scored BROKEN or DID_NOT_RUN, or the audit itself failed. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ -s "$BODY_FILE" ]; then
+            MSG="(!) $(cat "$BODY_FILE")"
+          else
+            MSG="(!) CI audit exited non-zero with NO alarm list written - treat as MACHINERY, not a finding."
+          fi
+          python -m scripts.ci_alert "$MSG
+          Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Fail the job when the audit alarmed
         # Separated from the audit step so the alert above always gets to run

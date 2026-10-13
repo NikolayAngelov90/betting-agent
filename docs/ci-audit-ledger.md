@@ -26565,3 +26565,280 @@ Full suite **2012 passed**. Invariants pass, count not cited. Fingerprint
 `tests/test_entrypoints_are_invocable.py`, `tests/test_prospective_deadline.py`,
 `tests/test_model_integrity_observable.py`. No production write, no schema
 change. The probe remains READ-ONLY; nothing on the H1 path was touched.*
+
+---
+
+# 2026-10-13 — THE 422 WINDOW WAS 64 SECONDS AND COST NOTHING. The missing run was 458 minutes late, not absent. Both detectors now exist.
+
+H1 untouched: no change to the collection, the stop, the reservation or the H1
+cron.
+
+## PART A — THE WINDOW, AND THE PREMISE IS WRONG
+
+The brief asks how long `daily-picks` was not scheduled. **It never was.**
+
+| | measured 2026-10-13 |
+| --- | --- |
+| file refused | **`.github/workflows/fixture-horizon-probe.yml` ONLY** |
+| from | `eed10e2`, 2026-10-12 **10:48:25 UTC** |
+| to | `fc12f78`, 2026-10-12 **10:49:29 UTC** |
+| **window** | **64 seconds** |
+| `daily-picks.yml` touched by either commit | **no** — `git diff --name-only eed10e2~1 fc12f78` does not list it |
+| the `0 4` slot it supposedly explains | due **04:00 UTC**, i.e. **6.81 h BEFORE the 422 existed** |
+
+**GitHub refuses the individual workflow file, not the repository's
+workflows.** So the 422 could not have affected `daily-picks`, and it did not:
+the arithmetic alone settles it, and the diff confirms the file was never
+touched.
+
+**Scheduled runs inside the window: zero.** A 64-second window contains no
+cron boundary for any of the six workflows — the probe's own cron is `0 18`.
+**Cards affected: none. Unrecoverable: nothing.** The realised cost of my 422
+is **one dispatch attempt**, which is how I found it.
+
+> **A workflow GitHub refuses does not run and does not report** — the
+> premise is right, and this instance is the cheapest possible demonstration
+> of it rather than an expensive one.
+
+## PART B — AND THE RUN WAS NOT ABSENT. IT WAS 458 MINUTES LATE.
+
+My own report of 2026-10-12 said "no `daily-picks` run has fired … at 10:55
+UTC". Accurate as an observation; **wrong as a conclusion.**
+
+| run | event | created |
+| --- | --- | --- |
+| `38242283454` | **`workflow_dispatch`** | 2026-10-12 11:22:58 UTC |
+| `38243861903` | **`schedule`** | 2026-10-12 **11:37:39 UTC** |
+
+The scheduled run **did** fire, at **11:37:39 UTC — 458 minutes (7h38m) after
+the nominal 04:00.** It is a legitimate data point and the **first** under
+`0 4 * * 1-5`:
+
+```
+weekend: n=4  2026-10-11 294m, 2026-10-10 271m, 2026-10-04 271m, 2026-10-03 238m
+weekday: n=1  2026-10-12 458m
+```
+
+> **The instruction to exclude it is overtaken by the event.** A run that never
+> fired must indeed be excluded — but this one fired. Excluding it would have
+> removed the only weekday observation, and it is the one that matters:
+> **458 min replaces the previous maximum of 304 min** (n=9, under the retired
+> `0 0` and `37 9` regimes). The first observation of the new cron nearly
+> doubled the envelope the split was sized against.
+
+**AND THE MARGIN ALARM FIRED FOR REAL, FOR THE FIRST TIME:**
+
+```
+::error::audit alarm — schedule margin -85m < 30m
+```
+
+Ready at 11:37:39 + 72m duration max = **12:49 UTC**, which is **50 minutes
+past the 12:00 weekday deadline the cron was sized against**. The margin
+machinery works, and its first genuine finding says the schedule no longer
+clears its own deadline.
+
+## PART C — THE DETECTORS, AND WHAT GITHUB ACTUALLY OFFERS
+
+### `DID_NOT_RUN` DOES NOT CATCH THIS, AND THE NAME IS THE TRAP
+
+`verdict()` returns `DID_NOT_RUN` from `facts["steps_not_run"]` — **a verdict
+on a run that EXISTS whose core steps were skipped.** A workflow that produced
+no run has no row to verdict, so every run-based check in the file is blind to
+it. The answer to "scope, timing, or `NEVER_ALARM_WORKFLOWS`?" for an absent
+run is **none of the three: the detector did not exist.**
+
+### FOR THE 422, HOWEVER, A SIGNAL DOES EXIST — AND IT WAS UNREAD
+
+```
+38238629301  .github/workflows/fixture-horizon-probe.yml  ev=push  failure  br=main  2026-10-12T10:48:29Z
+```
+
+**GitHub created a failed run four seconds after the push**, named by the
+file's **path** instead of its `name:` field — because the `name:` could not be
+parsed. `gh run list --workflow fixture-horizon-probe.yml` lists it.
+
+> So for the 422 the answer **is** scope: the signal was there, the audit could
+> see it, and `fixture-horizon-probe` is in `NEVER_ALARM_WORKFLOWS`. **The
+> path-as-name is the discriminator, and it is GitHub's own parser talking.**
+
+Both are now detectors, printed every run, with two new alarm sites (surface
+pin **5 → 7**, rows 16–19 written down):
+
+* `missing_scheduled_runs()` — days governed by a cron with **no scheduled run
+  at all**. Three states, because two would lie: a past day is **MISSING** and
+  alarms; **today** is **PENDING** with its elapsed minutes and does **not**
+  alarm. Today reads `147 min past nominal, against a measured maximum of 458`.
+* `unparseable_workflow_runs()` / `format_unparseable()` — a run named by path
+  with `conclusion: failure`. Alarms **on `main` only**; an off-branch push is
+  reported and not alarmed, because a branch can be deleted and then no action
+  here clears it.
+
+### WHAT GITHUB'S OWN PARSER WILL AND WILL NOT DO — measured on a scratch branch
+
+| probe | result |
+| --- | --- |
+| `gh api .../actions/workflows` | **`state: active`** for a file containing the refused defect — **state is not a parse verdict** |
+| dispatch a file with no `workflow_dispatch` | `422 "does not have 'workflow_dispatch' trigger"` — the trigger check short-circuits before any parse verdict |
+| dispatch a file **with** the trigger and a duplicate key | **`422 "failed to parse workflow: (Line: 11, Col: 9): 'env' is already defined"`** — GitHub's parser, with line and column |
+| the same file, valid | **creates a run** |
+
+> **GitHub's parser is reachable only in the failing direction, and only by an
+> attempt that runs the workflow when the file parses. It cannot be a pre-push
+> gate.** The brief is right that the strict loader is a different parser; the
+> honest position is that no same-parser pre-push check exists, so the local
+> gate is **anchored** instead of claimed equivalent.
+
+**POSITIVE CONTROL — the anchor.** `tests/test_absent_run_and_unparseable.py`
+holds `GITHUB_REFUSED_THIS`: the exact shape GitHub rejected, reduced to a step
+with two `env:` keys. The test asserts `yaml.safe_load` **accepts** it and the
+strict loader **refuses** it, plus that the anchor still carries two step-level
+`env` keys so it cannot drift from what shipped. That proves the gate catches
+**one input GitHub is measured to reject** — stated as one input, not as
+equivalence.
+
+## THE AUDIT'S OWN ALERT HAD THE PROBE'S DEFECT
+
+The alarm that fired on 2026-10-12 was a schedule margin. The Telegram text
+read:
+
+> "a run scored BROKEN or DID_NOT_RUN, or the audit itself failed"
+
+**None of the three.** A fixed sentence enumerating two causes, sent for a
+third — the same shape as the probe's single alert text, in the tool that found
+it. The audit now writes its `alarmed` list to `AUDIT_ALERT_BODY` and the
+workflow sends **the reasons**, falling back to an explicit "no alarm list
+written — treat as MACHINERY" when the file is empty.
+
+## THE PROBE: THE TAXONOMY WORKS IN PRODUCTION, AND THE CLOCK IS STRUCTURALLY BLIND
+
+First scheduled run after the dependency fix — `38326839882`, 2026-10-13
+00:21:32 UTC:
+
+```
+pages fetched : 30/30
+wall time     : 233.5s
+REFUSED       : 0
+timezone      : UNVERIFIABLE - no fixture is held by both the probe and the database
+::error::PROBE REFUSED: ... This is a DESIGNED REFUSAL, not a crash and not a finding.
+```
+
+**Exit 3, the designed refusal, correctly labelled, and the alert branched to
+the refusal text** rather than the crash text or a margin finding. No load limb
+met: 30/30 pages, 0 refused.
+
+But the clock is now **unverifiable on 2 of 2 successful runs**, and the cause
+is structural, not transient:
+
+> `verify_offset` looks for a fixture held by **both** the page and `matches`,
+> searching the **same two days the probe targets**. `matches` holds **0 rows**
+> for those days, because its horizon is **≤14.6 h** (measured) and nothing has
+> scraped them yet. **The verification population and the target population are
+> the same empty set.** So the probe has never emitted a deadline and, as
+> written, cannot — it refuses hardest exactly when the card is thin, which is
+> when the margin matters.
+>
+> The fix is not a relaxation: a browser's clock offset is a property of the
+> browser, not of a particular fixture, so verifying against **today's** rows —
+> which the database does hold — is equally valid and far more likely to
+> overlap. It is a change to the probe's parse and filter, which re-opens the
+> no-persistence census, so it is recorded here rather than made in a stage
+> whose rule is that the refusal is not relaxed.
+
+## A WORKFLOW RECORD OUTLIVES ITS BRANCH
+
+`.github/workflows/zz-parse-bad.yml` — pushed to a scratch branch for the
+parser experiment and deleted with it — was still listed **`active`** a day
+later. `gh workflow list` returns every record **GitHub holds**, not every file
+this repository has.
+
+The state check alarmed on **any** non-active record, so the day GitHub marks
+that orphan inactive it would alarm forever on a file nobody can fix. It is now
+**scoped to `WORKFLOWS`**, with the owned set derived **from the tree** — each
+file contributes its `name:` and its filename — and unowned records are
+**reported, not checked**:
+
+```
+!! 1 workflow record(s) GitHub holds that this repository does not own, so
+   their state is NOT checked: .github/workflows/zz-parse-bad.yml
+```
+
+> **The first attempt at that scoping broke the check and a test caught it.**
+> `gh workflow list` keys a valid workflow by its `name:` and an orphan by its
+> **path**, so matching on filename alone excluded every real workflow — a
+> disabled `Daily Betting Picks` would have stopped alarming. Found by driving
+> it, not by reading it.
+
+## THE ENTRIES
+
+> **A premise with arithmetic in it can be checked before it is adopted.** The
+> 422 was asked to explain a missed slot that preceded it by 6.81 hours, on a
+> file the commits never touched. Two commands settled it. The expensive
+> version of this stage would have measured a window that could not have
+> mattered.
+
+> **"No run yet" and "no run at all" need different states, and the threshold
+> between them is a measurement.** A run 458 minutes late has now been
+> observed, so an alarm on "nothing has run by 07:00" would have fired on a
+> run that was merely very late. PENDING is not a hedge; it is the only
+> reading the data supports.
+
+> **A detector named for the thing you want is not the thing you want.**
+> `DID_NOT_RUN` verdicts skipped steps in a run that exists. For the question
+> "did the workflow run today" it was never a candidate, and its name is why
+> nobody noticed.
+
+> **A parser more permissive than production's cannot be made equivalent, so
+> anchor it instead.** GitHub's parser is reachable only by an attempt that
+> runs the workflow when it succeeds. The local gate therefore carries the
+> exact input GitHub was measured to refuse, and claims that and nothing more.
+
+## DECLARATION
+
+**THE 422 WINDOW: 64 SECONDS**, `eed10e2` 10:48:25 → `fc12f78` 10:49:29 UTC,
+on **`fixture-horizon-probe.yml` only**. `daily-picks.yml` was never touched,
+and the `0 4` slot it was asked to explain fell **6.81 hours earlier**.
+**Scheduled runs inside the window: zero. Cards affected: none. Nothing
+unrecoverable.**
+
+**THE MISSING RUN WAS NOT MISSING.** `38243861903` fired on schedule at
+**11:37:39 UTC — 458 minutes late**, and is the **first** `0 4` data point;
+`38242283454` at 11:22 was a manual dispatch and is not one. 458 **replaces
+the measured maximum of 304** (n=9, retired regimes). My "absent" reading was
+right at 10:55 and wrong as a conclusion. **The margin alarm then fired for
+real — `schedule margin -85m < 30m`** — because ready at 12:49 is 50 minutes
+past the 12:00 deadline the split was sized against.
+
+**BOTH DETECTORS NOW EXIST.** `DID_NOT_RUN` never could catch an absent run —
+it verdicts `steps_not_run` on a run that exists — so `missing_scheduled_runs`
+was added with **three** states: MISSING alarms, **PENDING does not**, measured
+against the 458-minute bound. For the 422 the answer **is** scope: GitHub
+creates a `push`/`failure` run **named by the file's path**, run
+`38238629301`, four seconds after the push, and the audit could see it — the
+probe is in `NEVER_ALARM_WORKFLOWS`. That signal is now a detector too,
+alarming on `main` only. Alarm surface **5 → 7**, rows 16–19 written down.
+
+**GITHUB'S PARSER CANNOT BE A PRE-PUSH GATE**, measured three ways: the
+workflows API reports `active` for the refused file, the dispatch endpoint
+short-circuits on the trigger check without a parse verdict, and with the
+trigger present it returns the parse error **but creates a run when the file is
+valid**. So the strict loader is **anchored** to `GITHUB_REFUSED_THIS` — the
+exact shape GitHub rejected — with a control proving `safe_load` accepts what
+the strict loader refuses, and the limit stated as one input rather than
+equivalence.
+
+**Also fixed:** the audit's own alert said "BROKEN or DID_NOT_RUN" for a
+schedule-margin alarm and now sends the reasons; the workflow-state check is
+scoped to owned workflows after a record outlived its branch, with the first
+attempt at that scoping caught by a test; and the probe's first scheduled run
+since the fix produced a correctly-labelled **designed refusal** — while
+revealing that its clock check verifies against the **same empty days it
+targets**, so it has never emitted a deadline and cannot as written.
+
+Full suite **2032 passed**. Invariants pass, count not cited. Fingerprint
+**UNCHANGED** at `s5.17` / `818026`; picks stamped 65 → **88**.
+
+*Recorded 2026-10-13. `scripts/ci_audit.py`,
+`.github/workflows/ci-audit.yml`,
+`tests/test_absent_run_and_unparseable.py` (new),
+`tests/test_alarm_surface.py`, `tests/test_audit_history_survives_recording.py`.
+No production write, no schema change. Nothing on the H1 path was touched.*

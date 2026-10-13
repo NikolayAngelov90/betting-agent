@@ -1381,6 +1381,188 @@ def format_schedule_margin(m) -> str:
             + ("  ** DECISION FIRES **]" if m["alarm"] else "]"))
 
 
+# ───────────────────── A RUN THAT NEVER FIRED, AND A FILE GITHUB REFUSED
+#
+# NEITHER HAD A DETECTOR, and `DID_NOT_RUN` is not one despite its name: it is
+# a verdict on `steps_not_run` — a run that EXISTS whose core steps were
+# skipped. A workflow that produced no run at all has no row to verdict, so
+# every run-based check in this file is blind to it.
+#
+#     A workflow GitHub refuses does not fail, it disappears. Invalid YAML is
+#     an ABSENCE, not a red run.
+#
+# MEASURED 2026-10-13, and the second half of that is WRONG in a useful way:
+# GitHub DOES create a run for an unparseable workflow. Pushing a duplicate
+# `env:` to main produced run 38238629301 four seconds later — `event=push`,
+# `conclusion=failure`, and NAMED BY THE FILE'S PATH rather than its `name:`
+# field, because the `name:` could not be parsed. `gh run list --workflow
+# <file>` lists it. So the signal existed and nothing read it; the probe is in
+# NEVER_ALARM_WORKFLOWS, so the silence was SCOPE, not timing.
+#
+# The path-as-name is the discriminator, and it is GitHub's own parser talking.
+
+#: The measured maximum scheduler lateness, used ONLY to decide whether today's
+#: missing run is still plausibly coming. MEASURED 2026-10-12: the first
+#: weekday run under `0 4` fired 458 minutes late, which replaced the previous
+#: maximum of 304 (n=9, under the retired `0 0`/`37 9` regimes). A bound that a
+#: single observation has already doubled is not a distribution — it is used
+#: here as a floor for PENDING and for nothing else.
+OBSERVED_LATENESS_MAX_MIN = 458
+
+
+def is_unparseable_run(r: dict) -> bool:
+    """ONE definition of the predicate.
+
+    It was briefly two - the collector filtered and the formatter counted
+    whatever it was handed - so a formatter fed raw rows reported every failed
+    run as an unparseable workflow. Caught by passing raw rows to it in a
+    test, which is what a test is for.
+    """
+    return (str(r.get("workflowName") or "").startswith(".github/workflows/")
+            and str(r.get("conclusion") or "").lower() == "failure")
+
+
+def unparseable_workflow_runs(limit: int = 60) -> List[dict]:
+    """Runs whose workflow name is a PATH — GitHub could not parse the file.
+
+    This is the only signal GitHub offers, and it is not reachable any other
+    way: `gh api .../actions/workflows` reported `state: active` for a file
+    containing the exact defect it refuses (measured 2026-10-13), so state is
+    not a parse verdict. The dispatch endpoint DOES return GitHub's parser
+    error — `422 failed to parse workflow: (Line: N, Col: M)` — but only for a
+    file carrying a `workflow_dispatch` trigger, and it CREATES A RUN when the
+    file is valid, so it cannot be used as a gate.
+    """
+    try:
+        runs = json.loads(_sh(
+            "gh", "run", "list", "--limit", str(limit),
+            "--json", "databaseId,workflowName,event,conclusion,createdAt,"
+                      "headBranch") or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [r for r in runs if is_unparseable_run(r)]
+
+
+def format_unparseable(runs: List[dict], default_branch: str = "main") -> str:
+    """Alarm on the DEFAULT branch; report a branch push without alarming.
+
+    A branch can be deleted, and an alarm on a deleted branch's push cannot be
+    cleared by any action - the `fixtures_zero_active` shape for the seventh
+    time. On the default branch it is the real thing: the workflow is not
+    scheduled until the file parses, and no other check sees it.
+    """
+    runs = [r for r in runs if is_unparseable_run(r)]
+    on_main = [r for r in runs if r.get("headBranch") == default_branch]
+    other = [r for r in runs if r.get("headBranch") != default_branch]
+    lines = []
+    if on_main:
+        lines.append(
+            f"::error::{len(on_main)} UNPARSEABLE WORKFLOW push(es) on "
+            f"{default_branch}: "
+            + ", ".join(f"{r['databaseId']} {r['workflowName']}"
+                        for r in on_main)
+            + ". GitHub could not parse the file, so it is NOT SCHEDULED - "
+              "the run is named by its PATH because its `name:` could not be "
+              "read. CLEARING ACTION: fix the YAML and push; `gh api -X POST "
+              ".../dispatches` returns GitHub's own parser error with a line "
+              "and column.")
+    else:
+        lines.append(f"unparseable_workflows[0 on {default_branch}]")
+    if other:
+        lines.append(
+            f"  {len(other)} on other branches, reported and NOT alarmed "
+            f"(a deleted branch's push cannot be cleared by any action): "
+            + ", ".join(sorted({str(r.get("headBranch")) for r in other})))
+    return chr(10).join(lines)
+
+
+def missing_scheduled_runs(workflow: str = "daily-picks.yml",
+                           days: int = 14,
+                           today: _dt.date = None) -> dict:
+    """Days whose scheduled run NEVER EXISTED, and today's PENDING state.
+
+    THREE STATES, because two would lie. A past day with no scheduled run is
+    MISSING — a card that was never produced. Today with no run yet is
+    PENDING, not missing: the first weekday run under `0 4` arrived **458
+    minutes** late (measured 2026-10-12), so "it is 07:00 and nothing has run"
+    is not evidence of absence. Reporting PENDING as MISSING would have
+    alarmed on a run that was merely very late; reporting MISSING as PENDING
+    would never alarm at all.
+    """
+    today = today or _dt.date.today()
+    crons = current_crons_by_daytype() or {}
+    if not any(crons.values()):
+        return {"state": "UNEVALUATED",
+                "reason": "no cron resolved for either day type"}
+    try:
+        runs = json.loads(_sh(
+            "gh", "run", "list", "--workflow", workflow, "--limit", "120",
+            "--json", "createdAt,event") or "[]")
+    except json.JSONDecodeError:
+        return {"state": "UNEVALUATED", "reason": "run list unreadable"}
+
+    seen = set()
+    for r in runs:
+        if r.get("event") != "schedule":
+            continue
+        try:
+            seen.add(_dt.datetime.fromisoformat(
+                r["createdAt"].replace("Z", "+00:00")).date())
+        except (KeyError, ValueError):
+            continue
+
+    missing, pending = [], None
+    for back in range(days, -1, -1):
+        day = today - _dt.timedelta(days=back)
+        dtype = "weekend" if day.weekday() >= 5 else "weekday"
+        cron = crons.get(dtype)
+        if cron is None:
+            continue                      # no cron governs that day type
+        if day in seen:
+            continue
+        if day == today:
+            now = _dt.datetime.now(_dt.timezone.utc).replace(
+                tzinfo=None)
+            elapsed = (now - _dt.datetime.combine(
+                day, _dt.time(cron // 60, cron % 60))).total_seconds() / 60
+            if elapsed > OBSERVED_LATENESS_MAX_MIN:
+                missing.append(day)
+            elif elapsed > 0:
+                pending = (day, int(elapsed))
+        else:
+            missing.append(day)
+    return {"state": "CHECKED", "missing": missing, "pending": pending,
+            "window_days": days, "crons": crons}
+
+
+def format_missing_runs(m: dict) -> str:
+    if m.get("state") != "CHECKED":
+        return (f"missing_runs[UNEVALUATED: {m.get('reason')} - this is NOT a "
+                f"clean bill]")
+    lines = []
+    if m["missing"]:
+        lines.append(
+            f"::error::{len(m['missing'])} scheduled run(s) NEVER EXISTED in "
+            f"the last {m['window_days']}d: "
+            + ", ".join(str(d) for d in m["missing"])
+            + ". These are not late runs; they must NOT enter any delay "
+              "series. CLEARING ACTION: check the workflow file parses "
+              "(`gh run list` shows a push-event failure named by PATH when "
+              "it does not) and that the cron still matches the day type.")
+    else:
+        lines.append(f"missing_runs[0 in {m['window_days']}d - every day "
+                     f"governed by a cron has a scheduled run]")
+    if m["pending"]:
+        day, elapsed = m["pending"]
+        lines.append(
+            f"  today ({day}) has no scheduled run yet: {elapsed} min past "
+            f"nominal, against a measured maximum of "
+            f"{OBSERVED_LATENESS_MAX_MIN} min. PENDING, not missing - a run "
+            f"458 min late has already been observed, so this is not yet "
+            f"evidence of absence.")
+    return chr(10).join(lines)
+
+
 EMPTY_CARD_FROM = _dt.date(2026, 9, 21)
 #: Exclusive. The COVERED EIGHT's card returns here (10-09, 7 fixtures; 41 on
 #: 10-10). It is NOT the date the pipeline's card returns — uncovered leagues
@@ -1859,6 +2041,25 @@ def verdict(facts: Dict[str, object], hits: List[str],
 
 # ────────────────────────────────────────────────────────────────────── main
 
+def _write_alarm_body(alarmed: List[str]) -> None:
+    """Hand the REASONS to the workflow, so the alert is not a guess.
+
+    Until 2026-10-13 the alert read "a run scored BROKEN or DID_NOT_RUN, or
+    the audit itself failed" for EVERY alarm. On 2026-10-12 the actual cause
+    was `schedule margin -85m < 30m`, which is none of the three - the same
+    defect as the probe's single fixed sentence, in the tool that found it.
+    """
+    path = _os.environ.get("AUDIT_ALERT_BODY")
+    if not path:
+        return
+    try:
+        pathlib.Path(path).write_text(
+            "CI audit alarmed:" + chr(10)
+            + chr(10).join(f"  - {a}" for a in alarmed), encoding="utf-8")
+    except OSError as exc:                      # pragma: no cover
+        print(f"could not write the alarm body: {exc}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--unaudited", action="store_true",
@@ -1923,7 +2124,38 @@ def main() -> int:
         print("!! workflow state UNKNOWN: `gh workflow list` could not be read. "
               "A disabled workflow is indistinguishable from a quiet one here.\n")
     else:
-        _off = {n: s for n, s in _states.items() if s.lower() != "active"}
+        # SCOPED TO `WORKFLOWS`, added 2026-10-13. `gh workflow list` returns
+        # every record GitHub HOLDS, not every file this repository has: a
+        # scratch workflow pushed to a deleted branch stayed listed as
+        # `active` for at least a day after the branch was gone (measured
+        # 2026-10-13, `zz-parse-bad.yml`). An unscoped check would alarm on a
+        # workflow that no longer exists the moment GitHub marks it inactive,
+        # which is an alarm nobody can clear by any action in this repo.
+        # `gh workflow list` keys a VALID workflow by its `name:` field and an
+        # orphaned one by its PATH, so matching on filename alone excludes
+        # every real workflow - caught by driving it rather than by reading
+        # it. The owned set is therefore built FROM THE TREE: each file in
+        # `WORKFLOWS` contributes both its display name and its filename.
+        _owned = set(WORKFLOWS)
+        for _w in WORKFLOWS:
+            try:
+                for _line in (pathlib.Path(".github/workflows")
+                              / _w).read_text(encoding="utf-8").splitlines():
+                    if _line.startswith("name:"):
+                        _owned.add(_line.split(":", 1)[1].strip())
+                        break
+            except OSError:
+                continue
+        _unowned = {n for n in _states
+                    if n not in _owned and n.rsplit("/", 1)[-1] not in _owned}
+        if _unowned:
+            print(f"!! {len(_unowned)} workflow record(s) GitHub holds that "
+                  f"this repository does not own, so their state is NOT "
+                  f"checked: {', '.join(sorted(_unowned))}. A record outlives "
+                  f"the branch that carried it; an alarm on one could not be "
+                  f"cleared by any action here.")
+        _off = {n: st for n, st in _states.items()
+                if st.lower() != "active" and n in _owned}
         for _name, _state in sorted(_off.items()):
             alarmed.append(f"workflow {_name!r} state={_state}")
             print(f"::error::workflow {_name!r} is {_state}, not active — it "
@@ -1942,6 +2174,7 @@ def main() -> int:
         # produces no runs, so this is the branch it arrives on.
         if alarmed:
             print("\n::error::audit alarm — " + "; ".join(alarmed))
+            _write_alarm_body(alarmed)
             return 1
         return 0
 
@@ -2066,6 +2299,30 @@ def main() -> int:
     print(format_series_census(_by_type, _crons))
     print()
     print(format_schedule_margins(_margins))
+
+    # ── A RUN THAT NEVER FIRED, AND A FILE GITHUB REFUSED ───────────────────
+    # Both printed EVERY run. Neither had any detector before 2026-10-13, and
+    # `DID_NOT_RUN` is not one: it verdicts `steps_not_run` on a run that
+    # exists. A missing run has no row to verdict.
+    print()
+    _missing = missing_scheduled_runs()
+    print(format_missing_runs(_missing))
+    if _missing.get("missing"):
+        alarmed.append(
+            f"{len(_missing['missing'])} scheduled daily-picks run(s) NEVER "
+            f"EXISTED: {', '.join(str(d) for d in _missing['missing'])} - not "
+            f"late, ABSENT. CLEARING ACTION: confirm the workflow file parses "
+            f"and the cron matches the day type.")
+
+    print()
+    _unparseable = unparseable_workflow_runs()
+    print(format_unparseable(_unparseable))
+    _unp_main = [r for r in _unparseable if r.get("headBranch") == "main"]
+    if _unp_main:
+        alarmed.append(
+            f"{len(_unp_main)} unparseable workflow push(es) on main: "
+            + ", ".join(str(r["workflowName"]) for r in _unp_main)
+            + " - GitHub refused the file, so that workflow is NOT scheduled.")
     _margin = _margins.get(_margins.get("worse")) or {}
     _cron = _crons.get(_margins.get("worse"))
 
@@ -2104,6 +2361,7 @@ def main() -> int:
         # `::error::` so a workflow annotates, and a non-zero exit so it can
         # go red — but only for the verdicts the caller named.
         print("\n::error::audit alarm — " + "; ".join(alarmed))
+        _write_alarm_body(alarmed)
         return 1
     return 0
 
