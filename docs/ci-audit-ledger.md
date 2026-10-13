@@ -26842,3 +26842,329 @@ Full suite **2032 passed**. Invariants pass, count not cited. Fingerprint
 `tests/test_absent_run_and_unparseable.py` (new),
 `tests/test_alarm_surface.py`, `tests/test_audit_history_survives_recording.py`.
 No production write, no schema change. Nothing on the H1 path was touched.*
+
+---
+
+# 2026-10-13 (second entry) — REDS CLASSIFIED: seven reds, TWO findings. HOUR HYPOTHESIS REGISTERED and already not supported. VERIFIER DEFERRED, and the proposed fix does not work.
+
+H1 untouched: no change to the collection, the stop, the reservation, the H1
+cron or any pricing schedule. **No cron changed in this stage.**
+
+## PART A — REDS CLASSIFIED
+
+### SCOPE: 14 runs since the last ledger row, 2026-10-12 12:00Z → 2026-10-13 07:28Z
+
+| workflow | runs | conclusion |
+| --- | --- | --- |
+| CI Audit | **7** | all **failure** |
+| Fixture Horizon Probe | 1 | failure — already classified: **designed refusal** |
+| `zz-parse-bad.yml` | 2 | failure — my scratch branch, since deleted |
+| Closing Line Capture | 3 | success |
+| Paper Trading Report | 1 | success |
+
+All on headSha `6929155`.
+
+### SEVEN REDS, ONE FINDING — the default hypothesis held
+
+Every one of the seven CI Audit failures carries the **identical** line:
+
+```
+audit alarm — schedule margin -85m < 30m
+```
+
+One cause: the single 2026-10-12 weekday observation, 458 minutes late. The
+same shape as the nine reds of 10-10. **Verdict, not machinery** — the audit
+exited 1 because it found something, and the thing it found is real.
+
+### BUT THE PARTITION FOUND A SECOND FINDING, AND THAT ONE IS MACHINERY
+
+| | `38337483365` | `38246516896` | `38308788037` |
+| --- | --- | --- | --- |
+| `##[error]` total | 4 | 4 | 4 |
+| `exit_annotations` | 2 | 2 | 2 |
+| `self_emitted_annotations` | **1** | **1** | **1** |
+| `foreign_annotations` | **1** | **1** | **1** |
+| **`unexplained_nonzero_exit`** | **1** | **1** | **1** |
+| `tracebacks` | 0 | 0 | 0 |
+| `steps_failed` | **[]** | **[]** | **[]** |
+
+`steps_failed` is empty on all three — the **step-name parser's known gap**:
+it is parsed from a workflow's own `step(s) FAILED` alert text, which
+`ci-audit.yml` does not print. That disagreement is expected and is not the
+finding.
+
+**The finding is `foreign_annotations: 1` and `unexplained_nonzero_exit: 1` on
+every alarming run of the audit.** The cause:
+
+> **`SELF_EMITTED_ANNOTATIONS` matched the wrong form.** The registry spells
+> each pattern `::error::X`, which is the literal the emitter must contain —
+> and what `test_every_self_emitted_annotation_names_a_REAL_emitter` checks.
+> But GitHub **consumes** the workflow command: the log holds `##[error]X`.
+> The only place `::error::` survives verbatim is the `##[group]Run …` echo of
+> a step's own shell source.
+>
+> So the matcher was counting **echoed script text** and **missing every real
+> annotation.** Two errors that partially cancelled, which is why the total
+> still looked plausible.
+
+`measured` 2026-10-13, identical on three runs:
+
+```
+self_emitted  OLD 1 -> NEW 2        unexplained_nonzero_exit  OLD 1 -> NEW 0
+```
+
+**A false absorbed failure on every red audit run**, in the detector rebuilt in
+Stage 12.1 specifically to have dynamic range. Fixed by matching the rendered
+form; `foreign_annotations` and `unexplained_nonzero_exit` are now **0**.
+
+### NOTHING IS BEFORE THE LEDGER WRITE
+
+All seven reached the series census, the margin report and both new detectors —
+the alarm is emitted at the end of `main`, after everything is printed. **The
+audit's own work completed on all seven runs.** Nothing is unaudited.
+
+### THE NEW ROWS 16–19: FIRST EXPOSURE, NO DEFECT
+
+`missing_runs[0 in 14d]` and `unparseable_workflows[0 on main]` both printed
+and both read zero on `main`; the off-branch scratch pushes were **reported and
+not alarmed**, as designed. The probe's `::error::PROBE REFUSED` fired for the
+first time and is the designed refusal. **None of rows 16–19 has produced a
+finding; all four are exercised.**
+
+### CLEARING ACTIONS
+
+| finding | clearing action |
+| --- | --- |
+| the margin breach (7 reds) | **acknowledged**, below — and the cron decision after 2026-10-17 |
+| the annotation-form mismatch | **fixed** in this commit |
+
+### AND THE SEVEN REDS WERE GOING TO BE TWENTY-EIGHT DAYS OF REDS
+
+The breach is a **standing condition**, not an event: the 458-minute point sits
+in a 28-day window, so the identical alarm would have fired on every audit run
+for four weeks with nothing a reader could do about it. That is
+`fixtures_zero_active`'s shape, reached in a day.
+
+So `ACKNOWLEDGED_MARGIN_BREACH` records it — the binding figure, the date, the
+one-observation caveat, the named action and a review date of **2026-10-18** —
+and while acknowledged the margin **reports and does not alarm**. It alarms
+again the moment the binding margin goes **worse** than the acknowledged
+−85m, because *deterioration is an event*. Driven: −85 and −84 are covered,
+**−120 is not**, and the weekend is not covered at all.
+
+## PART B — HOUR HYPOTHESIS REGISTERED, AND THE FREE TEST ALREADY CONTRADICTS IT
+
+**Pre-registration committed at `2f50771` BEFORE any analysis**:
+`docs/scheduler-hour-hypothesis.md`. It carries the four-regime table with
+**each series' own n and query window** (`11h21m` belongs to `37 9`, and the
+`0 4` row is **n=1**, entered as a single observation that replaced the
+measured maximum of 304 and as nothing else); the falsifiable prediction
+(weekdays back to `0 0` restores the mean toward ~4h30m and the max below
+~5h30m over n≥10); the **decision rule stated in advance**, including that an
+intermediate result is INCONCLUSIVE and extends the window rather than
+licensing the preferred answer; and **two confounds named before measuring** —
+the four regimes are also four consecutive time periods, so hour and calendar
+are not separable from that data, and `0 4` is additionally the only
+day-restricted cron.
+
+### THE FREE TEST IS USABLE, AND IT DOES NOT SUPPORT THE HYPOTHESIS
+
+`closing-lines` fires at **eight** scheduled hours within one calendar period —
+`47 10` plus `17 11,13,15,17,19,21,23`. `measured` 2026-10-13, **n=318**
+scheduled runs, window **2026-08-10 → 2026-10-13 (65 days)**:
+
+| cron | ceiling | n | mean | max | at ceiling |
+| --- | --- | --- | --- | --- | --- |
+| 11:17 | 120 | 16 | 24.5 | 40 | 0 |
+| 13:17 | 120 | 54 | **72.7** | 119 | 1 |
+| 15:17 | 120 | 55 | 45.4 | 114 | 0 |
+| 17:17 | 120 | 42 | 41.2 | 83 | 0 |
+| 19:17 | 120 | 42 | 49.0 | 118 | 0 |
+| 21:17 | 120 | 43 | **34.4** | 119 | 2 |
+| 23:17 | **690** | 64 | 84.4 | 364 | 0 |
+
+**The ceiling TRUNCATES; it does not destroy.** 3 of 318 (**0.9%**) sit at
+their ceiling, against a criterion stated before the measurement.
+
+**But the maxima are not comparable across rows**, and that matters: 23:17 has
+a 690-minute ceiling from the overnight gap, so it is the only row that *can*
+show 364 minutes, while 13:17 cannot physically exceed 119. Its larger figures
+are **a property of the attribution rule, not an observation** — so the
+statistic uses only the six rows sharing a 120-minute ceiling.
+
+> **Pearson r(scheduled hour, mean delay) = −0.084** across those six, n=252.
+> Essentially zero and slightly **negative**. The highest mean is the
+> second-earliest cron and the lowest is the second-latest: there is no
+> ordering in the hour.
+
+**The limitation, stated rather than buried:** `closing-lines` delays are
+20–85 minutes; `daily-picks` delays are 4–11 hours. These may be different
+queueing regimes, so a null at the half-hour scale is **evidence against, not a
+refutation**. The most parsimonious reading of `0 4`'s 458 minutes is therefore
+**one draw from a heavy right tail** — exactly what n=1 licenses — rather than
+an hour effect. The registered decision rule stands unchanged.
+
+**No cron change.** Until 2026-10-17 the mechanism is the acknowledged margin
+report plus manual dispatch, with the probe's alert carrying the earliest
+kickoff and the last safe dispatch time in both clocks.
+
+## PART C — VERIFIER DEFERRED, and the proposed fix does not work
+
+### FIRST, A CORRECTION: THE VERIFIER IS NOT VACUOUS
+
+The brief calls it "a vacuous verifier … the third vacuous filter this week".
+**It is not.** `tests/test_fixture_horizon_probe.py` drives `verify_offset` to
+**+180**, to **0** and to **None** on constructed inputs. It can see all three
+outcomes.
+
+> **A filter that cannot fire is a defect in the filter. A correct filter
+> handed an empty population is a defect in the DESIGN.** The remedies differ,
+> and conflating them would have sent me to fix working code.
+
+### AND THE CAUSE IS NOT THE WINDOW. IT IS THE ORDERING.
+
+`max_days_ahead` is a **rolling** window from the run, so the probe firing at
+00:21 with `days_ahead=2` covers 10-13 00:21 → 10-15 00:21 — which **includes
+today in full**. The window was never the problem.
+
+`measured` 2026-10-13, after `daily-picks` had run:
+
+| day | rows in `matches` | is_fixture |
+| --- | --- | --- |
+| 2026-10-12 | **23** | 23 |
+| 2026-10-13 | **0** | — |
+| 2026-10-14 | **0** | — |
+| 2026-10-15 | **0** | — |
+
+> **The probe runs BEFORE the producer of its verification data.** `matches` is
+> written by `daily-picks`. The probe's cron is `0 18` and the weekday picks
+> cron is `0 4`, so for the day D+1 the probe targets, the scrape that would
+> populate D+1 runs **on D+1** — hours after the probe has already looked. The
+> only populated day is D, which the probe's window has moved past.
+
+### THE PROPOSED FIX IS NOT VIABLE, measured
+
+"Verify against today's rows" assumes the probe's pages render today. **They do
+not** — a `/fixtures/` page shows *upcoming* fixtures, and the rows the
+database holds for today are already past. There is no overlap to reach by
+changing which rows are compared.
+
+A real fix has to change **where the clock comes from** — e.g. measuring the
+runner's own offset, which the job already pins and prints — and that is a
+different change with a different risk profile: it removes the fixture
+cross-check that exists because *"a guessed shift is how the H1 cron was set
+three hours late"*. **That is not authorised by this stage and is not a
+relaxation I will make unannounced.** So: **DEFERRED**, recorded, for after
+2026-10-17.
+
+### THE KNOWN-WRONG CONTROL, DELIVERED EITHER WAY
+
+`test_the_PROBE_RUNS_BEFORE_the_producer_of_its_verification_data` derives the
+ordering from the two workflows' crons and asserts the probe precedes the
+scrape **by more than 6 hours**. **If it ever fails, the overlap has become
+possible** and the UNVERIFIABLE refusal is no longer structural — that is the
+input whose correct answer disagrees with today's behaviour, and it is the only
+assertion that distinguishes "the verifier is broken" from "the verifier is fed
+an empty set". A second test pins the three-outcome drive, so the claim that
+the verifier is not vacuous cannot quietly lose its support.
+
+The 6-hour margin is not decoration: with a measured weekday lateness of 7h38m
+the ordering **could** invert, and then the overlap would be sometimes
+non-empty — an **intermittent** refusal, which is worse than an always-empty
+one because it would look like a transient.
+
+### DOES THE FIX REMOVE THE PROPERTY OR MOVE IT?
+
+> **It moves it.** The verifier's input would no longer be drawn from the
+> population it validates, so the clock could be established on an empty card —
+> but the *cross-check* would then be the thing that cannot run when the card
+> is empty, i.e. the confirmation becomes unavailable exactly when the primary
+> is most load-bearing. The property is relocated from the measurement to its
+> corroboration. Stated now so the later change is judged on that and not on
+> "it works".
+
+## THE ENTRIES
+
+> **"Absent" is a conclusion, not an observation.** The 10-12 weekday run was
+> 458 minutes late, not missing; excluding it would have deleted the only
+> weekday observation, and it is the one that replaced the measured maximum.
+> An absence is checkable only after its window closes, never inside it.
+
+> **GitHub refuses the individual workflow file, not the repository's
+> workflows.** The 422 window was 64 seconds, one file, zero scheduled runs
+> inside it, zero cost. The rule — an invalid workflow disappears rather than
+> failing — holds in form and was wrong in scope, and the scope was its whole
+> force.
+
+> **`DID_NOT_RUN` verdicts the steps of a run that exists.** It could never
+> detect a run that never started; the name was the trap.
+> `missing_scheduled_runs()` with `MISSING` / `PENDING`, and a threshold raised
+> because a 458-minute run was **seen** rather than assumed, is the shape.
+
+> **A registry can match the wrong form of the thing it registers.**
+> `SELF_EMITTED_ANNOTATIONS` held `::error::X` — the literal the emitter must
+> contain — and the log holds `##[error]X`, so the matcher counted echoed
+> script source and missed every real annotation. The absorbed-failure
+> detector reported a phantom remainder of 1 on every red audit run, and the
+> two errors partially cancelled, which is why the total looked plausible.
+
+> **A standing condition alarmed as an event is noise with a four-week
+> horizon.** One observation inside a 28-day window would have produced 28
+> days of identical reds. An acknowledgement with a binding figure, a reason, a
+> named action and a review date reports it and alarms only on deterioration.
+
+## DECLARATION
+
+**REDS CLASSIFIED: 7 reds, TWO findings.** All seven CI Audit failures carry
+the identical `schedule margin -85m < 30m` — **one finding, a verdict**, from
+the single 458-minute weekday observation. The second finding came out of the
+partition and is **machinery**: `SELF_EMITTED_ANNOTATIONS` matched
+`::error::`, which survives only in echoed script source, so the matcher
+counted the echo and missed the real `##[error]` annotations — **a false
+`unexplained_nonzero_exit: 1` on every red audit run**, measured identically on
+three. Fixed; the remainder is now 0. `steps_failed` was empty on all three and
+that is the step-name parser's known gap, not a finding. **Nothing is before
+the ledger write** — all seven completed their reports. The probe's failure is
+the **designed refusal**, already classified. The two `zz-parse-bad` runs are
+my scratch branch. Rows 16–19 all printed, all read clean, **first exposure
+with no defect**. Clearing actions: the annotation fix is in this commit; the
+margin breach is **acknowledged** with a binding figure, a one-observation
+caveat, a named action and a **2026-10-18** review — it reports, and alarms
+again only if it goes worse than −85m, which was driven.
+
+**HOUR HYPOTHESIS REGISTERED at `2f50771`**, committed before any analysis,
+with each series' own n and query window, the n=1 caveat, the falsifiable
+prediction, the decision rule in advance including an INCONCLUSIVE branch, and
+two confounds named. **`closing-lines` CAN test it**: n=318 over 65 days in one
+calendar period across eight hours, and **the ceiling truncates rather than
+destroys — 0.9% at the ceiling**. Maxima are not comparable across rows because
+the 23:17 ceiling is 690 minutes, so the statistic uses the six 120-minute rows
+only: **r(hour, mean delay) = −0.084**, essentially zero and slightly negative.
+**The hypothesis is not supported**, with the scale limitation stated — 20–85
+minutes here versus 4–11 hours there — so this is evidence against rather than
+a refutation, and `0 4`'s 458 minutes reads most parsimoniously as one draw
+from a heavy tail.
+
+**VERIFIER DEFERRED.** First a correction: it is **not vacuous** — it is driven
+to +180, 0 and None, and a correct filter handed an empty population is a
+different defect from a filter that cannot fire. The cause is not the window
+(`max_days_ahead` is rolling and includes today) but the **ordering**: the probe
+runs before `daily-picks`, which writes the rows it verifies against —
+`matches` holds **23 rows for 10-12 and zero for 10-13/14/15**, the probe's
+whole window. **The proposed fix does not work**: a `/fixtures/` page does not
+render today's already-past fixtures, so no overlap is reachable by changing
+which rows are compared. A viable fix changes where the clock comes from and
+removes the cross-check that exists because a guessed shift once set the H1
+cron three hours wrong — not authorised here. **Known-wrong control delivered
+either way**, deriving the ordering from both crons and failing if the probe
+ever stops preceding the scrape by 6 hours; and the fix is recorded as
+**moving** the property rather than removing it — the corroboration becomes
+unavailable exactly when the primary matters most.
+
+Full suite **2034 passed**. Invariants pass, count not cited. Fingerprint
+**UNCHANGED** at `s5.17` / `818026`; picks stamped 88.
+
+*Recorded 2026-10-13. `scripts/ci_audit.py`,
+`docs/scheduler-hour-hypothesis.md` (new, registered at `2f50771`),
+`tests/test_fixture_horizon_probe.py`. No production write, no schema change,
+**no cron change**. Nothing on the H1 path was touched.*
