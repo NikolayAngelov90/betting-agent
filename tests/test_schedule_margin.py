@@ -72,7 +72,7 @@ def test_the_cron_is_SPLIT_BY_DAY_OF_WEEK():
     12:00 UTC, from an independent reference). The NAME changes with the
     shape so a reader cannot mistake this for the single-cron guard.
     """
-    assert _crons(_wf()) == ["0 0 * * 6,0", "0 4 * * 1-5"], (
+    assert _crons(_wf()) == ["0 0 * * 6,0", "0 0 * * 1-5"], (
         "the daily-picks crons moved. That changes when prices are taken, "
         "which is selection-affecting by the s5.2 precedent - bump "
         "CODE_REVISION and re-derive BOTH margins before changing this")

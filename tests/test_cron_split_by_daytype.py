@@ -90,14 +90,34 @@ def test_the_weekend_cron_is_UNCHANGED():
         f"00:00 deliberately")
 
 
-def test_the_weekday_cron_is_the_LATEST_that_clears_the_STATED_margin():
-    """`0 4` clears 60 minutes; `0 5` does not. Computed, not asserted.
+def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
+    """REWRITTEN 2026-10-18. Was: "`0 4` is the LATEST that clears".
 
-    The threshold was stated before the computation and lives in
-    `MIN_ACCEPTABLE_MARGIN` so it cannot be retrofitted to the answer.
+    THAT RULE IS RETIRED, AND ITS FAILURE IS THE REASON. `0 4` was chosen by
+    maximising lateness against the margin computed from `DELAY_MEAN/SD/MAX` —
+    constants measured under the `0 0` regime, n=9, sd 18.2 minutes. The `0 4`
+    regime's own distribution then turned out to be **4.5x wider**:
+
+        weekday `0 0`   n=6  mean 276.3  sd 18.8  max 305  (measured 2026-10-18)
+        weekday `0 4`   n=5  mean 357.5  sd 85.6  max 458  (measured 2026-10-18)
+
+    so the shipped cron's real binding margin was **-241m**, not the +75m the
+    selection had computed.
+
+        A cron chosen as "the latest that clears" using ANOTHER cron's spread
+        is an extrapolation presented as a bound.
+
+    What replaces it is not a different optimum. It is the requirement that the
+    shipped cron clear the margin against the series **it actually produces**,
+    which can only be checked after it runs — so the selection stops being an
+    optimisation and becomes a measurement with a revert path.
     """
     crons = current_crons_by_daytype()
-    assert crons["weekday"] == 4 * 60, crons
+    assert crons["weekday"] == 0, (
+        f"the weekday cron is at {crons['weekday']} minutes. It was reverted "
+        f"to 00:00 on 2026-10-18 because `0 4` measured -241m. If it has moved "
+        f"again, the series for the NEW cron must be measured before this "
+        f"number is trusted.")
 
     deadline = DEADLINE_MIN_BY_DAYTYPE["weekday"]
 
@@ -111,11 +131,31 @@ def test_the_weekday_cron_is_the_LATEST_that_clears_the_STATED_margin():
         f"the shipped weekday cron gives {m_max:+.0f}/{m_3sd:+.0f} against a "
         f"stated {MIN_ACCEPTABLE_MARGIN}-minute minimum")
 
-    nxt_max, nxt_3sd = margins(crons["weekday"] + 60)
-    assert min(nxt_max, nxt_3sd) < MIN_ACCEPTABLE_MARGIN, (
-        f"one hour later would ALSO clear the bar ({nxt_max:+.0f}/"
-        f"{nxt_3sd:+.0f}) — the shipped cron is not the latest acceptable one, "
-        f"so either ship the later one or restate the minimum")
+    # AND THE OLD ASSERTION IS DELIBERATELY NOT INVERTED. "One hour later
+    # would also clear, so ship the later one" is precisely the reasoning that
+    # produced `0 4`, and it used these same pre-split constants. The margin
+    # bought by an earlier cron is not spent just because the arithmetic says
+    # it could be: the 2026-10-18 series shows the spread is a function of the
+    # regime, so headroom under one cron is not headroom under another.
+    #
+    # What IS asserted is that the measured weekday series - whatever cron it
+    # carries - clears the bar, which is the only form of the claim that
+    # survived contact with the data.
+    import statistics
+
+    from scripts.ci_audit import (MARGIN_RUN_DURATIONS,
+                                  collect_lag_series_by_daytype)
+
+    by, live = collect_lag_series_by_daytype()
+    v = [lag for _d, lag in (by.get("weekday") or [])]
+    if len(v) >= 3:
+        dur = max(MARGIN_RUN_DURATIONS)
+        ready_3sd = live["weekday"] + statistics.mean(v) + 3 * statistics.stdev(v) + dur
+        assert deadline - ready_3sd >= MIN_ACCEPTABLE_MARGIN, (
+            f"the weekday series AS MEASURED gives "
+            f"{deadline - ready_3sd:+.0f}m against a stated "
+            f"{MIN_ACCEPTABLE_MARGIN}-minute minimum (n={len(v)}). This is the "
+            f"check the `0 4` selection did not have.")
 
 
 def test_the_two_deadlines_are_distinct_and_the_WORSE_is_the_single_value():
@@ -315,16 +355,16 @@ def test_the_1430_figure_is_a_PERCENTILE_not_a_minimum():
         "split no longer describes the data")
 
 
-def test_the_weekday_cron_BREACHES_on_a_holiday_weekday():
-    """THE MARGIN WE ARE DEFENDING IS NOT THE REAL ONE ON ~1.4% OF WEEKDAYS.
+def test_the_weekday_cron_CLEARS_a_holiday_weekday_since_the_revert():
+    """RESOLVED 2026-10-18 BY THE CRON REVERT. Was: BREACHES.
 
-    `0 4` has ready(3sd) at 10:42 UTC. Easter Monday 2026-04-06 carried 95
-    fixtures with the earliest at 10:15, so picks would have been delivered
-    **27 minutes AFTER the first kickoff**. 2026-06-18 is worse at 09:59
-    (−43 min) but carried one fixture.
+    Under `0 4`, ready(3sd) was 10:42 UTC and Easter Monday 2026-04-06 — 95
+    fixtures, earliest 10:15 — would have had picks delivered **27 minutes
+    AFTER the first kickoff**. Under `0 0` the same arithmetic clears it by
+    **+211 min**, and the 09:59 observed minimum clears too.
 
-    This is recorded as an EXPOSURE, not fixed, and it changes no schedule
-    today: the next weekday holiday with an early card is **Easter 2027
+    The exposure below is kept as HISTORY because it is why the revert
+    happened, and it changed no schedule at the time: the next weekday holiday with an early card is **Easter 2027
     (Friday 2027-04-02 and Monday 2027-04-05)**. 2026-12-26 (Boxing Day) falls
     on a SATURDAY and so uses the unchanged weekend cron; 2027-01-01 is a Friday
     but the festive programme's earliest is ~12:30, which clears.
@@ -338,14 +378,30 @@ def test_the_weekday_cron_BREACHES_on_a_holiday_weekday():
     ready_3sd = cron + DELAY_MEAN + 3 * DELAY_SD + DUR_MEAN + 3 * DUR_SD
     ready_max = cron + DELAY_MAX + DUR_MAX
 
+    # ── THE EXPOSURE IS RESOLVED, 2026-10-18, and this test did exactly what
+    # it asked to do: its own message said "if the cron moved earlier, update
+    # this test and the ledger rather than leaving a stale exposure on file".
+    # The cron moved to `0 0` and the holiday breach became a CLEARANCE:
+    #
+    #     Easter Monday 10:15 vs ready(3sd)   -27 min  ->  +211 min
+    #
+    # So the assertion INVERTS rather than being deleted: the holiday that
+    # breached must now clear, and if it ever breaches again the cron has moved
+    # back or the distribution has widened, either of which is a finding.
     margin_full_card = WEEKDAY_EARLIEST_ON_A_FULL_CARD - ready_3sd
-    assert margin_full_card < 0, (
-        f"Easter Monday's 10:15 kickoff now clears ready(3sd) by "
-        f"{margin_full_card:+.0f} min — if the cron moved earlier, update this "
-        f"test and the ledger rather than leaving a stale exposure on file")
-    assert margin_full_card > -60, (
-        f"the breach has grown to {margin_full_card:+.0f} min; below -60 this "
-        f"stops being a holiday edge case")
+    assert margin_full_card > 0, (
+        f"Easter Monday's 10:15 kickoff BREACHES ready(3sd) again by "
+        f"{margin_full_card:+.0f} min. Under `0 0` it cleared by +211. Either "
+        f"the weekday cron moved later or the delay distribution widened — "
+        f"re-measure the series before changing this number.")
+    assert margin_full_card >= 60, (
+        f"only {margin_full_card:+.0f} min of holiday clearance; below an hour "
+        f"the 1.4% of weekday holidays stop being comfortably covered")
+    # 2026-06-18's 09:59 is the harder case and carried ONE fixture; recorded
+    # here so the thin end of the distribution is not forgotten.
+    assert WEEKDAY_EARLIEST_OBSERVED - ready_3sd > 0, (
+        f"the observed weekday minimum 09:59 breaches ready(3sd) by "
+        f"{WEEKDAY_EARLIEST_OBSERVED - ready_3sd:+.0f} min")
 
     # And the ordinary-weekday margin is genuinely comfortable - the exposure is
     # the TAIL, not the typical day.

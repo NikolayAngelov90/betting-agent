@@ -115,6 +115,18 @@ DECLARED_INTENTIONAL: Dict[str, str] = {
         "named separately and pinned.",
     "src/scrapers/flashscore_scraper.py:DISCOVERY_STATES":
         "the discovery instrumentation's state set, same contract.",
+    "scripts/calendar_marker_scan.py:nodeid":
+        "its consumer is the pytest_collection_modifyitems HOOK in "
+        "tests/conftest.py, which runs on EVERY collection - production for "
+        "the test harness, not a test. The scan classifies anything under "
+        "tests/ as a test consumer, which is right for an assertion and "
+        "wrong for a hook.",
+    "scripts/h1_precondition.py:PRECONDITION_STATES":
+        "a DECLARED state set, same contract as COLLECTION_STATES and "
+        "DISCOVERY_STATES. Its consumer is the test that enumerates the four "
+        "states, deliberately: H1 spent three days reporting `nothing to do` "
+        "for three different causes, and naming the states is what separated "
+        "NO_CARD from NO_FIXTURE_IN_BAND from UNEVALUATED.",
     "scripts/schedule_deadline.py:OBSERVED_EARLIEST_MIN":
         "a MEASURED constant kept beside DEADLINE_PERCENTILES so a fallback "
         "can never drift laxer than the figure that justified the cron. Its "

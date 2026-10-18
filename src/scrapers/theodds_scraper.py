@@ -1337,6 +1337,38 @@ class TheOddsScraper:
                 .all()
             )
             if not rows:
+                # ── THE THIRD REASON, AND THE ONE THAT ACTUALLY BIT. ──────
+                #
+                # This returned an EMPTY skips dict, so the caller logged
+                # "0 league(s) skipped" - a count of nothing, for the one
+                # outcome that needed explaining. On 2026-10-13/14/15 H1
+                # reached here three times and the log said `nothing to do`.
+                #
+                # The counts below are captured HERE, at the moment of the
+                # decision, because the state does not survive: the post-picks
+                # results scrape flips `is_fixture` from true to false, and by
+                # the time the question was asked all three days read
+                # `is_fixture = 0` and the reason was unrecoverable.
+                day_lo = now.replace(hour=0, minute=0, second=0,
+                                     microsecond=0)
+                day_hi = day_lo + timedelta(days=2)
+                total = (session.query(Match.id)
+                         .filter(Match.match_date >= day_lo,
+                                 Match.match_date < day_hi).count())
+                as_fixture = (session.query(Match.id)
+                              .filter(Match.match_date >= day_lo,
+                                      Match.match_date < day_hi,
+                                      Match.is_fixture == True).count())  # noqa: E712
+                future = (session.query(Match.id)
+                          .filter(Match.match_date > now,
+                                  Match.is_fixture == True).count())  # noqa: E712
+                skips["*"] = (
+                    f"NO FIXTURE IN THE WINDOW: 0 rows matched "
+                    f"is_fixture AND {now:%H:%M} < kickoff <= "
+                    f"{horizon:%H:%M}. State at this instant: {total} row(s) "
+                    f"across today+tomorrow, {as_fixture} of them "
+                    f"is_fixture, {future} future fixture(s) at any horizon. "
+                    f"A zero here is the CARD, not the selection.")
                 return {}, skips
 
             match_ids = [r.id for r in rows]
@@ -1664,9 +1696,28 @@ class TheOddsScraper:
         plan["credits_estimated"] = credits_for(len(league_fixtures))
 
         if not league_fixtures:
+            # ── REASONS, NOT A COUNT. 2026-10-18. ──────────────────────────
+            #
+            # This line printed `— 4 league(s) skipped` and nothing else, on
+            # three consecutive H1 collection runs (10-13, 10-14, 10-15). By
+            # the time anyone asked WHY, `is_fixture` had been flipped from
+            # true to false on all three days by the post-picks results
+            # scrape, so the state that produced the decision was gone and the
+            # question had become unanswerable.
+            #
+            #     A count with no reasons is auditable only until the state
+            #     changes.
+            #
+            # `plan["skipped"]` has carried the reasons the whole time -
+            # `_imminent_league_fixtures` builds them per league at the moment
+            # of the decision. Only the log threw them away.
+            detail = ("; ".join(f"{lg}={why}"
+                                for lg, why in sorted(plan["skipped"].items()))
+                      or "no league reached the selection at all")
             logger.info(
                 f"TheOddsAPI imminent refresh: nothing to do (window "
-                f"{window_minutes} min) — {len(plan['skipped'])} league(s) skipped")
+                f"{window_minutes} min) — {len(plan['skipped'])} league(s) "
+                f"skipped: {detail}")
             return plan
 
         if dry_run:

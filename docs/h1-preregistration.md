@@ -399,3 +399,101 @@ decision, not a fix, and it is not taken here.
 above are reproducible from that commit: the slot series via
 `gh run list --workflow=closing-lines.yml --limit 200`, the simulation against
 `scripts/h1_collection_check.qualifying_triple` as shipped there.*
+
+---
+
+# AMENDMENT 1 — appended 2026-10-18, BEFORE any re-run. The statistics are UNCHANGED.
+
+The first window closed on 2026-10-17 at **n=4 of 39**, floor 33, **power
+0.073** at ρ=0.42. No analysis was run. The window under-collected because the
+pipeline that writes H1's input was dead 10-13 → 10-17; the full account is in
+`docs/ci-audit-ledger.md` under the entry of 2026-10-18.
+
+Credits reset **2026-11-01**, which is the earliest a re-run can start.
+
+## WHAT IS NOT AMENDED
+
+**The statistics are untouched.** ρ=0.42, σ=5.937%, `TARGET_N` 39, floor 33,
+the n=33–39 band from `((z_a+z_b)/z_r)² + 3`, the null's interpretation, the
+168-credit reservation and the eight-day window all stand exactly as
+registered. Nothing about the first window's result licenses changing them —
+`n=4` is **not** a reduced-power result and **`NO DATA` is not a null**, so
+there is no finding to update them against.
+
+**C1–C3 are not amendments.** The input precondition
+(`scripts/h1_precondition.py`), the per-league skip reasons and the
+zero-collection alarm change what is **observable**, not what is **collected**.
+A run that would have collected a trajectory before still collects it; a run
+that would have collected nothing now says which of three reasons applies. No
+selection rule moves.
+
+## WHAT **IS** AMENDED, AND WHY — ONE ITEM
+
+> **The density selection changes from CARD density to BAND density.**
+
+As registered, the pinned leagues were chosen by fixture density **per day**.
+That is the wrong denominator, and the measurement that shows it was taken on
+the live card of 2026-10-18:
+
+```
+H1_PRECONDITION state=NO_FIXTURE_IN_BAND
+  68 fixture(s) on the card, 9 anywhere in (240,360] minutes,
+  0 of those in the 4 pinned league(s)
+```
+
+**68 fixtures, 9 usable, 0 pinned.** A league can be dense per day and
+contribute nothing, because a collection round needs the fixture still unkicked
+when the **last** request fires. With 3 rounds at 120-minute gaps that is
+`T+240`, so the usable band is `(T+240, T+360]` — and a fixture at `T+60` sits
+inside the registered 360-minute window while being useless.
+
+**The mechanical justification**: `BAND_LO_MIN = (H1_ROUNDS - 1) *
+H1_GAP_MINUTES`. It is derived from the registered round count and gap, not
+chosen — if either changes, the band moves with it. Selecting on the window
+instead of the band overstates collectable yield by exactly the fixtures that
+kick off mid-collection.
+
+**This is the second time the density premise has inverted.** The first was the
+weekend card: bigger and worth less. Recorded so the pattern is on file rather
+than rediscovered.
+
+### The effect on the design, stated rather than implied
+
+Re-selecting by band density changes **which leagues are pinned**, therefore
+**which fixtures are sampled**, therefore the collected population. That is why
+it is an amendment and not a fix. It does **not** change ρ, σ, n, the floor, the
+credit bound or the analysis — it changes the sampling frame from "leagues with
+many fixtures" to "leagues with many fixtures H1 can actually follow", which is
+the frame the registered n was always computing for.
+
+## THE UNDER-COLLECTING-RATE DECISION RULE, STATED BEFORE COLLECTION
+
+Registered now, with its date, so it cannot be set after the rate is known:
+
+| checkpoint | condition | decision |
+| --- | --- | --- |
+| **day 3** of the window | trajectories < **8** | STOP. Re-select the pinned leagues by band density and restart; three days at under a quarter-rate cannot reach 33 in eight. |
+| **day 5** | trajectories < **18** | STOP and report. The window cannot reach the floor; continuing spends credits for an underpowered result. |
+| **day 8** (close) | trajectories ≥ **33** | run the registered analysis, unchanged. |
+| day 8 | trajectories < 33 | **no analysis.** Report n and its power, as on 2026-10-18. |
+
+The day-3 and day-5 figures are the straight-line rate to 33 over eight days
+(4.125/day), floored: `ceil(4.125 × 2)` = 9 → **8** allows one slow start, and
+`ceil(4.125 × 4)` = 17 → **18** does not. Stated as a rate, not as a verdict,
+and dated **2026-10-18** — before the re-run exists.
+
+## PRECONDITIONS ON STARTING AT ALL
+
+A re-run does not begin until all three hold, because the first window failed
+on the first of them:
+
+1. `daily-picks` has produced a non-empty card on each of the **three**
+   preceding days — H1 samples what that job writes, and it wrote 8, 4 and 1
+   fixtures on the three days it mattered.
+2. `H1_PRECONDITION` reports `OK`, not `NO_CARD` and not
+   `NO_FIXTURE_IN_BAND`, on the morning of the start.
+3. The zero-collection alarm is wired, so a silent day is seen on the day it
+   happens rather than at the window's close.
+
+**Whether to re-run at all is Niki's**, at a cost of **168 TheOddsAPI
+credits** over eight days, earliest start **2026-11-01**.

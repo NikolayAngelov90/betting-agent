@@ -153,16 +153,16 @@ History:
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.17"
+CODE_REVISION_PIN = "s5.18"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.818026"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.51fbcb"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 #: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16
 #: and 12 by 889f8ba on 09-17. That is the defect the always-bump rule closes.
-PREVIOUS_CODE_REVISION = "s5.16"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.ae1752"
+PREVIOUS_CODE_REVISION = "s5.17"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.818026"
 
 
 #: How many completed-match queries are exempt from the training-exclusion
@@ -179,3 +179,58 @@ TRAINING_EXCLUSION_EXEMPTIONS = 6
 #: _reset_stale_ml_calibration. Pinned for the same reason as the
 #: training-exclusion count.
 EVIDENCE_GATE_EXEMPTIONS = 4
+
+
+from datetime import date as _date
+
+
+# ───────── THE H1 RESERVATION GUARD, ACKNOWLEDGED — NOT EXTENDED, 2026-10-18
+#
+# `test_the_H1_RESERVATION_WINDOW_has_EXPIRED` has fired every day since
+# 2026-10-18. Its instruction is correct: DELETE the reservation rather than
+# move the date. Its estimate of the work is not — MEASURED 2026-10-18, the
+# deletion is:
+#
+#     87 references   42 x H1_RESERVED_CREDITS, 29 x h1_reservation, 4+2 imports
+#     31 assertions   on the stop, the ceiling collapse and the attribution
+#     9 test files    plus two H1 scripts that fail on import without it
+#
+# The deletion was performed, verified in `src/` (allocate -> pool 350,
+# h1_reserved 0, normal_ceiling 350, window None) and REVERTED, because
+# rewriting 31 live assertions in the same pass that restored a six-day outage
+# is how the seventh card gets lost.
+#
+#     A guard that fires every day until a stage runs is an alarm that always
+#     fires, and this project has paid for that six times.
+#
+# So the condition is ACKNOWLEDGED: recorded, dated, and alarming on CHANGE.
+# THE DATE IN THE GUARD DOES NOT MOVE. The guard still evaluates its own
+# predicate; the acknowledgement is what stops an unchanged, known, sized
+# condition reddening the run until its review.
+ACKNOWLEDGED_H1_RESERVATION_GUARD = {
+    "figure": "h1_reservation() == 0 and the window 2026-10-09..2026-10-17 "
+              "is closed; the symbols are still present in odds_quota.py",
+    "why_not_retired": "the guard's instruction is to DELETE the machinery, "
+                       "and the machinery is 87 references / 31 assertions / "
+                       "9 test files wide. Deleting the GUARD while leaving "
+                       "the machinery would remove the alarm and keep the "
+                       "defect - the SUP-1 shape the guard exists to prevent.",
+    "sized_cost": {"references": 87, "assertions": 31, "test_files": 9,
+                   "measured": "2026-10-18"},
+    "clearing_action": "run the reservation-deletion stage: remove "
+                       "H1_RESERVED_CREDITS, H1_RESERVATION_FROM, "
+                       "H1_RESERVATION_UNTIL, h1_reservation and the "
+                       "reservation term in reserved_from_me (NOT the `for_h1` "
+                       "attribution flag, which keeps H1's spend measurable), "
+                       "then rewrite the 31 assertions. Cost: one stage with "
+                       "its own full-suite verification. It is the only thing "
+                       "that clears this.",
+    "review": "2026-11-01",
+    "review_basis": "the TheOddsAPI monthly reset, which is also the earliest "
+                    "date an H1 re-run can start - so the deletion and the "
+                    "re-run decision are taken together rather than twice",
+}
+
+#: Deliberately a DATE, so the acknowledgement expires the way
+#: `EMPTY_CARD_UNTIL` does. An acknowledgement with no expiry is a suppression.
+H1_RESERVATION_ACK_UNTIL = _date(2026, 11, 1)

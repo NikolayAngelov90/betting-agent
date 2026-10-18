@@ -141,7 +141,30 @@ on:
     # requested — and leaves the weekend, which carries the bigger card and the
     # earlier deadline, untouched.
     - cron: '0 0 * * 6,0'   # Sat/Sun 00:00 UTC (03:00 Sofia) - UNCHANGED
-    - cron: '0 4 * * 1-5'   # Mon-Fri 04:00 UTC (07:00 Sofia) - starts ~08:31
+    # REVERTED TO 00:00 on 2026-10-18. MEASURED over the weekday series'
+    # own n=5 under `0 4`: delays 283/288/316/443/458 min, mean 357.5,
+    # sd 85.6, max 458 (7h38m). Against the 12:00 weekday deadline that
+    # is margin max -66m and mean+3sd -241m - picks land roughly four
+    # hours past the deadline on a 3sd weekday.
+    #
+    # At `0 0` the same distribution gives margin max +174m and
+    # mean+3sd -1m. SO THIS DOES NOT FULLY RESTORE THE MARGIN: it buys
+    # exactly the 240 minutes the shift is worth, and the weekday
+    # SPREAD (sd 85.6 against the weekend's 29.7) still puts 3sd a
+    # hair under zero. It is a large improvement and not a fix, and it
+    # is taken because -1m beats -241m on every criterion.
+    #
+    # THIS DOES NOT DECIDE THE HOUR HYPOTHESIS. If the hour matters the
+    # gain is larger (the weekend `0 0` series has a third the spread);
+    # if it does not, the figures above hold. The registered trial in
+    # docs/scheduler-hour-hypothesis.md settles it, not this change.
+    #
+    # TWO ENTRIES, NOT ONE `0 0 * * *`: the day types keep different
+    # DEADLINES (10:15 weekend, 12:00 weekday), the audit's two-cron
+    # attribution stays exercised, and either day type can be moved
+    # again without touching the other. The two series are separate
+    # populations because they are keyed by DAY TYPE, not by cron.
+    - cron: '0 0 * * 1-5'   # Mon-Fri 00:00 UTC (03:00 Sofia) - starts ~05:57
   workflow_dispatch: # Allow manual trigger
 
 # Serialize runs so a manual dispatch can never write to the DB at the same

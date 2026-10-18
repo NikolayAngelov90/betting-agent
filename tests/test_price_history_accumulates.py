@@ -152,6 +152,15 @@ _SNAPSHOT_READERS = {
     # table and feeds no prediction.
     "mark_1x2_assignment_corruption.py": (
         "dates the 1X2 corruption from the duplicate-Home signature"),
+    # the ALARM, 2026-10-18. It counts trajectories per day to decide whether
+    # H1 collected nothing, which is the check that did not exist when three
+    # collection days produced zero rows and reported RUNNING_AND_FINE. It
+    # MEASURES the history and feeds no prediction, so it is not a cohort
+    # event — the same standing as h1_collection_check.
+    "h1_precondition.py": (
+        "H1's zero-collection alarm. Counts trajectories per day from "
+        "odds_snapshots to tell a silent zero from a real one; no session is "
+        "held open past the read and nothing reaches a model"),
     # the DETECTOR, 2026-10-11. It names the table in its coverage table and
     # in a comment; it issues no query and opens no session. It was caught by
     # THIS guard on its first full run, which is the guard working: a file that

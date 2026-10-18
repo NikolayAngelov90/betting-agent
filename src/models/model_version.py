@@ -1106,7 +1106,47 @@ TRACKED_KEYS: List[str] = [
 #:       they are NEVER pooled, and the trigger fires on the WORSE of the two.
 #:       The weekday series starts EMPTY and is reported UNEVALUATED rather than
 #:       clear, because no run has yet fired under `0 4`.
-CODE_REVISION = "s5.17"
+#: s5.18 — 2026-10-18. THE WEEKDAY CRON IS REVERTED TO `0 0 * * 1-5`.
+#:
+#:       `0 4` was selected on 2026-10-10 as "the latest cron that clears a
+#:       60-minute margin", computed from `DELAY_MEAN/SD/MAX` measured under
+#:       the `0 0` regime (n=9, sd 18.2). The `0 4` regime's own distribution
+#:       is 4.5x wider, MEASURED 2026-10-18:
+#:
+#:           weekday `0 0`   n=6  mean 276.3  sd 18.8  max 305 (5h04m)
+#:           weekday `0 4`   n=5  mean 357.5  sd 85.6  max 458 (7h38m)
+#:
+#:       so the shipped cron's real binding margin was -241m against the 12:00
+#:       weekday deadline, not the +75m the selection had computed. Picks were
+#:       landing roughly four hours past the deadline on a 3sd weekday.
+#:
+#:           A cron chosen as "the latest that clears" using ANOTHER cron's
+#:           spread is an extrapolation presented as a bound.
+#:
+#:       AFTER THE REVERT, measured on the real `0 0` weekday population:
+#:       margin max +327m, mean+3sd +280m, threshold 30m — CLEAR, and the
+#:       trigger now fires on the WEEKEND at +166m.
+#:
+#:       LEAD-TIME CHANGE, per day type and separately:
+#:           weekday  ready(max) 10:17 -> 06:17   +240 min earlier
+#:           weekday  ready(3sd) 10:44 -> 06:44   +240 min earlier
+#:           weekend  unchanged (the cron did not move)
+#:
+#:       EFFECT ON THE DISCOVERED-FIXTURE POPULATION: NONE, and it is measured
+#:       rather than assumed. `max_days_ahead` is a rolling `now + 1 day`, so
+#:       the cutoff moves 240 min earlier with the run — on the binding
+#:       Friday->Saturday site the D+1 cutoff goes 09:09 -> 05:09 against
+#:       Saturday's 10:30 earliest, i.e. clearance +80 -> +320 min. **Zero D+1
+#:       fixtures were admitted under either cron**, so the population is
+#:       unchanged; what changed is the headroom.
+#:
+#:       THE HOUR HYPOTHESIS IS NOT DECIDED BY THIS. The sd collapsing from
+#:       85.6 to 18.8 is consistent with it, and the `closing-lines` test
+#:       registered at `2f50771` (n=318, one period, eight hours, r = -0.084)
+#:       contradicts it. The two are left disagreeing; the registered trial in
+#:       docs/scheduler-hour-hypothesis.md settles it, and the revert is what
+#:       starts that trial running prospectively.
+CODE_REVISION = "s5.18"
 
 
 def _stable(value: Any) -> Any:

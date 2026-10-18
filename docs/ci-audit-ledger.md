@@ -27550,3 +27550,350 @@ Full suite **2054 passed**. Invariants pass, count not cited. Fingerprint
 `docs/ci-audit-ledger.md`. The reservation deletion was performed, measured,
 sized and REVERTED pending its own stage. No production write, no schema
 change, no cron change.*
+
+---
+
+# 2026-10-18 (third entry) — WEEKDAY CRON REVERTED to `0 0`, margin +280m. GUARD ACKNOWLEDGED to 11-01. H1 RE-RUN PREPARED with one amendment.
+
+## PART A — WEEKDAY CRON REVERTED
+
+### THE SELECTION THAT FAILED, AND WHY IT FAILED
+
+`0 4` was chosen on 2026-10-10 as *"the latest cron that clears a 60-minute
+margin"*, computed from `DELAY_MEAN/SD/MAX` — constants measured under the
+**`0 0`** regime, n=9, sd 18.2. `measured` 2026-10-18:
+
+| cron | n | mean | sd | max |
+| --- | --- | --- | --- | --- |
+| weekday `0 0` | 6 | 276.3 (4h36m) | **18.8** | 305 (5h04m) |
+| weekday `0 4` | 5 | 357.5 (5h57m) | **85.6** | 458 (7h38m) |
+
+**4.5× the spread.** So the shipped cron's real binding margin was **−241m**,
+not the +75m the selection had computed.
+
+> **A cron chosen as "the latest that clears" using ANOTHER cron's spread is
+> an extrapolation presented as a bound.** The rule is retired, and what
+> replaces it is not a different optimum: the shipped cron must clear the
+> margin against the series **it actually produces**, which can only be
+> checked after it runs. Selection stops being an optimisation and becomes a
+> measurement with a revert path.
+
+### THE MARGIN, BOTH WAYS, AND THE CONSERVATIVE CASE IS REPORTED TOO
+
+| basis | margin `max` | margin `mean+3sd` |
+| --- | --- | --- |
+| `0 0`, using **`0 4`'s** spread (conservative projection) | +174m | **−1m** |
+| `0 0`, using the **real `0 0` weekday population** (n=6) | **+327m** | **+280m** |
+
+The first is what the revert buys if the hour does nothing — exactly the 240
+minutes of shift, with `0 4`'s spread intact, leaving 3sd a hair under zero.
+The second is what the `0 0` weekday series actually shows. **The truth is
+bounded between them**, and the prospective trial says which.
+
+**After the revert the margin CLEARS**: threshold 30m, binding **+280m**, and
+the trigger now fires on the **weekend** at +166m with no decision firing.
+
+### LEAD TIME, PER DAY TYPE, SEPARATELY
+
+| | ready(max) | ready(3sd) | change |
+| --- | --- | --- | --- |
+| weekday | 10:17 → **06:17** | 10:44 → **06:44** | **+240 min earlier** |
+| weekend | 06:06 → 06:06 | 06:54 → 06:54 | unchanged — the cron did not move |
+
+### TWO ENTRIES, NOT ONE `0 0 * * *`
+
+The day types keep different **deadlines** (10:15 weekend, 12:00 weekday), the
+audit's two-cron attribution stays exercised, and either day type can move
+again without touching the other. **The two series are separate populations
+regardless**, because they are keyed by DAY TYPE, not by cron minute — equal
+minutes do not pool them, and a test now asserts exactly that:
+`current_cron_minutes()` must still refuse a multi-cron file **on its shape,
+not on its values**.
+
+### THE SIX DATE-DERIVED SITES, RE-ENUMERATED — and two resolved
+
+All six re-run at the new weekday start; 22 of 22 pass. Two changed:
+
+* **the Friday→Saturday `max_days_ahead` cutoff**: D+1 cutoff 09:09 → **05:09**
+  against Saturday's 10:30 earliest, clearance **+80 → +320 min**.
+* **the holiday-weekday breach is RESOLVED**: Easter Monday's 10:15 kickoff
+  went from **−27 min** (picks after the first kickoff) to **+211 min**. The
+  test's own message said *"if the cron moved earlier, update this test and the
+  ledger rather than leaving a stale exposure on file"* — so the assertion is
+  **inverted**, not deleted: the holiday that breached must now clear, and the
+  09:59 observed minimum clears too.
+
+**EFFECT ON THE DISCOVERED-FIXTURE POPULATION: NONE, measured not assumed.**
+`max_days_ahead` is a rolling `now + 1 day`, so the cutoff moves with the run.
+**Zero D+1 fixtures were admitted under either cron** — the clearance was +80
+before and is +320 now. What changed is headroom, not population.
+
+### THE COHORT BUMP — taken deliberately
+
+```
+s5.17 / stage5_baseline_20260807.818026   ->   s5.18 / stage5_baseline_20260807.51fbcb
+picks stamped at the new fingerprint: 0
+```
+
+H1's window is shut, so nothing blocked it. The history block in
+`model_version.py` carries the two distributions, both margins, the lead-time
+change per day type and the population finding.
+
+### THE HOUR HYPOTHESIS IS NOT DECIDED BY THIS
+
+The sd collapsing 85.6 → 18.8 is **consistent with** it. The `closing-lines`
+test registered at `2f50771` — n=318, one calendar period, eight scheduled
+hours, **r = −0.084** — **contradicts** it. They are left disagreeing, exactly
+where the pre-registration said the scales differ (20–85 min there, 4–8 h
+here). **The revert is what starts the registered trial running
+prospectively**, and the historical `0 0` weekday figures (mean 4h36m, max
+5h04m) already sit inside the predicted band — but that is the data the
+hypothesis was generated from, so it is not the test.
+
+## PART B — GUARD ACKNOWLEDGED, NOT EXTENDED
+
+`ACKNOWLEDGED_H1_RESERVATION_GUARD` in `tests/experiment_pins.py`, in the shape
+the margin breach used:
+
+| field | value |
+| --- | --- |
+| figure | `h1_reservation() == 0`, window 2026-10-09..10-17 closed, symbols still present |
+| why not retired | deleting the GUARD while leaving the machinery removes the alarm and keeps the defect — the SUP-1 shape the guard exists to prevent |
+| sized cost | **87 references / 31 assertions / 9 test files**, `measured` 2026-10-18 |
+| clearing action | the deletion stage: remove the three constants, `h1_reservation` and the reservation term in `reserved_from_me` — **not** the `for_h1` attribution flag, which is what keeps H1's spend measurable at 6 of 168 — then rewrite the 31 assertions |
+| review | **2026-11-01** |
+| basis | the TheOddsAPI monthly reset, which is also the earliest an H1 re-run can start, so the deletion and the re-run decision are taken together rather than twice |
+
+**THE DATE IN THE GUARD DOES NOT MOVE.** The guard still evaluates its own
+predicate every day. The acknowledgement stops a known, sized, recorded,
+**inert** condition reddening the run until its review — and it **alarms on
+change**: if the reservation becomes live again it asserts, if the symbols
+vanish the guard itself is stale and must go, and when 11-01 passes
+`test_the_H1_RESERVATION_ACKNOWLEDGEMENT_EXPIRES` fires. Same pattern as
+`EMPTY_CARD_UNTIL`; an acknowledgement with no expiry is a suppression.
+
+The non-gating calendar step is now **green** (3 passed, 1 skipped) with the
+condition printed rather than asserted.
+
+## PART C — H1 RE-RUN PREPARED. NOT STARTED.
+
+### C1. THE INPUT DEPENDENCY, TRACED AND CHECKED
+
+```
+daily-picks --update  ->  matches (is_fixture = true)  ->  _imminent_league_fixtures  ->  h1_collect
+```
+
+H1 never touches `daily-picks` and cannot be blocked by it. It is nonetheless
+**entirely downstream of it**, and nothing in H1 said so.
+
+> **Independence of schedule is not independence of input.** Two jobs that
+> never collide can still have one starve the other when one writes the
+> population the other samples.
+
+`scripts/h1_precondition.py` runs **before** collecting, spends nothing (a test
+asserts it touches no `requests`, `aiohttp`, `api_key` or `claim_requests`) and
+returns one of four enumerated states:
+
+| state | meaning |
+| --- | --- |
+| `OK` | a pinned fixture sits in the band |
+| **`NO_CARD`** | rows exist but **none is a fixture** — `daily-picks` has not run. **This is NOT `nothing to do`.** |
+| **`NO_FIXTURE_IN_BAND`** | a full card carrying nothing usable |
+| `UNEVALUATED` | the check could not run — not a clean precondition |
+
+**THE BAND IS NOT THE WINDOW**, and it is derived, not chosen:
+`BAND_LO_MIN = (H1_ROUNDS − 1) × H1_GAP_MINUTES` = **240**, so the usable band
+is `(T+240, T+360]`. A fixture at `T+60` is inside the registered 360-minute
+window and useless — it kicks off before round 3.
+
+**Driven against the live card, 2026-10-18:**
+
+```
+H1_PRECONDITION state=NO_FIXTURE_IN_BAND
+  68 fixture(s) on the card, 10 anywhere in (240,360] minutes,
+  0 of those in the 4 pinned league(s)
+  COLLECT? NO
+```
+
+### C2. SKIPS LOG REASONS, NOT COUNTS
+
+`plan["skipped"]` carried the reasons the whole time — `_imminent_league_fixtures`
+builds them per league at the decision. **Only the log threw them away**, printing
+`— 4 league(s) skipped`.
+
+Now it joins `league=reason`. And the case that actually bit had **no reason at
+all**: the early `if not rows: return {}, skips` returned an empty dict, so the
+log said "0 skipped" for the one outcome needing explanation. It now records
+the state **at the instant of the decision**:
+
+```
+SKIP *: NO FIXTURE IN THE WINDOW: 0 rows matched is_fixture AND 16:36 < kickoff
+<= 22:36. State at this instant: 12 row(s) across today+tomorrow, 0 of them
+is_fixture, 68 future fixture(s) at any horizon. A zero here is the CARD, not
+the selection.
+```
+
+> **Captured, not re-derivable.** `is_fixture` is flipped true → false by the
+> post-picks results scrape, so a reason computed later reads a different
+> world. That is precisely why the 10-13 skip is unrecoverable: by the time
+> anyone asked, all three days read `is_fixture = 0`.
+
+**POSITIVE CONTROL**: all three reasons forced and asserted textually distinct
+— the old log printed one count for all three, so they were indistinguishable
+by construction.
+
+### C3. THE SILENT ZERO, ALARMED
+
+A day with a card and zero trajectories is now an alarm carrying the card size,
+the per-day state, the reason, `n` against the target and floor, and the credit
+spend **with its provider named** — plus the line that a zero spend means *"it
+never asked, not that it was refused"*.
+
+Escalation, N fixed before the firing rate was known, same contract as
+`pipeline_loss_alert`: **N=1** reports, **N=2** "NOT SELF-CORRECTING",
+**N=3+** "THE WINDOW IS AT RISK" with the running count. The clearing action
+**differs by state** — `NO_CARD` says *dispatch daily-picks first*,
+`NO_FIXTURE_IN_BAND` says *re-select by band density* — because one remedy for
+two causes is the fixed-sentence defect this project has now fixed twice.
+
+> **And the alarm was PNC-1 when written.** It existed only in its own tests,
+> in the week the PNC-1 detector was built — and `pnc_scan --list` caught it
+> before it shipped. It is now wired into the entry point, with
+> `Precondition.can_collect` consumed there too.
+
+### C4. THE SIZING, AND ONE AMENDMENT
+
+Appended to `docs/h1-preregistration.md` **before** any re-run.
+
+**NOT AMENDED — the statistics are untouched.** ρ=0.42, σ=5.937%, `TARGET_N`
+39, floor 33, the n=33–39 band, the null's interpretation, 168 credits, eight
+days. **`n=4` is not a reduced-power result and `NO DATA` is not a null**, so
+there is no finding to update them against. **C1–C3 are not amendments** —
+they change what is *observable*, not what is *collected*; no selection rule
+moves.
+
+**AMENDED — one item, with its mechanical justification:**
+
+> **The density selection changes from CARD density to BAND density.**
+
+68 fixtures, 10 usable, **0 pinned**. A league can be dense per day and
+contribute nothing, because a round needs the fixture unkicked when the *last*
+request fires. The justification is mechanical: the band is derived from the
+registered round count and gap, so if either changes the band moves with it.
+This changes which leagues are pinned, therefore which fixtures are sampled —
+which is why it is an amendment and not a fix. **Second time the density
+premise has inverted**; the first was the weekend card, bigger and worth less.
+
+**THE UNDER-COLLECTING-RATE RULE, dated 2026-10-18, before the re-run exists:**
+
+| checkpoint | condition | decision |
+| --- | --- | --- |
+| day 3 | trajectories < **8** | STOP, re-select by band density, restart |
+| day 5 | trajectories < **18** | STOP and report; the floor is unreachable |
+| day 8 | ≥ **33** | run the registered analysis, unchanged |
+| day 8 | < 33 | **no analysis**; report n and its power |
+
+Straight-line rate to 33 over eight days is 4.125/day; 8 allows one slow start,
+18 does not.
+
+**PRECONDITIONS ON STARTING AT ALL:** three non-empty cards on the preceding
+days, `H1_PRECONDITION = OK` on the morning, and the zero-collection alarm
+wired. **Whether to re-run is Niki's**: 168 TheOddsAPI credits, eight days,
+earliest **2026-11-01**.
+
+## AND THE REVERT NARROWED A GAP I HAD JUST MEASURED
+
+`test_the_PROBE_RUNS_BEFORE_the_producer_of_its_verification_data` — written
+two days ago as the known-wrong control for `verify_offset` — **fired on the
+boundary.** It asserted a 6-hour floor on the probe-to-scrape gap; the revert
+made the nominal gap **exactly 6.0h** (probe `0 18`, weekday scrape `0 0`).
+
+And the nominal gap is not the real one: the probe's observed starts include
+20:20, 21:06, 21:25 and **00:21** — it already crosses midnight. With the
+scrape now at 00:00 + up to 5h04m, **the ordering can already invert**, which
+turns the UNVERIFIABLE refusal from always-empty into **intermittent** — worse,
+because an intermittent refusal reads as a transient.
+
+Recorded as an exposure, not fixed: moving the probe's cron is a schedule
+change and `verify_offset`'s real repair is already deferred with its trade
+written down. The assertion now holds the nominal floor so a further narrowing
+fails.
+
+## THE ENTRIES
+
+> **A bound measured under one regime is not a bound under another.** `0 4` was
+> selected as the latest cron clearing a margin computed from `0 0`'s spread,
+> and `0 4`'s own spread was 4.5× wider. The optimisation was valid arithmetic
+> on the wrong distribution.
+
+> **Report the conservative projection beside the measured one.** `0 0` reads
+> −1m using `0 4`'s spread and +280m using its own. Quoting only the second
+> would be assuming the hour effect the registered trial has not established;
+> quoting only the first would be refusing the data. Both, and the bound
+> between them.
+
+> **A guard that fires every day until a stage runs is an alarm that always
+> fires.** The reservation guard's instruction is right and its estimate was
+> two orders of magnitude short. Acknowledging it with a sized cost and a
+> dated review keeps the condition visible without teaching anyone to ignore
+> the colour.
+
+> **Counting the window overstates what is collectable.** H1's usable band is
+> `(T+240, T+360]`, derived from its own round count and gap, and the live card
+> carried 68 fixtures with 10 in band and 0 pinned. `nothing to do` was three
+> different facts wearing one sentence.
+
+## DECLARATION
+
+**WEEKDAY CRON REVERTED to `0 0 * * 1-5`.** `0 4` measured a **−241m** binding
+margin because it was selected using the `0 0` regime's spread (sd 18.2) while
+its own is **85.6** — 4.5× wider, n=5 against n=6. After the revert:
+**margin max +327m, mean+3sd +280m** against a 30m threshold, and the trigger
+moves to the weekend at +166m with nothing firing. **The conservative
+projection is reported too**: using `0 4`'s spread, `0 0` gives max +174m and
+3sd **−1m**, so the revert buys exactly its 240 minutes and the truth is
+bounded between −1 and +280 until the trial speaks. Lead time **+240 min
+earlier on weekdays, unchanged on weekends**. Two entries kept, not one, and
+the two series stay separate populations because they are keyed by day type.
+All six date-derived sites re-enumerated, 22 of 22 passing, with the
+**holiday-weekday breach RESOLVED −27 → +211 min** and the Friday→Saturday
+clearance **+80 → +320**; the discovered-fixture population is **unchanged**,
+zero D+1 fixtures admitted under either cron. **Cohort bumped deliberately to
+`s5.18` / `stage5_baseline_20260807.51fbcb`, 0 picks stamped.** The hour
+hypothesis is **left open and disagreeing** with the `closing-lines` null.
+
+**GUARD ACKNOWLEDGED to 2026-11-01**, basis the TheOddsAPI reset so the
+deletion and the re-run decision are taken together. The date **does not
+move**; the guard still evaluates its predicate and alarms on any change, and
+the acknowledgement expires by its own dated test. Clearing action: the
+deletion stage, **87 references / 31 assertions / 9 test files**, protecting
+the `for_h1` attribution flag.
+
+**H1 RE-RUN PREPARED, NOT STARTED.** The input dependency is traced and
+checked by a free, read-only precondition with **four enumerated states** —
+`NO_CARD` distinct from `NO_FIXTURE_IN_BAND` distinct from `nothing to do` —
+driven live to `NO_FIXTURE_IN_BAND: 68 on the card, 10 in band, 0 pinned`.
+Every skip now logs its **reason** with the state captured at the decision,
+including the empty-row case that previously logged nothing, with a positive
+control forcing all three. The silent zero has an alarm that escalates at N=2
+and N=3 and whose clearing action differs by state — and that alarm was PNC-1
+when written, caught by this week's own detector before it shipped. **The
+pre-registration IS amended, in exactly one item**: density selection moves
+from card to band, with its mechanical derivation; the statistics are
+untouched, and the under-collecting-rate rule is dated before the re-run
+exists.
+
+Gating suite **2072 passed, 4 deselected**. Non-gating **3 passed, 1 skipped**.
+Invariants pass, count not cited. Fingerprint **s5.18 / 51fbcb**, bumped
+deliberately.
+
+*Recorded 2026-10-18. `.github/workflows/daily-picks.yml`,
+`src/models/model_version.py`, `src/scrapers/theodds_scraper.py`,
+`scripts/h1_precondition.py` (new), `scripts/pnc_scan.py`,
+`docs/h1-preregistration.md`, `tests/experiment_pins.py`,
+`tests/test_h1_precondition.py` (new), `tests/test_calendar_separation.py`,
+`tests/test_cron_split_by_daytype.py`, `tests/test_schedule_margin.py`,
+`tests/test_contamination_and_margin.py`,
+`tests/test_fixture_horizon_probe.py`,
+`tests/test_price_history_accumulates.py`. No production write, no schema
+change. H1 is not started.*

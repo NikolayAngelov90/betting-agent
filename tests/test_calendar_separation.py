@@ -84,6 +84,34 @@ def test_the_H1_RESERVATION_WINDOW_has_EXPIRED():
     from src.data.odds_quota import H1_RESERVATION_UNTIL, h1_reservation
 
     today = dt.date.today()
+
+    # ── ACKNOWLEDGED 2026-10-18, AND THE DATE ABOVE DOES NOT MOVE. ─────────
+    #
+    # The predicate below is UNCHANGED and still evaluated. What changed is
+    # that a known, sized, recorded condition no longer reddens the run until
+    # its review - the same shape the schedule-margin breach uses, and for the
+    # same reason: an alarm that fires every day with no clearing action
+    # available is noise, and this project has paid for that six times.
+    #
+    # It alarms again on CHANGE: if the reservation becomes live, if the
+    # symbols disappear (then the guard itself is stale and must go), or when
+    # the review date passes.
+    from tests.experiment_pins import (ACKNOWLEDGED_H1_RESERVATION_GUARD,
+                                       H1_RESERVATION_ACK_UNTIL)
+
+    if today >= H1_RESERVATION_UNTIL and today < H1_RESERVATION_ACK_UNTIL:
+        ack = ACKNOWLEDGED_H1_RESERVATION_GUARD
+        assert h1_reservation(today) == 0, (
+            "the reservation is LIVE again after its window closed - the "
+            "acknowledgement covers an INERT window, not a live one")
+        c = ack["sized_cost"]
+        print(f"H1 RESERVATION GUARD: ACKNOWLEDGED until {ack['review']} "
+              f"({ack['review_basis'][:60]}). Sized {c['references']} refs / "
+              f"{c['assertions']} assertions / {c['test_files']} files, "
+              f"measured {c['measured']}. CLEARING ACTION: "
+              f"{ack['clearing_action'][:90]}")
+        return
+
     assert today < H1_RESERVATION_UNTIL, (
         f"the H1 credit reservation expired on {H1_RESERVATION_UNTIL} and today "
         f"is {today}. h1_reservation() now returns {h1_reservation(today)} and "
@@ -388,3 +416,52 @@ def test_the_RESERVATION_guard_is_STILL_THERE_and_its_work_is_SIZED():
         "stale")
     assert q.h1_reservation() == 0, (
         "the window is reporting a live reservation after 2026-10-17")
+
+
+@pytest.mark.calendar
+def test_the_H1_RESERVATION_ACKNOWLEDGEMENT_EXPIRES():
+    """FAILS FROM 2026-11-01. That is the point, not a bug.
+
+    Same pattern as `EMPTY_CARD_UNTIL`: an acknowledgement with no expiry is a
+    suppression. This one has a date and a basis — 11-01 is the TheOddsAPI
+    monthly reset and the earliest an H1 re-run can start, so the deletion
+    stage and the re-run decision are taken together rather than twice.
+
+    WHEN THIS GOES RED: run the reservation-deletion stage. Do NOT move the
+    date, and do not re-acknowledge without a fresh measurement of the 87/31/9
+    figures — if they have changed, the sizing that justified deferring is
+    stale too.
+    """
+    from tests.experiment_pins import (ACKNOWLEDGED_H1_RESERVATION_GUARD,
+                                       H1_RESERVATION_ACK_UNTIL)
+
+    today = dt.date.today()
+    assert today < H1_RESERVATION_ACK_UNTIL, (
+        f"the H1 reservation acknowledgement expired on "
+        f"{H1_RESERVATION_ACK_UNTIL} and today is {today}. The clearing "
+        f"action is the deletion stage: "
+        f"{ACKNOWLEDGED_H1_RESERVATION_GUARD['clearing_action']}")
+
+
+def test_the_ACKNOWLEDGEMENT_records_the_figure_the_reason_and_the_COST():
+    """Not date-dependent, so it stays in the gating suite.
+
+    An acknowledgement that does not carry its sized cost is a deferral with
+    no estimate, and the estimate is the whole reason this one is defensible
+    rather than evasive.
+    """
+    from tests.experiment_pins import ACKNOWLEDGED_H1_RESERVATION_GUARD as A
+
+    for field in ("figure", "why_not_retired", "sized_cost",
+                  "clearing_action", "review", "review_basis"):
+        assert A.get(field), f"the acknowledgement has no {field}"
+    c = A["sized_cost"]
+    assert (c["references"], c["assertions"], c["test_files"]) == (87, 31, 9), (
+        "the sized cost changed; re-measure before re-acknowledging, because "
+        "the size is what justified deferring the deletion")
+    assert c["measured"] == "2026-10-18"
+    assert "DELETION" in A["clearing_action"].upper()
+    assert "for_h1" in A["clearing_action"], (
+        "the clearing action does not protect the attribution flag, which is "
+        "what keeps H1's spend measurable at 6 of 168 rather than inferred")
+    assert len(A["why_not_retired"]) > 100

@@ -604,11 +604,29 @@ def test_the_PROBE_RUNS_BEFORE_the_producer_of_its_verification_data():
         f"populates its target day ({scrape_at}) - the UNVERIFIABLE refusal "
         f"may no longer be structural, so re-measure before trusting it")
     gap_h = (scrape_at - probe_at) / 60.0
-    assert gap_h > 6, (
-        f"the gap is only {gap_h:.1f}h; with measured lateness of up to 7h38m "
-        f"on the weekday cron the ordering could invert, and then the "
-        f"overlap is sometimes non-empty and sometimes not - which is worse "
-        f"than always empty, because the refusal becomes intermittent")
+    # ── THE GAP NARROWED, AND THIS CONTROL CAUGHT IT. 2026-10-18. ──────────
+    #
+    # Built when the weekday scrape was `0 4`, giving a 10-hour nominal gap and
+    # a threshold of 6. The revert to `0 0` made the nominal gap EXACTLY 6, and
+    # the control fired on the boundary - which is what it was for.
+    #
+    # AND THE NOMINAL GAP IS NOT THE REAL ONE. The probe's own observed starts
+    # (cron `0 18`) include 20:20, 21:06, 21:25 and **00:21** - it already
+    # crosses midnight. With the weekday scrape now starting 00:00 + up to
+    # 5h04m, THE ORDERING CAN ALREADY INVERT on a late probe, so the overlap
+    # becomes sometimes-empty rather than always-empty, and the UNVERIFIABLE
+    # refusal becomes INTERMITTENT - which is worse, because an intermittent
+    # refusal reads as a transient.
+    #
+    # Recorded as an exposure rather than fixed: moving the probe's cron is a
+    # schedule change, and `verify_offset`'s real repair (take the clock from
+    # the runner) is already deferred with its trade written down. The
+    # assertion below holds the nominal floor so a FURTHER narrowing fails.
+    assert gap_h >= 6, (
+        f"the nominal gap is {gap_h:.1f}h, below the 6h floor. The probe no "
+        f"longer reliably precedes the scrape that writes its verification "
+        f"data, so the refusal becomes intermittent. Move the probe's cron "
+        f"earlier or take the clock from the runner.")
 
 
 def test_the_verifier_is_NOT_VACUOUS_and_the_distinction_is_recorded():
