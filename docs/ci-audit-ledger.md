@@ -27897,3 +27897,124 @@ deliberately.
 `tests/test_fixture_horizon_probe.py`,
 `tests/test_price_history_accumulates.py`. No production write, no schema
 change. H1 is not started.*
+
+---
+
+# 2026-10-18 (fourth entry) — ADDENDUM: the probe says WHICH refusal, and the guard caught a case I had called unreachable.
+
+Not a cron move and not `verify_offset`'s deferred repair. The fix is
+**provenance**, which is the part that makes intermittency dangerous.
+
+## SIZED FIRST — the intermittency has NOT started
+
+`measured` 2026-10-18 over **all nine** probe runs, separation taken against
+the completion of the scrape that writes each probe's **target day**:
+
+| | |
+| --- | --- |
+| ordering INVERTED | **9 of 9** |
+| separation range | **+7.33h … +33.49h** |
+| runs below the 6.0h floor | **ZERO** |
+
+> **AND THE NOMINAL GAP WAS NEVER THE REAL ONE — which corrects my own entry
+> of this morning.** I wrote that the revert "narrowed the gap" from 10h to
+> 6h. Measured against observed lateness, the worst case is **+3.92h**
+> post-revert and was **already +4.37h** pre-revert: the nominal change moved
+> the real worst case by **27 minutes**, not four hours. The nominal figure
+> overstated the margin in both regimes, which is exactly the class of error
+> the `0 4` selection made with a spread.
+
+## THE PROVENANCE, MEASURED FROM THE ROWS
+
+`observed_ordering()` reads `matches.updated_at` for the target day — **not
+the cron**, because both crons are nominal and both jobs run hours late. Three
+states, because "could not measure the ordering" is not "the ordering is
+inverted":
+
+```
+POPULATION_EXISTS   ORDERING_INVERTED   ORDERING_UNKNOWN
+```
+
+Two refusals, printing differently, so a reader never infers which world
+produced a `None`:
+
+```
+UNVERIFIABLE: EMPTY_POPULATION     the scrape ran; the match failed
+UNVERIFIABLE: ORDERING_INVERTED    the scrape had not run at all
+```
+
+and the annotation carries which. **Every emitted deadline states the ordering
+that produced it**, so a deadline and a refusal differ by provenance rather
+than by reading the date and guessing.
+
+## THE GUARD FIRED ON ITS FIRST PRODUCTION RUN, AND I HAD CALLED IT UNREACHABLE
+
+I wrote, in the guard's own comment: *"It cannot reach here today — `offset is
+None` whenever the population is absent."* Run **`39131837165`**, 2026-10-18
+13:31, minutes after it shipped:
+
+```
+pages fetched : 30/30      REFUSED : 0
+ordering      : ORDERING_INVERTED (MEASURED from the rows, not from the cron)
+                no row exists for 2026-10-19 at all, so the scrape that writes
+                this day's population has NOT run yet.
+timezone      : probe clock is +0 min from UTC (verified against `matches`)
+::error::PROBE REFUSED [UNVERIFIABLE: ORDERING_INVERTED]: the clock verified
+         (+0 min) but the population for 2026-10-19 does not exist …
+```
+
+**`verify_offset` succeeded for the first time in the probe's life** — +0,
+verified — because the morning's dispatch had populated **today's** card and
+the rolling window overlaps it. The clock verified against *today*; the
+deadline would have been computed for *tomorrow*, whose population does not
+exist.
+
+> **The two conditions are INDEPENDENT, and assuming otherwise was the error.**
+> Without the explicit guard the probe would have emitted a deadline for 10-19
+> from its own pages with nothing to check them against — and it would have
+> looked exactly like a real one. The guard existed only because "it cannot
+> happen" is how the H1 cron was set three hours wrong, and the reasoning that
+> said it was unnecessary was disproved within minutes of shipping it.
+
+A test now pins that the guard is **not** conditioned on the offset, which is
+the precise assumption the run disproved.
+
+## THE CONTROLS
+
+* **both orderings forced** and confirmed to print differently; the unreadable
+  case confirmed `ORDERING_UNKNOWN`
+* **the guard's position asserted ahead of** the deadline computation, by
+  source order, so an inverted ordering cannot reach it
+* the **six-hour nominal floor stays** in the gating suite, and a new
+  `live`-marked test reports the **measured** separation per run and fails the
+  day any run falls within 6.0h — which is the finding, not the floor
+
+## THE ENTRY
+
+> **A nominal interval is not a measured one, and the difference compounds when
+> both ends are late.** The probe-to-scrape gap reads 10h then 6h by cron and
+> 4.37h then 3.92h by observation. Twice in one day a nominal figure was
+> quoted as a margin — once for the `0 4` spread, once for this gap — and both
+> times the measured value was the one that mattered.
+
+## DECLARATION
+
+**THE PROBE'S REFUSAL NOW SAYS WHICH REFUSAL IT IS**, chosen from an ordering
+**measured from the rows** rather than derived from a cron, with three states
+and two distinctly-printed refusals, and every emitted deadline carrying its
+ordering. **An inverted ordering cannot silently produce a deadline** — and
+that path, which I had documented as unreachable, was **reached on the first
+production run after the guard shipped**, with `verify_offset` succeeding for
+the first time ever at +0 while the target day's population did not exist.
+**Sized: 9 of 9 runs inverted, separation +7.33h…+33.49h, ZERO below the 6.0h
+floor — the intermittency has not started**, and the projected worst case is
++3.92h against a pre-revert +4.37h, so the nominal 10h→6h change was worth 27
+minutes rather than four hours.
+
+Gating suite **2078 passed, 5 deselected**. Non-gating **4 passed, 1 skipped**.
+Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.18` /
+`51fbcb` — this addendum is observability only.
+
+*Recorded 2026-10-18. `scripts/fixture_horizon_probe.py`,
+`tests/test_fixture_horizon_probe.py`. No production write, no schema change,
+no cron change.*

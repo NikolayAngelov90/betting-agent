@@ -454,10 +454,29 @@ def main(argv=None) -> int:
               f"on the runner; the probe verifies rather than trusting it.")
         return EXIT_CLEAR if args.report_only else EXIT_REFUSED
 
-    # AN INVERTED ORDERING MUST NEVER SILENTLY PRODUCE A DEADLINE. It cannot
-    # reach here today - `offset is None` whenever the population is absent -
-    # but the guard is explicit rather than incidental, because "it cannot
-    # happen" is how the three-hour cron error happened.
+    # AN INVERTED ORDERING MUST NEVER SILENTLY PRODUCE A DEADLINE.
+    #
+    # I WROTE "it cannot reach here today" AND IT REACHED HERE ON THE NEXT
+    # RUN. Run 39131837165, 2026-10-18 13:31, minutes after this guard
+    # shipped:
+    #
+    #     timezone : probe clock is +0 min from UTC (verified against
+    #                `matches`, which stores UTC)
+    #     ordering : ORDERING_INVERTED - no row exists for 2026-10-19
+    #
+    # `verify_offset` SUCCEEDED for the first time in the probe's life,
+    # because the morning's dispatch had populated TODAY's card and the
+    # rolling window overlaps it - so the clock verified against today while
+    # the deadline would have been computed for TOMORROW, whose population
+    # does not exist. The old code would have emitted a deadline from the
+    # probe's pages with nothing to check them against, and it would have
+    # looked exactly like a real one.
+    #
+    # The two conditions are INDEPENDENT: the clock is verified against
+    # whatever day overlaps, and the deadline is computed for the target day.
+    # Assuming `offset is None` covers the absent-population case was the
+    # error, and "it cannot happen" is how the H1 cron was set three hours
+    # wrong.
     if ordering != ORDERING_POPULATION_EXISTS:
         print()
         print(f"{ANNOTATION_REFUSED} [{REFUSAL_ORDERING_INVERTED}]: the clock "

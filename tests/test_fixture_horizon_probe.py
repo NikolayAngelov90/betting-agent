@@ -725,11 +725,19 @@ def test_the_TWO_REFUSALS_print_DIFFERENTLY():
 
 
 def test_an_INVERTED_ordering_can_NEVER_silently_produce_a_deadline():
-    """The guard is explicit rather than incidental.
+    """REACHED ON THE FIRST PRODUCTION RUN AFTER IT SHIPPED.
 
-    It cannot be reached today - `offset is None` whenever the population is
-    absent - but "it cannot happen" is how the H1 cron was set three hours
-    wrong, so the path is closed by an assertion and not by a coincidence.
+    I wrote that it could not be reached, reasoning that `offset is None`
+    whenever the population is absent. Run 39131837165 (2026-10-18 13:31)
+    disproved it within minutes: `verify_offset` returned **+0, verified** for
+    the first time ever, because the morning's dispatch had populated TODAY's
+    card and the rolling window overlaps it - while the deadline would have
+    been computed for TOMORROW, whose population does not exist.
+
+    THE TWO CONDITIONS ARE INDEPENDENT. The clock verifies against whatever
+    day overlaps; the deadline is computed for the target day. Without this
+    guard the probe would have emitted a deadline from its own pages with
+    nothing to check them against, indistinguishable from a real one.
     """
     src = pathlib.Path("scripts/fixture_horizon_probe.py").read_text(
         encoding="utf-8")
@@ -810,3 +818,24 @@ def test_the_SIX_HOUR_control_reports_the_MEASURED_gap_per_run():
         f"refusal is no longer a constant, and its two causes must be read "
         f"from the ORDERING field rather than assumed. Separations: "
         f"{[round(x, 2) for x in seps]}")
+
+
+def test_the_CLOCK_and_the_POPULATION_are_INDEPENDENT_conditions():
+    """The error this cost nothing to find, pinned so it is not re-made.
+
+    `offset is not None` does NOT imply the target day's population exists.
+    Measured on run 39131837165: offset +0 (verified) with
+    ORDERING_INVERTED for the target day, simultaneously.
+    """
+    src = pathlib.Path("scripts/fixture_horizon_probe.py").read_text(
+        encoding="utf-8")
+    assert "REACHED HERE ON THE NEXT" in src, (
+        "the correction is no longer recorded at the guard")
+    # the guard must not be conditioned on the offset
+    body = src.split("def main(", 1)[1]
+    guard_line = [l for l in body.splitlines()
+                  if "if ordering != ORDERING_POPULATION_EXISTS" in l]
+    assert guard_line, "the guard is gone"
+    assert "offset" not in guard_line[0], (
+        "the ordering guard now depends on the offset, which is the exact "
+        "assumption run 39131837165 disproved")
