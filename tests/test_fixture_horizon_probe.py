@@ -300,40 +300,61 @@ def test_the_probe_does_not_overlap_H1_or_daily_picks():
     `0 9` was the probe's first choice and starts in the SAME window as H1's
     own `0 9 * * 2,3,4`. Caught before shipping, which is the only reason this
     test reads as arithmetic rather than as a bug report.
+
+    NOT APPLICABLE SINCE 2026-10-18, AND THAT IS A STATE, NOT A PASS. The
+    probe has no `schedule:` any more, so there is no start time to clear --
+    and a check whose subject is gone must SAY so. Left as written, the loop
+    over an empty cron list would have gone green while asserting nothing:
+    exactly the VAC-1 shape this project names, and the reason the empty-
+    population refusal was mistaken for a working verifier for six days.
+
+    So the arithmetic is kept ALIVE against the last live cron as a FIXTURE --
+    it still computes and still clears -- and the LIVE reading is restored the
+    instant a `schedule:` comes back, with no edit to this test.
     """
     DELAY_MIN, DELAY_MAX = 3 * 60 + 58, 5 * 60 + 4
     _d, on, job = _wf("fixture-horizon-probe")
-    probe_cron = int(on["schedule"][0]["cron"].split()[1]) * 60
-    probe_start_lo = probe_cron + DELAY_MIN
-    probe_end_hi = probe_cron + DELAY_MAX + job["timeout-minutes"]
 
-    # H1: starts cron+delay, runs (rounds-1)*gap, ends there
+    #: The cron the probe ran under 2026-10-12..10-18, `measured` from its own
+    #: run starts. A FIXTURE here, not live state: the live hours are read
+    #: below whenever any exist.
+    LAST_LIVE_PROBE_HOUR = 18
+
+    crons = [c["cron"] for c in (on.get("schedule") or [])]
+    state = ("CLEARANCE_MEASURED" if crons
+             else "CLEARANCE_NOT_APPLICABLE_NO_SCHEDULE")
+    probe_hours = ([int(c.split()[1]) for c in crons] if crons
+                   else [LAST_LIVE_PROBE_HOUR])
+    assert probe_hours, "neither a live cron nor the fixture -- nothing to check"
+
     import scripts.h1_collect as h1c
     _d2, on2, _j2 = _wf("h1-collect")
-    h1_cron = int(on2["schedule"][0]["cron"].split()[1]) * 60
-    h1_end_hi = (h1_cron + DELAY_MAX
-                 + (h1c.H1_ROUNDS - 1) * h1c.H1_GAP_MINUTES)
-    assert probe_start_lo > h1_end_hi, (
-        f"the probe can start at {probe_start_lo} while H1 runs until "
-        f"{h1_end_hi} — they overlap")
-    assert probe_start_lo - h1_end_hi >= 60, (
-        f"only {probe_start_lo - h1_end_hi} min of clearance from H1")
-
-    # daily-picks, both day types
     _d3, on3, _j3 = _wf("daily-picks")
-    for expr in [c["cron"] for c in on3["schedule"]]:
-        dp_cron = int(expr.split()[1]) * 60
-        dp_end_hi = dp_cron + DELAY_MAX + 72        # 72 = measured max duration
-        assert probe_start_lo > dp_end_hi, (
-            f"the probe can start at {probe_start_lo} while daily-picks "
-            f"({expr}) runs until {dp_end_hi}")
 
-    # and it must finish before the NEXT daily-picks run it is warning about
-    next_run_lo = 24 * 60 + min(
-        int(c["cron"].split()[1]) * 60 for c in on3["schedule"]) + DELAY_MIN
-    assert probe_end_hi < next_run_lo, (
-        "the probe can still be running when the run it warns about starts, so "
-        "the warning would arrive too late to act on")
+    for probe_hour in probe_hours:
+        probe_cron = probe_hour * 60
+        probe_start_lo = probe_cron + DELAY_MIN
+        probe_end_hi = probe_cron + DELAY_MAX + job["timeout-minutes"]
+        assert probe_end_hi > probe_start_lo, "the window is not a window"
+
+        # H1: starts cron+delay, runs (rounds-1)*gap, ends there
+        h1_cron = int(on2["schedule"][0]["cron"].split()[1]) * 60
+        h1_end_hi = (h1_cron + DELAY_MAX
+                     + (h1c.H1_ROUNDS - 1) * h1c.H1_GAP_MINUTES)
+        assert probe_start_lo > h1_end_hi, (
+            f"[{state}] the probe can start at {probe_start_lo} while H1 runs "
+            f"until {h1_end_hi} -- they overlap")
+        assert probe_start_lo - h1_end_hi >= 60, (
+            f"[{state}] only {probe_start_lo - h1_end_hi} min of clearance "
+            f"from H1")
+
+        # daily-picks, both day types
+        for expr in [c["cron"] for c in on3["schedule"]]:
+            dp_cron = int(expr.split()[1]) * 60
+            dp_end_hi = dp_cron + DELAY_MAX + 72    # 72 = measured max duration
+            assert probe_start_lo > dp_end_hi, (
+                f"[{state}] the probe can start at {probe_start_lo} while "
+                f"daily-picks ({expr}) runs until {dp_end_hi}")
 
 
 def test_the_probe_has_its_own_group_and_an_explicit_timeout():
@@ -567,13 +588,36 @@ def test_an_UNVERIFIED_CLOCK_blocks_the_deadline_in_main(tmp_path, monkeypatch, 
 # compared, and that is a different change with a different risk.
 
 def test_the_PROBE_RUNS_BEFORE_the_producer_of_its_verification_data():
-    """The structural cause, derived from the crons rather than asserted.
+    """The structural cause, derived rather than asserted -- and since
+    2026-10-18 there are TWO causes, of which the cron was the WEAKER.
 
-    THE KNOWN-WRONG CASE: if this test ever fails, the overlap has become
-    possible and the UNVERIFIABLE refusal would no longer be structural. That
-    is the input whose correct answer disagrees with today's behaviour, and it
-    is the only one that distinguishes "the verifier is broken" from "the
-    verifier is fed an empty set".
+    THE KNOWN-WRONG CASE, restated. Originally: if the cron ordering ever
+    inverts, the UNVERIFIABLE refusal stops being structural, so re-measure
+    before trusting it. That reading stood until the lead time was measured:
+
+        MEASURED 2026-10-18, n=1,131 fixture rows written since 2026-09-01
+          max write -> kickoff lead     23.62h
+          rows ever known >24h ahead    ZERO
+          `matches` rows for 2026-10-19  0   (that day's scrape ended 08:57)
+
+    The probe needs TOMORROW's earliest kickoff, 24-28h out from any run on
+    day D. `matches` has never held a fixture that far ahead, because
+    `max_days_ahead` is a rolling 24h from the run and D+1's early card is
+    written by D+1's OWN scrape. So the population is missing for a reason no
+    clock can fix: a `workflow_run` trigger would have ordered the two jobs
+    correctly, cost the same 30 page-loads, and refused identically.
+
+    THE TWO CAUSES CLEAR DIFFERENTLY, which is why both stay readable here:
+
+      CRON ORDERING      clears by moving a schedule. NOT APPLICABLE now --
+                         there is no schedule. Held below against the last
+                         live cron as a fixture, so the derivation cannot rot
+                         while it is dormant.
+      POPULATION CEILING clears only by changing what `--update` writes
+                         (`max_days_ahead`'s horizon) or by taking the clock
+                         from the runner -- `verify_offset`'s deferred repair.
+                         Asserted in
+                         `test_the_probe_still_cannot_emit_a_deadline_FOR_A_STATED_REASON`.
     """
     import re as _re
 
@@ -590,17 +634,24 @@ def test_the_PROBE_RUNS_BEFORE_the_producer_of_its_verification_data():
                 out.append((int(parts[1]) * 60 + int(parts[0]), parts[4]))
         return [m for m, dow in out if pick(dow)]
 
-    probe_min = _mins(probe_wf, lambda d: True)
     weekday_min = _mins(picks_wf, lambda d: d == "1-5")
-    assert probe_min and weekday_min, (probe_min, weekday_min)
+    assert weekday_min, (
+        "the weekday scrape lost its cron, so the ordering is unmeasurable "
+        "rather than fine -- the third state, again")
+
+    probe_min = _mins(probe_wf, lambda d: True)
+    #: The probe's cron 2026-10-12..10-18. A FIXTURE once the schedule is off.
+    LAST_LIVE_PROBE_MIN = 18 * 60
+    cause = ("CRON_ORDERING_LIVE" if probe_min
+             else "CRON_ORDERING_NOT_APPLICABLE_NO_SCHEDULE")
 
     # The probe targets D+1. `daily-picks` populates D+1 by running ON D+1.
     # So the probe's absolute moment is (D, probe_min) and the scrape's is
     # (D+1, weekday_min) - the probe is always earlier, by construction.
-    probe_at = probe_min[0]                 # minutes into day D
+    probe_at = (probe_min or [LAST_LIVE_PROBE_MIN])[0]
     scrape_at = 24 * 60 + weekday_min[0]    # minutes into day D, i.e. D+1
     assert probe_at < scrape_at, (
-        f"the probe ({probe_at}) no longer precedes the scrape that "
+        f"[{cause}] the probe ({probe_at}) no longer precedes the scrape that "
         f"populates its target day ({scrape_at}) - the UNVERIFIABLE refusal "
         f"may no longer be structural, so re-measure before trusting it")
     gap_h = (scrape_at - probe_at) / 60.0
@@ -618,15 +669,24 @@ def test_the_PROBE_RUNS_BEFORE_the_producer_of_its_verification_data():
     # refusal becomes INTERMITTENT - which is worse, because an intermittent
     # refusal reads as a transient.
     #
-    # Recorded as an exposure rather than fixed: moving the probe's cron is a
-    # schedule change, and `verify_offset`'s real repair (take the clock from
-    # the runner) is already deferred with its trade written down. The
-    # assertion below holds the nominal floor so a FURTHER narrowing fails.
+    # The fixture reproduces that exact boundary (1080 vs 1440 = 6.0h), so the
+    # dormant derivation is held at the value that fired, not at a safe one.
     assert gap_h >= 6, (
-        f"the nominal gap is {gap_h:.1f}h, below the 6h floor. The probe no "
-        f"longer reliably precedes the scrape that writes its verification "
-        f"data, so the refusal becomes intermittent. Move the probe's cron "
-        f"earlier or take the clock from the runner.")
+        f"[{cause}] the nominal gap is {gap_h:.1f}h, below the 6h floor. The "
+        f"probe no longer reliably precedes the scrape that writes its "
+        f"verification data, so the refusal becomes intermittent. Move the "
+        f"probe's cron earlier or take the clock from the runner.")
+
+    # AND WHEN THE CRON CAUSE IS DORMANT, THE OTHER ONE MUST STILL BE HELD.
+    # Otherwise disabling the schedule would have quietly retired the only
+    # assertion about why the probe cannot work.
+    if cause == "CRON_ORDERING_NOT_APPLICABLE_NO_SCHEDULE":
+        own = pathlib.Path("tests/test_fixture_horizon_probe.py").read_text(
+            encoding="utf-8")
+        assert "def test_the_probe_still_cannot_emit_a_deadline" in own, (
+            "the cron cause is dormant and the population cause is not "
+            "asserted anywhere -- the probe's defect is now undocumented by "
+            "any live check")
 
 
 def test_the_verifier_is_NOT_VACUOUS_and_the_distinction_is_recorded():
@@ -768,9 +828,12 @@ def test_the_SIX_HOUR_control_reports_the_MEASURED_gap_per_run():
     """The nominal floor stays in the gating suite; the MEASURED separation is
     reported here, because it needs `gh` and must not gate price capture.
 
-    `measured` 2026-10-18: inverted in 9 of 9, minimum separation +7.33h, so
-    zero runs below the 6.0h floor. If that count becomes non-zero the
-    intermittency has started, and THAT is the finding.
+    `measured` 2026-10-18 over 10 probe runs: 9 had a scrape run on their
+    target day and ALL NINE are inverted (min +7.33h, max +33.49h), zero
+    below the 6.0h floor. The 10th has NO COUNTERPART - today's dispatched
+    13:30 probe targets 10-19, whose scrape has not run - and that is a
+    separate column, not a tenth inversion. If `below_6h` becomes non-zero
+    the intermittency has started, and THAT is the finding.
     """
     import json
     import subprocess
@@ -795,13 +858,26 @@ def test_the_SIX_HOUR_control_reports_the_MEASURED_gap_per_run():
     if not probes or not picks:
         pytest.skip("run history unreadable here")
 
-    below, inverted, seps = 0, 0, []
+    below, inverted, no_counterpart, seps = 0, 0, 0, []
     for p in probes:
         start = _ts(p["createdAt"])
         target = (start + dt.timedelta(days=1)).date()
         cand = [r for r in picks if _ts(r["createdAt"]).date() == target]
         if not cand:
-            inverted += 1
+            # ── THIRD STATE, AND IT WAS COUNTED AS AN INVERSION. 2026-10-18.
+            #
+            # This branch used to do `inverted += 1`, conflating "no scrape
+            # run exists for the target day" with "the scrape finished after
+            # the probe started". They are different facts: the first is NOT
+            # YET KNOWABLE - today's 13:30 dispatched probe targets 10-19,
+            # whose scrape has not run - and the second is a measurement.
+            #
+            # It was caught by its own report being impossible: `n=9
+            # inverted=10`. The conclusion was unchanged (9 of 9 WITH a
+            # counterpart are inverted) but the count that supported it was
+            # inflated, in the direction that licensed the claim. A number
+            # right for the wrong reason is an unaudited number.
+            no_counterpart += 1
             continue
         sep = (_ts(cand[0]["updatedAt"]) - start).total_seconds() / 3600.0
         seps.append(sep)
@@ -810,8 +886,13 @@ def test_the_SIX_HOUR_control_reports_the_MEASURED_gap_per_run():
         if abs(sep) < 6.0:
             below += 1
     print(f"probe/scrape separation: n={len(seps)} inverted={inverted} "
+          f"ordered={len(seps) - inverted} no_counterpart={no_counterpart} "
           f"min={min(seps) if seps else float('nan'):+.2f}h "
           f"below_6h={below}")
+    assert inverted <= len(seps), (
+        f"inverted={inverted} exceeds the {len(seps)} measured pairs, so a "
+        f"state with no counterpart is being counted as an observed "
+        f"inversion again -- the exact conflation this guard exists for")
     assert below == 0, (
         f"{below} probe run(s) now sit within 6.0h of the scrape that writes "
         f"their target day. THE INTERMITTENCY HAS STARTED: the UNVERIFIABLE "
@@ -839,3 +920,92 @@ def test_the_CLOCK_and_the_POPULATION_are_INDEPENDENT_conditions():
     assert "offset" not in guard_line[0], (
         "the ordering guard now depends on the offset, which is the exact "
         "assumption run 39131837165 disproved")
+
+
+# ───────── THE SCHEDULE IS DISABLED, 2026-10-18. SUCCESSOR CONTRACT.
+#
+#     A nominal gap cannot order two jobs that are both late. Ordering is
+#     guaranteed by dependency or it is not guaranteed.
+#
+# The right instinct was a `workflow_run` trigger on `daily-picks` completion.
+# The measurement says the ordering was never the binding constraint:
+#
+#   MEASURED 2026-10-18, n=1,131 fixture rows written since 2026-09-01:
+#     lead time write -> kickoff   mean 8.98h  median 8.72h  MAX 23.62h
+#     rows ever known >24h ahead   ZERO
+#
+# The probe serves TOMORROW, whose earliest kickoff is 24-28h from any probe
+# run on day D. `matches` has never held a fixture that far ahead, because
+# `max_days_ahead` is a rolling 24h and D+1's early card is written by D+1's
+# OWN scrape - which runs after every probe targeting D+1. So the target day's
+# population cannot exist under ANY ordering, and a dependency trigger would
+# have fixed the ordering, changed nothing, and kept paying 30 page-loads a
+# day.
+
+def test_the_probe_has_NO_SCHEDULE_until_the_verifier_is_REPAIRED():
+    """It cannot emit a deadline, so it does not run.
+
+    WHEN THIS GOES RED: either the schedule came back, or
+    `test_the_probe_still_cannot_emit_a_deadline` below has flipped. Both want
+    the same question asked - can the verifier see the target day yet? - and
+    neither is answered by adding a cron.
+    """
+    import yaml
+
+    wf = yaml.safe_load(
+        pathlib.Path(".github/workflows/fixture-horizon-probe.yml")
+        .read_text(encoding="utf-8"))
+    on = wf.get("on") or wf.get(True)
+    assert "schedule" not in on, (
+        "the probe is scheduled again. It has never emitted a deadline: the "
+        "target day's population cannot exist when it runs (max observed "
+        "fixture lead 23.62h against a 24-28h requirement). Re-enabling costs "
+        "30 Flashscore page-loads a day for nothing unless verify_offset's "
+        "repair has landed.")
+    assert "workflow_dispatch" in on, (
+        "dispatch was removed too, so the repair cannot be tested without a "
+        "push")
+    src = pathlib.Path(".github/workflows/fixture-horizon-probe.yml").read_text(
+        encoding="utf-8")
+    assert "RE-ENABLE CONDITION" in src, (
+        "the disable does not record what would justify undoing it")
+    assert "23.62h" in src and "240 page-loads" in src, (
+        "the disable does not carry the measurement that justified it")
+
+
+def test_the_THREE_ORDERING_STATES_SURVIVE_the_disable():
+    """A state that becomes rare must not be deleted — and this one is not
+    even rare, it is universal. Disproved once already this morning."""
+    assert set(probe.ORDERING_STATES) == {
+        probe.ORDERING_POPULATION_EXISTS, probe.ORDERING_INVERTED,
+        probe.ORDERING_UNKNOWN}
+    assert probe.REFUSAL_EMPTY_POPULATION != probe.REFUSAL_ORDERING_INVERTED
+
+
+def test_the_probe_still_cannot_emit_a_deadline_FOR_A_STATED_REASON():
+    """The arithmetic that makes the disable correct, re-derived here so it is
+    checkable rather than quoted.
+
+    If `MAX_OBSERVED_FIXTURE_LEAD_H` is ever measured above the requirement,
+    the probe CAN see its target day and the disable must be revisited.
+    """
+    #: `measured` 2026-10-18 over n=1,131 rows written since 2026-09-01.
+    MAX_OBSERVED_FIXTURE_LEAD_H = 23.62
+    #: Tomorrow's earliest kickoff, from the measured percentiles.
+    from scripts.schedule_deadline import (DEADLINE_PERCENTILES,
+                                           OBSERVED_EARLIEST_MIN)
+
+    # A probe running at the EARLIEST plausible moment on day D - right after
+    # the weekend scrape completes, ~06:16 - is the most favourable case.
+    probe_at_h = 6 + 16 / 60
+    for label, ko_min in (("weekend 5th pct",
+                           DEADLINE_PERCENTILES["weekend"][0]),
+                          ("weekday observed min",
+                           OBSERVED_EARLIEST_MIN["weekday"])):
+        required_h = 24 + ko_min / 60 - probe_at_h
+        assert required_h > MAX_OBSERVED_FIXTURE_LEAD_H, (
+            f"{label}: the probe would need a fixture known {required_h:.2f}h "
+            f"ahead and the measured maximum is "
+            f"{MAX_OBSERVED_FIXTURE_LEAD_H}h. If this now passes, `matches` "
+            f"holds fixtures further ahead than it did and the probe's "
+            f"schedule should be reconsidered.")

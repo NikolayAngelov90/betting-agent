@@ -28018,3 +28018,198 @@ Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.18` /
 *Recorded 2026-10-18. `scripts/fixture_horizon_probe.py`,
 `tests/test_fixture_horizon_probe.py`. No production write, no schema change,
 no cron change.*
+
+---
+
+# THE PROBE WAS NOT MOVED TO `workflow_run`. IT WAS TURNED OFF.
+
+*2026-10-18*
+
+The instruction was to trigger the probe on the scrape's completion rather than
+on a clock, because **a nominal gap cannot order two jobs that are both late**.
+That reasoning is right, and the trigger would have worked: `workflow_run` is
+already how `ci-audit` is driven in this repo. I measured before changing
+anything, and the measurement inverted the premise — **ordering was never the
+binding constraint.**
+
+## THE MEASUREMENT
+
+`measured` 2026-10-18 from `matches`, n=1,131 fixture rows written since
+2026-09-01 (provenance: row write time against `match_date`):
+
+| quantity | value |
+|---|---|
+| lead time, write to kickoff, mean | **8.98 h** |
+| median | 8.72 h |
+| **maximum ever observed** | **23.62 h** |
+| rows ever known more than 24 h ahead | **ZERO** |
+| `matches` rows for 2026-10-19 (that day's scrape ended 08:57) | **0** |
+| `matches` rows for 2026-10-20 | **0** |
+
+The probe serves **tomorrow**, whose earliest kickoff is **24-28 h** from any
+run on day D. `max_days_ahead` is a rolling 24 h *from the run*, so D+1's early
+card is written by **D+1's own scrape** — which runs after every probe that
+targets D+1. The target day's population therefore **cannot exist under any
+ordering**: `ORDERING_INVERTED` is structural, not a race.
+
+A `workflow_run` trigger would have ordered the two jobs correctly, cost the
+same page-loads, and refused identically. It would have made the failure
+*tidier* without making the probe *work*.
+
+## THE COST, MEASURED FROM THE LOGS
+
+Not derived from the config — read out of each run's own `pages fetched` line:
+
+| run | pages | outcome |
+|---|---|---|
+| 8 runs that reached the fetch (10-12 ... 10-18) | **30/30 each** | **`PROBE REFUSED` 8/8** |
+| 2 runs that died earlier (missing `aiohttp`) | 0 | exit 1 |
+| **total** | **240 page-loads** | **ZERO deadlines, ever** |
+
+`probe_fixtures()` runs at line 409 and the ordering guard at line 480, so
+**the fetch is paid before the refusal is possible**. At one scheduled run a
+day that is **30 Flashscore league fixture-page loads per day on top of the 30
+`daily-picks` already loads over the same league list — 60/day, a doubling**
+(the 30 is `measured`; the doubling is `derived` from both passes iterating the
+same 30-league config).
+
+## THE DECISION, WHICH WAS THE DIRECTIVE'S OWN CONDITIONAL
+
+> *if the probe cannot emit a deadline under any ordering reachable without the
+> deferred repair, then stop paying for it.*
+
+It cannot. **The `schedule:` block is removed** and replaced by a comment
+carrying the measurement, the structural argument, the 240 page-loads and the
+**RE-ENABLE CONDITION**: `verify_offset`'s deferred repair (take the clock from
+the runner). `workflow_dispatch` is kept so the repair can be tested without a
+push. **Nothing is lost by disabling it, because it has never produced a
+deadline.**
+
+## THE TWO TRIGGER QUESTIONS, ANSWERED BY MEASUREMENT NOT BY DOCS
+
+Both from this repo's own history, since `ci-audit` already runs on
+`workflow_run: [completed]`:
+
+* **does it fire for DISPATCHED runs?** **Yes.** `daily-picks` run
+  `39109085963` was `event=workflow_dispatch`, and `ci-audit` fired at
+  `2026-10-18T08:57:59Z` with `event=workflow_run`.
+* **what happens when `daily-picks` FAILS?** **It fires anyway.** That same
+  dispatched run concluded **`failure`** and the `workflow_run` consumer ran
+  regardless — `types: [completed]` does not filter on conclusion. So a
+  completion-triggered probe would have fired through the whole 10-13 to 10-17
+  outage, paying 30 page-loads each day against a population the *failed*
+  scrape had not written. The clock was not what made those runs useless.
+
+## THE MEASURED-SEPARATION TEST DID NOT CHANGE SIGN, AND MUST NOT
+
+It still reports **inverted 9 of 9**. That is the correct reading of a world
+where the probe runs on D and the scrape on D+1, and the trigger was
+deliberately not wired. A sign change here would have been a lie about a
+change I did not make.
+
+## THREE FINDINGS ALONG THE WAY, NONE OF THEM THE PROBE
+
+**1. `inverted=10` out of `n=9`.** My own separation test, written yesterday,
+incremented `inverted` both when the scrape finished *after* the probe and when
+**no scrape run existed for the target day**. Those are a measurement and a
+third state. It was caught by its own report being **arithmetically
+impossible**. The conclusion survived re-measurement — 9 of 9 *with a
+counterpart* are inverted, min +7.33 h, max +33.49 h — but the count
+supporting it was inflated **in the direction that licensed the claim**. A
+number that is right for the wrong reason is an unaudited number. Now three
+columns (`inverted` / `ordered` / `no_counterpart`) with
+`assert inverted <= len(seps)` as the guard that caught it.
+
+**2. MIDNIGHT IS FALSY, AND IT KILLED A DETECTOR FOR A DAY.**
+`missing_scheduled_runs()` guarded on `if not any(crons.values())`. A cron is
+stored as **minutes past midnight**, so `0 0` is the integer `0` and
+`any([0, 0])` is `False`. It passed review because the weekday cron was `0 4`
+(240) at the time — the weekend zero was carried by the weekday value. **The
+revert to `0 0` at `566c927` made both zero, and the function has returned
+`UNEVALUATED` on every call since.** The detector it killed is the one built
+for the 422 window — *a workflow GitHub refuses does not fail, it disappears* —
+and it was dead for the whole of its first day. It presented as a **local
+environment skip**. Repaired, it reports `missing_runs[0 in 14d]`, and the test
+that had been skipping now evaluates. The same two lines also flattened `None`
+(unreadable tree) into `{}` (no cron) via `or {}`, giving one reason for two
+causes with different remedies — only one of which is fixed by
+`fetch-depth: 0`. Census: **one instance each**, both in those two lines; every
+other cron site already used `is None`.
+
+**3. THE `LIVE` CRON LABEL WAS A LITERAL AND WENT STALE IN A DAY.**
+`format_series_census` printed `LIVE 0 4 * * 1-5` from a hard-coded ternary.
+The weekday cron was reverted to `0 0 * * 1-5` at `566c927`, so **the report
+named `0 4` on the same line as a margin (+280 m) measured under `0 0`.** The
+series *attribution* was never wrong — it matches each run to the cron its own
+`headSha` carried — so the single incorrect field was the one a reader uses to
+decide **which schedule the numbers describe**. Now derived from the same parse
+that yields the minutes, so the two cannot disagree. The first draft of that
+fix returned the expressions as an `__exprs__` key **inside the dict
+`schedule_margins_by_daytype` iterates and divides by 60** — a sentinel key in
+someone else's mapping. Replaced with a second return value before shipping,
+and pinned.
+
+## THE CONTROLS
+
+* **the disable carries its own re-enable condition**, and a test fails if the
+  comment loses the measurement (`23.62h`, `240 page-loads`) or the condition
+* **`test_the_probe_still_cannot_emit_a_deadline_FOR_A_STATED_REASON`**
+  re-derives the arithmetic from `schedule_deadline`'s measured percentiles, so
+  if `matches` ever holds fixtures far enough ahead **the test flips and says
+  to reconsider the schedule** — the disable expires on evidence, not on a date
+* **the three ordering states survive**, asserted explicitly. A state that
+  becomes rare must not be deleted, and this one is not rare — it is universal
+* **two tests re-pointed rather than deleted.** The clearance and gap checks
+  had lost their subject; left alone they would have **passed over an empty
+  cron list while asserting nothing** — VAC-1, the shape this project names.
+  Both now carry an explicit
+  `CLEARANCE_NOT_APPLICABLE_NO_SCHEDULE` /
+  `CRON_ORDERING_NOT_APPLICABLE_NO_SCHEDULE`
+  state and keep the arithmetic **alive against the last live cron as a
+  fixture**, held at the 6.0 h boundary that fired rather than at a safe value
+* **POSITIVE CONTROL, run:** a cron planted back into the workflow flipped the
+  clearance check to `CLEARANCE_MEASURED` and it **caught the H1 collision**
+  (probe 778 vs H1 ending 1084), while the no-schedule test fired with its
+  cost. Restored afterwards
+* **when the cron cause is dormant the population cause must still be
+  asserted**, or disabling a schedule would quietly retire the only live claim
+  about why the probe fails
+* **known-wrong cases for the midnight bug**: both crons at `0 0` must yield
+  `CHECKED`; an unreadable tree and a cron-less workflow must give **different
+  reasons**; and the minutes mapping must hold no non-integer
+
+## THE ENTRY
+
+> **An always-unevaluated detector is indistinguishable from a working one
+> whose answer is always "nothing to report".** Three of today's findings are
+> that same sentence: a probe that refused 8 times out of 8 and read as
+> *pending*, a missing-run detector that returned `UNEVALUATED` on every call
+> and read as *a local skip*, and a clearance check about to pass over an empty
+> list. The fix for the first was to stop running it; for the other two, to
+> make zero mean zero.
+
+## DECLARATION
+
+**THE PROBE IS NOT ON A CLOCK AND NOT ON `workflow_run` — IT IS OFF**, by the
+directive's own conditional, because **measured** it cannot emit a deadline
+under any reachable ordering: max fixture lead **23.62 h** against a
+**24-28 h** requirement, **zero** rows ever known more than 24 h ahead.
+**COST RECORDED: 240 page-loads over 8 fetching runs for ZERO deadlines, and
+60/day — a doubling — had it continued.** `workflow_dispatch` retained;
+re-enable gated on `verify_offset`'s repair, and the gate **expires on
+evidence** rather than on a date. **The three ordering states are retained.**
+**The measured-separation test did not change sign, correctly**, because the
+trigger was not wired. **Three incidental defects fixed**, of which one —
+`any([0, 0])` — had silently killed the detector built for the 422 window **on
+its first day**.
+
+Gating suite **2089 passed, 5 deselected**. Non-gating **5 passed, 0 skipped**
+(the skip was the dead detector). Fingerprint **UNCHANGED** at `s5.18` /
+`stage5_baseline_20260807.51fbcb` — observability and scheduling only, nothing
+prediction- or selection-affecting.
+
+*Recorded 2026-10-18. `.github/workflows/fixture-horizon-probe.yml`,
+`scripts/ci_audit.py`, `tests/test_fixture_horizon_probe.py`,
+`tests/test_absent_run_and_unparseable.py`,
+`tests/test_cron_split_by_daytype.py`. No production write, no schema change,
+no model change. One schedule REMOVED; no cron moved.*

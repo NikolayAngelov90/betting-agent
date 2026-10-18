@@ -248,3 +248,70 @@ def test_DID_NOT_RUN_is_about_SKIPPED_STEPS_not_an_absent_run():
     # ...and with no run at all there is no facts dict to pass: the verdict
     # function is never reached, which is exactly the gap.
     assert ci.verdict({}, [], "a log with content" * 40) in ("CLEAN", "DEGRADED")
+
+
+# ── MIDNIGHT IS FALSY, AND IT KILLED THE DETECTOR FOR A DAY ─────────────────
+#
+#     An always-unevaluated detector is indistinguishable from a working one
+#     whose answer is always "nothing to report".
+#
+# `0 0` is stored as 0 minutes past midnight. `any([0, 0])` is False, so the
+# guard that meant "did we resolve a cron at all" rejected the one cron
+# expression the repo actually uses on both day types. It survived review
+# because the weekday cron was `0 4` at the time: `any([0, 240])` is True, and
+# the weekend zero was carried by the weekday value. The revert at 566c927
+# made both zero and the detector returned UNEVALUATED on every call for its
+# entire first day.
+#
+# Found 2026-10-18 by `current_crons_by_daytype()` reporting `{'weekend': 0,
+# 'weekday': 0}` - a successful resolution - while the consumer reported "no
+# cron resolved for either day type" one line later.
+
+def test_KNOWN_WRONG_both_crons_at_MIDNIGHT_do_not_make_it_UNEVALUATED(
+        monkeypatch):
+    """The live configuration, and the one that broke it."""
+    monkeypatch.setattr(ci, "current_crons_by_daytype",
+                        lambda *_a, **_k: {"weekend": 0, "weekday": 0})
+    monkeypatch.setattr(ci, "_sh", lambda *_a, **_k: "[]")
+    m = ci.missing_scheduled_runs(today=dt.date(2026, 10, 18))
+    assert m["state"] == "CHECKED", (
+        f"midnight crons still read as absent: {m.get('reason')!r}. The "
+        f"detector cannot fire, and an unevaluated detector reports nothing "
+        f"while looking identical to a clean one.")
+    assert m["missing"], (
+        "with an empty run list every past day in the window is MISSING; an "
+        "empty result here means the loop is being skipped too")
+
+
+def test_an_UNREADABLE_TREE_is_a_DIFFERENT_REASON_than_NO_CRON(monkeypatch):
+    """Two causes, one sentence, until now.
+
+    `or {}` turned a None (we could not read the workflow at this sha) into an
+    empty dict (the workflow has no cron). The first is a statement about our
+    clone, the second about the repo, and only the first is fixed by
+    `fetch-depth: 0`.
+    """
+    monkeypatch.setattr(ci, "current_crons_by_daytype", lambda *_a, **_k: None)
+    unreadable = ci.missing_scheduled_runs(today=dt.date(2026, 10, 18))
+    assert unreadable["state"] == "UNEVALUATED"
+    assert "unreadable" in unreadable["reason"]
+    assert "fetch-depth" in unreadable["reason"], (
+        "the reason does not name the remedy")
+
+    monkeypatch.setattr(ci, "current_crons_by_daytype",
+                        lambda *_a, **_k: {"weekend": None, "weekday": None})
+    nocron = ci.missing_scheduled_runs(today=dt.date(2026, 10, 18))
+    assert nocron["state"] == "UNEVALUATED"
+    assert nocron["reason"] != unreadable["reason"], (
+        "an unreadable tree and a cron-less workflow still give the same "
+        "reason, so the remedy cannot be chosen from the alarm")
+
+
+def test_a_RESOLVED_cron_of_ZERO_is_not_confused_with_an_ABSENT_one():
+    """The distinction itself, independent of the consumer: a dict holding 0
+    and a dict holding None must not compare equal in the places that branch
+    on it."""
+    assert 0 is not None
+    for d in ({"weekday": 0, "weekend": 0}, {"weekday": 0, "weekend": None}):
+        assert not all(v is None for v in d.values()), (
+            f"{d} reads as 'nothing resolved' and it holds a midnight cron")

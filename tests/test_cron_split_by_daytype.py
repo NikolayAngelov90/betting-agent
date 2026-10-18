@@ -612,3 +612,96 @@ def test_the_series_census_HAS_A_CONSUMER():
     assert any("print(" in l for l in calls), (
         "format_series_census is no longer printed; the attribution rule and "
         f"the per-series n are produced and discarded. Sites: {calls!r}")
+
+
+# ── THE LIVE LABEL WAS A LITERAL AND WENT STALE IN ONE DAY ──────────────────
+#
+#     A label that contradicts its own data is worse than no label.
+#
+# `format_series_census` printed `LIVE  0 4 * * 1-5` from a hard-coded ternary.
+# The weekday cron was reverted to `0 0 * * 1-5` at 566c927, so from that
+# commit the report named `0 4` on the same line as a margin (+280m) measured
+# under `0 0`. The series ATTRIBUTION was never wrong - it matches each run to
+# the cron its own headSha carried - so the only incorrect field was the one a
+# reader uses to decide which schedule the numbers describe.
+#
+# Found 2026-10-18 by reading the audit's own output against the tree.
+
+def test_the_LIVE_cron_label_is_READ_FROM_THE_TREE_not_written_down():
+    import pathlib
+    import re as _re
+
+    from scripts.ci_audit import format_series_census
+
+    text = format_series_census({"weekend": [(None, 1.0)], "weekday": [(None, 1.0)]},
+                                {"weekend": 0, "weekday": 0})
+    wf = pathlib.Path(".github/workflows/daily-picks.yml").read_text(
+        encoding="utf-8")
+    tree = set(_re.findall(r"- cron: '([^']+)'", wf))
+    live = set(_re.findall(r"^  LIVE\s+(\S+ \S+ \S+ \S+ \S+)\s", text, _re.M))
+    assert live == tree, (
+        f"the census labels {sorted(live)} as LIVE and the workflow holds "
+        f"{sorted(tree)} -- the label is not derived from the schedule it "
+        f"claims to describe")
+
+
+def test_the_label_CANNOT_be_a_LITERAL_in_the_source():
+    """The remedy, enforced. A derived label that someone re-hard-codes next
+    week is the same defect with a newer date."""
+    import inspect
+
+    from scripts.ci_audit import format_series_census
+
+    src = inspect.getsource(format_series_census)
+    body = src.split('for day_type in ("weekend", "weekday"):', 1)[1]
+    bad = [l for l in body.splitlines()
+           if "expr" in l and "* *" in l and not l.strip().startswith("#")]
+    assert not bad, (
+        f"a cron expression is written into the census body again: {bad}")
+    assert "live_exprs" in body, "the label is no longer read from the parse"
+
+
+def test_the_EXPRESSION_READER_shares_the_PARSE_with_the_minutes():
+    """One rule, one definition. A second parser for the same five fields is
+    THE HABIT, and it drifts."""
+    import scripts.ci_audit as ci
+
+    plain = ci.current_crons_by_daytype()
+    pair = ci.current_crons_by_daytype(want_exprs=True)
+    assert isinstance(plain, dict) and isinstance(pair, tuple) and len(pair) == 2
+    assert pair[0] == plain, "the two call forms disagree about the minutes"
+    for day_type, expr in pair[1].items():
+        if expr is None:
+            assert plain[day_type] is None
+            continue
+        parts = expr.split()
+        assert int(parts[1]) * 60 + int(parts[0]) == plain[day_type], (
+            f"{day_type}: the expression {expr!r} and the minutes "
+            f"{plain[day_type]} come from one parse and still disagree")
+
+
+def test_the_EXPRS_are_NOT_a_SENTINEL_KEY_in_a_dict_others_iterate():
+    """The landmine the first draft of this fix planted.
+
+    `schedule_margins_by_daytype` iterates `crons.items()` and divides the
+    value by 60. A `__exprs__` key holding a dict would have reached that
+    division. Caught before shipping, pinned so it cannot be re-introduced.
+    """
+    import scripts.ci_audit as ci
+
+    assert "__exprs__" not in ci.current_crons_by_daytype()
+    m, _e = ci.current_crons_by_daytype(want_exprs=True)
+    assert "__exprs__" not in m
+    assert all(v is None or isinstance(v, int) for v in m.values()), (
+        "a non-integer reached the minutes mapping that other functions "
+        "divide by 60")
+
+
+def test_an_UNREADABLE_tree_returns_None_in_BOTH_call_forms():
+    """The third state must survive the new parameter, or the shallow-clone
+    fix is undone for one of the two readers."""
+    import scripts.ci_audit as ci
+
+    assert ci.current_crons_by_daytype(sha="deadbeefdeadbeef") is None
+    assert ci.current_crons_by_daytype(sha="deadbeefdeadbeef",
+                                       want_exprs=True) is None

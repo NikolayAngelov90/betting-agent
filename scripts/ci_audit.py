@@ -1135,7 +1135,8 @@ def current_cron_minutes(sha: str = None):
 UNREADABLE_KEY = "__unreadable__"
 
 
-def current_crons_by_daytype(sha: str = None) -> dict:
+def current_crons_by_daytype(sha: str = None,
+                             want_exprs: bool = False) -> dict:
     """`{'weekend': minutes|None, 'weekday': minutes|None}` from the workflow.
 
     Added 2026-10-10 with the split. `current_cron_minutes` returns None for
@@ -1168,6 +1169,7 @@ def current_crons_by_daytype(sha: str = None) -> dict:
     if sha and not text.strip():
         return None
     out = {"weekend": None, "weekday": None}
+    exprs = {"weekend": None, "weekday": None}
     for expr in re.findall(r"^\s*- cron:\s*'([^']+)'", text, re.M):
         parts = expr.strip().split()
         if len(parts) != 5 or not parts[0].isdigit() or not parts[1].isdigit():
@@ -1187,9 +1189,18 @@ def current_crons_by_daytype(sha: str = None) -> dict:
                     days.add(int(piece) % 7)
         if days & {0, 6}:
             out["weekend"] = minutes
+            exprs["weekend"] = expr.strip()
         if days & {1, 2, 3, 4, 5}:
             out["weekday"] = minutes
-    return out
+            exprs["weekday"] = expr.strip()
+    # TWO READERS, ONE PARSE. An earlier draft of this fix returned the
+    # expressions as an `__exprs__` key inside the same dict -- which
+    # `schedule_margins_by_daytype` iterates with `crons.items()`, so a dict
+    # value would have reached `cron_minutes // 60`. A sentinel key in a
+    # mapping somebody else iterates is a landmine; a second return value is
+    # not. And a SECOND PARSE would have been THE HABIT: one rule, two
+    # definitions, free to drift.
+    return (out, exprs) if want_exprs else out
 
 
 def schedule_margins_by_daytype(series_by_type: dict, crons: dict) -> dict:
@@ -1308,10 +1319,24 @@ def format_series_census(series_by_type: dict, crons: dict) -> str:
         lines.append(f"           {'':16s}   {window}")
     from scripts.schedule_deadline import DEADLINE_PERCENTILES
 
+    # ── THE LIVE LABEL WAS A LITERAL, AND IT WENT STALE IN A DAY. ─────────
+    #
+    # This read `expr = ("0 0 * * 6,0" if ... else "0 4 * * 1-5")`. It was
+    # correct when written and WRONG from 566c927, where the weekday cron was
+    # reverted to `0 0 * * 1-5` -- so the report named `0 4` while the margin
+    # printed beside it (+280m) was measured under `0 0`. A label that
+    # contradicts its own data is worse than no label: the series attribution
+    # is sound, and the only wrong thing on the line is the one field a reader
+    # uses to decide WHICH schedule the numbers describe.
+    #
+    # Now derived from the same parse that produces the minutes, so the two
+    # cannot disagree.
+    _live = current_crons_by_daytype(want_exprs=True)
+    live_exprs = (_live[1] if _live else {})
     for day_type in ("weekend", "weekday"):
         cron_min = crons.get(day_type)
         n = len(series_by_type.get(day_type) or [])
-        expr = ("0 0 * * 6,0" if day_type == "weekend" else "0 4 * * 1-5")
+        expr = live_exprs.get(day_type) or "UNRESOLVED"
         _, pct, prov = DEADLINE_PERCENTILES[day_type]
         state = f"n={n}" if n else "n=0 UNEVALUATED, not clear"
         lines.append(f"  LIVE     {expr:16s} {state:36s} "
@@ -1535,8 +1560,31 @@ def missing_scheduled_runs(workflow: str = "daily-picks.yml",
     would never alarm at all.
     """
     today = today or _dt.date.today()
-    crons = current_crons_by_daytype() or {}
-    if not any(crons.values()):
+    # ── MIDNIGHT IS FALSY, AND IT KILLED THIS DETECTOR. 2026-10-18. ────────
+    #
+    # This read `if not any(crons.values())`. A cron is stored as MINUTES PAST
+    # MIDNIGHT, so `0 0` is the integer 0 and `any([0, 0])` is False. While
+    # the weekday cron was `0 4` (240) the guard was satisfied by the weekday
+    # value alone and the detector worked. The revert to `0 0` at 566c927
+    # made BOTH day types 0, and this function has returned UNEVALUATED on
+    # every call since -- silently, because UNEVALUATED is a legitimate state
+    # and its consumer skips on it.
+    #
+    # The detector it killed is the one built for the 422 window: "a workflow
+    # GitHub refuses does not fail, it disappears". It was dead for the whole
+    # of its first day, and the skip read as a local environment quirk.
+    #
+    # AND THE TWO CAUSES WERE ONE REASON. `current_crons_by_daytype()` returns
+    # None for an unreadable tree (the shallow-clone third state) and a dict
+    # otherwise; `or {}` flattened the first into the second, so an unreadable
+    # sha reported "no cron resolved" -- which is a statement about the
+    # WORKFLOW, not about our ability to read it.
+    crons = current_crons_by_daytype()
+    if crons is None:
+        return {"state": "UNEVALUATED",
+                "reason": "the workflow tree is unreadable at this sha "
+                          "(shallow clone? needs fetch-depth: 0)"}
+    if not crons or all(v is None for v in crons.values()):
         return {"state": "UNEVALUATED",
                 "reason": "no cron resolved for either day type"}
     try:

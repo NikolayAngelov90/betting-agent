@@ -65,8 +65,46 @@ on:
   #
   # And a 2-day window from ~22:00 on day D has a cutoff of D+2 22:00, which
   # covers every kickoff on D+1 — the day the next run serves.
-  schedule:
-    - cron: '0 18 * * *'
+  # ── THE SCHEDULE IS DISABLED, 2026-10-18. THE PROBE HAS NEVER FUNCTIONED. ──
+  #
+  # NOT a cron move. A `workflow_run` trigger on `daily-picks` completion was
+  # the obvious fix - it would order the two jobs BY DEPENDENCY instead of by
+  # a margin, which is the right instinct and the wrong constraint. Measured
+  # first, and the measurement says the ordering was never the binding one:
+  #
+  #   MEASURED 2026-10-18, n=1,131 fixture rows written since 2026-09-01:
+  #     lead time write -> kickoff   mean 8.98h  median 8.72h  MAX 23.62h
+  #     rows ever known >24h ahead   ZERO
+  #
+  # The probe serves TOMORROW. Tomorrow's earliest kickoff is 10:15 (weekend)
+  # or 09:59 observed (weekday), which is 24-28 HOURS away from any probe run
+  # on day D. `matches` has never held a fixture that far ahead, because
+  # `max_days_ahead` is a rolling 24h and the scrape that writes D+1's early
+  # card is D+1'S OWN - which runs after every probe that targets D+1.
+  #
+  #     The target day's population cannot exist when the probe runs, under
+  #     ANY ordering. ORDERING_INVERTED is structural, not a timing accident.
+  #
+  # So a `workflow_run` trigger would fix probe-vs-scrape ordering, change
+  # nothing about the target day, and keep paying. The ordering states stay in
+  # the code - a state that becomes rare must not be deleted, and this one is
+  # not even rare - but the schedule stops.
+  #
+  # THE MEASURED COST OF LEAVING A NON-FUNCTIONAL PRODUCER RUNNING:
+  #     30 Flashscore page-loads per run, 30/30 on every fetching run
+  #     8 fetching runs 10-12..10-18  =  240 page-loads
+  #     deadlines emitted             =  ZERO
+  #   and it DOUBLED the fixtures-page load, 30 -> 60 per day.
+  #
+  # RE-ENABLE CONDITION, and it is the only one: `verify_offset`'s deferred
+  # repair - take the clock from the runner rather than from a fixture both
+  # sides hold. Until then the probe cannot emit a deadline and the
+  # prospective margin stays UNEVALUATED, which is what it has always been.
+  # `workflow_dispatch` is kept so the repair can be tested without a push.
+  #
+  # NOTHING IS LOST BY STOPPING. The probe has never emitted a deadline, so
+  # the prospective check loses a capability it never had. The RETROSPECTIVE
+  # schedule margin in `ci_audit` is untouched and is what currently reports.
   workflow_dispatch:
     inputs:
       days_ahead:
