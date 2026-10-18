@@ -453,6 +453,38 @@ jobs:
       # so they are counted apart and alerted together. Anything that is none of
       # success/failure/skipped (`cancelled` at the timeout cap) is reported as
       # itself rather than folded into either.
+      # ── THE LOSS, NOT THE MECHANISM'S STATE (added 2026-10-18) ──────────
+      #
+      # MEASURED: this workflow failed on six consecutive days and sent six
+      # messages reading "Daily picks workflow FAILED (run #NNN)". Every one
+      # fired correctly and produced no action. They carried no card size (137
+      # fixtures were in those cards), no statement that a price does not
+      # backfill, no deadline, and no cumulative total - the sixth looked
+      # exactly like the first.
+      #
+      #     A repeated identical alarm is background.
+      #
+      # This step measures the streak as CONSECUTIVE DAYS WITH A CARD AND ZERO
+      # PICKS - the loss itself - and escalates its wording at N=2 and N=3. It
+      # needs DATABASE_URL, which is why it is a step and not a shell line.
+      - name: Report the LOSS when no picks were produced
+        id: loss
+        if: always() && steps.picks.outcome != 'success'
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+          TABLES_CREATED: '1'
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LOSS_ALERT_BODY: ${{ runner.temp }}/loss_alert.txt
+          LOSS_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python -m scripts.pipeline_loss_alert
+          if [ -s "${{ runner.temp }}/loss_alert.txt" ]; then
+            python -m scripts.ci_alert "$(cat "${{ runner.temp }}/loss_alert.txt")"
+          fi
+
       - name: Alert on critical step failure
         if: always()
         env:

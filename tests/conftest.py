@@ -49,6 +49,13 @@ def pytest_configure(config):
 # src/models/ml_models.py for the rationale.
 os.environ.setdefault("BETTING_AGENT_ALLOW_DEFAULT_HMAC", "1")
 
+# AND SQLITE, DECLARED. The suite strips DATABASE_URL on purpose (below), so
+# it is the one caller that legitimately wants SQLite. Declaring it is what
+# lets `database.py` REFUSE the substitution everywhere else: three confident
+# wrong answers came from an entry point that forgot `.env` and was handed an
+# empty SQLite file instead of production.
+os.environ.setdefault("BETTING_AGENT_ALLOW_SQLITE", "1")
+
 # SAFETY: tests must NEVER touch a real database. CI (and local dev) set
 # DATABASE_URL to the production Postgres, and DatabaseManager._create_engine
 # prefers env DATABASE_URL over any sqlite_path passed in config — so a DB-backed
@@ -261,3 +268,93 @@ def pytest_collection_modifyitems(config, items):
             "per tests/test_logging_regime.py — add the test to "
             "CAPLOG_ALLOWED in tests/conftest.py with that reason.\n\n"
             "Offending test(s):\n  " + "\n  ".join(offenders))
+
+
+# ────────────── THE CALENDAR/LIVE MARKER, ENFORCED RATHER THAN DECLARED
+#
+# The `calendar` marker shipped 2026-10-09 after a date rolling over cost ONE
+# CARD. A new rolling-window test entered the gate on 2026-10-13 and cost SIX
+# — 137 fixtures, zero picks, because `Run tests` failed and `--update`,
+# `--settle` and the picks were all SKIPPED.
+#
+#     A remedy that must be remembered when writing new code is not a remedy.
+#
+# Declared membership failed for the reason it always does: it asks the author
+# to classify the thing at the moment they are not thinking about the
+# classification. So `scripts/calendar_marker_scan.py` computes it, and this
+# hook refuses an unmarked finding AT COLLECTION.
+#
+# WHY A COLLECTION-TIME REFUSAL IS NOT THE SAME DISEASE. The predicate is
+# PURELY STATIC: it reads the test's own AST and nothing else. It therefore
+# cannot fire on a date roll, a provider, or a window moving — only on a commit
+# that introduces an unmarked time-varying test, and it fires on that commit,
+# locally, in the same pytest the author is already running. That is the
+# opposite failure mode from the one that cost six cards: immediate and
+# code-dependent rather than delayed and calendar-dependent.
+
+#: Tests the scan flags that are CORRECT as written, each with the reason.
+#: Static analysis cannot see that both sides of the comparison move together.
+#: `tests/conftest.py`'s own note is the governing rule here: "A correctness
+#: test that happens to use a date stays in the gating suite." These are
+#: correctness tests, so they are exempted rather than marked out of the gate.
+CALENDAR_SCAN_ALLOWED = {
+    "tests/test_models.py::test_state_file_written_after_send":
+        "BOTH SIDES MOVE TOGETHER. It asserts "
+        "`state_file.read_text() == date.today().isoformat()`, and the file "
+        "was written by the code under test moments earlier WITH today's "
+        "date. The scan sees a file read as 'fixed' because it cannot know "
+        "the file is clock-derived. The 2026-10-13 defect was the opposite: a "
+        "FROZEN literal against a moving window, where only one side moved.",
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    """Refuse `caplog`, and refuse an unmarked time-varying test."""
+    # ── caplog, as before ───────────────────────────────────────────────────
+    offenders = []
+    for item in items:
+        if "caplog" not in getattr(item, "fixturenames", ()):
+            continue
+        nodeid = item.nodeid.replace(chr(92), "/")
+        if nodeid not in CAPLOG_ALLOWED:
+            offenders.append(nodeid)
+    if offenders:
+        raise _pytest.UsageError(
+            "caplog is REFUSED in this project: it captures stdlib logging, "
+            "and almost everything in src/ logs through LOGURU. An assertion "
+            "on caplog.records reads an EMPTY list, which is byte-identical "
+            "to the defect such a test is usually written to exclude. This "
+            "has happened three times.\n\n"
+            "USE THE `capture_loguru` FIXTURE INSTEAD (tests/conftest.py):\n\n"
+            "    def test_x(capture_loguru):\n"
+            "        with capture_loguru('ERROR') as records:\n"
+            "            do_the_thing()\n"
+            "        assert any('MARKER' in r['message'] for r in records)\n\n"
+            "If the code under test really does use stdlib logging — "
+            "src/scrapers/barren_leagues.py is the only such module in src/, "
+            "per tests/test_logging_regime.py — add the test to "
+            "CAPLOG_ALLOWED in tests/conftest.py with that reason.\n\n"
+            "Offending test(s):\n  " + "\n  ".join(offenders))
+
+    # ── the calendar/live marker ────────────────────────────────────────────
+    # Only over the files actually collected, so a narrowed run is not
+    # refused for a file it did not ask for.
+    try:
+        from scripts.calendar_marker_scan import refusal_text, scan, unmarked
+    except Exception:                               # pragma: no cover
+        return
+    paths = sorted({_pathlib.Path(str(i.fspath)) for i in items
+                    if str(getattr(i, "fspath", "")).endswith(".py")})
+    if not paths:
+        return
+    root = _pathlib.Path.cwd()
+    rel = []
+    for p in paths:
+        try:
+            rel.append(p.relative_to(root))
+        except ValueError:
+            rel.append(p)
+    bad = [f for f in unmarked(scan(rel))
+           if f.nodeid not in CALENDAR_SCAN_ALLOWED]
+    if bad:
+        raise _pytest.UsageError(refusal_text(bad))

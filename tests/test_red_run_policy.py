@@ -204,8 +204,16 @@ def test_continue_on_error_is_still_set_on_every_core_step():
     # CAPTURE still runs. Same mechanism, and it is declared here rather than
     # absorbed into the number, because this guard exists so a step cannot LOSE
     # the flag silently — which means a step gaining it must be named.
-    assert len(guarded) == 10, (
-        f"{len(guarded)} steps carry continue-on-error, expected 10 — if a step "
+    # 10 -> 11 on 2026-10-18. THE ELEVENTH IS THE LOSS REPORT, and it carries
+    # the flag for a third reason: a failure to REPORT a failure must not
+    # change the run's verdict. It reads the card from the database to say how
+    # many fixtures were lost, so it can fail on its own (a database hiccup),
+    # and if that halted the job it would convert an alert problem into a
+    # pipeline problem — on the step whose entire purpose is to describe a
+    # pipeline problem. Named here rather than absorbed into the number,
+    # because this guard exists so a step cannot LOSE the flag silently.
+    assert len(guarded) == 11, (
+        f"{len(guarded)} steps carry continue-on-error, expected 11 — if a step "
         "lost it, the job now HALTS there instead of merely reporting red; if "
         "one gained it, name it here and say why")
     assert any("calendar" in n for n in guarded), (

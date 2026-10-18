@@ -88,7 +88,45 @@ class DatabaseManager:
                 pool_recycle=300,
             )
 
-        # 2. Fall back to SQLite (local dev without DATABASE_URL)
+        # 2. SQLite — AND IT IS NO LONGER A SILENT FALLBACK.
+        #
+        # THREE CONFIDENT WRONG ANSWERS, all measured, all agreeing with the
+        # standing hypothesis — which is the class that gets published:
+        #
+        #   the Part C empty-window query          "no overlap"
+        #   the density probe's predecessor        a fabricated zero
+        #   2026-10-18, pipeline_loss_alert.py     "card NEVER DISCOVERED"
+        #                                          for ELEVEN days, while the
+        #                                          database held 101 fixtures
+        #                                          for 10-17 alone
+        #
+        # Each had the same cause: an entry point that did not load `.env`, so
+        # `DATABASE_URL` was absent, so this branch handed it an EMPTY SQLITE
+        # FILE and logged the substitution at INFO. The remedy each time was
+        # "remember to load .env", and a convention has now failed three times
+        # in the same direction.
+        #
+        #     A fallback that substitutes a different population is not a
+        #     fallback, it is a silent answer to a different question.
+        #
+        # So it refuses. Tests legitimately use SQLite — `tests/conftest.py`
+        # strips `DATABASE_URL` on purpose — and declare it with the opt-in,
+        # exactly as they already do for the HMAC default key.
+        if not os.environ.get("BETTING_AGENT_ALLOW_SQLITE"):
+            raise RuntimeError(
+                "NO DATABASE_URL, and the SQLite fallback is REFUSED." + chr(10) + chr(10) + 
+                "An empty SQLite file answers every query with a plausible "
+                "zero, and this substitution has produced three confident "
+                "wrong answers (see the comment above for the list). It is "
+                "refused rather than logged because the log said so all "
+                "three times." + chr(10) + chr(10) + 
+                "IF YOU MEANT PRODUCTION: load the environment first. Every "
+                "entry point that reads production data does this INSIDE "
+                "its main(), never at import - see "
+                "scripts/cohort_status.py." + chr(10) + chr(10) + 
+                "IF YOU MEANT SQLITE: set BETTING_AGENT_ALLOW_SQLITE=1. "
+                "tests/conftest.py sets it, which is why the suite is "
+                "unaffected.")
         db_path = Path(db_config.get("sqlite_path", "data/football_betting.db"))
         db_path.parent.mkdir(parents=True, exist_ok=True)
         url = f"sqlite:///{db_path}"
