@@ -190,20 +190,49 @@ def test_an_UNEVALUATED_check_says_so_rather_than_passing():
         assert "NOT a clean bill" in text
 
 
-def test_the_detector_runs_against_the_LIVE_repo_and_2026_10_12_is_NOT_missing():
-    """The correction, pinned.
+@pytest.mark.live
+def test_the_detector_does_not_call_a_day_with_a_RUN_missing():
+    """NO HARD-CODED DATE, and OUT OF THE GATING SUITE.
 
-    2026-10-12 looked absent at 10:55 UTC and was reported as such. It was
-    not: the scheduled run fired at 11:37:39 UTC, 458 minutes late, and is a
-    legitimate data point in the `0 4` series. A detector that called it
-    missing would have been wrong.
+    THIS TEST COST SIX CARDS. Its first version asserted that **2026-10-12**
+    was not in `missing`, against a rolling 14-day window over a live
+    `gh run list`. The date aged out of the window on schedule, the assertion
+    failed, `Run tests` failed, and every downstream step - `--update`,
+    `--settle`, the picks - was SKIPPED for six consecutive days:
+    10-13..10-18, 137 fixtures, **zero picks**.
+
+    Two defects in one test, and the workflow already documented both:
+
+      1. it queried LIVE EXTERNAL STATE from inside the gate, so its outcome
+         changed with no code change - the `calendar` marker exists because
+         Stage 28 paid one card for exactly this on 2026-10-09;
+      2. it pinned a DATE rather than a PROPERTY, so it could only ever
+         expire.
+
+    The property is now derived from the same run list the detector reads: a
+    day that HAS a scheduled run must not be reported missing. That cannot
+    expire, because both sides move together.
     """
     m = ci.missing_scheduled_runs()
     if m.get("state") != "CHECKED":
         pytest.skip(f"detector unevaluated here: {m.get('reason')}")
-    assert dt.date(2026, 10, 12) not in m["missing"], (
-        "2026-10-12 is reported missing, but its scheduled run exists "
-        "(38243861903, fired 11:37:39Z)")
+
+    import json
+    import subprocess
+    raw = subprocess.run(
+        ["gh", "run", "list", "--workflow", "daily-picks.yml", "--limit",
+         "120", "--json", "createdAt,event"],
+        capture_output=True, encoding="utf-8", errors="replace", timeout=120)
+    try:
+        runs = json.loads(raw.stdout or "[]")
+    except json.JSONDecodeError:
+        pytest.skip("run list unreadable here")
+    have = {dt.datetime.fromisoformat(
+        r["createdAt"].replace("Z", "+00:00")).date()
+        for r in runs if r.get("event") == "schedule"}
+    overlap = have & set(m["missing"])
+    assert not overlap, (
+        f"days with a scheduled run are reported MISSING: {sorted(overlap)}")
 
 
 # ── WHAT `DID_NOT_RUN` IS, AND IS NOT ────────────────────────────────────────

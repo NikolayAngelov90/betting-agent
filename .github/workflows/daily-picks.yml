@@ -291,7 +291,12 @@ jobs:
       - name: Run tests
         id: tests
         timeout-minutes: 15
-        run: python -m pytest tests/ -v --tb=short -m "not calendar"
+        # `not live` ADDED 2026-10-18, at a cost of SIX CARDS. A test that
+        # queries live external state changes its verdict with no code change,
+        # which is the property `calendar` was created for on 2026-10-09 —
+        # and a `live` test was added straight back into this gate four days
+        # later. Membership is DECLARED by the marker, never inferred.
+        run: python -m pytest tests/ -v --tb=short -m "not calendar and not live"
 
       # ── CALENDAR ASSERTIONS, OUT OF THE CAPTURE-GATING PATH (Stage 28) ────
       #
@@ -317,7 +322,7 @@ jobs:
         id: calendar
         timeout-minutes: 5
         continue-on-error: true
-        run: python -m pytest tests/ -v --tb=short -m calendar
+        run: python -m pytest tests/ -v --tb=short -m "calendar or live"
 
       - name: Run daily update (fixtures + odds, no Flashscore results)
         id: update

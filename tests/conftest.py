@@ -31,6 +31,18 @@ def pytest_configure(config):
         "the code — it asserts a deployment fact and must NOT gate price "
         "capture. Run separately; a failure reds the run without blocking "
         "--update.")
+    config.addinivalue_line(
+        "markers",
+        "live: a test that queries LIVE EXTERNAL STATE (the GitHub API, the "
+        "network, a provider). Its outcome changes with no code change, so it "
+        "must NOT gate price capture - the same rule as `calendar`, and the "
+        "same cost when ignored. MEASURED 2026-10-18: "
+        "test_the_detector_runs_against_the_LIVE_repo asserted a date was not "
+        "missing from a rolling 14-day `gh run list` window; the date aged "
+        "out, `Run tests` failed, and SIX consecutive cards were lost "
+        "(10-13..10-18, 137 fixtures, 0 picks). Stage 28 had already moved "
+        "the calendar assertions out of the gate for this exact reason, at a "
+        "cost of one card.")
 
 # Opt into the insecure default HMAC key for tests. Production runs require
 # MODEL_HMAC_KEY to be set or this env var to be set explicitly — see
