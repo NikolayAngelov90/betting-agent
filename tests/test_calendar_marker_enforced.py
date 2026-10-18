@@ -96,9 +96,13 @@ def test_the_scan_finds_ALL_THREE_tests_the_MARKER_EXISTS_FOR():
     measuring nothing — and an earlier draft did, because it only accepted AST
     literals as the 'fixed' side and these compare against a module constant.
     """
+    # TWO, not three, from 2026-10-18: `test_the_H1_RATE_DECISION_is_DUE` was
+    # RETIRED that day because the decision it was holding was taken (H1
+    # collected n=4 of 39 against a floor of 33, so no analysis runs). Its
+    # successor contract lives in tests/test_calendar_separation.py. The
+    # predicate's coverage is unchanged; the population shrank.
     found = {f.name for f in scan.scan() if f.markers}
     for name in ("test_the_H1_RESERVATION_WINDOW_has_EXPIRED",
-                 "test_the_H1_RATE_DECISION_is_DUE",
                  "test_the_suppression_has_EXPIRED"):
         assert name in found, (
             f"{name} is no longer flagged; the predicate has lost the "

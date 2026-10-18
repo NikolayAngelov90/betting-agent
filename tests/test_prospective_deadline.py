@@ -248,10 +248,18 @@ def test_no_margin_computation_uses_a_deadline_LITERAL():
         txt = path.read_text(encoding="utf-8")
         # strip comments: a literal in prose is provenance, not a computation
         code = "\n".join(l.split("#", 1)[0] for l in txt.splitlines())
-        for lit in ("14 * 60 + 30", "12 * 60", "10 * 60 + 15", "870", "720", "615"):
+        # WORD-BOUNDED for the bare numbers. `870` as a substring matched the
+        # RUN ID `38708288664` on 2026-10-18 and reported a deadline literal
+        # in a `RESOLVED_RUNS` comment. A digit run inside a longer digit run
+        # is not a literal.
+        import re as _re
+        for lit in ("14 * 60 + 30", "12 * 60", "10 * 60 + 15"):
             for m in re.finditer(re.escape(lit), code):
                 line = code[:m.start()].count("\n") + 1
                 offenders.append(f"{path}:{line} uses {lit!r}")
+        for bare in ("870", "720", "615"):
+            if _re.search(r"(?<![0-9])" + bare + r"(?![0-9])", code):
+                offenders.append(f"{path}:{code.index(bare)} uses {bare!r}")
     assert not offenders, (
         "a deadline literal is back in a margin computation:\n  "
         + "\n  ".join(offenders)

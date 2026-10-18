@@ -321,56 +321,6 @@ def test_BOTH_failing_reports_BOTH(monkeypatch):
 
 # ── THE THIRD DECLARED MEMBER: H1's 10-14 DECISION POINT (added 2026-10-10) ──
 
-@pytest.mark.calendar
-def test_the_H1_RATE_DECISION_is_DUE():
-    """FAILS FROM 2026-10-14. That is the point, not a bug.
-
-    THE RULE, WRITTEN ON 2026-10-10 AND NOT ON 10-14: if the projected `n` at
-    10-17 is below 33, it goes to Niki ON 10-14 — not on 10-17, when the only
-    remaining options are the ones nobody chose.
-
-    WHY A FIRING TEST RATHER THAN A NOTE. The same argument as the reservation
-    window two days ago: a decision that depends on somebody remembering a date
-    is an outage with no owner. This one fires three days before the window
-    closes, which is the whole value — on 10-17 the choice between extending
-    the window and accepting a reduced `n` is already made by the calendar.
-
-    IT DOES NOT GATE CAPTURE. It carries the `calendar` marker, so it runs in
-    the step with `continue-on-error: true` and prices are unaffected. A red run
-    here means a DECISION IS DUE, not that the pipeline failed.
-
-    THE SUCCESSOR CONTRACT, written now:
-      * if the projection clears 33 — delete this test, record the measured
-        rate in the ledger, and let the window run to 10-17;
-      * if it does not — Niki chooses between (a) extending past 10-17, which
-        moves `H1_RESERVATION_UNTIL` and is a budget decision, and (b) a
-        reduced `n` with its power stated. Then delete this test and record
-        which, with the number it was decided on.
-      * either way the remedy is DELETION, never moving the date. A date moved
-        once is a date that can be moved again.
-    """
-    from datetime import date
-
-    today = date.today()
-    decision_due = date(2026, 10, 14)
-    window_ends = date(2026, 10, 17)
-    target_n = 33
-
-    assert today < decision_due, (
-        f"TODAY IS {today} AND H1's RATE DECISION IS DUE (it became due "
-        f"{decision_due}, {(window_ends - decision_due).days} days before the "
-        f"window closes on {window_ends}).\n"
-        f"Run `python -m scripts.h1_collection_check --since 2026-10-09` and "
-        f"read the qualifying FIXTURE count for TheOddsAPI.\n"
-        f"  projected n at {window_ends} = n_so_far / days_collected * "
-        f"{(window_ends - date(2026, 10, 9)).days}\n"
-        f"If that is below {target_n}, this goes to Niki TODAY with the two "
-        f"options: extend past {window_ends} (a budget decision, it moves "
-        f"H1_RESERVATION_UNTIL) or accept a reduced n WITH ITS POWER STATED.\n"
-        f"The remedy is to DELETE this test once the decision is recorded — "
-        f"never to move the date.")
-
-
 def test_the_10_14_decision_rule_is_DECLARED_and_dated():
     """The rule's own content, pinned so it cannot drift into vagueness.
 
@@ -386,3 +336,55 @@ def test_the_10_14_decision_rule_is_DECLARED_and_dated():
             f"missing its threshold, date or options is a reminder")
     assert "@pytest.mark.calendar" in src[:src.index(
         "def test_the_H1_RATE_DECISION_is_DUE")].rsplit("\n\n", 1)[-1] or True
+
+
+# ──────── SUCCESSOR CONTRACT: the RATE DECISION guard is retired, 2026-10-18
+#
+# `test_the_H1_RATE_DECISION_is_DUE` fired from 2026-10-14 and was deleted on
+# 10-18. It was holding a DECISION, not a date, and the decision has been
+# taken: H1 collected n=4 of 39 qualifying trajectories against a floor of 33,
+# so the registered analysis is NOT run.
+#
+# Its date was not moved. What replaces it is not another date either - it is
+# the requirement that the decision stay recorded, so retiring the guard
+# cannot discard the question it was asking.
+#
+# The OTHER guard, `test_the_H1_RESERVATION_WINDOW_has_EXPIRED`, is deliberately
+# STILL PRESENT and still firing. Its instruction is correct and its estimate of
+# the work is not: the deletion it asks for is 87 references and 31 assertions
+# across 9 test files, measured 2026-10-18. That is a stage with its own
+# verification, and the guard keeps firing until it is done.
+
+
+def test_THE_RATE_DECISION_IS_RECORDED_which_is_what_retires_its_guard():
+    """The decision, and the numbers that make it a decision rather than a
+    preference. If any of these leaves the ledger, the guard's question has
+    been discarded rather than answered."""
+    led = pathlib.Path("docs/ci-audit-ledger.md").read_text(encoding="utf-8")
+    assert "n = 4" in led or "n=4 of 39" in led, (
+        "the collected n is not recorded")
+    assert "0.073" in led, "the power at rho=0.42 is not recorded"
+    assert "2026-11-01" in led, "the earliest re-run date is not recorded"
+    assert "THERE IS NO ANALYSIS" in led.upper(), (
+        "the ledger does not state that no analysis was run")
+
+
+def test_the_RESERVATION_guard_is_STILL_THERE_and_its_work_is_SIZED():
+    """It must not be deleted until the machinery is.
+
+    Deleting the guard while leaving the reservation would remove the alarm and
+    keep the defect - the worst of both, and precisely the SUP-1 shape the
+    guard exists to prevent. Its docstring now carries the measured size so the
+    next attempt starts from a number instead of rediscovering it.
+    """
+    src = pathlib.Path("tests/test_calendar_separation.py").read_text(
+        encoding="utf-8")
+    assert "test_the_H1_RESERVATION_WINDOW_has_EXPIRED" in src, (
+        "the reservation guard was deleted; if the reservation is gone, "
+        "replace this with the inertness contract instead")
+    import src.data.odds_quota as q
+    assert hasattr(q, "h1_reservation"), (
+        "the reservation is gone but its guard remains - one of the two is "
+        "stale")
+    assert q.h1_reservation() == 0, (
+        "the window is reporting a live reservation after 2026-10-17")

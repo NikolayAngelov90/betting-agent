@@ -202,6 +202,31 @@ SELF_EMITTED_ANNOTATIONS = (
 # verdict and its resolution. What changes is only whether it enters `alarmed`.
 RESOLVED_RUNS = {
     # run id        (resolving commit, reason)
+    # ── THE SIX-DAY OUTAGE, RESOLVED 2026-10-18 BY 7514a50 ─────────────────
+    #
+    # One finding, six reds, and the partition was IDENTICAL on all six:
+    # exit=2 self=1 foreign=0 unexplained_nonzero_exit=1 tracebacks=0
+    # steps_failed=[]. `Run tests` failed on a test that asserted a hard-coded
+    # date was absent from a rolling 14-day window over a live `gh run list`;
+    # the date aged out, and every downstream step was SKIPPED -> the verdict
+    # was correctly `DID_NOT_RUN` and the audit correctly alarmed on all six
+    # days. 137 fixtures, zero picks.
+    #
+    # The one unexplained exit is TRUE, not a matcher defect: `Run tests`
+    # exits non-zero and emits no registered annotation of its own, while the
+    # critical-step alert emits `::error::Pick generation`, which explains the
+    # other exit. `steps_failed` is empty because that list is parsed from the
+    # workflow's own text, which names only the CORE steps - the known
+    # step-name parser gap, not a finding.
+    "38389790394": ("7514a50", "six-day outage: the live-state test in the "
+                               "gate; marked `live` and the gate narrowed"),
+    "38541025164": ("7514a50", "same finding, day 2"),
+    "38708288664": ("7514a50", "same finding, day 3"),
+    "38875569032": ("7514a50", "same finding, day 4"),
+    "38999614321": ("7514a50", "same finding, day 5"),
+    "39094759323": ("7514a50", "same finding, day 6 — recovered by a "
+                               "dispatch the same morning, 65 picks on a "
+                               "68-fixture card, 93 min before kickoff"),
     "36843668865": ("a4d5228",
                     "the month-boundary contradiction in "
                     "test_credit_reading_freshness was bounded; the test gate "
@@ -2078,6 +2103,21 @@ def verdict(facts: Dict[str, object], hits: List[str],
 #:
 #: The clearing action is an action a person takes: the cron decision registered
 #: in `docs/scheduler-hour-hypothesis.md`, due after 2026-10-17.
+# ── THE 10-18 REVIEW, CONDUCTED. THE ACKNOWLEDGEMENT IS NOT RENEWED. ───────
+#
+# It worked exactly as designed, and the first thing it did on a real test was
+# REFUSE. Measured 2026-10-18: the weekday series grew n=1 -> n=5 and the
+# binding margin deteriorated from -85m to **-241m**, so
+# `margin_breach_is_acknowledged('weekday', -241.4)` returns {} and the margin
+# alarms again. Deterioration is an event.
+#
+#     weekday `0 4`   n=5  min 283  mean 357 (5h57m)  max 458 (7h38m)  sd 77
+#     weekend `0 0`   n=6  min 219  mean 253 (4h13m)  max 294 (4h54m)  sd 27
+#
+# The entry below is LEFT AT -85 ON PURPOSE. Re-acknowledging at -241 would
+# absorb a condition that got four times worse, which is the one thing an
+# acknowledgement must never do. It alarms until the cron decision is taken —
+# that is the clearing action, and it is now the blocking item.
 ACKNOWLEDGED_MARGIN_BREACH = {
     "weekday": dict(
         binding=-85.0,

@@ -27168,3 +27168,385 @@ Full suite **2034 passed**. Invariants pass, count not cited. Fingerprint
 `docs/scheduler-hour-hypothesis.md` (new, registered at `2f50771`),
 `tests/test_fixture_horizon_probe.py`. No production write, no schema change,
 **no cron change**. Nothing on the H1 path was touched.*
+
+---
+
+# 2026-10-18 (second entry) — H1 RESULT: n=4 of 39, power 0.073, NO ANALYSIS. The experiment's failure and the pipeline's failure are the same event.
+
+Every figure below is `measured` against PostgreSQL with `assert db.is_postgres`
+executed first, which is now structural rather than remembered.
+
+## PART 2 — H1 RESULT
+
+### `n = 4` QUALIFYING TRAJECTORIES, FLOOR 33, TARGET 39
+
+The registered figure, from `h1_collection_check`'s own output on the last
+collection run (`38745923236`, 2026-10-15):
+
+```
+H1_APPARATUS state=RUNNING_AND_FINE alarms=False
+  H1 COLLECTION: 4 of 39 qualifying trajectories
+  qualifying FIXTURES by provider (never summed):
+     TheOddsAPI     fixtures=   4 series=342
+  pool credits used this month: 220 (EVERY consumer — not H1's spend)
+  H1 ATTRIBUTED credits: 6 / bound 168 (reservation 168, registered ceiling 200)
+```
+
+> **The unit matters and I got it wrong first.** My own query over
+> `odds_snapshots` returned **418** keys with ≥3 instants at ≥30-minute
+> separation — but a key is `(match, bookmaker, market, selection)` and the
+> registered unit is the **fixture**. 4 fixtures carrying 342 series. Reporting
+> 418 would have been a hundredfold overstatement of n, in the direction that
+> licences an analysis.
+
+**THE ACTUAL GAPS, not the predicate's verdict** — `measured` 2026-10-18 over
+the window 2026-10-09 → 2026-10-17 exclusive, n=1,166 gaps across the
+qualifying series:
+
+```
+min 121.0   median 121.1   max 473.0   minutes
+```
+
+The 121-minute mode is the in-job wait (`--gap-minutes 120` plus request time),
+which matches the trial's measured 121.1 / 120.9 exactly. The 473 is the
+overnight span between the 10-09 seed and the 10-10 trial.
+
+### CREDITS: 6 OF THE 168 RESERVED, provider named
+
+**TheOddsAPI: 6 attributed credits** against the 168 reservation and the
+registered 200 ceiling. The pool figure of 220 is **every consumer** and is not
+comparable to either — the separate attribution ledger is what makes H1's own
+spend measurable rather than inferred, and it is the thing that survives the
+reservation's deletion.
+
+**It did not exhaust. It had almost nothing to ask for.**
+
+### WHICH DAYS COLLECTED — and H1's job was NOT stopped by the outage
+
+`h1-collect` ran **independently of `daily-picks` and succeeded every time**:
+
+| run | day | conclusion |
+| --- | --- | --- |
+| `38053287510` | 10-10 (dispatch, the trial) | success |
+| `38431871968` | 10-13 | success |
+| `38578617571` | 10-14 | success |
+| `38745923236` | 10-15 | success |
+
+**And `odds_snapshots` holds nothing after 10-12:**
+
+| day | observations | distinct keys |
+| --- | --- | --- |
+| 10-09 | 2,416 | 2,416 |
+| 10-10 | 15,645 | 12,999 |
+| 10-11 | 10,269 | 9,629 |
+| 10-12 | 5,137 | 3,433 |
+| **10-13 … 10-16** | **0** | **0** |
+
+So three jobs ran, succeeded, spent nothing and wrote nothing. Their own reason,
+logged verbatim and identically on all three:
+
+```
+TheOddsAPI imminent refresh: nothing to do (window 360 min) — 4 league(s) skipped
+```
+
+### THE CAUSE, AND I HAVE TO STATE WHERE THE MEASUREMENT RUNS OUT
+
+**The experiment's failure and the pipeline's failure are the same event.**
+H1 selects from `matches`, which is written by `daily-picks --update`, which
+was dead 10-13 → 10-17. The cards on the collection days were:
+
+| day | whole card | in the 4 pinned leagues | inside the 360-min window at run time |
+| --- | --- | --- | --- |
+| 10-13 | 8 | 8 | **8** |
+| 10-14 | 4 | 4 | **4** |
+| 10-15 | 1 | 0 | 1 |
+
+A Tuesday card of **8** is itself the outage: nothing had scraped new fixtures
+since 10-12, so the Champions League night that would have carried the
+collection was never in the database.
+
+> **But the 8 and the 4 WERE inside the window, and H1 skipped them anyway —
+> and why is no longer measurable.** The selector filters on
+> `Match.is_fixture == true`, and the post-picks results scrape (which
+> succeeded on every failed run) has since flipped all of those rows to
+> results: `is_fixture` is now **0** on 10-13, 10-14 and 10-15. A reproduction
+> today returns an empty row set **for a different reason than applied then**,
+> so it cannot establish the 10-13 skip. I ran it, got `selected={} skips={}`,
+> and that result is anachronistic rather than informative.
+>
+> I will not infer the skip reason from today's state. It is **unmeasurable**,
+> and the one thing that would have preserved it — the skip reasons in the log
+> — printed a count (`4 league(s) skipped`) and not the reasons.
+
+### THE VERDICT: NO ANALYSIS
+
+**`n = 4`. The floor is 33. 4 << 33, so the registered analysis is NOT run.**
+
+**POWER AT ρ=0.42**, two-sided α=0.05, Fisher z, `measured` 2026-10-18:
+
+| n | power |
+| --- | --- |
+| **4** | **0.073** |
+| 33 (floor) | 0.689 |
+| 39 (target) | 0.766 |
+
+**7.3%.** An analysis at that power is a coin-flip dressed as a result, and
+running one anyway is how the fifteen fitted thresholds happened.
+
+**`NO DATA` IS NOT A NULL**, and n=4 is not a reduced-power result — the power
+is computed above and stated, not implied. Nothing about H1's hypothesis is
+known either way.
+
+**WHETHER TO RE-RUN IS NIKI'S.** The cost, provider named: the registered
+design is **168 TheOddsAPI credits** over an eight-day window, of which 6 were
+spent, and the monthly pool resets **2026-11-01** — the earliest date a fresh
+window can start without competing with October's remaining 130 spendable
+credits. The apparatus is intact and was never the problem.
+
+## PART 4 — THE 10-17 QUEUE
+
+### 4a. THE TWO GUARDS — one retired, one sized and left firing
+
+**`test_the_H1_RATE_DECISION_is_DUE` — RETIRED.** It was holding a *decision*,
+and the decision is Part 2's verdict, now recorded. Its successor contract
+asserts the ledger carries `n=4 of 39 qualifying trajectories`, the power
+`0.073`, and `2026-11-01`, so deleting the guard cannot discard the question it
+was asking.
+
+**`test_the_H1_RESERVATION_WINDOW_has_EXPIRED` — STILL FIRING, and that is the
+honest outcome.** Its instruction is right and its estimate of the work is not.
+I performed the deletion, and it works in `src/`:
+
+```
+allocate() -> {'pool': 350, 'h1_reserved': 0, 'normal_ceiling': 350, 'window': None}
+```
+
+Then I measured what else references it:
+
+> **87 references across 9 test files, 31 of them assertions** — 42 uses of
+> `H1_RESERVED_CREDITS`, 29 calls to `h1_reservation`, plus the H1 scripts
+> which fail on import without it. The guard names five symbols and one test.
+
+Those 31 assertions encode measured facts about the stop, the ceiling collapse
+and the attribution, which are still live. Rewriting them in the same pass that
+restored the pipeline is how a card gets lost, and six were lost this week by
+exactly that kind of haste. **So the change is reverted and sized**: the
+deletion is a stage with its own verification, not a queue sub-item. The guard
+keeps firing until it is done, which is the guard working.
+
+**Neither date moved.**
+
+**And the offset is observed in production for the first time**, `measured`
+2026-10-18: `h1_reservation(today) -> 0`, `allocate() -> h1_reserved 0,
+normal_ceiling 350`. The onset was verified on 10-09; a self-deactivating
+mechanism whose deactivation is never seen is an assumption, and this is the
+only observation of it. **350, not 400** — the pool is the budget net of the 50
+safety margin.
+
+### 4b. THE REST — status, not promises
+
+| item | status |
+| --- | --- |
+| the four H1 PNC-1 findings | **re-triage now due**; `DEFERRED_UNTIL` was 2026-10-17 and the window is shut. Blocked behind the reservation deletion, which touches the same files. |
+| `as_datetime`, the nested H1 copy | **not unified**; it lives in `h1_collection_check.load_observations`, one of the 9 files the reservation deletion rewrites. Doing both at once is correct; doing either alone touches the file twice. |
+| `max_days_ahead` — the rename | **not done.** Still the right change: the name says fetch bound and the thing is a post-fetch rolling filter, which produced two of my errors in 48 hours. It is a pure rename across the scraper and its tests. |
+| `verify_offset` | **DEFERRED, with the trade recorded.** The fix changes where the clock comes from and removes the cross-check that caught a three-hour cron error. The control that fails if the probe stops preceding the scrape by six hours is in place and passing. |
+| the HMAC switch plan | **re-confirmed accurate against the current tree.** `MODEL_HMAC_KEY` is still not a configured secret; `daily-picks` still passes `${{ secrets.MODEL_HMAC_KEY }}` alongside the opt-in. **It should run after the reservation deletion and before the next cohort bump** — and step 3 still costs a card per run, so not in a week that has lost six. |
+
+## PART 1 — THE SIX DEAD DAYS: ONE FINDING
+
+| run | exit | self | foreign | **unexplained** | tracebacks | steps_failed |
+| --- | --- | --- | --- | --- | --- | --- |
+| `38389790394` 10-13 | 2 | 1 | 0 | **1** | 0 | `[]` |
+| `38541025164` 10-14 | 2 | 1 | 0 | **1** | 0 | `[]` |
+| `38708288664` 10-15 | 2 | 1 | 0 | **1** | 0 | `[]` |
+| `38875569032` 10-16 | 2 | 1 | 0 | **1** | 0 | `[]` |
+| `38999614321` 10-17 | 2 | 1 | 0 | **1** | 0 | `[]` |
+| `39094759323` 10-18 | 2 | 1 | 0 | **1** | 0 | `[]` |
+
+**Byte-identical. ONE FINDING, six reds** — the third time this shape has been
+counted rather than assumed (nine on 10-10, seven on 10-13).
+
+**THE `##[error]` MATCHER READS THEM CORRECTLY**, and this was its first
+sustained exposure since `5bb62cc`. The partition is right in every column:
+two exits (`Run tests` and the critical-step alert), **one** explained by the
+registered `::error::Pick generation`, and **one genuinely unexplained** —
+`Run tests` exits non-zero and announces nothing. `foreign=0` confirms the
+rendered-form fix. `tracebacks=0` because `pytest --tb=short` emits no
+`Traceback (most recent call last)`, and `steps_failed=[]` because that list is
+parsed from the workflow's own text naming only the CORE steps. Both are the
+documented gaps, not defects.
+
+All six now carry the `resolved` marker against **`7514a50`**.
+
+## PART 3 — THE AUDIT REDS, AND THE ALARM ACCOUNTING
+
+**38 red `ci-audit` runs since the last ledger row.** And the brief's
+assumption — mine too — was wrong:
+
+```
+audit alarm — 38999614321 daily-picks DID_NOT_RUN; 39094759323 daily-picks DID_NOT_RUN; schedule margin …
+```
+
+> **`DID_NOT_RUN` FIRED, CORRECTLY, ON EVERY ONE OF THE SIX DAYS.** The core
+> steps were SKIPPED, so `steps_not_run` was non-empty, so the verdict was
+> `DID_NOT_RUN`, which **is** in `--fail-on`. The audit alarmed every single
+> time. **The alarm surface was never silent.**
+
+So the 38 reds are **two findings, not one**: the rolling pair of
+`DID_NOT_RUN` run ids (one finding, now resolved at `7514a50`) and the schedule
+margin (the second). Counted, not assumed.
+
+### THE ACKNOWLEDGEMENT'S 10-18 REVIEW, CONDUCTED — AND IT REFUSED
+
+```
+weekend  deadline 10:15  schedule_margin[n=6 ... binding=+166m threshold=30m]
+weekday  deadline 12:00  schedule_margin[n=5 delay max=7h37m mean+3sd=10h14m
+                         | binding=-241m threshold=30m  ** DECISION FIRES **]
+```
+
+`margin_breach_is_acknowledged('weekday', -241.4)` → **`{}`**. The
+acknowledgement recorded −85m; the condition is now **−241m**, and
+deterioration is an event. **Its first real test was a refusal, which is the
+behaviour it was built for.**
+
+**It is NOT renewed, deliberately.** Re-acknowledging at −241 would absorb a
+condition that got four times worse — the one thing an acknowledgement must
+never do. The margin alarms until the cron decision is taken, and that decision
+is now the blocking item.
+
+### AND A TENSION I AM NOT GOING TO RESOLVE BY PREFERENCE
+
+`measured` 2026-10-18, same calendar period, same repository:
+
+| cron | n | mean | max | sd |
+| --- | --- | --- | --- | --- |
+| weekend `0 0` | 6 | **4h13m** | 4h54m | 27 min |
+| weekday `0 4` | 5 | **5h57m** | 7h38m | 77 min |
+
+That contrast **supports** the hour hypothesis. The `closing-lines` test
+registered at `2f50771` **contradicts** it: n=318, one period, eight hours,
+**r = −0.084**.
+
+> They disagree exactly where the pre-registration said the free test might not
+> generalise: `closing-lines` delays are **20–85 minutes** and these are
+> **4–8 hours**. The stated limitation turned out to be load-bearing. Neither
+> measurement settles it — n=5 and n=6 with no randomisation on one side, a
+> null in a different regime on the other — and the registered trial
+> (weekdays back to `0 0`, n≥10) remains the only thing that can.
+
+### WHAT THE SIX MESSAGES SAID, AND WHAT WOULD BE SENT NOW
+
+Verbatim, from the logs, identical on all six days but for the run number:
+
+```
+❌ Daily picks workflow FAILED (run #332). Logs: https://github.com/.../runs/39094759323
+```
+
+**Card size: no. Irreversibility: no. Deadline: no.** Six times.
+
+What `pipeline_loss_alert.py` renders for the same streak, `measured`
+2026-10-18 against the real cards:
+
+```
+!!! DAY 6 OF ZERO PICKS - THIS ALERT IS NOT BEING SEEN. 206 fixtures lost so far.
+
+Prices DO NOT BACKFILL: a fixture that kicks off without a captured price is
+gone, and no later run recovers it.
+
+THE LOSS, per day:
+  2026-10-13  8 fixtures  picks saved: 0
+  2026-10-14  4 fixtures  picks saved: 0
+  2026-10-15  1 fixtures  picks saved: 0
+  2026-10-16  23 fixtures  picks saved: 0
+  2026-10-17  101 fixtures  picks saved: 0
+  2026-10-18  68 fixtures  picks saved: 0
+
+EARLIEST KICKOFF   10:15 UTC / 13:15 EEST+0300   (discovered from the stored card)
+LAST SAFE DISPATCH 08:31 UTC / 11:31 EEST+0300
+  = kickoff - 88m time-to-picks (MEASURED upper bound, n=4, 67.4-88.1, NOT the mean) - 15m safety margin
+TIME REMAINING     +31 min
+
+ACTION, and it is the OPERATOR'S - there is no automated alternative today:
+    gh workflow run daily-picks.yml
+```
+
+## THE ENTRIES
+
+> **The unit of n is part of n.** The same window read 418 or 4 depending on
+> whether the unit was a key or a fixture, and 418 would have licensed an
+> analysis at a hundredth of the real sample. A count without its unit is not
+> a measurement.
+
+> **A green run that spends nothing and writes nothing is the hardest failure
+> to see.** Three H1 jobs ran, succeeded, cost 0 credits and produced 0 rows,
+> and the only trace was one INFO line saying `nothing to do`. Its own
+> apparatus check reported `state=RUNNING_AND_FINE alarms=False` throughout.
+
+> **A skip reason that logs its COUNT and not its REASONS destroys the
+> evidence.** `4 league(s) skipped` was enough to know something was skipped
+> and never enough to know why, and by the time anyone asked, the rows had been
+> flipped from fixtures to results and the question had become unanswerable.
+
+> **An instruction can be right and still understate its work by two orders of
+> magnitude.** "Delete these five symbols and this test" is 87 references and
+> 31 assertions across 9 files. Sizing it before starting is the difference
+> between a stage and an outage.
+
+> **An acknowledgement's first duty is to refuse.** The margin acknowledgement
+> absorbed −85m for five days and declined −241m on the day it mattered. A
+> suppression that cannot say no is a silence.
+
+## DECLARATION
+
+**H1 RESULT: `n = 4` of 39 qualifying trajectories against a floor of 33.
+POWER AT ρ=0.42 IS 0.073. THERE IS NO ANALYSIS**, and `NO DATA` is not a null.
+H1's own job ran and SUCCEEDED on all four days, independent of the dead
+pipeline, spending **6 of 168 TheOddsAPI credits** — it did not exhaust, it had
+nothing to ask for. `odds_snapshots` holds **zero rows after 10-12**; the three
+collection runs each logged `nothing to do (window 360 min) — 4 league(s)
+skipped`. **The experiment's failure and the pipeline's failure are the same
+event**: H1 selects from a card `daily-picks` writes, and the cards on its
+collection days were **8, 4 and 1 fixtures**. Why the 8 and the 4 that *were*
+inside the window got skipped is **no longer measurable** — `is_fixture` is now
+0 on all three days and a reproduction today is anachronistic. Actual gaps,
+n=1,166: min 121.0, median 121.1, max 473.0 minutes. **Re-running is Niki's
+decision**, cost 168 TheOddsAPI credits over eight days, earliest start
+**2026-11-01**.
+
+**10-17 QUEUE:** the rate-decision guard is **RETIRED** with a successor
+contract that asserts the decision is in the ledger. The reservation guard is
+**STILL FIRING and SIZED**: the deletion works in `src/` and is **87 references
+/ 31 assertions / 9 test files** wide, so it is its own stage — reverted, not
+half-done. **Neither date moved.** The offset is **observed in production for
+the first time**: `h1_reserved 0`, `normal_ceiling 350`. The four PNC-1
+findings, `as_datetime` and `max_days_ahead` are blocked behind that same
+deletion or named as pure renames; `verify_offset` stays deferred with its
+trade recorded and its six-hour control passing; the HMAC plan is
+**re-confirmed accurate** and should run after the deletion, not this week.
+
+**ONE FINDING for the six days** — byte-identical partitions, `exit=2 self=1
+foreign=0 unexplained=1 tracebacks=0 steps_failed=[]`, all six now `resolved`
+at `7514a50`. **The `##[error]` matcher reads them correctly** on its first
+sustained exposure since `5bb62cc`: the single unexplained exit is `Run tests`
+announcing nothing, which is true.
+
+**TWO FINDINGS for the 38 audit reds**, counted: the rolling `DID_NOT_RUN` pair
+and the schedule margin. **And the alarm gap was never silence** —
+`DID_NOT_RUN` fired correctly on all six days. The gap was that the picks alert
+said `❌ Daily picks workflow FAILED (run #NNN)` six times with **no card size,
+no irreversibility and no deadline**, which is now rendered differently and
+shown above. **The acknowledgement's 10-18 review is conducted and it is NOT
+renewed**: −85m acknowledged, **−241m** measured, refused. And the weekday
+`0 0`-vs-`0 4` contrast in one period (**4h13m vs 5h57m mean**) now points the
+opposite way from the registered `closing-lines` null (**r = −0.084**), exactly
+where the pre-registration warned the scales differ — the registered trial
+remains the only thing that settles it.
+
+Full suite **2054 passed**. Invariants pass, count not cited. Fingerprint
+**UNCHANGED** at `s5.17` / `818026`.
+
+*Recorded 2026-10-18. `scripts/ci_audit.py`, `tests/test_calendar_separation.py`,
+`docs/ci-audit-ledger.md`. The reservation deletion was performed, measured,
+sized and REVERTED pending its own stage. No production write, no schema
+change, no cron change.*
