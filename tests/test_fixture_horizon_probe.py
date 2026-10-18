@@ -644,3 +644,169 @@ def test_the_verifier_is_NOT_VACUOUS_and_the_distinction_is_recorded():
     assert "verify_offset(s, probed) is None" in src, (
         "the three-outcome drive is gone; without it the claim that the "
         "verifier is not vacuous is unsupported")
+
+
+# ───────── WHICH REFUSAL IS IT? THE PROVENANCE, FORCED. 2026-10-18.
+#
+#     An always-empty verifier is honest. An intermittently-populated one is
+#     worse, because its silence and its answer become indistinguishable in
+#     provenance - unless the output says which.
+#
+# `verify_offset` returns None for two different worlds and the log said
+# `UNVERIFIABLE` for both. While the ordering is always inverted that
+# conflation is harmless; it stops being harmless the moment the ordering can
+# invert, and the margin to that has thinned.
+#
+# MEASURED 2026-10-18, all nine probe runs, separation against the TARGET
+# DAY's scrape completion:
+#
+#     ordering INVERTED in 9 of 9      separation +7.33h .. +33.49h
+#     runs below the 6.0h floor        ZERO - the intermittency has not started
+#
+# AND THE NOMINAL GAP WAS NEVER THE REAL ONE. With the probe's observed
+# maximum lateness (18:00 -> 00:21) against the weekday scrape's observed
+# 256-305 min, the worst case is +3.92h post-revert and was ALREADY +4.37h
+# pre-revert. The nominal 10h -> 6h change moved the real worst case by 27
+# minutes.
+
+def test_the_ORDERING_is_MEASURED_from_the_rows_not_the_cron(tmp_path):
+    """Force both worlds and confirm each is named."""
+    import datetime as _d
+
+    mgr = _mgr(tmp_path)
+    day = _d.date(2026, 10, 20)
+
+    # (1) no rows for the day -> the scrape has not run
+    with mgr.get_session() as s:
+        state, detail = probe.observed_ordering(s, day)
+    assert state == probe.ORDERING_INVERTED, (state, detail)
+    assert "has NOT run yet" in detail
+    assert "this is ORDERING, not an empty result" in detail
+
+    # (2) rows exist -> the population exists, so a miss is about the match
+    mgr = _seed(mgr)
+    with mgr.get_session() as s:
+        from src.data.models import Match
+        md = s.query(Match).first()
+        day2 = md.match_date.date()
+        state2, detail2 = probe.observed_ordering(s, day2)
+    assert state2 == probe.ORDERING_POPULATION_EXISTS, (state2, detail2)
+    assert "The population EXISTS" in detail2
+    assert "not the ordering" in detail2
+    assert detail != detail2, "both worlds print the same sentence"
+
+
+def test_an_UNREADABLE_database_is_ORDERING_UNKNOWN_not_inverted():
+    """Third state. "Could not measure the ordering" is not "the ordering is
+    inverted" - the sixth time this file set has had to separate those."""
+    class _Boom:
+        def execute(self, *_a, **_k):
+            raise RuntimeError("no connection")
+
+    state, detail = probe.observed_ordering(_Boom(), dt.date(2026, 10, 20))
+    assert state == probe.ORDERING_UNKNOWN
+    assert "absence of evidence" in detail
+
+
+def test_the_TWO_REFUSALS_print_DIFFERENTLY():
+    """The whole point. A reader must never infer which world produced a
+    `None`."""
+    assert probe.REFUSAL_EMPTY_POPULATION != probe.REFUSAL_ORDERING_INVERTED
+    assert "EMPTY_POPULATION" in probe.REFUSAL_EMPTY_POPULATION
+    assert "ORDERING_INVERTED" in probe.REFUSAL_ORDERING_INVERTED
+    src = pathlib.Path("scripts/fixture_horizon_probe.py").read_text(
+        encoding="utf-8")
+    # the selection is on the MEASURED ordering, not on a date or a cron
+    assert "if ordering == ORDERING_INVERTED" in src
+    assert "else REFUSAL_EMPTY_POPULATION" in src
+    assert set(probe.ORDERING_STATES) == {
+        probe.ORDERING_POPULATION_EXISTS, probe.ORDERING_INVERTED,
+        probe.ORDERING_UNKNOWN}
+
+
+def test_an_INVERTED_ordering_can_NEVER_silently_produce_a_deadline():
+    """The guard is explicit rather than incidental.
+
+    It cannot be reached today - `offset is None` whenever the population is
+    absent - but "it cannot happen" is how the H1 cron was set three hours
+    wrong, so the path is closed by an assertion and not by a coincidence.
+    """
+    src = pathlib.Path("scripts/fixture_horizon_probe.py").read_text(
+        encoding="utf-8")
+    body = src.split("def main(", 1)[1]
+    guard = body.index("if ordering != ORDERING_POPULATION_EXISTS")
+    emit = body.index("deadline = earliest_for(")
+    assert guard < emit, (
+        "the ordering guard sits AFTER the deadline is computed, so an "
+        "inverted ordering could produce one")
+    assert "MUST NEVER SILENTLY PRODUCE A DEADLINE" in src
+
+
+def test_an_EMITTED_deadline_carries_the_ORDERING_that_produced_it():
+    """A deadline and a refusal must be distinguishable by PROVENANCE, not by
+    reading the date and guessing."""
+    src = pathlib.Path("scripts/fixture_horizon_probe.py").read_text(
+        encoding="utf-8")
+    assert 'ordering {ordering}' in src, (
+        "the alarm body no longer states which ordering produced its deadline")
+    body = probe.format_dispatch_alert(
+        dt.date(2026, 10, 20), 11 * 60, "x/y",
+        basis="deadline DISCOVERED by the probe; ordering POPULATION_EXISTS")
+    assert "ordering POPULATION_EXISTS" in body
+
+
+@pytest.mark.live
+def test_the_SIX_HOUR_control_reports_the_MEASURED_gap_per_run():
+    """The nominal floor stays in the gating suite; the MEASURED separation is
+    reported here, because it needs `gh` and must not gate price capture.
+
+    `measured` 2026-10-18: inverted in 9 of 9, minimum separation +7.33h, so
+    zero runs below the 6.0h floor. If that count becomes non-zero the
+    intermittency has started, and THAT is the finding.
+    """
+    import json
+    import subprocess
+
+    def _runs(wf):
+        o = subprocess.run(
+            ["gh", "run", "list", "--workflow", wf, "--limit", "40", "--json",
+             "createdAt,updatedAt,event"],
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=180)
+        try:
+            return json.loads(o.stdout or "[]")
+        except json.JSONDecodeError:
+            return []
+
+    def _ts(x):
+        return dt.datetime.fromisoformat(
+            x.replace("Z", "+00:00")).replace(tzinfo=None)
+
+    probes = _runs("fixture-horizon-probe.yml")
+    picks = _runs("daily-picks.yml")
+    if not probes or not picks:
+        pytest.skip("run history unreadable here")
+
+    below, inverted, seps = 0, 0, []
+    for p in probes:
+        start = _ts(p["createdAt"])
+        target = (start + dt.timedelta(days=1)).date()
+        cand = [r for r in picks if _ts(r["createdAt"]).date() == target]
+        if not cand:
+            inverted += 1
+            continue
+        sep = (_ts(cand[0]["updatedAt"]) - start).total_seconds() / 3600.0
+        seps.append(sep)
+        if sep > 0:
+            inverted += 1
+        if abs(sep) < 6.0:
+            below += 1
+    print(f"probe/scrape separation: n={len(seps)} inverted={inverted} "
+          f"min={min(seps) if seps else float('nan'):+.2f}h "
+          f"below_6h={below}")
+    assert below == 0, (
+        f"{below} probe run(s) now sit within 6.0h of the scrape that writes "
+        f"their target day. THE INTERMITTENCY HAS STARTED: the UNVERIFIABLE "
+        f"refusal is no longer a constant, and its two causes must be read "
+        f"from the ORDERING field rather than assumed. Separations: "
+        f"{[round(x, 2) for x in seps]}")

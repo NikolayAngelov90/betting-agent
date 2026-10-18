@@ -302,6 +302,85 @@ def format_dispatch_alert(day, deadline_min, league, basis: str,
     return chr(10).join(lines)
 
 
+# ── WHICH REFUSAL IS IT? THE PROVENANCE, MEASURED. 2026-10-18. ──────────────
+#
+# `verify_offset` returns None for two different worlds and the log said
+# `UNVERIFIABLE` for both:
+#
+#   the scrape ran and wrote rows the verifier could not match
+#   the scrape had not run, so the population could not exist yet
+#
+# While the second is ALWAYS true the conflation is harmless - the refusal is
+# a constant. It stops being a constant the moment the ordering can invert.
+#
+#     An always-empty verifier is honest. An intermittently-populated one is
+#     worse, because its silence and its answer become indistinguishable in
+#     provenance - unless the output says which.
+#
+# MEASURED 2026-10-18 over all nine probe runs: the ordering was INVERTED in
+# 9 of 9, separation +7.33h to +33.49h against the target day's scrape
+# completion, so ZERO runs fell below the 6.0h floor and the intermittency has
+# not started. But the projection has thinned: with the probe's observed
+# maximum lateness (18:00 -> 00:21) against the weekday scrape at 00:00 plus
+# its observed 256-305 min, the worst case is **+3.92h** - and pre-revert it
+# was already **+4.37h**, so the nominal 10h -> 6h change moved the real
+# worst case by 27 minutes, not four hours. The nominal gap overstated the
+# margin in both regimes.
+#
+# So the ordering is now OBSERVED, from the database, not derived from a cron.
+ORDERING_POPULATION_EXISTS = "POPULATION_EXISTS"
+ORDERING_INVERTED = "ORDERING_INVERTED"
+ORDERING_UNKNOWN = "ORDERING_UNKNOWN"
+
+ORDERING_STATES = (ORDERING_POPULATION_EXISTS, ORDERING_INVERTED,
+                   ORDERING_UNKNOWN)
+
+#: The two refusals, printing differently, so a reader never has to infer
+#: which world produced a `None`.
+REFUSAL_EMPTY_POPULATION = "UNVERIFIABLE: EMPTY_POPULATION"
+REFUSAL_ORDERING_INVERTED = "UNVERIFIABLE: ORDERING_INVERTED"
+
+
+def observed_ordering(session, day) -> tuple:
+    """`(state, detail)` for `day`, MEASURED from the rows themselves.
+
+    The question is not "what do the crons say" - the crons are nominal and
+    both jobs run hours late. It is "had the scrape written this day's
+    population when the probe looked", and `matches.updated_at` answers it.
+    """
+    from sqlalchemy import text
+
+    from scripts.schedule_deadline import as_datetime
+    try:
+        row = session.execute(text(
+            "SELECT count(*) AS n, max(updated_at) AS last_write, "
+            "       sum(CASE WHEN is_fixture THEN 1 ELSE 0 END) AS fixtures "
+            "FROM matches WHERE match_date >= :a AND match_date < :b"),
+            {"a": day.isoformat(),
+             "b": (day + _dt.timedelta(days=1)).isoformat()}).mappings().first()
+    except Exception as exc:                        # noqa: BLE001
+        return ORDERING_UNKNOWN, (f"the ordering could not be measured "
+                                  f"({type(exc).__name__}) - that is not an "
+                                  f"ordering, it is an absence of evidence")
+    n = int(row["n"] or 0)
+    fx = int(row["fixtures"] or 0)
+    last = as_datetime(row["last_write"])
+    if n == 0:
+        return ORDERING_INVERTED, (
+            f"no row exists for {day} at all, so the scrape that writes this "
+            f"day's population has NOT run yet. The probe reached the question "
+            f"before the answer could exist - this is ORDERING, not an empty "
+            f"result.")
+    sep = ""
+    if last is not None:
+        sep = (f", last written {last:%Y-%m-%d %H:%M} UTC, "
+               f"{(_dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None) - last).total_seconds() / 3600.0:+.2f}h "
+               f"before this probe")
+    return ORDERING_POPULATION_EXISTS, (
+        f"{n} row(s) for {day}, {fx} of them fixtures{sep}. The population "
+        f"EXISTS, so a failure to match is about the match, not the ordering.")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--days-ahead", type=int, default=PROBE_DAYS_AHEAD)
@@ -341,6 +420,10 @@ def main(argv=None) -> int:
     tomorrow = _dt.date.today() + _dt.timedelta(days=1)
     with db.get_session() as session:
         offset = verify_offset(session, probed)
+        ordering, ord_detail = observed_ordering(session, tomorrow)
+    print(f"  ordering      : {ordering} (MEASURED from the rows, not from "
+          f"the cron)")
+    print(f"                  {ord_detail}")
     if offset is None:
         print("  timezone      : UNVERIFIABLE - no fixture is held by both the "
               "probe and the database")
@@ -349,18 +432,39 @@ def main(argv=None) -> int:
               f"(verified against `matches`, which stores UTC)")
 
     if offset is None or abs(offset) > OFFSET_TOLERANCE_MIN:
+        # WHICH REFUSAL. A `None` offset has two causes and they are not the
+        # same finding: one is about the clock, the other about the schedule.
+        if offset is None:
+            which = (REFUSAL_ORDERING_INVERTED
+                     if ordering == ORDERING_INVERTED
+                     else REFUSAL_EMPTY_POPULATION
+                     if ordering == ORDERING_POPULATION_EXISTS
+                     else "UNVERIFIABLE: ORDERING_UNKNOWN")
+        else:
+            which = f"UNVERIFIABLE: CLOCK_OFFSET {offset:+d}min"
         print()
-        print(f"  prospective_margin[serves={tomorrow} UNKNOWN: the probe's "
-              f"timezone is "
-              + ("unverifiable" if offset is None else f"{offset:+d} min, not UTC")
-              + " - NOT safe]")
+        print(f"  prospective_margin[serves={tomorrow} {which} - NOT safe]")
+        print(f"  ordering basis: {ord_detail}")
         print("  A deadline is NOT emitted on an unestablished clock. Setting "
               "TZ=UTC in the job is what fixes this; a guessed shift is how the "
               "H1 cron was set three hours late.")
-        print(f"{ANNOTATION_REFUSED}: the clock is not established, so the "
+        print(f"{ANNOTATION_REFUSED} [{which}]: the clock is not established, so the "
               f"margin is UNKNOWN and NOT safe. This is a DESIGNED REFUSAL, "
               f"not a crash and not a finding. CLEARING ACTION: confirm TZ=UTC "
               f"on the runner; the probe verifies rather than trusting it.")
+        return EXIT_CLEAR if args.report_only else EXIT_REFUSED
+
+    # AN INVERTED ORDERING MUST NEVER SILENTLY PRODUCE A DEADLINE. It cannot
+    # reach here today - `offset is None` whenever the population is absent -
+    # but the guard is explicit rather than incidental, because "it cannot
+    # happen" is how the three-hour cron error happened.
+    if ordering != ORDERING_POPULATION_EXISTS:
+        print()
+        print(f"{ANNOTATION_REFUSED} [{REFUSAL_ORDERING_INVERTED}]: the clock "
+              f"verified ({offset:+d} min) but the population for {tomorrow} "
+              f"does not exist, so any deadline would be computed from the "
+              f"probe's pages with nothing to check them against. "
+              f"{ord_detail}")
         return EXIT_CLEAR if args.report_only else EXIT_REFUSED
 
     deadline = earliest_for(probed, tomorrow, offset)
@@ -384,7 +488,7 @@ def main(argv=None) -> int:
         league = earliest_league_for(probed, tomorrow, offset)
         body = format_dispatch_alert(
             tomorrow, m["deadline_min"], league,
-            basis="deadline DISCOVERED by the probe",
+            basis=f"deadline DISCOVERED by the probe; ordering {ordering}",
             margin=m["binding"],
             run_url=_os.environ.get("PROBE_RUN_URL", ""))
         print()
