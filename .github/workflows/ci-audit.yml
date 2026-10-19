@@ -72,6 +72,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONIOENCODING: utf-8
           AUDIT_ALERT_BODY: ${{ runner.temp }}/audit_alert.txt
+          # THE DAY-AHEAD DEADLINE, AND IT IS STILL stdlib-ONLY.
+          #
+          # The prospective margin for TOMORROW needs tomorrow's earliest
+          # kickoff, which our own `matches` has never held: max observed
+          # fixture lead 23.62h against a 24-28h requirement. It used to live
+          # in the Flashscore probe, disabled 2026-10-18 after 240 page-loads
+          # produced zero deadlines, so nothing computed it from then until
+          # this line.
+          #
+          # football-data.org answers `/matches?date=D+1` over ONE stdlib
+          # HTTPS GET -- no database, no psycopg2, no SQLAlchemy, no pip
+          # install -- on a free tier of 10 calls/minute with NO DAILY LIMIT.
+          # Absent, the deadline falls to the conservative constant and the
+          # report says `NOT reference-verified` rather than going quiet.
+          FOOTBALL_DATA_ORG_KEY: ${{ secrets.FOOTBALL_DATA_ORG_KEY }}
         # THE POLICY, STATED RATHER THAN INHERITED.
         #
         # `--fail-on BROKEN,DID_NOT_RUN` and NOT DEGRADED. DEGRADED is this

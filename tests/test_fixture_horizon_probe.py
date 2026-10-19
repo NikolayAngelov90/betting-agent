@@ -1009,3 +1009,57 @@ def test_the_probe_still_cannot_emit_a_deadline_FOR_A_STATED_REASON():
             f"{MAX_OBSERVED_FIXTURE_LEAD_H}h. If this now passes, `matches` "
             f"holds fixtures further ahead than it did and the probe's "
             f"schedule should be reconsidered.")
+
+
+# ───────── ITS REMAINING PURPOSE, SIZED 2026-10-19
+#
+#     A producer kept alive for a reason that no longer exists is the
+#     thirteen-instance pattern with a dispatch trigger attached.
+#
+# The day-ahead deadline now comes from the external reference, so the probe
+# had to justify itself again. It has exactly one remaining job and it is
+# measurable: the reference covers 9 of 30 configured leagues and this probe
+# fetches all 30 (`pages fetched : 30/30` on every one of the 8 fetching
+# runs). The gap is worth FIFTEEN MINUTES, measured on Easter Monday 2026 --
+# truth 10:15 in the uncovered `poland/ekstraklasa`, earliest covered fixture
+# 10:30 -- and 15 minutes is immaterial under the cron in force (+253m on that
+# same date replayed under `0 0`).
+
+def test_the_disable_records_its_REMAINING_PURPOSE_and_BOTH_clauses():
+    """Disabled is not the same as pointless, and the file must say which."""
+    src = pathlib.Path(".github/workflows/fixture-horizon-probe.yml").read_text(
+        encoding="utf-8")
+    assert "9 of the 30 configured leagues" in src, (
+        "the coverage gap -- the probe's only remaining advantage -- is not "
+        "recorded")
+    assert "FIFTEEN MINUTES" in src, (
+        "the gap is named but not sized; an unsized advantage cannot be "
+        "weighed against 60 page-loads a day")
+    assert "TWO clauses" in src and "both required" in src, (
+        "the re-enable condition still reads as a single clause. The repair "
+        "alone is not sufficient: a repaired probe buys 15 minutes, which is "
+        "inside the margin under the cron in force.")
+    assert "0 4" in src and "+253m" in src, (
+        "the condition does not say under which schedule the gap would start "
+        "to matter")
+
+
+def test_the_PROSPECTIVE_margin_is_no_longer_the_probes_to_lose():
+    """The claim `nothing is lost by stopping` has to stay true.
+
+    It was true on 2026-10-18 because the probe had never emitted a deadline.
+    It is true for a second reason now: the audit computes the prospective
+    margin from the reference every run, so stopping the probe does not leave
+    the check unevaluated.
+    """
+    import inspect
+
+    import scripts.ci_audit as ci
+
+    src = inspect.getsource(ci.main)
+    assert "prospective margin" in src, (
+        "the audit no longer computes the prospective margin, so disabling "
+        "the probe DOES lose something and the workflow comment is wrong")
+    wf = pathlib.Path(".github/workflows/fixture-horizon-probe.yml").read_text(
+        encoding="utf-8")
+    assert "no longer UNEVALUATED" in wf

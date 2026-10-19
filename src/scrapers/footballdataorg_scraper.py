@@ -29,45 +29,12 @@ logger = get_logger()
 
 BASE_URL = "https://api.football-data.org/v4"
 
-# football-data.org competition code → our internal league key
-#: Statuses that mean "will not be played as listed". Only `status` can express
-#: these — a kickoff time cannot — so it stays authoritative for exactly this.
-_STATUS_NOT_PLAYABLE = frozenset({"POSTPONED", "CANCELLED", "SUSPENDED", "AWARDED"})
-#: Statuses that mean "not yet played". Anything outside both sets is decided by
-#: `utcDate`, never by guessing what the status meant.
-_STATUS_UPCOMING = frozenset({"SCHEDULED", "TIMED"})
-
-
-def _kickoff_in_future(utc_str: str):
-    """True/False if `utcDate` parses, None if it does not.
-
-    None is a real answer here: when neither the status nor the date can say
-    whether a match has been played, the fixture is REFUSED and logged rather
-    than assumed either way.
-    """
-    from datetime import datetime as _dt, timezone as _tz
-    try:
-        dt = _dt.fromisoformat((utc_str or "").replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=_tz.utc)
-    return dt > _dt.now(_tz.utc)
-
-
-COMPETITION_MAP: Dict[str, str] = {
-    "PL":  "england/premier-league",
-    "ELC": "england/championship",
-    "PD":  "spain/laliga",
-    "BL1": "germany/bundesliga",
-    "SA":  "italy/serie-a",
-    "FL1": "france/ligue-1",
-    "CL":  "europe/champions-league",
-    "DED": "netherlands/eredivisie",
-    "PPL": "portugal/primeira-liga",
-    # International — national team competitions
-    "WC":  "world/fifa-world-cup",
-}
+# ONE DEFINITION. The map and the status sets moved to
+# `footballdata_competitions`, which imports nothing, because `ci_audit` needs
+# them and installs no packages. Duplicating them here would be THE HABIT.
+from src.scrapers.footballdata_competitions import (  # noqa: E402
+    COMPETITION_MAP, STATUS_NOT_PLAYABLE as _STATUS_NOT_PLAYABLE,
+    STATUS_UPCOMING as _STATUS_UPCOMING)
 
 # football-data.org full team name → name used in our DB (from football-data.co.uk CSVs)
 TEAM_NAME_MAP: Dict[str, str] = {

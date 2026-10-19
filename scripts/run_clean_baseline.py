@@ -47,7 +47,19 @@ def fit_poisson(train, ref_date, half_life=540):
                   for m in train]) if half_life else np.ones(len(train))
     hg = np.array([m.home_goals for m in train], float)
     ag = np.array([m.away_goals for m in train], float)
-    ws = w.sum() or 1.0
+    # SAME DEFECT, SECOND COPY. `fit_poisson` exists in both baseline
+    # harnesses, so `ws = w.sum() or 1.0` had to be fixed twice -- which is
+    # what THE HABIT costs. Zero is reached exactly when `train` is empty, and
+    # nothing here guarantees otherwise; substituting 1.0 returns league
+    # averages of 0.0 goals as though they were measured. This harness is the
+    # one the clean-dataset rule points every experiment at, so a degenerate
+    # fit here is a corrupt evidence run.
+    ws = float(w.sum())
+    if ws <= 0:
+        raise ValueError(
+            f"fit_poisson got {len(train)} training match(es) and a weight sum "
+            f"of {ws}: there is nothing to fit. Substituting 1.0 would report "
+            f"0.0-goal league averages as a measurement.")
     gh, ga = float(w @ hg / ws), float(w @ ag / ws)
 
     lg = defaultdict(lambda: [[], [], []])

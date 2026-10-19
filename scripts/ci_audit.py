@@ -66,8 +66,14 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 # Only the labelled percentile table is needed here; it is stdlib-only, so
 # this step keeps its no-install property.
 from scripts.schedule_deadline import (
+    CLEARING_ACTION,
     DEADLINE_PERCENTILES as _DEADLINE_PERCENTILES,
-)
+    combined_deadline,
+    day_type,
+    format_prospective,
+    format_reference_deadline,
+    prospective_margin,
+    reference_earliest)
 
 LEDGER = pathlib.Path("docs/ci-audit-ledger.md")
 LOGS = pathlib.Path("ci_logs")
@@ -2477,21 +2483,55 @@ def main() -> int:
     _margin = _margins.get(_margins.get("worse")) or {}
     _cron = _crons.get(_margins.get("worse"))
 
-    # ── THE DISCOVERED/PROSPECTIVE MARGIN LIVES IN THE PROBE, NOT HERE ─────
+    # ── THE PROSPECTIVE MARGIN COMES BACK, FROM THE REFERENCE — 2026-10-19 ─
     #
-    # A DB-dependent line was added here on 2026-10-10 and it could NEVER have
-    # produced its number: this step passes `GH_TOKEN` and nothing else, and
-    # `ci_audit.py` deliberately loads no `.env` because the step installs no
-    # packages ("imports the standard library only"). Without `DATABASE_URL` it
-    # silently fell back to SQLite, which holds no fixtures, so the line read
-    # `UNKNOWN: the card for that day is not discovered` on every run — a
-    # permanently uninformative figure presented as a measurement.
+    # IT LIVED IN THE PROBE AND THE PROBE IS OFF. A DB-dependent line was
+    # added here on 2026-10-10 and could never have produced its number: this
+    # step passes `GH_TOKEN` and nothing else and installs no packages, so
+    # without `DATABASE_URL` it fell back to SQLite, which holds no fixtures,
+    # and read `UNKNOWN: the card for that day is not discovered` on every
+    # run. It was removed and handed to `fixture_horizon_probe.py`, which was
+    # disabled on 2026-10-18 after 240 page-loads produced 8 refusals and
+    # ZERO deadlines -- so from that day **nothing computed it at all**.
     #
-    # Giving this step the database would mean credentials AND psycopg2 AND
-    # SQLAlchemy on every audit run, to duplicate a check the probe already
-    # performs with both already in place. So it is removed rather than
-    # supplied: `scripts/fixture_horizon_probe.py` owns the prospective margin
-    # and alarms on it, and the series census below stays stdlib-only.
+    # The objection that removed it was `credentials AND psycopg2 AND
+    # SQLAlchemy on every audit run`. The reference pays none of that: ONE
+    # stdlib HTTPS GET and one secret, no database, no driver, no package.
+    # That is the whole reason this line can live here now.
+    #
+    # COVERAGE IS NOT A BOUND. `measured` 2026-10-19 the reference covers 9 of
+    # the 30 configured leagues, so its minimum errs LATE. It is combined with
+    # the day-type constant by `min`, which can only tighten; the basis names
+    # which side bound the answer and the coverage is printed every run.
+    _tomorrow = _dt.date.today() + _dt.timedelta(days=1)
+    _ref = reference_earliest(_tomorrow)
+    _ahead = combined_deadline(_tomorrow, _ref)
+    print()
+    print(format_reference_deadline(_ahead))
+    print(f"  basis: {_ahead['basis']}")
+    if _ref.get("leagues_absent"):
+        print(f"  reference covered : {', '.join(_ref['leagues_present']) or 'NONE'}")
+        print(f"  reference did NOT : {', '.join(_ref['leagues_absent'])}")
+    _ahead_cron = _crons.get(day_type(_tomorrow))
+    _prosp = prospective_margin(
+        _ahead["deadline_min"], _ahead_cron,
+        [lag for _d, lag in (_by_type.get(day_type(_tomorrow)) or [])],
+        MARGIN_RUN_DURATIONS, serves=_tomorrow,
+        deadline_basis=f"{_ahead['bound_by']} via {_ahead['reference']}, "
+                       f"{_ahead['coverage']}")
+    print(format_prospective(_prosp))
+    if _prosp.get("verdict") == "ALARM":
+        print(f"!! PROSPECTIVE MARGIN {_prosp['binding']:+.0f} min for "
+              f"{_tomorrow} is below {_prosp['min_margin']} min. "
+              f"CLEARING ACTION: {CLEARING_ACTION}")
+        alarmed.append(
+            f"prospective margin {_prosp['binding']:+.0f}m for {_tomorrow} "
+            f"< {_prosp['min_margin']}m (deadline "
+            f"{_ahead['deadline_min'] // 60:02d}:"
+            f"{_ahead['deadline_min'] % 60:02d} bound_by "
+            f"{_ahead['bound_by']}, reference {_ahead['reference_state']}, "
+            f"{_ahead['coverage']})")
+
     if _cron is None:
         print("!! daily-picks carries no single `m h * * *` cron — the margin is "
               "UNEVALUATED, not safe")

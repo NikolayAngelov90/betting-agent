@@ -206,13 +206,82 @@ def test_the_FULL_alarm_surface_is_enumerated_here():
     src = inspect.getsource(ci)
     appends = [l.strip() for l in src.splitlines()
                if "alarmed.append(" in l]
-    assert len(appends) == 7, (
+    assert len(appends) == 8, (
         f"the alarm surface changed: {len(appends)} append sites, expected "
-        f"7 (workflow state, run verdict, schedule margin, model integrity "
+        f"8 (workflow state, run verdict, schedule margin, model integrity "
         f"failure, model signature missing, scheduled run never existed, "
-        f"unparseable workflow on main). The prospective "
-        f"margin is NOT here: it lives in the probe, which has the database "
-        f"this step deliberately does not. Sites: " + repr(appends))
+        f"unparseable workflow on main, PROSPECTIVE MARGIN for tomorrow). "
+        f"Sites: " + repr(appends))
+
+
+def test_the_EIGHTH_surface_is_the_PROSPECTIVE_margin_and_why_it_moved_here():
+    """It was the probe's, and the probe is off.
+
+    The count above said for eight days: "the prospective margin is NOT here:
+    it lives in the probe, which has the database this step deliberately does
+    not." Both halves have changed.
+
+      * the PROBE was disabled 2026-10-18 -- 240 page-loads, 8 refusals, zero
+        deadlines -- so from that day **nothing** computed tomorrow's margin
+      * the DATABASE is no longer the way to get the deadline. Our own
+        `matches` never holds tomorrow's early card (max observed fixture lead
+        23.62h against a 24-28h requirement), so the database was never going
+        to answer it. The external reference does, over ONE stdlib HTTPS GET.
+
+    The objection that removed this line in the first place was `credentials
+    AND psycopg2 AND SQLAlchemy on every audit run`. It now costs one secret
+    and no packages, which is why it can live here.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    src = inspect.getsource(ci.main)
+    assert "prospective margin" in src, "the eighth surface is gone"
+
+    # BY AST, NOT BY TEXT -- AND THIS IS THE THIRD TIME TODAY. A text scan
+    # for `DATABASE_URL` matched the COMMENT above the new block, which names
+    # it to explain why it is absent. Comments are dropped by the parser and
+    # docstrings are excluded explicitly, so what remains is use.
+    tree = ast.parse(textwrap.dedent(src))
+    docstrings = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(body, list) and body and isinstance(body[0], ast.Expr)                 and isinstance(body[0].value, ast.Constant)                 and isinstance(body[0].value.value, str):
+            docstrings.add(id(body[0].value))
+    used = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            used.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            used.add(node.attr)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str)                 and id(node) not in docstrings:
+            used.add(node.value)
+    for banned in ("get_db", "DATABASE_URL", "psycopg2", "create_engine",
+                   "discovered_deadline"):
+        assert banned not in used, (
+            f"`{banned}` is USED in ci_audit.main; this step installs no "
+            f"packages and holds no credentials beyond GH_TOKEN and the "
+            f"reference key")
+
+
+def test_the_prospective_alarm_CARRIES_the_deadline_its_BASIS_and_COVERAGE():
+    """An alarm that says only a number cannot be acted on.
+
+    A margin is meaningless without the deadline it was measured against, and
+    a reference-derived deadline is meaningless without its coverage: 9 of 30
+    leagues means the figure is an UPPER BOUND on the true minimum.
+    """
+    import inspect
+
+    src = inspect.getsource(ci.main)
+    block = src[src.index("prospective margin"):][:700]
+    for part in ("deadline", "bound_by", "reference_state", "coverage"):
+        assert part in block, (
+            f"the prospective alarm omits {part!r}, so the reader cannot tell "
+            f"which side bound it or how much of the card was visible")
+    assert "CLEARING_ACTION" in src, (
+        "the alarm does not name the action that clears it")
 
 
 def test_a_DEGRADED_series_census_does_NOT_alarm_and_that_is_deliberate():

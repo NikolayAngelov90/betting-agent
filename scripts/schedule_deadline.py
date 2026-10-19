@@ -178,7 +178,8 @@ def prospective_margin(earliest_kickoff_min: Optional[int],
                        delays: Sequence[float],
                        durations: Sequence[float],
                        serves: _dt.date = None,
-                       min_margin: int = MIN_ACCEPTABLE_MARGIN_MIN) -> dict:
+                       min_margin: int = MIN_ACCEPTABLE_MARGIN_MIN,
+                       deadline_basis: str = "discovered card") -> dict:
     """The margin against the DISCOVERED deadline, with its own verdict.
 
     Returns a dict carrying the deadline it was measured against, because a
@@ -194,7 +195,16 @@ def prospective_margin(earliest_kickoff_min: Optional[int],
         "serves": serves.isoformat() if serves else None,
         "day_type": day_type(serves) if serves else None,
         "deadline_min": earliest_kickoff_min,
-        "deadline_basis": "discovered card",
+        # ── THE BASIS IS A PARAMETER, NOT A LITERAL. 2026-10-19. ────────
+        #
+        # It was the fixed string `"discovered card"`, and the first caller to
+        # pass a deadline from somewhere else printed
+        # `deadline=12:00 (discovered card)` for a value that came from the
+        # REFERENCE combined with a CONSTANT and never touched the card. Same
+        # shape as the `LIVE 0 4 * * 1-5` label fixed the day before: a label
+        # pinned to its original producer, still printing after the producer
+        # changed. The caller names its own source.
+        "deadline_basis": deadline_basis,
         "min_margin": min_margin,
     }
     if earliest_kickoff_min is None or cron_minutes is None:
@@ -247,8 +257,259 @@ def format_prospective(m: dict) -> str:
             f"{m.get('day_type')}")
     if m["verdict"] == "UNKNOWN":
         return head + f" UNKNOWN: {m['reason']} - NOT safe]"
-    return (head + f" deadline={hm(m['deadline_min'])} (discovered card) "
+    return (head + f" deadline={hm(m['deadline_min'])} "
+            f"({m.get('deadline_basis', 'UNSTATED BASIS')}) "
             f"ready max={hm(m['ready_max'])} 3sd={hm(m['ready_3sd'])} "
             f"| margin max={m['margin_max']:+.0f}m 3sd={m['margin_3sd']:+.0f}m "
             f"binding={m['binding']:+.0f}m min={m['min_margin']}m n={m['n']}"
             + ("  ** ACTION REQUIRED **]" if m["verdict"] == "ALARM" else "]"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE DAY-AHEAD DEADLINE COMES FROM THE EXTERNAL REFERENCE — 2026-10-19
+#
+#     A minimum over a subset is an UPPER BOUND on the true minimum.
+#
+# WHY NOT FROM US. `max_days_ahead` is a rolling 24 hours from the run, so our
+# own `matches` has NEVER held tomorrow's early card: `measured` 2026-10-18
+# over n=1,131 rows, the maximum write-to-kickoff lead is 23.62h and rows known
+# more than 24h ahead number ZERO. The Flashscore probe built to fetch it paid
+# 240 page-loads for 8 refusals and zero deadlines, and was disabled.
+#
+# WHY FROM THE REFERENCE. football-data.org answers `/matches?date=D+1`
+# directly. `measured` 2026-10-19 for 2026-10-20 it returned **16:45**
+# (europe/champions-league) while our own table held **0 rows** for that day.
+# Free tier: 10 calls/minute, **no daily limit**, so one call a run costs
+# neither an API-Football request nor a TheOddsAPI credit nor a Flashscore
+# page-load.
+#
+# AND IT IS NOT A BOUND. `measured` 2026-10-19 it covers **9 of the 30
+# configured leagues**. A minimum over 9 errs LATE, which is the unsafe
+# direction, so the reference is COMBINED with the conservative constant and
+# never substituted for it:
+#
+#     deadline = min(reference over covered leagues, the day-type constant)
+#
+# This can only TIGHTEN. It is still an upper bound on the true minimum --
+# `measured` on Easter Monday 2026 the truth was 10:15 in `poland/ekstraklasa`,
+# which the reference does not cover, and the combination returned 10:30: 90
+# minutes better than the constant and 15 minutes short of the truth. The
+# residual is reported, not hidden.
+
+#: The reference, named so no figure derived from it is quoted without a source.
+REFERENCE_NAME = "football-data.org"
+REFERENCE_BASE = "https://api.football-data.org/v4"
+
+#: Where the key comes from. Absent is a THIRD STATE, not an empty answer.
+REFERENCE_KEY_ENV = "FOOTBALL_DATA_ORG_KEY"
+
+#: `reference_earliest` states, enumerated so the set is read, not inferred.
+REF_OK = "OK"                       #: a covered fixture was found for that day
+REF_NO_FIXTURE = "NO_FIXTURE"       #: the reference answered; nothing covered
+REF_NO_KEY = "NO_KEY"               #: we could not ask
+REF_FETCH_FAILED = "FETCH_FAILED"   #: we asked and could not read the answer
+REFERENCE_STATES = (REF_OK, REF_NO_FIXTURE, REF_NO_KEY, REF_FETCH_FAILED)
+
+#: The two that mean "could not look", which is NOT "found nothing". Both fall
+#: to the constant, and they print differently because their remedies differ:
+#: one needs a secret, the other needs the provider to answer.
+REF_UNEVALUATED = (REF_NO_KEY, REF_FETCH_FAILED)
+
+
+def _reference_fetch(day: _dt.date, api_key: str, timeout: float = 15.0):
+    """GET `/matches?date=day`. Returns the decoded payload, or raises.
+
+    STDLIB ONLY, and that is not a style choice: `ci-audit.yml` installs no
+    packages ("No pip install: ci_audit imports the standard library only"),
+    and this is reached from the audit. `httpx` here would kill that job at
+    import.
+    """
+    import json as _json
+    import urllib.error  # noqa: F401  (imported for the caller's except)
+    import urllib.request
+
+    url = f"{REFERENCE_BASE}/matches?date={day.isoformat()}"
+    req = urllib.request.Request(url, headers={"X-Auth-Token": api_key})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read().decode("utf-8"))
+
+
+def reference_earliest(day: _dt.date, fetch=None, api_key: str = None) -> dict:
+    """Earliest covered kickoff for `day` per the reference, with its coverage.
+
+    `fetch` is injectable so every branch is testable without a network, and
+    so the known-wrong cases below are driven rather than waited for.
+
+    THE PROVIDER DOES NOT HONOUR `date` WHEN THE DAY IS EMPTY. `measured`
+    2026-10-19: asked for 2027-04-02 it returned **39 matches, every one dated
+    2027-04-03**; asked for 2027-04-05 it returned **8, all dated 2027-04-06**.
+    A `min()` over the raw response would therefore present the NEXT day's
+    kickoff as tomorrow's -- a confident wrong answer, in either direction,
+    with nothing in the payload marking it. So every row is checked against its
+    own `utcDate` and the mismatches are COUNTED, not merely dropped: a silent
+    filter and an honest provider look identical.
+    """
+    import os
+
+    from src.scrapers.footballdata_competitions import (COMPETITION_MAP,
+                                                        STATUS_NOT_PLAYABLE)
+
+    out = {
+        "day": day.isoformat(),
+        "reference": REFERENCE_NAME,
+        "min": None,
+        "league": None,
+        "n_usable": 0,
+        "n_raw": 0,
+        "leagues_present": [],
+        "leagues_absent": [],
+        "dropped": {"other_day": 0, "unmapped": 0, "world": 0,
+                    "not_playable": 0, "unparseable": 0},
+    }
+    key = api_key if api_key is not None else (
+        os.environ.get(REFERENCE_KEY_ENV, "") or "").strip()
+    if not key and fetch is None:
+        out["state"] = REF_NO_KEY
+        out["reason"] = (f"{REFERENCE_KEY_ENV} is not set, so the reference was "
+                         f"NOT asked. This is 'could not look', not 'nothing "
+                         f"tomorrow' - the deadline falls to the constant and "
+                         f"says so.")
+        return out
+    try:
+        payload = (fetch or _reference_fetch)(day, key)
+    except Exception as exc:                      # noqa: BLE001 - any failure
+        out["state"] = REF_FETCH_FAILED
+        out["reason"] = (f"{REFERENCE_NAME} did not answer: "
+                         f"{type(exc).__name__}. 'Could not look', not "
+                         f"'nothing tomorrow'.")
+        return out
+
+    matches = (payload or {}).get("matches") or []
+    out["n_raw"] = len(matches)
+    rows = []
+    for m in matches:
+        code = ((m or {}).get("competition") or {}).get("code", "")
+        league = COMPETITION_MAP.get(code)
+        if not league:
+            out["dropped"]["unmapped"] += 1
+            continue
+        if league.startswith("world/"):
+            out["dropped"]["world"] += 1
+            continue
+        if ((m or {}).get("status") or "") in STATUS_NOT_PLAYABLE:
+            out["dropped"]["not_playable"] += 1
+            continue
+        ko = as_datetime((m or {}).get("utcDate") or "")
+        if ko is None:
+            out["dropped"]["unparseable"] += 1
+            continue
+        if ko.date() != day:
+            # THE TRAP, counted. See the docstring.
+            out["dropped"]["other_day"] += 1
+            continue
+        rows.append((ko, league))
+
+    from src.scrapers.footballdata_competitions import REFERENCE_LEAGUES
+
+    out["n_usable"] = len(rows)
+    out["leagues_present"] = sorted({lg for _k, lg in rows})
+    out["leagues_absent"] = sorted(REFERENCE_LEAGUES - set(out["leagues_present"]))
+    if not rows:
+        out["state"] = REF_NO_FIXTURE
+        out["reason"] = (f"{REFERENCE_NAME} answered with {out['n_raw']} row(s) "
+                         f"and none is a covered fixture on {day}: "
+                         f"{out['dropped']}. The reference LOOKED and found "
+                         f"nothing - distinct from not having looked.")
+        return out
+    ko, league = min(rows, key=lambda t: t[0])
+    out["state"] = REF_OK
+    out["min"] = ko.hour * 60 + ko.minute
+    out["league"] = league
+    return out
+
+
+def combined_deadline(day: _dt.date, ref: dict) -> dict:
+    """`min(reference, constant)` for `day`, carrying its basis and coverage.
+
+    RULE 1, MECHANICAL. The reference is a minimum over a SUBSET, so it is an
+    upper bound on the true minimum and errs LATE. `min` with the day-type
+    constant means the answer can only ever be TIGHTER than what the schedule
+    was already justified against -- it can never loosen it, whatever the
+    reference says or fails to say.
+
+    `basis` names which side bound the answer, because a deadline without its
+    basis is a number without a referent, and because the two sides fail
+    differently: a reference that goes dark leaves the constant standing, while
+    a constant that is wrong is wrong on every day at once.
+    """
+    from src.scrapers.footballdata_competitions import \
+        REFERENCE_COVERAGE_MEASURED
+
+    dtype = day_type(day)
+    const_min, const_what, const_prov = DEADLINE_PERCENTILES[dtype]
+    nc, nt = REFERENCE_COVERAGE_MEASURED
+    out = {
+        "serves": day.isoformat(),
+        "day_type": dtype,
+        "constant_min": const_min,
+        "constant_basis": f"{const_what} ({const_prov})",
+        "reference": REFERENCE_NAME,
+        "reference_state": ref.get("state"),
+        "reference_min": ref.get("min"),
+        "reference_league": ref.get("league"),
+        "coverage": f"{nc} of {nt} configured leagues",
+        "leagues_present": ref.get("leagues_present") or [],
+        "leagues_absent": ref.get("leagues_absent") or [],
+        # `ref.get(k, 0)`, not `ref.get(k) or 0`: the fallback happens to be
+        # the same value here, but the idiom is the one that killed
+        # `missing_scheduled_runs`, and it reads as if zero were absent.
+        "n_usable": ref.get("n_usable", 0),
+        "dropped": ref.get("dropped") or {},
+    }
+    rmin = ref.get("min")
+    if rmin is None:
+        out["deadline_min"] = const_min
+        out["bound_by"] = "CONSTANT"
+        out["basis"] = (
+            f"CONSTANT {const_min // 60:02d}:{const_min % 60:02d} - the "
+            f"reference supplied NO value ({ref.get('state')}). "
+            + ("NOT reference-verified: " if ref.get("state") in REF_UNEVALUATED
+               else "")
+            + (ref.get("reason") or ""))
+        out["reference_verified"] = ref.get("state") == REF_NO_FIXTURE
+        return out
+    out["deadline_min"] = min(rmin, const_min)
+    out["bound_by"] = "REFERENCE" if rmin < const_min else "CONSTANT"
+    out["reference_verified"] = True
+    if rmin < const_min:
+        out["basis"] = (
+            f"REFERENCE {rmin // 60:02d}:{rmin % 60:02d} in "
+            f"{ref.get('league')} ({REFERENCE_NAME}, {out['coverage']}), "
+            f"TIGHTER than the {const_min // 60:02d}:{const_min % 60:02d} "
+            f"constant by {const_min - rmin} min")
+    else:
+        out["basis"] = (
+            f"CONSTANT {const_min // 60:02d}:{const_min % 60:02d} - the "
+            f"reference's {rmin // 60:02d}:{rmin % 60:02d} in "
+            f"{ref.get('league')} is LATER, and a minimum over "
+            f"{out['coverage']} is an UPPER BOUND on the true minimum, so it "
+            f"may not relax the constant")
+    return out
+
+
+def format_reference_deadline(c: dict) -> str:
+    """One line carrying the deadline, its basis, and its coverage."""
+    def hm(v):
+        v = int(round(v))
+        return f"{v // 60:02d}:{v % 60:02d}"
+
+    absent = c.get("leagues_absent") or []
+    return (
+        f"day_ahead_deadline[serves={c['serves']} {c['day_type']} "
+        f"deadline={hm(c['deadline_min'])} bound_by={c['bound_by']} "
+        f"ref={c['reference_state']}"
+        + (f"@{hm(c['reference_min'])}" if c.get("reference_min") is not None
+           else "")
+        + f" coverage={c['coverage']} present={len(c.get('leagues_present') or [])}"
+        f" absent={len(absent)} usable={c.get('n_usable')} "
+        f"dropped={c.get('dropped')}]")

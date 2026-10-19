@@ -118,7 +118,29 @@ def fit_poisson(train, ref_date, half_life=180):
         w = np.ones(len(train))
     hg = np.array([m.home_goals for m in train], float)
     ag = np.array([m.away_goals for m in train], float)
-    ws = w.sum() or 1.0
+    # ── A ZERO WEIGHT SUM IS NOT A 1.0 WEIGHT SUM. 2026-10-19. ────────────
+    #
+    # This read `ws = w.sum() or 1.0`. The sum is zero exactly when `train` is
+    # EMPTY (both branches: `np.array([]).sum()` and `np.ones(0).sum()` are
+    # 0.0), and nothing at the call site guarantees a non-empty window -- there
+    # is no minimum-train guard anywhere in this harness. The substitution then
+    # produced `gh = ga = 0.0` and an empty team-strength table WITHOUT
+    # raising, because the loops that would have divided by them never ran.
+    #
+    # A baseline fitted on zero matches is not a baseline, and this harness is
+    # what every model change is required to clear. A degenerate fit reported
+    # as a number is the one outcome worse than a crash, so it refuses.
+    #
+    # REACHABLE BY CONSTRUCTION, NOT OBSERVED: no run is known to have hit it.
+    # The two INNER sums (lines below) were already guarded with `if s > 0` and
+    # an explicit fallback, which is why only this one needed changing.
+    ws = float(w.sum())
+    if ws <= 0:
+        raise ValueError(
+            f"fit_poisson got {len(train)} training match(es) and a weight sum "
+            f"of {ws}: there is nothing to fit. Substituting 1.0 here would "
+            f"return league averages of 0.0 goals and an empty strength table "
+            f"as though they were measured.")
     gh, ga = float(w @ hg / ws), float(w @ ag / ws)
 
     lg = defaultdict(lambda: [[], [], []])

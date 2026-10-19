@@ -358,3 +358,79 @@ def pytest_collection_modifyitems(config, items):
            if f.nodeid not in CALENDAR_SCAN_ALLOWED]
     if bad:
         raise _pytest.UsageError(refusal_text(bad))
+
+
+# ── CODE WITHOUT PROSE, BECAUSE TEXT SCANS KEEP MATCHING THEIR OWN COMMENTS ──
+#
+#     A remedy that must be remembered when writing new code is not a remedy.
+#
+# THREE TIMES on 2026-10-19 a test asserted `"<pattern>" not in source` and
+# matched the COMMENT or DOCSTRING that documents why the pattern is absent.
+# Enumerated rather than counted, because a bare ordinal is how this project
+# has twice invented an instance number it could not support:
+#
+#   1. `test_the_fetch_uses_the_STDLIB_and_not_httpx` -- matched its own
+#      docstring, which names `httpx` to explain that it is not used
+#   2. `test_the_EIGHTH_surface_...` -- matched `DATABASE_URL` in the comment
+#      that explains the audit holds no database credentials
+#   3. `test_the_MOTIVATING_instance_is_still_fixed_in_ci_audit` -- matched
+#      the repaired line quoted in the comment recording the repair
+#
+# Stripping `#` lines does not help: the longest explanations live in
+# docstrings. The same shape had already cost a stage each for `::error::`
+# and `date.today()`.
+#
+#     assert "if not any(crons.values())" not in src          # matches prose
+#     assert "if not any(crons.values())" not in code_of(src) # matches code
+#
+# Use `code_of` for any assertion about what the code DOES. For assertions
+# about what is DOCUMENTED, read the raw text deliberately and say so.
+
+def code_of(source: str) -> str:
+    """`source` with comments and docstrings removed.
+
+    LINE NUMBERS ARE NOT PRESERVED, and the first version of this docstring
+    said they were -- measured on `ci_audit.py` the newline count differs,
+    because a multi-line string that is NOT a docstring keeps its own
+    newlines while a dropped one contributes a different number. Nothing here
+    needs them, so the claim is removed rather than the behaviour fixed: an
+    unverified convenience claim is how a helper gets trusted for the one
+    thing it cannot do.
+
+    Implemented by tokenising rather than by regex: a `#` inside a string
+    literal is not a comment, and a regex that treats it as one introduces a
+    second, quieter version of the same bug.
+    """
+    import io
+    import tokenize
+
+    out = []
+    prev_end = (1, 0)
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (tokenize.TokenError, IndentationError):
+        return source          # unparseable: better to over-match than to lie
+    # A STRING is a docstring when it is the whole statement. Tracked by the
+    # token before it: NEWLINE/INDENT/DEDENT/start means "statement begins".
+    at_stmt_start = True
+    for tok in toks:
+        ttype, tstr, start, end, _line = tok
+        if start[0] > prev_end[0]:
+            out.append("\n" * (start[0] - prev_end[0]))
+            prev_end = (start[0], 0)
+        if start[1] > prev_end[1]:
+            out.append(" " * (start[1] - prev_end[1]))
+        drop = (ttype == tokenize.COMMENT
+                or (ttype == tokenize.STRING and at_stmt_start))
+        if drop:
+            # keep the line count, drop the content
+            out.append("\n" * (end[0] - start[0]))
+        else:
+            out.append(tstr)
+        if ttype in (tokenize.NEWLINE, tokenize.NL, tokenize.INDENT,
+                     tokenize.DEDENT):
+            at_stmt_start = True
+        elif ttype not in (tokenize.COMMENT,):
+            at_stmt_start = False
+        prev_end = end
+    return "".join(out)

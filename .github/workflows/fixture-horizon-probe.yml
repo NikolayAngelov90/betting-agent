@@ -96,15 +96,45 @@ on:
   #     deadlines emitted             =  ZERO
   #   and it DOUBLED the fixtures-page load, 30 -> 60 per day.
   #
-  # RE-ENABLE CONDITION, and it is the only one: `verify_offset`'s deferred
-  # repair - take the clock from the runner rather than from a fixture both
-  # sides hold. Until then the probe cannot emit a deadline and the
-  # prospective margin stays UNEVALUATED, which is what it has always been.
+  # ── ITS REMAINING PURPOSE, SIZED 2026-10-19 ───────────────────────────
+  #
+  # The day-ahead deadline now comes from the EXTERNAL REFERENCE instead
+  # (football-data.org, `/matches?date=D+1`, free tier 10/min and no daily
+  # limit, ONE stdlib HTTPS GET from the audit job). So the question is
+  # whether this probe still has a job at all, and the answer is yes --
+  # exactly one, and it is measurable:
+  #
+  #     COVERAGE. The reference covers 9 of the 30 configured leagues, so its
+  #     minimum is an UPPER BOUND on the true minimum and errs LATE. This
+  #     probe fetches ALL 30: `pages fetched : 30/30` on every one of the 8
+  #     fetching runs. Its data was never the problem.
+  #
+  # WHAT THAT GAP IS WORTH, measured on the one date in the record where an
+  # uncovered league carries the earliest kickoff -- Easter Monday 2026, truth
+  # 10:15 in `poland/ekstraklasa`, earliest COVERED fixture 10:30 in
+  # `italy/serie-a`:
+  #
+  #     the coverage gap costs FIFTEEN MINUTES of deadline accuracy
+  #     against 60 Flashscore page-loads a day
+  #
+  # AND 15 MINUTES IS IMMATERIAL UNDER THE CRON IN FORCE. Replayed under
+  # `0 0`, that same date leaves a +253m margin; it was under `0 4` that it
+  # left +14m and alarmed. So the gap matters only if the weekday cron moves
+  # late again.
+  #
+  # RE-ENABLE CONDITION, now TWO clauses, both required:
+  #   (1) `verify_offset`'s deferred repair - take the clock from the runner
+  #       rather than from a fixture both sides hold. SEVEN of the 8 fetching
+  #       runs refused with "the clock is not established"; only the eighth
+  #       reached the ordering guard. This is the binding blocker.
+  #   (2) a schedule under which 15 minutes is inside the margin. Today it is
+  #       not, so even a repaired probe would buy nothing worth 60 page-loads.
   # `workflow_dispatch` is kept so the repair can be tested without a push.
   #
   # NOTHING IS LOST BY STOPPING. The probe has never emitted a deadline, so
-  # the prospective check loses a capability it never had. The RETROSPECTIVE
-  # schedule margin in `ci_audit` is untouched and is what currently reports.
+  # the prospective check loses a capability it never had -- and the
+  # prospective margin is no longer UNEVALUATED either way: `ci_audit` now
+  # computes it from the reference every run, with its coverage printed.
   workflow_dispatch:
     inputs:
       days_ahead:

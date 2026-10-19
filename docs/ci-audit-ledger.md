@@ -28213,3 +28213,289 @@ prediction- or selection-affecting.
 `tests/test_absent_run_and_unparseable.py`,
 `tests/test_cron_split_by_daytype.py`. No production write, no schema change,
 no model change. One schedule REMOVED; no cron moved.*
+
+---
+
+# THE DAY-AHEAD DEADLINE COMES FROM THE REFERENCE. THE PROBE KEEPS ONE JOB.
+
+*2026-10-19*
+
+## PART A — THE DEADLINE, WIRED
+
+The reference is **football-data.org** (`/matches?date=D+1`), free tier **10
+calls/minute with no daily limit**, so one call a run spends no API-Football
+request, no TheOddsAPI credit and no Flashscore page-load.
+
+**THE HORIZON WAS NEVER THE PROBLEM — the coverage is.** `measured` 2026-10-19,
+one call per row, provider named per cell:
+
+| probe | state | usable | earliest | rows dropped for being another day |
+|---|---|---|---|---|
+| D+1 2026-10-20 | OK | 10 | **16:45** | 0 |
+| D+2 | OK | 10 | 16:45 | 0 |
+| D+4 | OK | 8 | 18:00 | 0 |
+| D+8 | OK | 3 | 17:30 | 0 |
+| D+16 | OK | 12 | 17:45 | 0 |
+| D+32 | OK | 2 | 19:30 | 0 |
+
+So the reference answers **at least 32 days out** where ours has never reached
+**24 hours** (max observed fixture lead 23.62h, `measured` 2026-10-18, n=1,131).
+For 2026-10-20 it gave **16:45** while production `matches` held **0 rows**.
+
+**COVERAGE, `measured` 2026-10-19 against `config/config.yaml`: 9 of the 30
+configured leagues, 21 uncovered.** The directive's figure was 8 of 30; the
+measured value is 9 — `world/fifa-world-cup` is the tenth mapped competition
+and is not among the configured 30, so the `world/*` exclusion does not reduce
+it. A minimum over 9 errs **LATE**, the unsafe direction, so:
+
+    deadline = min(reference over covered leagues, day-type constant)
+
+which **can only tighten** and never relaxes what the schedule was justified
+against. Every run prints the deadline, which side bound it, the coverage
+fraction, the leagues present, the leagues absent, and the drop counters.
+
+### THE FOUR POSITIVES
+
+| date | truth | reference | constant | deadline | bound_by | tightens by |
+|---|---|---|---|---|---|---|
+| 2026-04-03 Good Friday | 11:30 | **11:30** | 12:00 | 11:30 | REFERENCE | 30 min |
+| 2026-04-06 Easter Monday | 10:15 | 10:30 | 12:00 | 10:30 | REFERENCE | **90 min** |
+| 2027-04-02 | — | 11:30 `simulated` | 12:00 | 11:30 | REFERENCE | 30 min |
+| 2027-04-05 | — | 10:30 `simulated` | 12:00 | 10:30 | REFERENCE | **90 min** |
+
+Truth is `measured` from production `matches`; reference is `measured` live
+from football-data.org except the two 2027 rows, which are `simulated` from
+each date's own 2026 holiday value **because the reference has no published
+2027-04 schedule yet** — the live replay returns `NO_FIXTURE` and falls to the
+constant, correctly. It will have the schedule on the day: the horizon sweep
+above reached D+32.
+
+**AND THE ALARM FIRES ON EXACTLY THE RIGHT TWO.** Replayed against the measured
+delay/duration series:
+
+| date | margin under `0 4` (the breach regime) | under `0 0` (in force) |
+|---|---|---|
+| Good Friday | +74m CLEAR | +313m CLEAR |
+| Easter Monday | **+14m ALARM** | +253m CLEAR |
+
+That is the payoff: under the cron that produced the −27m breach, the
+reference-derived deadline **catches Easter Monday and only Easter Monday**.
+
+### THE TWO NEGATIVES
+
+| date | truth | reference | deadline | bound_by |
+|---|---|---|---|---|
+| 2026-09-17 ordinary weekday | 16:45 | 17:00 (LATER) | **12:00** | CONSTANT |
+| 2026-05-17 ordinary weekend | 10:00 | 10:00 | **10:00** | REFERENCE |
+
+The weekday negative is the rule working: a reference value **later** than the
+constant may not relax it, so the answer stays 12:00 — 285 minutes inside the
+truth. The weekend negative is better than clear: the reference tightens the
+10:15 constant by 15 minutes and still equals the truth.
+
+### THE KNOWN-WRONG COVERAGE CASE, AND IT IS IN THE RECORD
+
+**Easter Monday 2026.** The truth is **10:15 in `poland/ekstraklasa`** —
+uncovered — and `netherlands/eerste-divisie` is also at 10:15 and also
+uncovered. The earliest **covered** fixture is `italy/serie-a` at 10:30.
+
+> the reference alone is **FIFTEEN MINUTES LATE**, and the combination is
+> **NOT a bound on the true minimum**
+
+It is 90 minutes better than the constant and 15 minutes short of the truth,
+and the test asserts **both** — including that the residual is exactly 15 — so
+that if the gap ever closes it must be re-measured rather than assumed. A
+detector that pretended the subset were a bound would be worse than one that
+states the residual.
+
+### THE PROVIDER DOES NOT HONOUR `date`, AND THAT WOULD HAVE LIED
+
+`measured` 2026-10-19: asked for **2027-04-02** it returned **39 matches, every
+one dated 2027-04-03**; asked for **2027-04-05**, **8 dated 2027-04-06**. With
+every other drop counter at zero. A `min()` over the raw response would have
+presented the **next day's** kickoff as tomorrow's, with nothing in the payload
+marking it. Every row is now checked against its own `utcDate` and the
+mismatches are **counted**, because a silent filter and an honest provider look
+identical from the outside.
+
+### THE CONSUMER, AND WHY IT CAN LIVE IN THE AUDIT
+
+The prospective margin lived in the probe. The audit's own surface-count test
+had said, for eight days, *"the prospective margin is NOT here: it lives in the
+probe, which has the database this step deliberately does not."* **Both halves
+changed**: the probe was disabled on 2026-10-18, so from that day **nothing
+computed it at all**; and the database was never going to answer it anyway.
+
+The objection that removed it was *credentials AND psycopg2 AND SQLAlchemy on
+every audit run*. The reference costs **one stdlib HTTPS GET and one secret** —
+no database, no driver, no `pip install`. That is the whole reason it fits. The
+alarm surface therefore goes **7 → 8**, and the enumeration in the pinned test
+was rewritten rather than the number bumped.
+
+Two dependency constraints were held mechanically: `COMPETITION_MAP` moved to
+`src/scrapers/footballdata_competitions.py`, which imports **nothing**, because
+copying it into the deadline module would have been THE HABIT and importing the
+scraper would have pulled `httpx` into a job that installs no packages. Both
+are asserted by AST.
+
+## PART B — THE PROBE DISPOSED, WITH ITS LIFETIME COST
+
+**MEASURED LIFETIME:** 10 runs, of which **8 reached the fetch**; `30/30 pages`
+on every one of those; **240 page-loads**; `PROBE REFUSED` **8 of 8**;
+**deadlines emitted: ZERO**. `probe_fixtures()` at line 409 pays the fetch
+before the guard at line 480 can refuse, so the cost was never avoidable while
+it ran. Two further runs died earlier on a missing `aiohttp` and fetched
+nothing.
+
+**WHY IT REFUSED, re-read from the logs and not from memory:** **seven** of the
+eight refused with *"the clock is not established"* — `verify_offset` — and
+only the eighth reached the ordering guard. I had been treating the ordering as
+the blocker; the clock is the binding one.
+
+**DOES IT STILL HAVE A PURPOSE? YES — EXACTLY ONE, AND IT IS SIZED.** The
+reference covers 9 of 30 leagues; the probe fetches **all 30**, and `pages
+fetched : 30/30` on every fetching run says its data was never the problem. So
+its remaining job is to turn an upper bound into the true minimum, and what
+that is worth is measurable:
+
+> **the coverage gap costs FIFTEEN MINUTES of deadline accuracy, against 60
+> Flashscore page-loads a day** — and 15 minutes is immaterial under the cron
+> in force, where that same date leaves **+253m**.
+
+**RE-ENABLE CONDITION, now TWO clauses, both required:** (1) `verify_offset`'s
+deferred repair — take the clock from the runner; (2) a schedule under which 15
+minutes is inside the margin. Today it is not, so even a repaired probe would
+buy nothing worth the page-loads. `workflow_dispatch` retained. **The three
+ordering states are retained**, asserted explicitly.
+
+## PART C — THE FALSY-ZERO CLASS, SWEPT
+
+`scripts/falsy_zero_scan.py`. Predicate: truthiness tests on the **vocabulary**
+of quantities this project measures — minutes, counts, offsets, credits,
+margins, n, lags, deltas, pages. Name-based on purpose: **reachability is a
+fact about the producer, not about the syntax**, so every hit is triaged by
+hand and a scanner that claimed to decide it would be the confident-wrong
+shape. Collections are deliberately not flagged: `if not rows:` is correct.
+
+**CENSUS, `measured` 2026-10-19 over `scripts/` and `src/`:**
+
+| | |
+|---|---|
+| hits | **20 sites at 18 distinct keys** |
+| `NOT` / `TRUTHY` / `OR_DEFAULT` / `ANY_ALL` / `ASSERT` | 4 / 14 / 2 / 0 / 0 |
+| registered REACHABLE | **4** — still in the tree: **0** |
+| registered EXEMPT | 18 — still in the tree: 18 |
+| UNREACHABLE | 0 |
+
+Sites ≠ keys and that is not an error: the register is keyed by
+`path:expr:shape`, so two `if rec.current_n:` in one file share an entry. Stated
+in the output, because the lesson from `inverted=10 of n=9` is that a count is
+checked against its own arithmetic before a conclusion is drawn.
+
+**THE FOUR REACHABLE, ALL FIXED:**
+
+1. **`ci_audit.py` `if not any(crons.values())`** — the motivating instance.
+   Minutes past midnight, so `0 0` is `0` and `any([0, 0])` is `False`. It
+   passed review only because the weekday cron was `0 4` (240) at the time.
+2. **`run_baseline.py` `ws = w.sum() or 1.0`** — zero exactly when `train` is
+   empty, and there is **no minimum-train guard at the call site**. It returned
+   `gh = ga = 0.0` and an empty strength table **without raising**, because the
+   loops that divide by them never ran. This harness gates every model change.
+   **REACHABLE BY CONSTRUCTION, NOT OBSERVED.** Now refuses.
+3. **`run_clean_baseline.py`** — the **same line** in the second harness, which
+   is the one the clean-dataset rule points experiments at. The fix was needed
+   twice; that is what THE HABIT costs.
+4. **`schedule_deadline.py` `ref.get('n_usable') or 0`** — mine, written the
+   same day. Behaviour was already correct because the fallback equals the
+   falsy value, but the idiom reads as if zero were absent.
+
+**SIXTEEN EXEMPT, every one read.** What makes truthiness correct there is that
+`0` and `absent` mean the **same thing** to the consumer: nothing to log,
+nothing to divide by, nothing to update. `ml_models.py`'s `if n_imp_models:`
+guards a division and is the *correct* use. One is a frank false positive of
+the name vocabulary — `no_match_days` is a list — and it is left in the
+register rather than silenced so the predicate's precision stays visible.
+
+**KNOWN-WRONG CONTROL, RUN:** `missing_scheduled_runs()` **as written
+yesterday**, verbatim, is flagged `ANY_ALL` on `crons`. The discrimination that
+makes it work: `if not crons:` on the **dict** is correct and stays quiet,
+while `any(crons.values())` tests **minutes** and is flagged — same identifier,
+opposite verdict, decided by shape. Five positive controls (one per shape) and
+three negative controls (collection tests) also run.
+
+**AND THE `LIVE` CRON LABEL** was fixed the previous day and is pinned; the
+same literal-vs-derived defect appeared again here in `prospective_margin`,
+which hard-coded `deadline_basis = "discovered card"` and printed
+`deadline=12:00 (discovered card)` for a value that came from the reference and
+never touched the card. The basis is now a parameter the caller supplies.
+
+## ONE MORE, AND IT IS MINE THREE TIMES
+
+Three tests in this stage asserted `"<pattern>" not in source` and matched the
+**comment or docstring explaining why the pattern is absent** — enumerated in
+`tests/conftest.py` rather than counted, because a bare ordinal is how this
+project has twice invented an instance number it could not support. The remedy
+is `conftest.code_of(source)`, which strips comments and docstrings by
+**tokenising** (a `#` inside a string literal is not a comment, and a regex
+that treats it as one is a quieter version of the same bug). Its first
+docstring claimed line numbers were preserved; measured, they are not, so the
+claim was removed rather than the behaviour fixed.
+
+## THE ENTRY
+
+> **A minimum over a subset is an upper bound, and the honest thing to do with
+> an upper bound is to say so in the same line that prints it.** The reference
+> gets Good Friday exactly right, Easter Monday 15 minutes wrong, and the
+> ordinary weekday 285 minutes conservative — and every one of those is an
+> improvement on a constant that was 90 minutes late on the day that mattered.
+> What makes it safe to consult at all is that it may only tighten.
+
+## DECLARATION
+
+**DEADLINE FROM REFERENCE.** Wired, consumed by `ci_audit` every run as the
+**eighth** alarm surface, over one stdlib HTTPS GET with no database.
+**FOUR POSITIVES:** Good Friday 2026 exact (−30m on the constant), Easter
+Monday 2026 −90m, and both 2027 dates −30m/−90m on `simulated` input, with the
+alarm firing on **exactly** Easter Monday under the `0 4` regime (+14m) and on
+neither date under `0 0`. **TWO NEGATIVES:** the ordinary weekday holds at the
+constant because a later reference may not relax it, and the ordinary weekend
+is tightened 15 minutes to the exact truth. **KNOWN-WRONG COVERAGE CASE
+MEASURED AND ASSERTED:** an uncovered league (`poland/ekstraklasa`) carries
+Easter Monday's 10:15, the reference alone is **15 minutes late**, and the
+combination is never laxer than the constant **but is not a bound** — stated,
+not hidden. Coverage **9 of 30** `measured`, and the fraction is re-derived
+from the config by a test so it cannot go stale.
+
+**PROBE DISPOSED.** Lifetime: **8 fetching runs × 30/30 pages = 240
+page-loads, 8/8 `PROBE REFUSED`, ZERO deadlines ever**, the fetch paid at line
+409 before the guard at 480. **It keeps exactly one purpose — 30-league
+coverage against the reference's 9 — worth a measured FIFTEEN MINUTES, which
+is immaterial under the cron in force (+253m).** Re-enable now needs **two**
+clauses, the binding one being `verify_offset`'s repair: **seven of eight**
+refusals were the clock, not the ordering. Three ordering states retained.
+
+**FALSY ZERO SWEPT.** **20 sites at 18 keys, 0 untriaged. FOUR REACHABLE, all
+fixed** — `any(crons.values())`, both baseline harnesses' `w.sum() or 1.0`, and
+one of my own from the same day — **16 EXEMPT with reasons**, 0 unreachable.
+**KNOWN-WRONG CONTROL PASSES:** yesterday's `missing_scheduled_runs()` is
+caught verbatim, with five positive and three negative controls, and a
+regression check that looks for a repaired site by name because a fixed site
+vanishes from the scan.
+
+Gating suite **2123 passed, 6 deselected**. Non-gating **6 passed, 0 skipped**
+— the live reference check runs rather than skipping, because the key is in
+both workflows' env, which is itself pinned by a test. Invariants pass, count
+not cited. Fingerprint **UNCHANGED** at `s5.18` /
+`stage5_baseline_20260807.51fbcb`: nothing prediction- or selection-affecting,
+and the two harness fixes are **no-ops for every non-empty training set**,
+which a test asserts so no baseline number moves.
+
+*Recorded 2026-10-19. `scripts/schedule_deadline.py`, `scripts/ci_audit.py`,
+`scripts/falsy_zero_scan.py`, `scripts/run_baseline.py`,
+`scripts/run_clean_baseline.py`, `src/scrapers/footballdata_competitions.py`,
+`src/scrapers/footballdataorg_scraper.py`, `tests/conftest.py`,
+`tests/test_reference_deadline.py`, `tests/test_falsy_zero_swept.py`,
+`tests/test_alarm_surface.py`, `tests/test_fixture_horizon_probe.py`,
+`.github/workflows/ci-audit.yml`,
+`.github/workflows/fixture-horizon-probe.yml`. No production write, no schema
+change, no model change, no cron moved.*
