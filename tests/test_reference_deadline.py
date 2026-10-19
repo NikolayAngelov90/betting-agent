@@ -245,9 +245,12 @@ def test_COULD_NOT_LOOK_and_FOUND_NOTHING_are_DIFFERENT_states():
     assert failed["state"] == sd.REF_FETCH_FAILED
     assert "did not answer" in failed["reason"]
 
+    # SPLIT 2026-10-19: a response with NO ROWS AT ALL and a response whose
+    # rows are all for another date were one state until the 2027-04-02 case
+    # showed why they must not be. See tests/test_coverage_residual.py.
     empty = sd.reference_earliest(day, fetch=_fetch({"matches": []}))
-    assert empty["state"] == sd.REF_NO_FIXTURE
-    assert "LOOKED and found nothing" in empty["reason"]
+    assert empty["state"] == sd.REF_EMPTY_RESPONSE
+    assert "NO ROWS AT ALL" in empty["reason"]
 
     reasons = {nokey["reason"], failed["reason"], empty["reason"]}
     assert len(reasons) == 3, "two of the three states share a reason"
@@ -263,7 +266,8 @@ def test_COULD_NOT_LOOK_and_FOUND_NOTHING_are_DIFFERENT_states():
 
 def test_the_states_are_ENUMERATED():
     assert set(sd.REFERENCE_STATES) == {
-        sd.REF_OK, sd.REF_NO_FIXTURE, sd.REF_NO_KEY, sd.REF_FETCH_FAILED}
+        sd.REF_OK, sd.REF_NO_FIXTURE, sd.REF_EMPTY_RESPONSE, sd.REF_NO_KEY,
+        sd.REF_FETCH_FAILED}
     assert set(sd.REF_UNEVALUATED) == {sd.REF_NO_KEY, sd.REF_FETCH_FAILED}
     for s in sd.REFERENCE_STATES:
         assert s == s.upper()

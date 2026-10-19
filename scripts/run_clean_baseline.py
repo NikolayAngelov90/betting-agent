@@ -49,11 +49,17 @@ def fit_poisson(train, ref_date, half_life=540):
     ag = np.array([m.away_goals for m in train], float)
     # SAME DEFECT, SECOND COPY. `fit_poisson` exists in both baseline
     # harnesses, so `ws = w.sum() or 1.0` had to be fixed twice -- which is
-    # what THE HABIT costs. Zero is reached exactly when `train` is empty, and
-    # nothing here guarantees otherwise; substituting 1.0 returns league
-    # averages of 0.0 goals as though they were measured. This harness is the
-    # one the clean-dataset rule points every experiment at, so a degenerate
-    # fit here is a corrupt evidence run.
+    # what THE HABIT costs. Substituting 1.0 returns league averages of 0.0
+    # goals as though they were measured.
+    #
+    # AND HERE THE CALL-SITE GUARD WAS LOAD-BEARING. `run_market` skips a
+    # cutoff when `len(train) < 300`, and MEASURED 2026-10-19 against the
+    # population as it stood on 2026-08-07 (2,671 clean rows, against the
+    # recorded manifest's 2,700) THREE OF THE FIVE recorded cutoffs had an
+    # ENTIRELY EMPTY training set: 2025-08-01, 2025-11-01 and 2026-02-01. All
+    # three were skipped by that guard, so `fit_poisson` was never called on
+    # them and no recorded figure rests on one. The `or 1.0` was one
+    # `continue` away from being exercised on three folds in five.
     ws = float(w.sum())
     if ws <= 0:
         raise ValueError(

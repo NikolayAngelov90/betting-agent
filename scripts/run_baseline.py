@@ -122,10 +122,19 @@ def fit_poisson(train, ref_date, half_life=180):
     #
     # This read `ws = w.sum() or 1.0`. The sum is zero exactly when `train` is
     # EMPTY (both branches: `np.array([]).sum()` and `np.ones(0).sum()` are
-    # 0.0), and nothing at the call site guarantees a non-empty window -- there
-    # is no minimum-train guard anywhere in this harness. The substitution then
-    # produced `gh = ga = 0.0` and an empty team-strength table WITHOUT
-    # raising, because the loops that would have divided by them never ran.
+    # 0.0). The substitution then produced `gh = ga = 0.0` and an empty
+    # team-strength table WITHOUT raising, because the loops that would have
+    # divided by them never ran.
+    #
+    # CORRECTION, 2026-10-19. The note here said "nothing at the call site
+    # guarantees a non-empty window -- there is no minimum-train guard
+    # anywhere in this harness". THAT WAS WRONG. `walk_forward` takes
+    # `min_train=500` and skips any cutoff below it, and it is this function's
+    # only caller, so `fit_poisson` is never reached with an empty train
+    # through the harness. MEASURED over the recorded folds: the smallest
+    # training set was 30,916 rows, and ZERO folds were empty or skipped. The
+    # guard below is therefore PROSPECTIVE -- it protects a direct call, which
+    # is how it is now exercised by its own test.
     #
     # A baseline fitted on zero matches is not a baseline, and this harness is
     # what every model change is required to clear. A degenerate fit reported

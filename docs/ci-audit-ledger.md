@@ -28499,3 +28499,303 @@ which a test asserts so no baseline number moves.
 `.github/workflows/ci-audit.yml`,
 `.github/workflows/fixture-horizon-probe.yml`. No production write, no schema
 change, no model change, no cron moved.*
+
+---
+
+# THE RESIDUAL IS A DISTRIBUTION, THE PROVIDER ECHOES ITS OWN WINDOW, AND NO EMPTY FOLD EVER REACHED A FIGURE
+
+*2026-10-19*
+
+## PART A — THE RESIDUAL, SIZED
+
+Easter Monday measured a 15-minute gap. One case, and not a typical one.
+
+**THE DIRECTIVE'S QUANTITY**, `measured` 2026-10-19 from production
+`matches`, phantoms and `world/*` excluded, configured leagues only, defined
+as `min(kickoff | 21 uncovered) − min(kickoff | 9 covered)` so NEGATIVE means
+the uncovered card is earlier and the reference is LATE:
+
+| stratum | n | negative | median | p90 | p99 | max | >60m |
+|---|---|---|---|---|---|---|---|
+| ALL | 585 | 388 (66.3%) | 60 | 240 | 450 | **585** | 45.6% |
+| weekday | 305 | 235 (77.0%) | 120 | 285 | 510 | **585** | 59.0% |
+| weekend | 280 | 153 (54.6%) | 30 | 180 | 330 | 360 | 31.1% |
+| holiday | 14 | 11 (78.6%) | 60 | 360 | 510 | 510 | 42.9% |
+
+So the raw residual's tail is **nine and three-quarter hours** and it is
+negative on two days in three. Taken at face value that says the combination
+is unsafe on half of all days and the needed minimum is 570 minutes.
+
+**BOTH CONCLUSIONS ARE WRONG, AND THE REASON IS THE FINDING.** The deadline
+is `min(reference, constant)` and **the constant binds on 1087 of 1090 days** —
+12:00 weekday and 10:15 weekend both sit far below the first *covered*
+kickoff. The residual is a component; what the margin bears is the
+
+    EXPOSURE = max(0, deadline − min(kickoff | all 30 configured leagues))
+
+| stratum | n | exposure>0 | p90 | p99 | max | >60m |
+|---|---|---|---|---|---|---|
+| ALL | 1090 | 21 (1.9%) | 0 | 45 | **150** | 8 (0.7%) |
+| weekday | 715 | 14 (2.0%) | 0 | 75 | **150** | 8 (1.1%) |
+| weekend | 375 | 7 (1.9%) | 0 | 15 | 30 | **0 (0.0%)** |
+| weekday/holiday | 22 | 3 (13.6%) | 15 | 90 | 90 | 1 (4.5%) |
+
+### THE 60-MINUTE MINIMUM DOES NOT HOLD ON TWO STRATA
+
+**Weekday max 150m, exceeded on 8 of 715 days. Holiday max 90m, exceeded on 1
+of 22.** The weekend stratum **is** absorbed (max 30m, zero exceedances). The
+strata fail differently, as the bimodality predicted.
+
+**AND IT IS NOT INTRODUCED BY THE REFERENCE.** Under the constant **alone**
+the exposure is max 150m on 23 of 1090 days; under the combination, max 150m
+on 21. `min()` can only lower a deadline, so
+`exposure(combination) ≤ exposure(constant)` always — and measured, **3 days
+improved** (median 30m, max 90m) and **ZERO days made worse**. The tail belongs
+to the 12:00 weekday constant, already recorded on 2026-10-10 as the ~12th
+percentile over an observed minimum of 09:59. The reference did not create this
+exposure; it inherited it and reduces it slightly.
+
+### THE DRIVER IS REAL, NOT A TIMEZONE ARTEFACT
+
+`bulgaria/efbet-league` is the earliest uncovered league on **7 of the 10
+worst days**. Checked rather than assumed, `measured` 2026-10-19:
+
+| league | n | min | p05 | p50 | before 12:00 UTC |
+|---|---|---|---|---|---|
+| bulgaria/efbet-league | 327 | **09:30** | 10:30 | 15:30 | 40 (12.2%), 11 on weekdays |
+| turkey/super-lig | 476 | 10:30 | 11:30 | 17:00 | 52 (10.9%) |
+| finland/veikkausliiga | 115 | 09:59 | 11:00 | 15:00 | 7 (6.1%) |
+| italy/serie-b | 458 | 10:30 | 13:00 | 15:15 | 5 (1.1%) |
+| romania/liga-1 | 261 | 11:00 | 12:00 | 17:30 | 4 (1.5%) |
+| greece/super-league | 239 | 13:00 | 14:00 | 16:00 | 0 |
+| england/premier-league | 587 | 11:30 | 12:30 | 15:00 | 24 (4.1%) |
+
+Bulgaria is UTC+2/+3, so 09:30 UTC is 11:30/12:30 local — an ordinary early
+kickoff, and the distributions are internally consistent across three other
+UTC+2/+3 leagues. Note the last row: **a COVERED league goes below the
+constant too** (Premier League minimum 11:30 UTC, 24 fixtures before 12:00),
+which is why the reference binds on any day at all.
+
+### THE MINIMUM, DERIVED RATHER THAN CHOSEN
+
+`MIN_ACCEPTABLE_MARGIN_MIN = 60` was registered on 2026-10-10 **before** any of
+this was computed. **It is deliberately not edited** — refitting a
+pre-registered threshold to a later measurement is how a stated bound becomes a
+fitted one. The exposure is added as its own term:
+
+    margin ≥ MIN_ACCEPTABLE_MARGIN_MIN + COVERAGE_EXPOSURE[day_type]["p99"]
+           = 135 minutes on a weekday, 75 on a weekend
+
+against the p99, or **210 / 90** against the measured maximum. The p99 is the
+operating figure and the max is printed beside it, because a single
+150-minute day in four years is a tail to know about rather than a budget to
+hold permanently. **NEITHER FIGURE MANUFACTURES AN ALARM:** the measured
+prospective margin is **+225m**, which clears 135 and 210 alike — asserted by
+a test, so the raise cannot quietly create a finding.
+
+### THE RESIDUAL IS PRINTED BESIDE THE DEADLINE, EVERY RUN
+
+    day_ahead_deadline[serves=2026-10-20 weekday deadline=12:00
+      bound_by=CONSTANT ref=OK@16:45 coverage=9 of 30 configured leagues ...]
+      residual[coverage exposure weekday: p99=75m max=150m over60=8/715d
+        -> effective minimum 135m = 60m registered + 75m p99 | basis: ...]
+
+and the figure the **verdict** uses is the same dict the line **prints** —
+asserted, because the `LIVE 0 4 * * 1-5` label is what happens when they are
+two.
+
+## PART B — THE PROVIDER, VALIDATED
+
+**AND THE ECHO CORRECTED MY OWN ACCOUNT OF IT.** Yesterday I wrote that
+football-data.org "does not honour `date`". Its own response disproves that.
+Asked for 2027-04-02 it returned 39 matches all dated 2027-04-03 **and
+echoed**:
+
+    filters: {dateFrom: '2027-04-02', dateTo: '2027-04-03', permission: 'TIER_ONE'}
+
+So **`?date=X` is a two-day window `[X, X+1]` inclusive**, documented in the
+payload. Those 39 rows are the honest second day. The defect would have been
+**ours** — attributing a two-day window's minimum to one day.
+
+The response is therefore validated against the request **twice**: the echoed
+`filters.dateFrom` against what was asked, and every row against its own
+`utcDate`, before any `min()`, `max()` or count. An echo that disagrees is
+`FETCH_FAILED` — we did not get the answer we asked for, so nothing in the
+response may be attributed.
+
+**FOUR STATES WHERE THERE ARE FOUR FACTS**, each printing a distinct reason:
+
+| state | fact | reference-verified |
+|---|---|---|
+| `EMPTY_RESPONSE` | no rows at all | yes |
+| `NO_FIXTURE` | rows came back, **none for the asked date** | yes |
+| `NO_KEY` | we could not ask | no |
+| `FETCH_FAILED` | we asked and could not read the answer | no |
+
+`NO_FIXTURE` and `EMPTY_RESPONSE` were one state until today, and conflating
+them hides exactly the case where the provider answers a different question.
+
+**KNOWN-WRONG CONTROL, VERBATIM.** The real 2027-04-02 response is saved at
+`tests/fixtures/footballdata_2027-04-02_wrong_date.json`, **52,343 bytes, 39
+matches, every `utcDate` on 2027-04-03**. Driven through
+`reference_earliest` it produces `NO_FIXTURE`, `min=None`, and
+`other_day=39` — it **does not** produce 2027-04-03's earliest kickoff, and
+the deadline falls to the constant.
+
+### THE SWEEP: NINE HOSTS, ENUMERATED AND PINNED
+
+Every URL literal in `src/` and `scripts/`, `measured` 2026-10-19:
+
+| host | request parameter | attributed? | verdict |
+|---|---|---|---|
+| api.football-data.org | `?date=` | YES | **FIXED** — echo + per-row |
+| api.open-meteo.com | `start_date`/`end_date` | YES | **FIXED** — reads `daily.time` |
+| geocoding-api.open-meteo.com | `?name=` | YES | partly validated already; residual REPORTED |
+| v3.football.api-sports.io | `?date=` | no | rows keyed by afid, stored under their own date |
+| api.the-odds-api.com | key in PATH, no date | no | each event's own `commence_time` |
+| www.flashscore.com | page scrape, none | no | rows carry parsed dates |
+| www.football-data.co.uk | season/league in PATH | n/a | CSV, no echo to compare |
+| api.telegram.org | outbound send | n/a | nothing read back |
+| www.football-data.org | sign-up page in a docstring | n/a | not a call |
+
+The set is **pinned by a test**, so a new external read cannot land without the
+sweep being redone.
+
+**SECOND INSTANCE FOUND AND FIXED: the weather read.**
+`_fetch_daily_weather` requested `start_date=end_date=date_str` and then read
+`daily["temperature_2m_max"][0]`, attributing element 0 to the match's date
+**without ever reading `daily["time"]`** — the provider echoing the dates it
+answered for. Index 0 of a one-element array is the same trust in a different
+costume. `measured` 2026-10-19 the echo exists and is honest (asked
+2026-10-22, echoed `['2026-10-22']`); the same probe for 2026-10-20 returned
+**HTTP 503 twice**, so the provider is intermittently unavailable today, which
+is why its circuit breaker exists. A mismatch now takes the **existing**
+unavailable path (`_DEFAULTS`, `weather_available: 0`) and is **counted**,
+rather than inventing a third behaviour: a wrong-day forecast *is* "no weather
+for this match". Driven both ways with the network stubbed.
+
+**REPORTED, NOT FIXED — the geocoder.** It already fetches three results and
+prefers one whose `country_code` matches the request, with its reason on file
+(Dunfermline resolving to Illinois). What remains is the fallback to
+`results[0]` when **no** result matches the country. Changing it would change
+`weather_*` **feature values**, which is prediction-affecting and a cohort
+event, so it is recorded rather than altered in an observability stage.
+
+**openfootball is NOT a call site.** It appears in `ci_audit.py` only inside a
+suppression **message** and in comments — the manual reference used for two
+verifications. My first test for this asserted the word's absence from
+`code_of(...)` and failed on that message string: `code_of` strips comments and
+docstrings, not ordinary literals. The check now looks for a **URL**, which is
+what a call site is.
+
+## PART C — THE EMPTY FOLD, ANSWERED: IT NEVER REACHED A FIGURE
+
+**AND IT CORRECTS WHAT I WROTE YESTERDAY.** I recorded that `w.sum() or 1.0`
+sat behind "no minimum-train guard anywhere in this harness". **That was
+false, in both harnesses**, and the guards are what protected the record.
+
+**`run_baseline.py`** — `walk_forward(min_train=500)` is its only caller and
+skips any cutoff below it. `measured` against the population as of 2026-08-07
+(39,658 rows):
+
+| cutoff | train | test(60d) | empty | skipped |
+|---|---|---|---|---|
+| 2025-08-01 | 30,916 | 1,035 | no | no |
+| 2025-11-01 | 32,611 | 1,514 | no | no |
+| 2026-02-01 | 35,001 | 2,081 | no | no |
+| 2026-05-01 | 38,247 | 933 | no | no |
+| 2026-07-01 | 39,183 | 475 | no | no |
+
+Smallest training set **30,916 rows**; zero empty, zero skipped. Under `b1`
+the filter was **looser** (584 excluded rows admitted), so the recorded trains
+were ≥ these — monotone, so both recorded `b1` snapshots are covered.
+
+**`run_clean_baseline.py`** — `run_market` skips when `len(train) < 300`, and
+**here that guard was load-bearing**. Against the population as of 2026-08-07:
+
+| cutoff | train | empty | skipped | fit called |
+|---|---|---|---|---|
+| 2025-08-01 | **0** | YES | yes | no |
+| 2025-11-01 | **0** | YES | yes | no |
+| 2026-02-01 | **0** | YES | yes | no |
+| 2026-05-01 | 1,401 | no | no | yes |
+| 2026-07-01 | 2,258 | no | no | yes |
+
+**Three of the five recorded cutoffs had an entirely empty training set**, and
+all three were skipped before `fit_poisson` was reached. The reconstruction
+cross-checks: it yields **2,671** clean rows against the recorded manifest's
+**2,700 qualified** — a 29-row agreement that validates the as-of method, and
+the direction is safe (an upper bound on the recorded trains; an upper bound of
+zero *is* zero).
+
+> **EMPTY FOLDS THAT REACHED THE DEFECT, over every recorded baseline: ZERO.**
+
+So **no recorded figure moves and there is no `baseline_revision` event** —
+`BASELINE_REVISION` stays `b2`, and the three recorded snapshots keep
+`b1.unstamped-pre-exclusion`. The guard added on 2026-10-18 is **prospective**
+and worth having: in the clean harness the `or 1.0` was **one `continue` away**
+from being exercised on three folds in five.
+
+## THE ENTRY
+
+> **A tail measured on the wrong quantity is worse than no measurement, because
+> it is actionable.** The residual's p99 is 450 minutes and its max is 585, and
+> acting on either would have meant demanding a nine-hour margin. The quantity
+> the margin actually bears has a max of 150 minutes on 1.1% of weekdays, it
+> was there before the reference arrived, and the reference reduces it. Three
+> of today's four corrections were to my own claims from the two days before.
+
+## DECLARATION
+
+**RESIDUAL SIZED.** The directive's residual: median 60m, p90 240m, p99 450m,
+**max 585m**, negative on **66.3%** of 585 days, worse on weekdays (median
+120m, p99 510m). **But it is not what the margin bears** — the constant binds
+on **1087 of 1090 days**, and the decision quantity is the exposure: max
+**150m**, >0 on 1.9% of days, **>60m on 8 of 715 weekday days (1.1%)** and 1 of
+22 holidays. **THE 60-MINUTE MINIMUM DOES NOT HOLD on the weekday and holiday
+strata; it does hold on the weekend** (max 30m, zero exceedances). **It is not
+introduced by the reference**: identical 150m max under the constant alone, 3
+days improved, **zero** made worse, and `min()` can only lower a deadline.
+**Derived minimum: 60 + p99 = 135m weekday / 75m weekend** (210/90 on the
+max), carried as a separate term because the 60 was pre-registered and is not
+refitted; the measured +225m margin clears every one of those figures.
+Driver verified real, not a timezone artefact — `bulgaria/efbet-league` at
+09:30 UTC minimum, 11 weekday fixtures before 12:00. Residual printed beside
+the deadline with its basis on every run, from the same dict the verdict uses.
+
+**PROVIDER VALIDATED.** `?date=X` is a **two-day window** `[X, X+1]` and the
+provider **echoes it** in `filters` — correcting yesterday's "does not honour
+`date`". Validated twice: echo against request, then every row against its own
+`utcDate`, before any min/max/count; a disagreeing echo is `FETCH_FAILED`.
+**Four states where there were three**: `EMPTY_RESPONSE` split from
+`NO_FIXTURE`, four distinct reasons, two reference-verified and two not.
+**KNOWN-WRONG CONTROL: the real 2027-04-02 payload, 52,343 bytes verbatim, 39
+matches all dated 2027-04-03 → `NO_FIXTURE`, `min=None`, `other_day=39`, and
+it does not yield 2027-04-03's kickoff.** Sweep: **nine hosts enumerated and
+pinned**; a second instance found and **fixed** in the weather read (index 0
+attributed without reading `daily.time`); the geocoder's residual **reported
+not fixed** because it is prediction-affecting; openfootball confirmed **not a
+call site**.
+
+**EMPTY FOLD ANSWERED: NO — and never could, through either harness.**
+`run_baseline` min train **30,916** over five recorded folds, zero empty, zero
+skipped, and `b1`'s looser filter makes that monotone. `run_clean_baseline`
+had **three of five folds entirely empty**, all three skipped by its `< 300`
+call-site guard, reconstruction cross-checked at 2,671 rows against the
+recorded 2,700. **Zero empty folds reached the defect; no recorded figure
+moves; no `baseline_revision` event.** The guard is prospective, and the
+correction is mine: I had written that no call-site guard existed.
+
+Gating suite **2142 passed, 6 deselected**. Non-gating **6 passed, 0 skipped**.
+Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.18` /
+`stage5_baseline_20260807.51fbcb`; `BASELINE_REVISION` **UNCHANGED** at `b2`.
+One behaviour change reaches a model feature — the weather date validation —
+and it is unreachable today: the echo matched on every response measured, and
+a mismatch routes to the path a failed fetch already takes.
+
+*Recorded 2026-10-19. `scripts/schedule_deadline.py`, `scripts/ci_audit.py`,
+`scripts/run_baseline.py`, `scripts/run_clean_baseline.py`,
+`src/features/weather_service.py`, `tests/test_coverage_residual.py`,
+`tests/test_reference_deadline.py`,
+`tests/fixtures/footballdata_2027-04-02_wrong_date.json`. No production write,
+no schema change, no model change, no cron moved.*

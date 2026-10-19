@@ -2517,6 +2517,14 @@ def main() -> int:
         _ahead["deadline_min"], _ahead_cron,
         [lag for _d, lag in (_by_type.get(day_type(_tomorrow)) or [])],
         MARGIN_RUN_DURATIONS, serves=_tomorrow,
+        # THE MINIMUM CARRIES THE RESIDUAL. 60m was registered on 2026-10-10
+        # against THE DEADLINE; the deadline is now known to sit up to the
+        # measured exposure after the first kickoff we bet, because the
+        # reference sees 9 of 30 leagues. So the requirement is 60 + p99,
+        # which is 135m on a weekday and 75m on a weekend. The registered 60
+        # is NOT edited -- refitting a pre-registered threshold to a later
+        # measurement is how a stated bound becomes a fitted one.
+        min_margin=_ahead["exposure"]["effective_min"],
         deadline_basis=f"{_ahead['bound_by']} via {_ahead['reference']}, "
                        f"{_ahead['coverage']}")
     print(format_prospective(_prosp))

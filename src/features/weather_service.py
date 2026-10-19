@@ -29,6 +29,11 @@ _DEFAULTS = {
     "weather_available": 0,
 }
 
+#: Responses whose echoed date did not match the request, counted so a silent
+#: drop and an honest provider do not look the same in the output. Stage
+#: 2026-10-19; see `_fetch_daily_weather`.
+_date_mismatches = 0
+
 # Circuit breaker: after _CB_THRESHOLD consecutive failures (e.g. SSL timeouts in CI),
 # disable all weather fetches for the rest of the process run to avoid wasting time.
 _cb_failures: int = 0
@@ -44,7 +49,7 @@ def _geocode(city: str, country_code: Optional[str] = None) -> Optional[Tuple[fl
     preferred, avoiding false matches (e.g. Dunfermline → Illinois instead of
     Scotland).  Results are cached per (city, country_code) pair.
     """
-    global _cb_failures, _weather_disabled
+    global _cb_failures, _weather_disabled, _date_mismatches
     key = (city.lower().strip(), country_code)
     if key in _GEO_CACHE:
         return _GEO_CACHE[key]
@@ -103,6 +108,44 @@ def _fetch_daily_weather(lat: float, lon: float, match_date: date) -> Dict:
             data = json.loads(resp.read())
 
         daily = data.get("daily", {})
+
+        # ── VALIDATE THE RESPONSE AGAINST THE REQUEST. 2026-10-19. ─────────
+        #
+        # This read `temps[0]` and attributed it to `match_date` without ever
+        # looking at `daily["time"]`, which is the provider ECHOING the dates
+        # it actually answered for. The request carries `start_date` and
+        # `end_date`; the response carries the echo; the code ignored it.
+        #
+        # THE SHAPE, measured on another provider the same day:
+        # football-data.org, asked for 2027-04-02, returned 39 matches ALL
+        # DATED 2027-04-03 -- a different question, answered silently, on a
+        # day with no local data to contradict it. Index 0 of a one-element
+        # array is the same trust in a different costume.
+        #
+        # MEASURED 2026-10-19 that the echo exists and is honest here: asked
+        # for 2026-10-22, `daily["time"] == ['2026-10-22']`. (The same probe
+        # for 2026-10-20 returned HTTP 503 on two attempts -- the provider is
+        # intermittently unavailable today, which is why the circuit breaker
+        # below exists.)
+        #
+        # A MISMATCH TAKES THE EXISTING UNAVAILABLE PATH, deliberately: it
+        # returns `_DEFAULTS` with `weather_available: 0`, exactly as a failed
+        # fetch already does, rather than inventing a new behaviour. A
+        # wrong-day forecast IS "no weather for this match".
+        _echo = daily.get("time")
+        if _echo is not None and list(_echo)[:1] != [date_str]:
+            global _date_mismatches
+            _date_mismatches += 1
+            logger.warning(
+                f"Open-Meteo answered a DIFFERENT DATE than asked: requested "
+                f"{date_str}, echoed {list(_echo)[:3]} for "
+                f"({lat:.3f},{lon:.3f}). Treating as unavailable rather than "
+                f"attributing another day's forecast to this match. "
+                f"(mismatches this run: {_date_mismatches})")
+            result = dict(_DEFAULTS)
+            _WEATHER_CACHE[cache_key] = result
+            return result
+
         temps = daily.get("temperature_2m_max", [None])
         precips = daily.get("precipitation_sum", [None])
         winds = daily.get("windspeed_10m_max", [None])

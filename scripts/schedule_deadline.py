@@ -266,6 +266,123 @@ def format_prospective(m: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# THE COVERAGE RESIDUAL IS A DISTRIBUTION, AND IT IS NOT THE ONE THAT BITES
+#
+#     A residual is a distribution until its tail is measured. One observation
+#     is not a bound.
+#
+# Easter Monday 2026 measured a 15-minute gap. That was one case, and it was
+# not even a typical one.
+#
+# THE RESIDUAL, `measured` 2026-10-19 over production `matches`, phantoms and
+# `world/*` excluded, configured leagues only, n=585 days carrying BOTH a
+# covered and an uncovered fixture. Defined as
+# `min(kickoff | 21 uncovered) - min(kickoff | 9 covered)`, so NEGATIVE means
+# the uncovered card is earlier and the reference is LATE by that much:
+#
+#   stratum             n    negative      median   p90   p99   max   >60m
+#   ALL               585   388 (66.3%)      60     240   450   585   45.6%
+#   weekday           305   235 (77.0%)     120     285   510   585   59.0%
+#   weekend           280   153 (54.6%)      30     180   330   360   31.1%
+#   holiday            14    11 (78.6%)      60     360   510   510   42.9%
+#
+# So the raw residual's tail is NINE AND THREE-QUARTER HOURS and it is
+# negative on two days in three. Taken at face value that would say the
+# combination is unsafe on half of all days, and the needed minimum is 570
+# minutes. Both conclusions are wrong, and the reason is worth stating.
+#
+# THE RESIDUAL IS NOT WHAT THE MARGIN BEARS. The deadline is
+# `min(reference, constant)` and the CONSTANT binds on 1087 of 1090 days --
+# 12:00 weekday and 10:15 weekend both sit far below the first covered
+# kickoff. What the margin bears is the EXPOSURE:
+#
+#     exposure = max(0, deadline - min(kickoff | all configured leagues))
+#              = minutes our deadline sits AFTER the first kickoff we bet
+#
+# `measured` 2026-10-19, same population, n=1090 days:
+#
+#   stratum      exposure>0     median  p90   p99   max   >60m
+#   ALL          21 (1.9%)        0      0     45   150   8 (0.7%)
+#   weekday      14 (2.0%)        0      0     75   150   8 (1.1%)
+#   weekend       7 (1.9%)        0      0     15    30   0 (0.0%)
+#   wd/holiday    3 (13.6%)       0     15     90    90   1 (4.5%)
+#
+# AND IT IS NOT INTRODUCED BY THE REFERENCE. Under the constant ALONE the
+# exposure is max 150m on 23 of 1090 days; under the combination it is max
+# 150m on 21. `min()` can only lower the deadline, so exposure(combination)
+# <= exposure(constant) ALWAYS -- measured, 3 days improved (median 30m, max
+# 90m), ZERO days made worse. The tail is a property of the 12:00 weekday
+# constant, which the 2026-10-10 analysis already recorded as the ~12th
+# percentile with an observed minimum of 09:59.
+#
+# WHAT DRIVES THE TAIL: genuine early kickoffs in a few leagues, not a
+# timezone artefact. `bulgaria/efbet-league` is the earliest uncovered league
+# on 7 of the 10 worst days (its own distribution: min 09:30, p05 10:30, p50
+# 15:30 UTC -- i.e. 11:30/12:30 local, normal for Bulgaria), with
+# `finland/veikkausliiga` at 09:59 and `italy/serie-b` at 10:30. Checked
+# against three other UTC+2/+3 leagues and against the Premier League, whose
+# own minimum is 11:30 UTC with 24 fixtures before 12:00 -- which is why the
+# reference binds at all.
+
+#: `measured` 2026-10-19. The exposure distribution per day type: how many
+#: minutes the COMBINED deadline sits after the true first kickoff.
+#:
+#: STRATIFIED BY DAY TYPE, not by holiday, because the deadline itself is keyed
+#: by day type -- and the weekday figure DOMINATES its own holiday subset
+#: (weekday/holiday max 90m against weekday max 150m), so using the day-type
+#: number is the conservative choice rather than a convenient one.
+COVERAGE_EXPOSURE = {
+    "weekday": {"n": 715, "pos": 14, "p99": 75, "max": 150, "over60": 8},
+    "weekend": {"n": 375, "pos": 7, "p99": 15, "max": 30, "over60": 0},
+}
+
+#: THE DERIVED MINIMUM, and it is derived rather than chosen.
+#:
+#: `MIN_ACCEPTABLE_MARGIN_MIN` (60) was registered on 2026-10-10 against THE
+#: DEADLINE, before any of this was computed, and it is deliberately NOT
+#: edited here -- retrofitting a pre-registered threshold to a later
+#: measurement is how a stated bound becomes a fitted one. Instead the
+#: exposure is added as its own term, so the requirement reads
+#:
+#:     margin >= MIN_ACCEPTABLE_MARGIN_MIN + COVERAGE_EXPOSURE[day_type]["p99"]
+#:
+#: which is **135 minutes on a weekday and 75 on a weekend** against the p99,
+#: or 210/90 against the measured maximum. The p99 is the operating figure and
+#: the max is reported beside it, because a single 150-minute day in four
+#: years is a tail to know about rather than a budget to hold permanently.
+#:
+#: NEITHER FIGURE CREATES AN ALARM TODAY: the measured prospective margin is
+#: +225m, which clears 135 and 210 alike.
+EFFECTIVE_MIN_MARGIN = {
+    dt: MIN_ACCEPTABLE_MARGIN_MIN + v["p99"]
+    for dt, v in COVERAGE_EXPOSURE.items()
+}
+
+
+def coverage_exposure(day: _dt.date) -> dict:
+    """The measured exposure for `day`'s stratum, with its basis.
+
+    Returned rather than inlined so the figure printed beside a deadline and
+    the figure the verdict uses are THE SAME NUMBER. The `LIVE 0 4 * * 1-5`
+    label is what happens when they are two.
+    """
+    dtype = day_type(day)
+    e = COVERAGE_EXPOSURE[dtype]
+    return {
+        "day_type": dtype,
+        "p99": e["p99"],
+        "max": e["max"],
+        "n": e["n"],
+        "over60": e["over60"],
+        "effective_min": EFFECTIVE_MIN_MARGIN[dtype],
+        "basis": (f"measured 2026-10-19, n={e['n']} {dtype} days, production "
+                  f"`matches`, phantoms and world/* excluded; exposure = "
+                  f"max(0, deadline - first kickoff over the 30 configured "
+                  f"leagues); p99={e['p99']}m max={e['max']}m, exceeds 60m on "
+                  f"{e['over60']} day(s)"),
+    }
+
+# ─────────────────────────────────────────────────────────────────────────────
 # THE DAY-AHEAD DEADLINE COMES FROM THE EXTERNAL REFERENCE — 2026-10-19
 #
 #     A minimum over a subset is an UPPER BOUND on the true minimum.
@@ -305,10 +422,19 @@ REFERENCE_KEY_ENV = "FOOTBALL_DATA_ORG_KEY"
 
 #: `reference_earliest` states, enumerated so the set is read, not inferred.
 REF_OK = "OK"                       #: a covered fixture was found for that day
-REF_NO_FIXTURE = "NO_FIXTURE"       #: the reference answered; nothing covered
+REF_NO_FIXTURE = "NO_FIXTURE"       #: rows came back, NONE for the asked date
+REF_EMPTY_RESPONSE = "EMPTY_RESPONSE"  #: the provider returned no rows at all
 REF_NO_KEY = "NO_KEY"               #: we could not ask
 REF_FETCH_FAILED = "FETCH_FAILED"   #: we asked and could not read the answer
-REFERENCE_STATES = (REF_OK, REF_NO_FIXTURE, REF_NO_KEY, REF_FETCH_FAILED)
+#: FOUR STATES WHERE THERE ARE FOUR FACTS. `NO_FIXTURE` and `EMPTY_RESPONSE`
+#: were one state until 2026-10-19, and they are not the same claim: an empty
+#: response says the provider has nothing anywhere near that query, while
+#: NO_FIXTURE says it answered with rows and not one of them was for the day
+#: we asked about -- which is what 2027-04-02 did, returning 39 matches all
+#: dated 2027-04-03. Conflating them hides exactly the case where the provider
+#: answered a different question.
+REFERENCE_STATES = (REF_OK, REF_NO_FIXTURE, REF_EMPTY_RESPONSE, REF_NO_KEY,
+                    REF_FETCH_FAILED)
 
 #: The two that mean "could not look", which is NOT "found nothing". Both fall
 #: to the constant, and they print differently because their remedies differ:
@@ -340,14 +466,22 @@ def reference_earliest(day: _dt.date, fetch=None, api_key: str = None) -> dict:
     `fetch` is injectable so every branch is testable without a network, and
     so the known-wrong cases below are driven rather than waited for.
 
-    THE PROVIDER DOES NOT HONOUR `date` WHEN THE DAY IS EMPTY. `measured`
+    `?date=X` IS A TWO-DAY WINDOW, AND THE PROVIDER SAYS SO. `measured`
     2026-10-19: asked for 2027-04-02 it returned **39 matches, every one dated
-    2027-04-03**; asked for 2027-04-05 it returned **8, all dated 2027-04-06**.
-    A `min()` over the raw response would therefore present the NEXT day's
-    kickoff as tomorrow's -- a confident wrong answer, in either direction,
-    with nothing in the payload marking it. So every row is checked against its
-    own `utcDate` and the mismatches are COUNTED, not merely dropped: a silent
-    filter and an honest provider look identical.
+    2027-04-03**, and its own echo read
+
+        filters: {dateFrom: 2027-04-02, dateTo: 2027-04-03, ...}
+
+    An earlier note here said the provider "does not honour `date`". That was
+    imprecise and its own echo disproves it: `date=X` expands to `[X, X+1]`
+    INCLUSIVE, so those 39 rows are the honest second day of the window. The
+    defect would be OURS -- attributing a two-day window's minimum to one day.
+
+    So the response is validated against the request TWICE: the echoed
+    `filters.dateFrom` is compared against what was asked, and every row is
+    checked against its own `utcDate`. Mismatched rows are COUNTED rather than
+    merely dropped, because a silent filter and a provider with nothing to say
+    look identical from the outside.
     """
     import os
 
@@ -384,8 +518,34 @@ def reference_earliest(day: _dt.date, fetch=None, api_key: str = None) -> dict:
                          f"'nothing tomorrow'.")
         return out
 
+    # VALIDATE AGAINST THE REQUEST USING THE PROVIDER'S OWN ECHO. It returns
+    # `filters: {dateFrom, dateTo}`; if `dateFrom` is not the day we asked
+    # about, the response answers a different question and nothing below may
+    # be attributed to `day`.
+    out["echo"] = dict((payload or {}).get("filters") or {})
+    _from = out["echo"].get("dateFrom")
+    out["echo_matches_request"] = (_from == day.isoformat()) if _from else None
+    if out["echo_matches_request"] is False:
+        out["state"] = REF_FETCH_FAILED
+        out["reason"] = (
+            f"{REFERENCE_NAME} echoed dateFrom={_from!r} for a request of "
+            f"{day.isoformat()} - it answered a DIFFERENT question, so no row "
+            f"in this response may be attributed to {day}. Treated as a "
+            f"failed fetch: we did not get the answer we asked for.")
+        return out
+
     matches = (payload or {}).get("matches") or []
     out["n_raw"] = len(matches)
+    if not matches:
+        out["state"] = REF_EMPTY_RESPONSE
+        out["reason"] = (f"{REFERENCE_NAME} returned NO ROWS AT ALL for "
+                         f"{day}. Distinct from 'rows came back and none was "
+                         f"for the day we asked about' - that is NO_FIXTURE "
+                         f"and it is how a provider answers a different "
+                         f"question.")
+        from src.scrapers.footballdata_competitions import REFERENCE_LEAGUES
+        out["leagues_absent"] = sorted(REFERENCE_LEAGUES)
+        return out
     rows = []
     for m in matches:
         code = ((m or {}).get("competition") or {}).get("code", "")
@@ -416,10 +576,17 @@ def reference_earliest(day: _dt.date, fetch=None, api_key: str = None) -> dict:
     out["leagues_absent"] = sorted(REFERENCE_LEAGUES - set(out["leagues_present"]))
     if not rows:
         out["state"] = REF_NO_FIXTURE
-        out["reason"] = (f"{REFERENCE_NAME} answered with {out['n_raw']} row(s) "
-                         f"and none is a covered fixture on {day}: "
-                         f"{out['dropped']}. The reference LOOKED and found "
-                         f"nothing - distinct from not having looked.")
+        out["reason"] = (
+            f"{REFERENCE_NAME} answered with {out['n_raw']} row(s) and NOT "
+            f"ONE is a covered fixture on {day}: {out['dropped']}. "
+            + (f"{out['dropped']['other_day']} of them were for a DIFFERENT "
+               f"DATE - the provider answered a different question than it "
+               f"was asked, which is why they are counted rather than merely "
+               f"dropped. "
+               if out["dropped"]["other_day"] else "")
+            + "The reference LOOKED and found nothing for this day - distinct "
+              "from not having looked, and from having returned nothing at "
+              "all.")
         return out
     ko, league = min(rows, key=lambda t: t[0])
     out["state"] = REF_OK
@@ -466,6 +633,11 @@ def combined_deadline(day: _dt.date, ref: dict) -> dict:
         "n_usable": ref.get("n_usable", 0),
         "dropped": ref.get("dropped") or {},
     }
+    # THE RESIDUAL TRAVELS WITH THE DEADLINE. An improved deadline must never
+    # read as a safe one: `min(reference, constant)` is still up to
+    # `exposure["max"]` minutes LATER than the first kickoff we bet, because
+    # the reference sees 9 of 30 leagues.
+    out["exposure"] = coverage_exposure(day)
     rmin = ref.get("min")
     if rmin is None:
         out["deadline_min"] = const_min
@@ -476,7 +648,8 @@ def combined_deadline(day: _dt.date, ref: dict) -> dict:
             + ("NOT reference-verified: " if ref.get("state") in REF_UNEVALUATED
                else "")
             + (ref.get("reason") or ""))
-        out["reference_verified"] = ref.get("state") == REF_NO_FIXTURE
+        out["reference_verified"] = ref.get("state") in (REF_NO_FIXTURE,
+                                                         REF_EMPTY_RESPONSE)
         return out
     out["deadline_min"] = min(rmin, const_min)
     out["bound_by"] = "REFERENCE" if rmin < const_min else "CONSTANT"
@@ -512,4 +685,10 @@ def format_reference_deadline(c: dict) -> str:
            else "")
         + f" coverage={c['coverage']} present={len(c.get('leagues_present') or [])}"
         f" absent={len(absent)} usable={c.get('n_usable')} "
-        f"dropped={c.get('dropped')}]")
+        f"dropped={c.get('dropped')}]"
+        + (f"{chr(10)}  residual[coverage exposure {e['day_type']}: "
+           f"p99={e['p99']}m max={e['max']}m over60={e['over60']}/{e['n']}d "
+           f"-> effective minimum {e['effective_min']}m = "
+           f"{MIN_ACCEPTABLE_MARGIN_MIN}m registered + {e['p99']}m p99 | "
+           f"basis: {e['basis']}]"
+           if (e := c.get("exposure")) else ""))
