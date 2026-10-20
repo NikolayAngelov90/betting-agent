@@ -332,6 +332,26 @@ def main():
     print(format_table(results))
 
     base = "market (de-vigged consensus)"
+    # THE EFFECTIVE FOLD COUNT, OR NO TABLE. 2026-10-20.
+    #
+    # Extended here from the clean harness, where `show()` already refuses. A
+    # fold count is a population count: five requested cutoffs and three that
+    # fit are different experiments, and the figures below are the ones the
+    # standing `bookmaker_blend_weight -> 1.0` recommendation rests on.
+    _f = results.get("folds")
+    if not _f:
+        raise ValueError(
+            "a baseline table was about to print WITHOUT its effective fold "
+            "count. `cutoffs` records what was ASKED FOR; `folds` records what "
+            "RAN, and the 2026-08-07 audit's priced figures rest on 3 of 5.")
+    print(f"folds: {_f['effective_folds']} EFFECTIVE of "
+          f"{_f['requested_folds']} requested (min_train={_f['min_train']})"
+          f"   span {_f['span']}")
+    for _c, _tr, _te in _f["folds_ran"]:
+        print(f"   RAN     {_c}  train={_tr:6d}  test={_te:6d}")
+    for _c, _tr, _te, _why in _f["folds_skipped"]:
+        print(f"   SKIPPED {_c}  train={_tr:6d}  test={_te:6d}  {_why}")
+    print(f"   CAVEAT: {_f['caveat']}")
     print("\nPaired bootstrap vs the market baseline (positive = market is better):")
     for name in results["candidates"]:
         if name == base:

@@ -29142,3 +29142,284 @@ No production write, no schema change, no model change, no cron moved.
 `tests/test_fold_count_and_first_result.py`,
 `tests/test_coverage_residual.py`, `tests/test_reference_deadline.py`,
 `tests/test_cron_split_by_daytype.py`, `tests/test_contamination_and_margin.py`.*
+
+---
+
+# 88 MINUTES IS NOT THE FLOOR, AND THE WEATHER FEATURES REACH NOTHING
+
+*2026-10-20*
+
+## PART A — DURATION PROFILED
+
+The margin has been attacked from the cron five times and from the deadline
+twice. Duration had never been decomposed.
+
+**METHOD, stated.** GitHub's job API gives exact per-**step** boundaries.
+Inside a step the only timestamps are loguru's, so each log line's elapsed gap
+to the next is charged to the `module:function` that emitted the earlier line.
+That measures time spent in **or waiting after** each emitter. It cannot see
+time inside a call that logs nothing — that appears as a large gap on whatever
+logged last, and those are **named** below rather than hidden.
+
+**n=3 profiled runs.** The `67.4–88.1` time-to-picks figure is **n=4 from
+2026-10-01** and is a **different population**. The two are not pooled.
+
+| phase | 10-20 (34 fx) | 10-19 (13 fx) | 10-18 (65 fx) |
+|---|---|---|---|
+| **run total** | **56.9** | **48.5** | **68.8** |
+| `--update` | **24.7 (43.4%)** | **24.1 (49.7%)** | **32.9 (47.8%)** |
+| ·· AF fixtures-by-date | 7.2 (n=6) | 3.7 (n=6) | 10.1 (n=7) |
+| ·· injury scraper | 6.9 (n=3) | 3.6 (n=3) | 9.7 (n=3) |
+| ·· xG backfill | 2.9 | 9.0 | — |
+| ·· Flashscore fixtures | 2.7 (n=90) | 3.0 (n=90) | 2.3 (n=90) |
+| ·· team resolution | 1.3 | 0.3 | 7.1 |
+| **picks step** | **11.3 (19.9%)** | **5.4 (11.2%)** | **21.1 (30.6%)** |
+| ·· Claude review `_briefing_for` | 4.9 (n=33) | 2.0 (n=13) | 9.5 (n=65) |
+| ·· `analyze_fixture` | 2.9 | 1.3 | 4.9 |
+| ·· **weather fetch** | **1.6 (14.2%)** | **0.9 (15.7%)** | **3.1 (14.6%)** |
+| ·· `_save_picks` | 0.6 | 0.4 | 1.1 |
+| ML retrain | — | — | 5.6 |
+| tests | 2.9 | 3.2 | 2.1 |
+| Flashscore **RESULTS** (post-picks) | 14.1 | 11.2 | 4.0 |
+
+**TIME-TO-PICKS** — the run minus everything after the picks step —
+is **42.3 / 36.9 / 64.3 min**. The 11–14 minute results scrape runs **after**
+picks and does not count against the deadline at all. Note these are **below**
+the registered `FULL_CARD_PICKS_MAX = 88.1`, so that bound is conservative and
+possibly stale; it is **not** edited here (rule 4: profiling changes nothing).
+
+**PER-FIXTURE RATES**, which is where the shape lives:
+
+| phase | per fixture | stability |
+|---|---|---|
+| Claude review | **~9 s** | 8.7 / 9.1 / 8.7 — strikingly stable |
+| injuries | **14–20 s** | budget-capped at 30 requests |
+| weather | **~3 s** | 2.9 / 4.6 / 3.2 |
+
+### SERIAL BY NECESSITY, OR BY ACCIDENT
+
+* **Flashscore** — one Selenium browser over 30 leagues. **BY NECESSITY.**
+* **injury scraper** — its own comment reads *"the sequential API+DB loop"*,
+  and the cap is a **request budget** (30), not a concurrency limit. The count
+  is provider-bound; the **serialisation is by accident**. 9.7 min for 30
+  fixtures is ~19 s each, which for a single HTTP call means the DB write sits
+  inside the loop.
+* **Claude review** — `for match_id in fixtures: await self._briefing_for(...)`.
+  **BY ACCIDENT**, with cost and rate-limit consequences any fix must weigh.
+* **weather** — one call per fixture inside `create_features`. **BY ACCIDENT**,
+  and moot: Part B shows it reaches nothing.
+* **AF fixtures-by-date** — the 9.2-minute gap follows the
+  `AF_LEAGUE_FILTER … rejected 1241 fixture(s) across 337 untracked leagues`
+  line, so the time is in the **per-fixture upsert loop**, not the HTTP call.
+  DB-bound, **BY ACCIDENT**.
+
+### WHAT IS REDUCIBLE, WITH THE ARITHMETIC
+
+> **88 minutes is not the floor, and the 8.4-minute residual is reducible.**
+
+* **weather: 3.1 min on a full card, for a producer that reaches nothing.**
+  Removing it is not an optimisation — it is deleting a producer with no
+  consumer. **That alone is 3.1 of the 8.4 minutes.**
+* **injuries: 9.7 min on a full card, serial by accident.** Even four-way
+  concurrency inside the same request budget recovers ~7 min.
+
+Either one covers the shortfall; together they cover it three times over. **So
+the cron is NOT the only remaining lever**, and the finding that goes to Niki
+is the opposite of the one this stage was braced for. **Nothing was changed:**
+profiling and optimising are separate stages, and the second needs the first's
+numbers to be honest.
+
+## PART B — GEOCODER SIZED, AND THE EXPOSURE IS NIL
+
+### WEATHER REACHES NOTHING — MEASURED, WITH A NEGATIVE CONTROL
+
+* **training skips it by construction.** `create_features(for_training=True)`
+  documents *"skip external API calls (weather, news)"* and the weather block
+  sits behind `if not for_training:`. So weather is in **no fit** — confirmed
+  on both shipped pickles: **111 feature names, ZERO weather.**
+* **inference drops it.** The live path *does* compute weather, but
+  `_align_features` selects by the **fitted** names. Measured on the real
+  fitted set: 117 input columns → 111 aligned, and a **−40 °C / 400 mm /
+  300 km/h** fixture aligns **identically** to a 19.7 °C one. **Negative
+  control:** perturbing a *fitted* column **does** change the aligned vector,
+  so the mechanism is not inert and the equality is not vacuous.
+  *(A first attempt loaded the pickle through the HMAC-gated loader, which
+  refused under the dev key and reported an UNFITTED model — three identical
+  predictions for the wrong reason. That result was discarded, not used.)*
+* **no other consumer.** `weather_*` appears nowhere in `src/reporting/`,
+  `src/betting/` or `src/models/` — not the briefing, not the value
+  calculator. The only outside mention is `ensemble.py`'s comment justifying
+  the 40% bookmaker weight because the bookmaker sees *"weather, sharp money"*
+  that **our model doesn't see** — which turns out to be literally true.
+
+> **So realised harm from a wrong venue is ZERO — measured, not inferred from
+> the mechanism's severity.** A wrong temperature in a feature vector and a
+> wrong temperature in a prompt are different severities; this is neither. It
+> is a wrong temperature in a dictionary nothing reads.
+
+**AND THE PRODUCER COSTS SOMETHING.** `measured` 2026-10-20: **33, 11 and 58**
+Open-Meteo calls on the last three runs, **0.9–3.1 min of wall time**, 14–16%
+of the picks step. It is PNC-1 with a provider bill. **My own PNC detector
+cannot see it:** `pnc_scan` tracks symbols — functions, constants, tables,
+columns — and these are **dict keys** written into a feature mapping, while
+`_get_weather_features` itself *is* consumed by `create_features`. A coverage
+gap in the instrument, stated rather than left implied.
+
+### THE ERROR RATE: A CENSUS, NOT A SAMPLE
+
+**Decision rule, stated before the sweep:** every fixture in the three
+pan-European competitions is played in a UEFA country, so a `results[0]`
+**outside UEFA with a UEFA alternative in the same response** is **wrong** —
+not "at risk", wrong, because the fixture cannot have been played there.
+Applied to the **whole population**, 185 unhinted venues / 428 fixtures:
+
+| outcome | venues |
+|---|---|
+| top result in UEFA (or no UEFA alternative) | 176 |
+| **top result OUTSIDE UEFA with a UEFA alternative** | **3 (1.6%)** |
+| no geocoding result at all → `_DEFAULTS` | 6 |
+
+**4 fixtures affected.** It is a **LOWER bound**: a venue resolving to the
+wrong *UEFA* country would pass the rule.
+
+| venue | fx | `results[0]` | the UEFA alternative |
+|---|---|---|---|
+| `Motherwell` | 2 | **Motherwell, ZA** pop 140,351 | Motherwell, GB pop 32,840 |
+| `Bar` | 1 | **Qionghai, CN** pop 528,238 | (Bar, ME — 4th) |
+| `San Sebastian` | 1 | **San Sebastián, PR** | San Sebastián de La Gomera, ES |
+
+Population ranking is doing the damage in each: a larger homonym outranks the
+intended town.
+
+**DELTAS over all three (n=3):** |ΔTemp| **5.2–10.7 °C**, mean 7.6; |ΔPrecip|
+0.6–4.4 mm; `weather_is_raining` flips on **2 of 3**, `weather_is_windy` on 0
+of 3. *(The `Bar` delta measured yesterday for a different target date was
++9.6 °C / −10.6 mm; weather deltas are date-dependent, which is why the two
+figures differ rather than disagree.)*
+
+**CAN THE TWO SAMPLES BE COMBINED? No — and they no longer need to be.** The
+head sample (0 of 12) was drawn from the stratum **protected by population
+ranking**; the tail sample (1 of 12) from the unprotected one. Pooling would
+estimate a mixture corresponding to no population. The tail's 8.3% also
+**over-states** the census's 1.6%, precisely because it was drawn from the most
+obscure venues. The census supersedes both, which is why it was taken.
+
+**Report only.** Fixing either site changes feature values — a cohort event —
+and goes to the 11-01 queue with this size attached. Note the size now reads:
+3 wrong venues, 4 fixtures, **zero realised effect on any pick or figure**.
+
+## PART C — THREE FOLDS LABELLED
+
+### THE FOUR ROUTES, AND ONLY ONE USES THIS HARNESS
+
+| route | key figures | folds? |
+|---|---|---|
+| logistic divergence, settled picks | coef +0.245, z=1.11, p=0.265; market-only LL **−685.99 beats** model-only −690.67; n=1018 | **none** |
+| scoring rules, same picks | model Brier 0.2499 ≈ constant-0.514 Brier 0.2498; raw 1/odds 0.2410 | **none** |
+| **walk-forward blend sweep** | **1,710 priced** OOS matches; log-loss falls monotonically 1.0412 (w=0) → 0.9929 (w=1.0), no interior optimum | **3 effective of 5** |
+| the price closure | close-at-retail predicts `1/R−1 = −4.64%`; measured flat ROI **−5.396%** over 1,320 settled picks, a 0.76pp gap inside the ~±2.6pp SE | **none** |
+
+> **The standing conclusion — "the model adds no information over the price" —
+> is MULTIPLY DETERMINED and does not depend on the fold count. The
+> `bookmaker_blend_weight → 1.0` RECOMMENDATION rests on this harness alone.**
+
+Route 3 is the only one that sweeps the *weight*: the others establish that the
+model adds nothing, which implies w=1.0 is not worse, but the **monotone shape
+with no interior optimum** is established only on 1,710 priced matches across
+**three adjacent folds inside one odds-collection era**.
+
+### WHAT THREE ADJACENT FOLDS IN ONE ODDS ERA SUPPORT
+
+* **CAN** — the intervals for those 1,710 observations, and the absence of an
+  interior optimum **within that period**.
+* **CANNOT** — temporal generality. And the period is not merely short, it is
+  **atypical**: the corruption gate rejected **4,836** 1X2 books in that era,
+  Bet365 at **92%** implausible and Pinnacle at **26%**.
+
+**SHOULD THE RECOMMENDATION CARRY A QUALIFICATION? Yes.** What it would take is
+**more odds eras, which means time** — a statement about **when, not whether**.
+Odds collection began 2026-02; a second era with a different book mix cannot
+exist until one has accumulated.
+
+### THE REFUSAL, EXTENDED
+
+`show()` already refused in the clean harness. Now `walk_forward` returns
+`effective_folds` / `requested_folds` / `folds_ran` / `folds_skipped` /
+`min_train` / `span`, distinguishes **`EMPTY TRAIN`** from `train<N`, and
+`run_baseline.main` **raises** rather than print a table without them. The
+returned block also carries its own caveat: **a fold count over all rows is
+not the count for a priced subset** — 3 of 5 for the audit's 1,710 — stated so
+a reader cannot transfer one to the other.
+
+**No re-run, no figure moved, `BASELINE_REVISION` stays `b2`.**
+
+## AND TWICE IN THIS STAGE, A TEST COUNTED ITS OWN SOURCE
+
+A test asserting "exactly three of the four routes carry no fold structure"
+greped this file for the phrase and found **4** — the assertion list quotes it.
+The fix quoted it too and found **5**. A test that greps its own source for a
+string it must also mention cannot be made correct by better escaping, so the
+claim became **data**: a dict of route → `uses_this_harness`, asserted on
+structure. Third costume of the comment-blind family in this file set, after
+docstrings and log-message literals.
+
+## THE ENTRY
+
+> **A floor nobody has profiled is an assumption wearing a measurement's
+> clothes.** Eight and a half minutes looked irreducible for two stages because
+> the only levers examined were the cron and the deadline. Decomposed, the
+> largest block in the picks step after the Claude review is a weather fetch
+> whose output no model, no prompt and no calculator reads — three minutes a
+> day spent on a dictionary nothing opens.
+
+## DECLARATION
+
+**DURATION PROFILED.** n=3 runs, phase table above, method and its blind spot
+stated. `--update` is **43–50%** of every run; the post-picks results scrape
+(11–14 min) does not count against the deadline; **time-to-picks 42.3 / 36.9 /
+64.3 min**, all below the registered 88.1 bound, which is left unedited.
+Serial **by necessity**: Flashscore's single browser. Serial **by accident**:
+the injury loop (its own comment says so; 9.7 min on a full card, budget-capped
+but not concurrency-capped), the Claude review (~9 s × N sequential awaits),
+the weather fetch, and the AF upsert loop. **88 MINUTES IS NOT THE FLOOR: the
+8.4-minute residual is reducible, 3.1 of it by deleting a producer that reaches
+nothing and 9.7 available from one sequential loop.** The cron is not the only
+remaining lever. **Nothing changed.**
+
+**GEOCODER SIZED.** **Weather reaches nothing** — skipped in training by
+construction, absent from both shipped pickles' 111 fitted names, and dropped
+at inference by name alignment (a −40 °C fixture aligns identically to a
+19.7 °C one, with a negative control proving the mechanism live), with no
+consumer in reporting, betting or models. **So realised harm is ZERO, measured
+rather than inferred.** The producer still costs **33/11/58 Open-Meteo calls
+and 0.9–3.1 min per run**, and my own PNC detector cannot see it because it
+tracks symbols and these are dict keys. **Census, not sample: 3 of 185
+unhinted venues wrong (1.6%), 4 fixtures** — `Motherwell` → South Africa,
+`Bar` → China, `San Sebastian` → Puerto Rico — under a decision rule stated
+before the sweep, and a **lower bound** because a wrong UEFA country would
+pass it. Deltas |ΔTemp| 5.2–10.7 °C, rain flag flips 2 of 3. **The two samples
+cannot be combined** — one was drawn from the stratum population-ranking
+protects — and the census supersedes both.
+
+**THREE FOLDS LABELLED.** Four independent routes to the no-information
+conclusion; **three carry no fold structure at all** (two scoring analyses on
+1,018 settled picks and the price closure at **−5.396% measured against
+−4.64% predicted**), so **the standing conclusion is multiply determined and
+survives**. **Only the `bookmaker_blend_weight → 1.0` recommendation rests on
+this harness**, and therefore on **3 effective folds of 5**, adjacent, in one
+odds era whose book mix was itself atypical (4,836 1X2 books rejected). Three
+adjacent folds **can** support the intervals for those 1,710 observations and
+**cannot** support temporal generality; the recommendation **should** carry
+that qualification, and lifting it takes more odds eras — **when, not
+whether**. The fold count is now returned by `walk_forward` and
+`run_baseline.main` **refuses to print without it**, carrying the caveat that
+an all-rows count does not describe a priced figure.
+
+Gating suite **2167 passed, 6 deselected**. Non-gating **6 passed, 0 skipped**.
+Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.18` /
+`stage5_baseline_20260807.51fbcb`; `BASELINE_REVISION` **UNCHANGED** at `b2`.
+No production write, no schema change, no model change, no cron moved, and no
+optimisation applied.
+
+*Recorded 2026-10-20. `src/evaluation/baseline.py`, `scripts/run_baseline.py`,
+`tests/test_duration_profile_and_reach.py`.*

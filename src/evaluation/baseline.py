@@ -278,6 +278,19 @@ def walk_forward(rows: List[MatchRow], candidates: List[Candidate],
     per_candidate_probs: Dict[str, List] = defaultdict(list)
     per_candidate_keys: Dict[str, List] = defaultdict(list)
 
+    # ── THE EFFECTIVE FOLD COUNT IS PART OF THE RESULT. 2026-10-20. ───────
+    #
+    # A fold count is a population count. `cutoffs` is what was ASKED FOR and
+    # the guard below decides what RAN; recording only the first is the same
+    # defect as a population count without its query window.
+    #
+    # It was found in the clean harness first -- three of five cutoffs there
+    # had an ENTIRELY EMPTY training set -- and the same shape is in the
+    # figures this function produces: of the five cutoffs the 2026-08-07
+    # predictive audit used, the two earliest contain ZERO matches carrying a
+    # bookmaker price (odds collection began 2026-02), so every PRICED figure
+    # drawn from this harness rests on THREE adjacent folds in one odds era.
+    folds_ran, folds_skipped = [], []
     for cutoff in cutoffs:
         train = [r for r in rows if r.match_date < cutoff]
         test = [r for r in rows
@@ -285,7 +298,13 @@ def walk_forward(rows: List[MatchRow], candidates: List[Candidate],
         if len(train) < min_train or not test:
             logger.debug(f"baseline: skipping cutoff {cutoff} "
                          f"(train={len(train)}, test={len(test)})")
+            folds_skipped.append(
+                (str(cutoff), len(train), len(test),
+                 "EMPTY TRAIN" if not train else
+                 (f"train<{min_train}" if len(train) < min_train
+                  else "no test row")))
             continue
+        folds_ran.append((str(cutoff), len(train), len(test)))
         for cand in candidates:
             state = cand.fit(train, cutoff)
             for r in test:
@@ -296,8 +315,25 @@ def walk_forward(rows: List[MatchRow], candidates: List[Candidate],
 
     # Intersect on match ids so every candidate is scored on the same fixtures.
     id_sets = [set(v) for v in per_candidate_keys.values()]
+    folds = {
+        "effective_folds": len(folds_ran),
+        "requested_folds": len(cutoffs),
+        "folds_ran": folds_ran,
+        "folds_skipped": folds_skipped,
+        "min_train": min_train,
+        "span": (f"{folds_ran[0][0]} .. "
+                 f"{folds_ran[-1][0]} +{window_days}d" if folds_ran else "none"),
+        # A FOLD COUNT OVER *ALL* ROWS IS NOT THE COUNT FOR A PRICED SUBSET.
+        # The audit's blend-sweep figures are computed on matches carrying a
+        # bookmaker price, and that subpopulation spans fewer folds than this.
+        # Stated here so a reader of `effective_folds` does not transfer it to
+        # a figure it does not describe.
+        "caveat": ("effective_folds counts folds over the rows passed in; a "
+                   "PRICED subset spans fewer -- measured 3 of 5 for the "
+                   "2026-08-07 audit's 1,710 priced matches"),
+    }
     if not id_sets:
-        return {"n": 0, "candidates": {}}
+        return {"n": 0, "candidates": {}, "folds": folds}
     shared = set.intersection(*id_sets)
     outcome_by_id = {r.id: r.outcome for r in rows}
 
@@ -337,6 +373,8 @@ def walk_forward(rows: List[MatchRow], candidates: List[Candidate],
         "n_shared_matches": len(shared),
         "window_days": window_days,
         "cutoffs": [c.isoformat() for c in cutoffs],
+        # REQUESTED cutoffs above; EFFECTIVE folds here. Both, always.
+        "folds": folds,
         "candidates": results,
         "_per_match_loss": per_match_loss,
     }
