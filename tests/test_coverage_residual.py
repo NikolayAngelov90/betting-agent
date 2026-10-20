@@ -324,86 +324,6 @@ def test_the_states_are_ENUMERATED_and_all_five_are_reachable():
 
 # ── PART B, THE SWEEP: THE WEATHER READ HAD THE SAME SHAPE ──────────────────
 
-def test_the_WEATHER_read_validates_the_ECHOED_date():
-    """Second instance of the attributing shape, found by the sweep.
-
-    `_fetch_daily_weather` requests `start_date=end_date=date_str` and read
-    `daily["temperature_2m_max"][0]`, attributing element 0 to the match's
-    date WITHOUT ever reading `daily["time"]` -- which is the provider echoing
-    the dates it answered for. `measured` 2026-10-19: the echo exists and is
-    honest (asked 2026-10-22, echoed `['2026-10-22']`).
-    """
-    import ast
-    import inspect
-
-    import src.features.weather_service as w
-
-    src = inspect.getsource(w._fetch_daily_weather)
-    tree = ast.parse(src.lstrip())
-    consts = {n.value for n in ast.walk(tree)
-              if isinstance(n, ast.Constant) and isinstance(n.value, str)}
-    assert "time" in consts, (
-        "the weather read does not look at `daily['time']`, so it still "
-        "attributes element 0 to the requested date on trust")
-    assert hasattr(w, "_date_mismatches"), (
-        "mismatches are not counted; a silent drop and an honest provider "
-        "look the same")
-
-
-def test_a_WRONG_DAY_forecast_takes_the_EXISTING_unavailable_path():
-    """Driven, with the network stubbed. A wrong-day forecast IS 'no weather
-    for this match', so it reuses the path a failed fetch already takes rather
-    than inventing a third behaviour."""
-    import json as _json
-    import urllib.request
-
-    import src.features.weather_service as w
-
-    class _Resp:
-        def __init__(self, payload):
-            self._p = _json.dumps(payload).encode()
-
-        def read(self):
-            return self._p
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    def _fake(payload):
-        return lambda *_a, **_k: _Resp(payload)
-
-    day = dt.date(2026, 10, 20)
-    w._WEATHER_CACHE.clear()
-    w._date_mismatches = 0
-    orig = urllib.request.urlopen
-    try:
-        # WRONG day echoed -> unavailable, counted
-        urllib.request.urlopen = _fake({"daily": {
-            "time": ["2026-10-21"], "temperature_2m_max": [30.0],
-            "precipitation_sum": [0.0], "windspeed_10m_max": [5.0]}})
-        r = w._fetch_daily_weather(51.5, -0.12, day)
-        assert r["weather_available"] == 0, (
-            "a forecast for another day was attributed to this match")
-        assert r["weather_temp_c"] == 12.0, "it is not the defaults path"
-        assert w._date_mismatches == 1
-
-        # RIGHT day echoed -> used
-        w._WEATHER_CACHE.clear()
-        urllib.request.urlopen = _fake({"daily": {
-            "time": [day.isoformat()], "temperature_2m_max": [21.5],
-            "precipitation_sum": [2.0], "windspeed_10m_max": [8.0]}})
-        r2 = w._fetch_daily_weather(51.5, -0.12, day)
-        assert r2["weather_available"] == 1 and r2["weather_temp_c"] == 21.5
-        assert w._date_mismatches == 1, "a matching echo was counted"
-    finally:
-        urllib.request.urlopen = orig
-        w._WEATHER_CACHE.clear()
-        w._date_mismatches = 0
-
-
 def test_the_SWEEP_is_RECORDED_including_what_it_cleared():
     """A sweep that lists only its findings cannot be audited.
 
@@ -417,9 +337,11 @@ def test_the_SWEEP_is_RECORDED_including_what_it_cleared():
 
     for f in ("src/scrapers/apifootball_scraper.py",
               "src/scrapers/theodds_scraper.py",
-              "src/features/weather_service.py",
               "src/scrapers/footballdataorg_scraper.py"):
         assert _p.Path(f).exists(), f"{f} moved; re-run the sweep"
+    # DELETED 2026-10-20 — `src/features/weather_service.py` was the fourth
+    # entry here. Its two Open-Meteo hosts left the system with it.
+    assert not _p.Path("src/features/weather_service.py").exists()
     # BY CALL SITE, NOT BY WORD. The name appears in `ci_audit.py` inside a
     # suppression MESSAGE -- `f"reference openfootball 2026-27 shows 0
     # fixtures..."` -- which `code_of` keeps, because it strips comments and
@@ -551,15 +473,19 @@ def test_the_PROSPECTIVE_guard_still_fires_on_a_DIRECT_call():
 #: request/response sweep being redone.
 EXTERNAL_HOSTS = {
     "api.football-data.org",
-    "api.open-meteo.com",
     "api.telegram.org",
     "api.the-odds-api.com",
-    "geocoding-api.open-meteo.com",
     "v3.football.api-sports.io",
     "www.flashscore.com",
     "www.football-data.co.uk",
     "www.football-data.org",      # the human sign-up page, in a docstring
 }
+
+#: SHRANK 2026-10-20, and that is a measurement rather than housekeeping:
+#: deleting the weather producer removed `api.open-meteo.com` AND
+#: `geocoding-api.open-meteo.com` from the set of providers this system talks
+#: to at all. Nine hosts to seven.
+RETIRED_HOSTS = {"api.open-meteo.com", "geocoding-api.open-meteo.com"}
 
 
 def test_the_SET_OF_EXTERNAL_HOSTS_has_not_grown():
@@ -583,17 +509,51 @@ def test_the_SET_OF_EXTERNAL_HOSTS_has_not_grown():
         f"Each addition must be swept: does the request carry a parameter the "
         f"response is attributed to, and is the echo compared?")
 
+# ═══════ RETIRED 2026-10-20 — THE PRODUCER THEY GUARDED WAS DELETED ═══════
+#
+# `src/features/weather_service.py` and `FeatureEngineer._get_weather_features`
+# are gone: the six `weather_*` keys were read by nothing. The checks below
+# were correct and are now moot, so they are RETIRED WITH THEIR REASON rather
+# than deleted silently -- a check that vanishes without a note is
+# indistinguishable from one that was quietly dropped because it failed.
+#
+#   test_the_WEATHER_read_validates_the_ECHOED_date
+#       pinned that `_fetch_daily_weather` compared `daily["time"]` against
+#       the requested date. The GENERAL rule it was an instance of survives
+#       for football-data.org in `test_the_PROVIDER_ECHOES_THE_REQUEST...`.
+#
+#   test_a_WRONG_DAY_forecast_takes_the_EXISTING_unavailable_path
+#       drove the mismatch branch with the network stubbed. No branch left.
+#
+#   test_the_GEOCODER_already_validates_the_COUNTRY_and_the_residual_is_NAMED
+#       pinned `results[0]` and the country preference so the reported-not-
+#       fixed note could not go stale. The note is now HISTORY: the census
+#       (3 of 185 venues wrong, 4 fixtures, ZERO realised effect) stands as a
+#       record of what was deleted, not of what is exposed.
+#
+# What replaces all three: `test_the_WEATHER_PRODUCER_IS_GONE`, which fails if
+# the producer comes back without its consumer.
 
-def test_the_GEOCODER_already_validates_the_COUNTRY_and_the_residual_is_NAMED():
-    """Reported, not fixed, and the reason is in the test rather than only in
-    a comment."""
-    import inspect
 
-    import src.features.weather_service as w
+def test_the_WEATHER_PRODUCER_IS_GONE():
+    """The deletion, pinned. Gated on the aligned vector for 8 real fixtures
+    being byte-identical before and after -- it was, with raw features going
+    272 -> 266 (exactly the six keys) and 8 distinct hashes of 8 proving the
+    instrument discriminates."""
+    assert not pathlib.Path("src/features/weather_service.py").exists(), (
+        "the weather service is back. It had no consumer: training skipped "
+        "it by construction and `_align_features` dropped it at predict "
+        "time. If it returns, it needs a reader first.")
+    from src.features.feature_engineer import FeatureEngineer
 
-    src = inspect.getsource(w._geocode)
-    assert 'country_code", "").upper() == country_code.upper()' in src, (
-        "the geocoder stopped comparing the returned country against the "
-        "requested one")
-    assert "chosen = results[0]" in src, (
-        "the residual changed; re-measure before relying on this note")
+    for gone in ("_get_weather_features", "_league_country_code",
+                 "_LEAGUE_COUNTRY_CODES"):
+        assert not hasattr(FeatureEngineer, gone), (
+            f"`{gone}` is back; it existed only for the weather producer")
+    src = pathlib.Path("src/features/feature_engineer.py").read_text(
+        encoding="utf-8")
+    assert "MARK-NEVER-DELETE APPLIES TO DATA, NOT TO PRODUCERS" in src, (
+        "the deletion no longer records the data/producer split it rests on")
+    assert "AWAITING_CONSUMER" in src, (
+        "the note no longer contrasts this with the substrates that DO have "
+        "registered questions and are therefore not deletable")

@@ -128,9 +128,12 @@ models:
   # paired bootstrap 95% CI [+0.0028, +0.0098] — significant.
   # The model was being starved of data, not kept fresh.
   strength_half_life_days: 540
-  # Enable match-day weather features (Open-Meteo free API, no key needed).
-  # Adds temperature, wind, precipitation features. Set to false to disable.
-  weather_features_enabled: true
+  # REMOVED 2026-10-20 — `weather_features_enabled` and the whole weather
+  # producer were deleted. The six `weather_*` keys were computed on every
+  # live fixture and read by nothing: training skipped them, and at predict
+  # time `_align_features` dropped them. The flag is gone rather than left
+  # defaulting, because a config key for a producer that does not exist is
+  # the next reader's wasted afternoon.
   # International goals dampening: blend Poisson goal probs toward neutral priors
   # for CL/EL/ECL matches. 0.30 = 30% prior, 70% Poisson. Set to 0.0 to disable.
   intl_goals_dampen: 0.30

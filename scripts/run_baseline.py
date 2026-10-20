@@ -352,6 +352,16 @@ def main():
     for _c, _tr, _te, _why in _f["folds_skipped"]:
         print(f"   SKIPPED {_c}  train={_tr:6d}  test={_te:6d}  {_why}")
     print(f"   CAVEAT: {_f['caveat']}")
+    # A COUNT ALONE DOES NOT CONVEY AN ANOMALOUS MIX, so the refusal above
+    # is not satisfied by the number: both halves print, every run.
+    for _k in ("era", "lifting_it", "multiply_determined_note"):
+        if not _f.get(_k):
+            raise ValueError(
+                f"the fold block is missing {_k!r}. Three adjacent folds is "
+                f"only HALF the qualification; the other half is that the era "
+                f"those folds sit in had an anomalous book mix, and a reader "
+                f"who sees the count alone will under-read the limitation.")
+        print(f"   {_k.upper()}: {_f[_k]}")
     print("\nPaired bootstrap vs the market baseline (positive = market is better):")
     for name in results["candidates"]:
         if name == base:

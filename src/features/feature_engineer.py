@@ -27,7 +27,6 @@ class FeatureEngineer:
         self.h2h_features = H2HFeatures()
         self.injury_features = InjuryFeatures()
         self.db = get_db()
-        self._weather_service = None  # lazy-loaded on first use
         self.elo_ratings = None  # set externally from predictor.elo.ratings
         self._preload_cache: Optional[dict] = None
         # Per-instance league baseline rates cache.  Keyed by (league, as_of_date).
@@ -658,12 +657,35 @@ class FeatureEngineer:
         league_feat = self._get_league_features(league, as_of_date=_standings_date)
         features.update(league_feat)
 
-        # 14. Match-day weather (Open-Meteo free API — no key required)
-        # Skip during training: historical weather is unavailable and
-        # constant placeholders just become zero-variance noise.
-        if not for_training:
-            weather = self._get_weather_features(_venue, _match_date, league=league)
-            features.update(weather)
+        # 14. DELETED 2026-10-20 — the weather producer had NO CONSUMER.
+        #
+        # Six `weather_*` keys were computed here on every live fixture and
+        # read by nothing: training skipped them by construction
+        # (`for_training=True`), so they were in no fit, and at predict time
+        # `MLModels._align_features` selects the FITTED names and dropped all
+        # six. No reader in models, betting or reporting -- every consumer of
+        # `analysis.features` uses an explicit `.get(key)` and none names a
+        # weather key.
+        #
+        # PROVED unread by PERTURBATION: a -40 C / 400 mm / 300 km/h fixture
+        # aligned byte-identically to a 19.7 C one, with a POSITIVE CONTROL
+        # showing that perturbing a FITTED column does change the vector. The
+        # deletion was gated on the aligned vector for 8 real fixtures being
+        # byte-identical before and after; it was.
+        #
+        # It had already been recorded as dead on 2026-08-07:
+        # `docs/predictive-audit-2026-08-07.md` lines 157 and 650 -- "its
+        # output is discarded by the ML path", "Dead work on every fixture".
+        #
+        # COST, `measured` 2026-10-20: 33 / 11 / 58 Open-Meteo calls on three
+        # consecutive runs, 0.9-3.1 min of wall time, 14-16% of the picks
+        # step -- the largest block after the Claude review.
+        #
+        # MARK-NEVER-DELETE APPLIES TO DATA, NOT TO PRODUCERS. No row is
+        # touched; the producer stops. There is no registered question and no
+        # declared substrate behind it -- unlike `odds.first_seen_at` (H4) and
+        # `injury_observations`, which are in `pnc_scan.AWAITING_CONSUMER`
+        # with re-triage dates and are therefore NOT deletable.
 
         # 15. WC / national-tournament features (group-stage form, knockout flag).
         # Resolved from the match_meta preload when available; falls back to DB.
@@ -1419,56 +1441,13 @@ class FeatureEngineer:
             logger.warning(f"Situational features failed for team {team_id}: {e}")
             return defaults
 
-    # ISO 3166-1 alpha-2 country codes derived from league slug prefix.
-    # Used to disambiguate geocoding when a city name exists in multiple countries.
-    _LEAGUE_COUNTRY_CODES: dict = {
-        "scotland/": "GB", "england/": "GB", "wales/": "GB", "northern-ireland/": "GB",
-        "france/": "FR", "germany/": "DE", "italy/": "IT", "spain/": "ES",
-        "portugal/": "PT", "netherlands/": "NL", "belgium/": "BE", "turkey/": "TR",
-        "greece/": "GR", "norway/": "NO", "sweden/": "SE", "denmark/": "DK",
-        "austria/": "AT", "switzerland/": "CH", "poland/": "PL", "romania/": "RO",
-        "czech/": "CZ", "russia/": "RU", "ukraine/": "UA", "croatia/": "HR",
-        "serbia/": "RS", "hungary/": "HU", "slovakia/": "SK", "bulgaria/": "BG",
-        "finland/": "FI", "ireland/": "IE", "scotland/": "GB",
-    }
-
-    @classmethod
-    def _league_country_code(cls, league: str) -> str | None:
-        if not league:
-            return None
-        for prefix, code in cls._LEAGUE_COUNTRY_CODES.items():
-            if league.startswith(prefix):
-                return code
-        return None
-
-    def _get_weather_features(self, venue, match_date, league: str = None) -> dict:
-        """Return weather features for the match venue and date.
-
-        Uses Open-Meteo free API (no key). Returns neutral defaults on failure.
-        Can be disabled via models.weather_features_enabled: false in config.
-        A league-derived country_code hint is passed to the geocoder to avoid
-        false matches (e.g. Dunfermline → Scotland, not Illinois).
-        """
-        defaults = {
-            "weather_temp_c": 12.0, "weather_wind_kmh": 10.0,
-            "weather_precip_mm": 0.0, "weather_is_raining": 0,
-            "weather_is_windy": 0, "weather_available": 0,
-        }
-        try:
-            from src.utils.config import get_config as _gc
-            if not _gc().get("models.weather_features_enabled", True):
-                return defaults
-            if self._weather_service is None:
-                from src.features.weather_service import WeatherService
-                self._weather_service = WeatherService()
-            if match_date is None:
-                return defaults
-            md = match_date.date() if hasattr(match_date, "date") else match_date
-            country_code = self._league_country_code(league)
-            return self._weather_service.get_match_weather(venue, md, country_code=country_code)
-        except Exception as exc:
-            logger.debug(f"Weather features failed: {exc}")
-            return defaults
+    # The league->country map, `_league_country_code` and
+    # `_get_weather_features` were DELETED 2026-10-20 with the weather
+    # producer: the map existed only to disambiguate geocoding, and the
+    # geocoder's only production consumer was the weather fetch. Leaving
+    # either behind would have created the very defect this stage removed.
+    #
+    # `src/features/weather_service.py` went with them.
 
     def _get_wc_tournament_features(
         self,

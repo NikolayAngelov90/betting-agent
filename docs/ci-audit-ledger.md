@@ -29423,3 +29423,284 @@ optimisation applied.
 
 *Recorded 2026-10-20. `src/evaluation/baseline.py`, `scripts/run_baseline.py`,
 `tests/test_duration_profile_and_reach.py`.*
+
+---
+
+# THE WEATHER PRODUCER IS DELETED. THE INJURY LOOP IS SIZED, NOT TOUCHED.
+
+*2026-10-20*
+
+## PART A — WEATHER DELETED
+
+### THE GATE, AND WHAT IT ACTUALLY TESTED
+
+The raw feature dict **cannot** be byte-identical: removing the producer
+removes six keys, which is the point. What must not move is **what reaches the
+model** — the vector after `_align_features` selects the fitted names. That
+distinction is stated rather than silently substituted.
+
+`measured` 2026-10-20 over **8 real fixtures with venues**:
+
+| | before | after |
+|---|---|---|
+| raw features | **272** | **266** (exactly the six weather keys) |
+| `weather_*` keys present | 6 | **0** |
+| aligned width | 111 | 111 |
+| aligned SHA-256 | — | **all 8 byte-identical** |
+
+**And the instrument discriminates: 8 distinct digests across the 8 fixtures**,
+so the equality is not a constant-output artefact. **The gate passed and the
+deletion proceeded.**
+
+**Rule 4 was applied to my own prior measurement.** The earlier grep for
+`weather_*` agreed with the standing hypothesis, so before cutting I checked
+the instrument: `analysis.features` is read in **five** places and **every one
+uses an explicit `.get(key)`** — no `items()`, no `keys()`, no `json.dumps`, no
+f-string of the dict. A generic iteration would have been invisible to the
+grep. The features dict is also **not persisted**: no `JSON` column holds it,
+and `features=features` constructs an in-memory dataclass.
+
+### WHAT WENT, AND THE DATA/PRODUCER SPLIT
+
+> **Mark-never-delete applies to DATA, not to PRODUCERS.** No row was touched.
+> The producer stops.
+
+* `src/features/weather_service.py` — the whole module, including the
+  `results[0]` geocoder. Its **only** production consumer was the weather
+  fetch, so it went with it.
+* `FeatureEngineer._get_weather_features`, `_league_country_code`,
+  `_LEAGUE_COUNTRY_CODES`, the lazy `_weather_service` wiring, and section 14's
+  call site. The league→country map existed *only* to disambiguate geocoding;
+  leaving it would have created a fresh instance of the very defect removed.
+* `models.weather_features_enabled` from both config files — **a config key for
+  a producer that does not exist is the next reader's wasted afternoon.**
+
+**No registered question and no declared substrate depend on it.** That is the
+contrast that makes this a deletion rather than a declaration: `odds.first_seen_at`
+(H4) and `injury_observations` sit in `pnc_scan.AWAITING_CONSUMER` **with
+re-triage dates** and are therefore *not* deletable. Weather is in neither
+register.
+
+### AND IT WAS NOT MY FINDING
+
+`docs/predictive-audit-2026-08-07.md` already recorded it, ten weeks ago:
+
+> line 157 — *"**Structurally excluded** — same train/serve asymmetry as
+> injuries… The Open-Meteo call runs on every live fixture and **its output is
+> discarded by the ML path**"*
+> line 650 — *"dropped by `_align_features`. **Dead work on every fixture**"*
+
+My contribution is the perturbation-controlled proof, the cost measurement and
+the deletion. The finding sat recorded and unacted-on for ten weeks, which is
+its own fact about this project.
+
+### THE DURATION SAVED
+
+`derived` from the `measured` 2026-10-20 phase profile — the call site is gone,
+so the phase time is removed by construction. Confirmation is a post-deployment
+re-measure:
+
+| | 10-20 (34 fx) | 10-19 (13 fx) | 10-18 (65 fx) |
+|---|---|---|---|
+| weather phase | **−1.6** | **−0.9** | **−3.1** |
+| picks step | 11.3 → **9.7** | 5.4 → **4.5** | 21.1 → **18.0** |
+| time-to-picks | 42.3 → **40.7** | 36.9 → **36.0** | 64.3 → **61.2** |
+| Open-Meteo calls | 33 → **0** | 11 → **0** | 58 → **0** |
+
+**And two provider hosts left the system entirely** — `api.open-meteo.com` and
+`geocoding-api.open-meteo.com`. The pinned external-host set goes **nine to
+seven**, which is a measurement rather than housekeeping.
+
+**On the 8.4-minute residual: 3.1 of it is now gone on a full card** — and it
+was the free part, because this was not an optimisation. It was deleting work.
+
+### THE TAXONOMY WAS RIGHT
+
+**First instance of PNC-1 resolved by DELETION rather than by wiring.** Every
+prior instance was either wired to a consumer or declared with a re-triage
+date.
+
+And **`pnc_scan` could not see it**: the detector tracks **symbols** —
+functions, constants, tables, columns — while these are **dict keys** written
+into a feature mapping, and `_get_weather_features` itself *is* consumed by
+`create_features`. **KIND V, exactly as the taxonomy predicted.** The gap is
+recorded in the instrument's own test rather than left implied.
+
+### THE GEOCODER CENSUS IS NOW HISTORY
+
+3 of 185 unhinted venues wrong (1.6%), 4 fixtures — `Motherwell` → South
+Africa, `Bar` → Qionghai CN, `San Sebastian` → Puerto Rico — with **zero
+realised effect**, because the features reached no model, no prompt and no
+calculator. The record stands as what was *removed*, not what is exposed. The
+**other** unverified first result, API-Football's `/teams?search=`, is **not**
+deleted: it writes `Team.apifootball_team_id` persistently, so it has a
+consumer. Five tests were **retired with their reasons** rather than dropped,
+each naming what it had guarded and what replaces it.
+
+## PART B — INJURY LOOP SIZED. NOTHING CHANGED.
+
+### THE DB WRITE IS INSIDE THE LOOP — CONFIRMED
+
+`_fetch_fixture_injuries` does `await self.apifootball._api_get(...)` **and**
+`with self.db.get_session() as session:` — API call *and* a database session
+**per fixture, both inside the per-fixture loop**. So concurrency would buy
+network **and** database time, and the measured ~19 s per fixture is not one
+HTTP round trip.
+
+### WHAT THE 30 IS: A TIMEOUT WORKAROUND WHOSE TIMEOUT HAS DOUBLED
+
+Not a provider rate limit. The code's own derivation:
+
+> *"Keep budget at ≤15 so the **sequential API+DB loop** finishes within the
+> 5-minute (300s) asyncio timeout. 26 fixtures × ~11s each = ~299s which always
+> times out; 15 × 11s = ~165s which always completes."*
+
+**The cap exists BECAUSE the loop is serial.** And it now disagrees with itself
+three ways, `measured` 2026-10-20 by reading all three sites:
+
+| where | value |
+|---|---|
+| docstring | *"the cap (default 30)"* |
+| code | `max_injury = 15` / `config.get(…, 15)` |
+| config (what production runs) | **`max_injury_budget: 30`** |
+
+Meanwhile the caller's timeout is **720 s**, not the 300 s the derivation
+cites — *"88 fixtures × ~8s = ~12 min worst case"* — and the **measured**
+per-fixture cost is **14–20 s**, not the ~8–11 s either comment assumes. So the
+constant the 9.7 minutes hangs on was raised, its timeout was raised 2.4×, and
+the arithmetic justifying it was never re-derived. **Sized, not changed.**
+
+### WHAT PARALLELISING WOULD COST
+
+* **provider risk** — API-Football signals rate limiting as **HTTP 200 with
+  `{"errors": {"rateLimit": …}}`**, handled with up to 3 retries and backoff.
+  Concurrency raises the instantaneous rate, and the retries would eat part of
+  the gain rather than failing loudly.
+* **DB contention** — each call opens its own session, so 4-way concurrency
+  means 4 concurrent Neon connections against a free-tier limit.
+* **ordering assumptions** — `priority_fixture_ids` fetches picked fixtures
+  **first** so that a budget exhaustion loses the unimportant ones, and the
+  budget check `if fetched >= injury_budget` is a read-modify-write inside the
+  loop. Concurrency without an atomic claim changes **which** fixtures get
+  data, which is value-affecting rather than timing-only.
+
+### DOES INJURY DATA REACH ANYTHING BUT THE PROMPT? STAGE 14 STILL HOLDS
+
+`injury_*` **features** share weather's fate — **absent from the 111 fitted
+names**, dropped by alignment. But `analysis.injury_report` reaches
+`match_briefing._build_dossier`, i.e. **the Claude review prompt**, and
+`injury_impact` reaches a reasoning string in `value_calculator`. The review
+issues KEEP/CHANGE on every pick, so **injuries are value-affecting through the
+prompt** even though they are in no fit.
+
+> **That is the whole difference between Part A and Part B.** Weather reached
+> nothing, so it was deleted. Injuries reach the prompt, so they are an
+> optimisation candidate — and a parallelisation that changed *which* fixtures
+> get fetched would be value-affecting, not timing-only.
+
+### THE CLAUDE REVIEW: ~9 s, AND THE STABILITY IS THE EVIDENCE
+
+8.7 / 9.1 / 8.7 s per fixture across cards of **65 / 13 / 33** — a five-fold
+range in card size and a 0.4 s range in per-fixture cost. **That stability says
+the cost is per-call overhead, not work proportional to the card**, so
+concurrency would scale close to linearly: 65 fixtures at ~9 s is 9.5 min
+serial and ~2.4 min four-way. Same risks in kind — provider rate limits and
+cost — and the same ordering caveat, since the review writes KEEP/CHANGE
+decisions.
+
+**CANDIDATES, with measured savings and risks:**
+
+| candidate | available | risk |
+|---|---|---|
+| injury loop, 4-way within the same budget | ~7 min on a full card | rate-limit retries, 4 DB sessions, **budget-claim atomicity is value-affecting** |
+| Claude review, 4-way | ~7 min on a 65-fixture card | provider cost and rate limits; KEEP/CHANGE ordering |
+| AF upsert loop (batch rather than per-fixture) | up to ~9 min on a large card | DB transaction size; the 9.2-min gap is DB work, not the HTTP call |
+
+## PART C — RECOMMENDATION QUALIFIED, BOTH HALVES
+
+The fold block returned by `walk_forward` now carries three fields beyond the
+count, and `run_baseline.main` **raises** if any is missing — because **a count
+alone does not convey an anomalous mix**:
+
+* **`era`** — *"odds collection began 2026-02; every priced figure here sits in
+  ONE era whose book mix was ANOMALOUS — 4,836 1X2 books rejected by the
+  corruption gate, Bet365 92% implausible, Pinnacle 26%. Temporal generality is
+  unsupported AND the population itself is atypical."*
+* **`lifting_it`** — temporal generality needs **more odds eras, which means
+  TIME: a statement about WHEN, not whether**. The anomalous mix needs a second
+  era collected with the corruption gate in force from the start, so its books
+  are clean **by construction** rather than by filtering.
+* **`multiply_determined_note`** — the standing **no-information** conclusion
+  does **not** rest on this harness: of its four routes, **three carry no fold
+  structure at all** (two scoring analyses on 1,018 settled picks, and the
+  price closure at **−5.396% measured against −4.64% predicted**). Only the
+  **`bookmaker_blend_weight → 1.0` recommendation** rests on this harness
+  alone. *"Do not read the two as equally supported."*
+
+That last line prints beside the count on every run, so the conclusion and the
+recommendation cannot be read as equally supported by someone who sees only
+"3 of 5".
+
+## THE ENTRY
+
+> **The cheapest optimisation is the one that deletes the work.** Three minutes
+> a day, two provider hosts, a geocoder, a config flag and a league→country map
+> all came out of recognising that six numbers were computed and never read —
+> and the recognition was not mine: it was in the audit from 2026-08-07, line
+> 157, waiting ten weeks for someone to act on a sentence that already said
+> "dead work on every fixture".
+
+## DECLARATION
+
+**WEATHER DELETED.** Gated on the **aligned** vector — stated precisely, since
+the raw dict could not be identical — and the gate passed: **8 of 8 fixtures
+byte-identical**, raw 272 → 266, aligned 111 → 111, with **8 distinct digests
+of 8** proving the instrument discriminates. Before cutting, my own prior grep
+was checked for instrument failure (rule 4): all five readers of
+`analysis.features` use explicit `.get(key)`, and the dict is not persisted.
+**Measured saving: 1.6 / 0.9 / 3.1 min per run** and **33 / 11 / 58 → 0**
+Open-Meteo calls, taking **3.1 of the 8.4-minute residual** on a full card and
+removing **two provider hosts** from the system (nine to seven).
+**Mark-never-delete applies to data, not producers:** no row touched, and the
+contrast with `odds.first_seen_at` (H4) and `injury_observations` — both in
+`AWAITING_CONSUMER` with re-triage dates, both therefore undeletable — is
+recorded. **First PNC-1 instance resolved by deletion rather than wiring**, and
+**KIND V** confirmed: the detector tracks symbols and these were dict keys.
+Credit where it belongs: the audit recorded this on **2026-08-07** and it went
+unacted-on for ten weeks. Fingerprint **UNCHANGED**, which is the gate's own
+confirmation.
+
+**INJURY LOOP SIZED, NOTHING CHANGED.** The DB write **is** inside the loop —
+`_api_get` and `db.get_session()` both per fixture — so concurrency buys network
+*and* database time. **The 30 is not a rate limit**: it is a timeout workaround
+whose own derivation cites a **300 s** timeout that is now **720 s**, at an
+assumed ~11 s per call against a **measured 14–20 s**, and the number disagrees
+with itself three ways (docstring 30, code 15, config 30 — production runs 30).
+**Candidates: ~7 min from the injury loop and ~7 min from the Claude review**,
+whose 8.7/9.1/8.7 s stability across a five-fold card range says the cost is
+per-call overhead and would parallelise near-linearly. **Risks named:**
+rate-limit retries eating the gain, concurrent Neon sessions, and — the one
+that matters — **budget-claim atomicity, because changing which fixtures get
+data is value-affecting, not timing-only.** Stage 14 still holds: injury
+features are dropped by alignment like weather's, but `injury_report` reaches
+the Claude review prompt, so injuries have a consumer and weather did not.
+
+**RECOMMENDATION QUALIFIED, BOTH HALVES.** Beyond the fold count, the block now
+carries the **era** (4,836 1X2 books rejected, Bet365 92% implausible — so the
+population the intervals describe is itself atypical), **what would lift each
+half** (more eras = time = *when*, not whether; and a second era gated from the
+start rather than filtered), and the **multiply-determined note** naming the
+three fold-free routes so the conclusion and the recommendation are not read as
+equally supported. `run_baseline.main` **refuses to print without all three**.
+
+Gating suite **2172 passed, 6 deselected**. Non-gating **6 passed, 0 skipped**.
+Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.18` /
+`stage5_baseline_20260807.51fbcb`; `BASELINE_REVISION` **UNCHANGED** at `b2`.
+No production write, no schema change, no model change, no cron moved, and no
+optimisation applied.
+
+*Recorded 2026-10-20. DELETED `src/features/weather_service.py`. Changed
+`src/features/feature_engineer.py`, `src/evaluation/baseline.py`,
+`scripts/run_baseline.py`, `config/config.yaml`, `config/config.example.yaml`,
+`tests/test_duration_profile_and_reach.py`, `tests/test_coverage_residual.py`,
+`tests/test_fold_count_and_first_result.py`.*

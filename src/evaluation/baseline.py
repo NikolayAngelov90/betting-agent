@@ -331,6 +331,31 @@ def walk_forward(rows: List[MatchRow], candidates: List[Candidate],
         "caveat": ("effective_folds counts folds over the rows passed in; a "
                    "PRICED subset spans fewer -- measured 3 of 5 for the "
                    "2026-08-07 audit's 1,710 priced matches"),
+        # ── BOTH HALVES OF THE QUALIFICATION. 2026-10-20. ─────────────────
+        #
+        # A COUNT ALONE DOES NOT CONVEY AN ANOMALOUS MIX. Three adjacent
+        # folds is the first half; the second is that the era those folds sit
+        # in had a book mix unlike any other: the corruption gate rejected
+        # 4,836 1X2 books, Bet365 at 92% implausible and Pinnacle at 26%. So
+        # even the population the intervals describe is unusual, and a reader
+        # who sees "3 of 5" and nothing else will under-read the limitation.
+        "era": ("odds collection began 2026-02; every priced figure here sits "
+                "in ONE era whose book mix was ANOMALOUS -- 4,836 1X2 books "
+                "rejected by the corruption gate, Bet365 92% implausible, "
+                "Pinnacle 26%. Temporal generality is unsupported AND the "
+                "population itself is atypical."),
+        "lifting_it": ("temporal generality: more odds eras, which means TIME "
+                       "-- a statement about WHEN, not whether. The anomalous "
+                       "mix: a second era collected after the corruption gate "
+                       "was in force from the start, so its books are clean "
+                       "by construction rather than by filtering."),
+        "multiply_determined_note": (
+            "the standing NO-INFORMATION conclusion does NOT rest on this "
+            "harness: of its four routes, three carry no fold structure at "
+            "all (two scoring analyses on 1,018 settled picks, and the price "
+            "closure at -5.396% measured against -4.64% predicted). Only the "
+            "bookmaker_blend_weight -> 1.0 RECOMMENDATION rests on this "
+            "harness alone. Do not read the two as equally supported."),
     }
     if not id_sets:
         return {"n": 0, "candidates": {}, "folds": folds}

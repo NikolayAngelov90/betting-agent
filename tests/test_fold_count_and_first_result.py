@@ -202,19 +202,20 @@ def test_the_RECORDED_snapshots_are_UNTOUCHED():
 # agree on that date. 'Biisen' and 'Hajvalia' return NO results and fall to
 # `_DEFAULTS` with `weather_available: 0`, which is the honest outcome.
 
-def test_the_geocoder_STILL_has_the_unverified_fallback():
-    """Report-only means the note must not go stale."""
-    import inspect
+def test_the_geocoder_IS_GONE_so_the_census_is_HISTORY():
+    """RETIRED-AND-REPLACED 2026-10-20. It pinned `results[0]` and the
+    three-result country preference so the reported-not-fixed note could not
+    go stale. The producer was deleted instead: the census (3 of 185 venues
+    wrong, 4 fixtures, ZERO realised effect because weather reached no model,
+    no prompt and no calculator) is now a record of what was removed.
 
-    import src.features.weather_service as w
-
-    src = inspect.getsource(w._geocode)
-    assert "chosen = results[0]" in src, (
-        "the first-result fallback changed; re-measure the sizing above "
-        "before relying on it")
-    assert "count = 3 if country_code else 1" in src, (
-        "the no-hint path no longer fetches a single result; the 419-fixture "
-        "figure was measured against that behaviour")
+    The OTHER unverified first result -- API-Football's `/teams?search=` --
+    is NOT deleted and keeps its own check below: it writes
+    `Team.apifootball_team_id` persistently, so it has a consumer.
+    """
+    assert not pathlib.Path("src/features/weather_service.py").exists(), (
+        "the geocoder is back; re-measure the 185-venue census before "
+        "relying on the figures in this file")
 
 
 def test_the_TEAM_SEARCH_site_still_takes_the_first_result_UNVERIFIED():
@@ -243,21 +244,15 @@ def test_the_TEAM_SEARCH_site_has_NO_PROVENANCE_and_that_is_the_finding():
         "must be measured rather than bounded")
 
 
-def test_the_THREE_PAN_EUROPEAN_leagues_are_the_UNHINTED_ones():
-    """The 419-fixture figure rests on this, so it is checked rather than
-    quoted. A hint would be WRONG for these: a Champions League tie is played
-    in whichever country the home club is in."""
-    import pathlib as _p
-
-    import yaml
-
+def test_the_LEAGUE_COUNTRY_MAP_went_with_the_geocoder():
+    """RETIRED-AND-REPLACED 2026-10-20. It checked that exactly the three
+    pan-European competitions lacked a country hint -- the population that
+    geocoded on `results[0]` with no verification at all. The map existed
+    ONLY to disambiguate geocoding, so it was deleted with the producer; had
+    it been left behind it would have been a fresh instance of the very
+    defect this stage removed.
+    """
     from src.features.feature_engineer import FeatureEngineer as FE
 
-    cfg = yaml.safe_load(
-        _p.Path("config/config.yaml").read_text(encoding="utf-8"))
-    configured = (cfg.get("scraping") or {}).get("flashscore_leagues") or []
-    unhinted = {l for l in configured if not FE._league_country_code(l)}
-    assert unhinted == {"europe/champions-league", "europe/europa-league",
-                        "europe/europa-conference-league"}, (
-        f"the unhinted set changed to {sorted(unhinted)}; re-measure the "
-        f"419-fixture exposure")
+    assert not hasattr(FE, "_league_country_code")
+    assert not hasattr(FE, "_LEAGUE_COUNTRY_CODES")

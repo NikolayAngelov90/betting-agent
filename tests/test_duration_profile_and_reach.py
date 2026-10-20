@@ -140,13 +140,22 @@ def test_the_BRIEFING_loop_is_still_SEQUENTIAL():
 # ── PART B: weather reaches nothing — MEASURED, with a negative control ────
 
 def test_TRAINING_SKIPS_WEATHER_BY_CONSTRUCTION():
+    """SUPERSEDED 2026-10-20 BY THE DELETION. It asserted that section 14 sat
+    behind `if not for_training:`, which was the reason weather could never
+    enter a fit. The section is gone, so the guard is gone with it and there
+    is nothing left to skip.
+
+    What survives is the SAME GUARD ON INJURIES, which have the identical
+    train/serve asymmetry and are NOT deleted -- they reach the Claude review
+    prompt, so they have a consumer.
+    """
     src = pathlib.Path("src/features/feature_engineer.py").read_text(
         encoding="utf-8")
-    assert "skip external API calls (weather, news)" in src
-    block = src.split("14. Match-day weather", 1)[1][:400]
-    assert "if not for_training:" in block, (
-        "the weather section is no longer guarded by `not for_training`, so "
-        "it could now enter a fit -- the geocoder exposure stops being nil")
+    assert "14. DELETED 2026-10-20" in src, (
+        "the weather section is back without its deletion note")
+    assert "skip external API calls" in src, (
+        "`for_training` no longer documents what it skips; injuries still "
+        "depend on that guard")
 
 
 def test_the_SHIPPED_PICKLES_contain_NO_weather_feature():
@@ -426,3 +435,154 @@ def test_NO_baseline_revision_and_NO_figure_moved():
 
     assert BASELINE_REVISION == "b2", (
         "labelling is not a revision event; no figure moved in this stage")
+
+
+# ═══════ 2026-10-20: THE DELETION, THE INJURY SIZING, THE QUALIFICATION ════
+
+def test_the_DELETION_GATE_is_recorded_as_the_ALIGNED_vector_not_the_raw_one():
+    """What had to be byte-identical, stated precisely.
+
+    The RAW feature dict cannot be: removing the producer removes six keys,
+    which is the point. What must not move is what REACHES THE MODEL -- the
+    vector after `_align_features` selects the fitted names.
+
+    `measured` 2026-10-20 over 8 real fixtures with venues: raw features
+    272 -> 266 (exactly the six weather keys), aligned width 111 -> 111, and
+    **all 8 aligned SHA-256 digests byte-identical**. The instrument
+    discriminates: 8 distinct digests across the 8 fixtures, so the equality
+    is not a constant-output artefact.
+    """
+    src = pathlib.Path("src/features/feature_engineer.py").read_text(
+        encoding="utf-8")
+    assert "byte-identical before and after" in src, (
+        "the deletion no longer records its gate")
+    assert "POSITIVE CONTROL" in src and "PERTURBATION" in src, (
+        "the deletion no longer records HOW the input was proved unread: a "
+        "perturbation that would change the output, plus a positive control "
+        "on a column known to be read")
+
+
+def test_the_DELETION_names_the_PRIOR_RECORD_it_did_not_discover():
+    """It was recorded dead on 2026-08-07 and not acted on for ten weeks.
+    Crediting that is the difference between a finding and a re-finding."""
+    src = pathlib.Path("src/features/feature_engineer.py").read_text(
+        encoding="utf-8")
+    assert "2026-08-07" in src and "Dead work on every fixture" in src, (
+        "the deletion presents itself as a discovery; the audit had already "
+        "recorded it at lines 157 and 650")
+    doc = pathlib.Path("docs/predictive-audit-2026-08-07.md").read_text(
+        encoding="utf-8")
+    assert "discarded by the ML path" in doc, (
+        "the prior record is gone, so the credit cannot be checked")
+
+
+def test_the_CONFIG_KEY_went_with_the_producer():
+    import yaml
+
+    for f in ("config/config.yaml", "config/config.example.yaml"):
+        cfg = yaml.safe_load(pathlib.Path(f).read_text(encoding="utf-8"))
+        assert "weather_features_enabled" not in (cfg.get("models") or {}), (
+            f"{f} still carries a flag for a producer that does not exist")
+        assert "REMOVED 2026-10-20" in pathlib.Path(f).read_text(
+            encoding="utf-8"), f"{f} removed the key without saying why"
+
+
+def test_INJURIES_are_NOT_deletable_because_they_HAVE_a_consumer():
+    """The distinction that makes one a deletion and the other an
+    optimisation.
+
+    `injury_*` FEATURES share weather's fate -- absent from the 111 fitted
+    names, dropped by alignment. But `analysis.injury_report` reaches
+    `match_briefing._build_dossier`, i.e. the Claude review prompt, and
+    `injury_impact` reaches a reasoning string in `value_calculator`. The
+    review issues KEEP/CHANGE on every pick, so injuries are
+    **value-affecting through the prompt** even though they are in no fit.
+    Weather reached neither.
+    """
+    brief = pathlib.Path("src/reporting/match_briefing.py").read_text(
+        encoding="utf-8")
+    assert "analysis.injury_report" in brief, (
+        "the injury summary no longer reaches the dossier -- then injuries "
+        "have no consumer either and become deletable, which is a different "
+        "stage's decision")
+    vc = pathlib.Path("src/betting/value_calculator.py").read_text(
+        encoding="utf-8")
+    assert "injury_impact" in vc
+
+
+def test_the_INJURY_CAP_disagrees_with_itself_THREE_WAYS():
+    """Sized, not changed. The constant the 9.7 minutes hangs on.
+
+    `measured` 2026-10-20 by reading the three places it is stated:
+
+      docstring   "the cap (default 30)"
+      code        `max_injury = 15` / `config.get(..., 15)`
+      config      `max_injury_budget: 30`   <- what production runs
+
+    And the comment deriving it cites a **300s** asyncio timeout
+    ("26 fixtures x ~11s each = ~299s which always times out"), while the
+    caller now uses **720s**. So the cap is NOT a provider rate limit: it is a
+    timeout workaround whose timeout has since doubled, and whose per-call
+    cost is now measured at 14-20s rather than the ~8-11s the comments cite.
+    """
+    inj = pathlib.Path("src/scrapers/injury_scraper.py").read_text(
+        encoding="utf-8")
+    assert "the cap (default 30)" in inj
+    assert "max_injury = 15" in inj
+    assert "sequential API+DB loop" in inj
+    assert "300s" in inj, "the stale timeout derivation is gone"
+
+    import yaml
+
+    cfg = yaml.safe_load(pathlib.Path("config/config.yaml").read_text(
+        encoding="utf-8"))
+    assert (cfg.get("models") or {}).get("max_injury_budget") == 30, (
+        "the configured budget moved; the 9.7-minute figure was measured at 30")
+
+    agent = pathlib.Path("src/agent/betting_agent.py").read_text(
+        encoding="utf-8")
+    assert "timeout=720" in agent, (
+        "the injury timeout moved off 720s; the cap's own derivation cites "
+        "300s and is already stale by a factor of 2.4")
+
+
+def test_the_DB_WRITE_is_INSIDE_the_injury_loop():
+    """Measured by the call chain, because it decides whether concurrency
+    buys network time only or network AND database time."""
+    inj = pathlib.Path("src/scrapers/injury_scraper.py").read_text(
+        encoding="utf-8")
+    body = inj.split("async def _fetch_fixture_injuries", 1)[1][:2000]
+    assert "_api_get" in body and "self.db.get_session()" in body, (
+        "the per-fixture function no longer does both the API call and the DB "
+        "write; re-measure the ~19 s per fixture before costing concurrency")
+
+
+def test_the_FOLD_BLOCK_carries_BOTH_HALVES_of_the_qualification():
+    """A count alone does not convey an anomalous mix."""
+    import datetime as dt
+
+    from src.evaluation.baseline import walk_forward
+
+    class _R:
+        def __init__(self, i, d):
+            self.id, self.match_date, self.outcome = i, d, 0
+
+    rows = [_R(i, dt.date(2026, 3, 1) + dt.timedelta(days=i)) for i in range(40)]
+    f = walk_forward(rows, [], [dt.date(2026, 1, 1), dt.date(2026, 4, 1)],
+                     window_days=60, min_train=5)["folds"]
+    for k in ("era", "lifting_it", "multiply_determined_note"):
+        assert f.get(k), f"the fold block lost {k!r}"
+    assert "4,836" in f["era"] and "92%" in f["era"], (
+        "the era qualification no longer carries the measured anomaly")
+    assert "WHEN, not whether" in f["lifting_it"]
+    assert "equally supported" in f["multiply_determined_note"], (
+        "the block no longer warns that the conclusion and the "
+        "recommendation are not equally supported")
+
+    import inspect
+
+    import scripts.run_baseline as rb
+
+    src = inspect.getsource(rb.main)
+    assert 'for _k in ("era", "lifting_it", "multiply_determined_note")' in src, (
+        "run_baseline no longer refuses on the missing halves")
