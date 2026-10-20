@@ -29475,6 +29475,14 @@ and `features=features` constructs an in-memory dataclass.
 * `models.weather_features_enabled` from both config files — **a config key for
   a producer that does not exist is the next reader's wasted afternoon.**
 
+  **PRECISION, added on checking the commit:** only `config.example.yaml` is in
+  the repository. `config/config.yaml` is **gitignored**, and CI does
+  `cp config/config.example.yaml config/config.yaml` at line 276 of
+  `daily-picks.yml` — so **the example file is the one production reads** and
+  the committed removal is the effective one. The local edit is cosmetic for
+  this machine. Saying "both config files" without that distinction would have
+  implied two shipped artefacts where there is one.
+
 **No registered question and no declared substrate depend on it.** That is the
 contrast that makes this a deletion rather than a declaration: `odds.first_seen_at`
 (H4) and `injury_observations` sit in `pnc_scan.AWAITING_CONSUMER` **with
