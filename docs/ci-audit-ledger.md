@@ -28799,3 +28799,346 @@ a mismatch routes to the path a failed fetch already takes.
 `tests/test_reference_deadline.py`,
 `tests/fixtures/footballdata_2027-04-02_wrong_date.json`. No production write,
 no schema change, no model change, no cron moved.*
+
+---
+
+# THE TAIL BELONGED TO THE CONSTANT. TIGHTENING IT REMOVED THE EXPOSURE — AND THE REFERENCE'S JOB.
+
+*2026-10-19*
+
+## PART A — THE CONSTANT TIGHTENED
+
+> Raising the minimum margin accommodates a wrong constant. Fixing the
+> constant removes the exposure.
+
+The 12:00 weekday constant was the fallback on **1087 of 1090 days** and sat
+**two and a half hours** laxer than our own measured earliest kickoff. That gap
+was the whole exposure tail.
+
+### THE MEASURED EARLIEST KICKOFF
+
+`measured` 2026-10-19, production `matches`, the 30 **configured** leagues,
+phantom exclusion applied, n=1090 days over 2022-07-05 … 2026-10-19:
+
+| stratum | n | **MIN** | p01 | p05 | p50 | <10:00 | <11:00 |
+|---|---|---|---|---|---|---|---|
+| weekday | 715 | **09:30** | 10:45 | 13:00 | 17:00 | 2 | 9 |
+| weekday/ordinary | 693 | **09:30** | 11:00 | 14:00 | 17:00 | 2 | 7 |
+| weekday/holiday | 22 | 10:15 | 10:15 | 10:30 | 13:00 | 0 | 2 |
+| weekend | 375 | **09:45** | 10:00 | 10:15 | 11:30 | 1 | 96 |
+| weekend/ordinary | 373 | **09:45** | 10:00 | 10:15 | 11:30 | 1 | 96 |
+| weekend/holiday | 2 | 13:00 | 13:00 | 13:00 | 13:00 | 0 | 0 |
+
+**THE HOLIDAY STRATUM IS NOT THE EARLIEST ONE, and the earlier analysis implied
+it was.** Holidays shift the whole weekday distribution forward (p50 13:00
+against 17:00) but the **minimum is an ordinary Thursday**: 2023-10-26 09:30,
+`bulgaria/efbet-league`. Then 09:59 (2026-06-18, `finland/veikkausliiga`), then
+10:15 (Easter Monday 2026). Both observed minima also moved **earlier** than
+the 2026-10-10 figures (09:59 → 09:30, 10:00 → 09:45), because a minimum is a
+function of its window and a longer window can only lower it.
+
+### THE READY TIME, EACH DAY TYPE FROM ITS OWN SERIES
+
+Which is what `0 4` got wrong by borrowing the other's spread:
+
+| day type | lateness (attributed by headSha) | duration (by day type) | ready max | ready mean+3sd | **BINDING** |
+|---|---|---|---|---|---|
+| weekday | n=7 max 305 mean+3sd 417.5 | n=78 max 100.8 m+3sd 100.9 | 06:45 | 08:38 | **08:38** |
+| weekend | n=6 max 294 mean+3sd 334.5 | n=34 max 129.2 m+3sd 148.8 | 07:02 | 08:03 | **08:03** |
+
+Lateness is attributed per run by its own `headSha` cron — pooling regimes
+reads a `37 9` start as 21 hours late. Duration is **not** cron-dependent, so
+it is pooled across regimes and split by day type: better powered (n=78/34
+against n=10) and more conservative (weekday mean+3sd 100.9 against 59.4 for
+the current regime alone). **The audit's prospective margin was using one
+pooled duration list for both day types; it now uses each day type's own** —
+the weekend's spread is half again as wide.
+
+**CAVEAT, STATED:** the binding figure is a mean+3sd projection on a lateness
+series of **n=7 / n=6**, exceeding the observed max by 112 / 40 minutes. The
+floor is therefore **re-derivable and will move earlier** as the series grows.
+Re-derive it; do not defend it.
+
+### THE DERIVATION, AN ARITHMETIC AND NOT A CHOICE
+
+    floor = ceil_to_15min( ready_binding + MIN_ACCEPTABLE_MARGIN_MIN )
+
+the tightest value the measured pipeline supports while clearing the
+pre-registered 60. Tighter is safer against an unobserved early kickoff —
+the only thing a fallback is for — and the margin requirement is what stops it
+going lower.
+
+| day type | floor | margin | worst-case exposure |
+|---|---|---|---|
+| weekday | **09:45** | +66.6m | 15m |
+| weekend | **09:15** | +71.7m | **0m** |
+
+**AND THE WEEKDAY CANNOT HAVE BOTH, BY 8.4 MINUTES.** Zero exposure needs
+`floor ≤ 09:30`; a 60-minute margin needs `floor ≥ 09:38`. The window is empty.
+**The alternative not taken:** `floor = observed minimum` maximises the margin
+among zero-exposure choices (weekend 09:45, +101.7m) — rejected because the
+observed minimum is a bound for the *measured window* and nothing more, and the
+derived floor already sits 30 minutes below it.
+
+The fallback moved to its **own symbol**, `DEADLINE_FLOOR`.
+`DEADLINE_PERCENTILES` is kept under its own name as the historical percentile
+record and is no longer the fallback: a symbol named "percentiles" holding a
+derived floor is the labelling defect Part B is about.
+
+### THE RECOMPUTED EXPOSURE — TARGET MET
+
+| constants | exposure>0 | p99 | max | **>60m** |
+|---|---|---|---|---|
+| 12:00 / 10:15 | 21 days | 45m | 150m | **8 days** |
+| **09:45 / 09:15** | **1 day** | **0m** | **15m** | **ZERO** |
+
+Per stratum under the floor: weekday/ordinary max 15m (the single 2023-10-26),
+weekday/holiday **0**, weekend/ordinary **0**, weekend/holiday **0**. **Zero
+days above 60 minutes on every stratum.**
+
+The term stays at zero and is **still printed** —
+`residual[... p99=0m max=15m over60=0/715d -> effective minimum 60m = 60m
+registered + 0m p99 ...]`. A term that disappears when it is satisfied cannot
+be seen to have been satisfied. The pre-registered 60 is unedited; the
+effective minimum collapses back onto it because the p99 is now zero.
+
+### THE ALERT RATE: ZERO ADDITIONAL
+
+`measured` by replaying all 1090 days with each day's own
+`min(covered-league minimum, floor)` and each day type's own binding ready:
+
+| basis | alarms | per week |
+|---|---|---|
+| current 12:00 / 10:15 | 0 | 0.000 |
+| **derived 09:45 / 09:15** | **0** | **0.000** |
+| discovered card under `0 0` | 1 in 1090 days | 0.0045 |
+| *discovered card under `0 4`* (the recorded baseline) | *23 in 235 days* | *0.69* |
+
+**Zero additional alerts, and eight fewer days above the 60-minute budget.**
+The 0.69/wk figure belongs to the `0 4` regime; the revert to `0 0` is what
+removed it, not this.
+
+In the audit the trailing-window margins become **weekday +47m** (was +182m)
+and **weekend +106m** (was +166m), both clearing the 30-minute threshold, and
+the **TRIGGER switches from weekend to weekday**. The prospective margin reads
+**+67m** against the registered 60.
+
+### THE 8-MINUTE SHORTFALL THAT NO FLOOR REMOVES
+
+`60 + max exposure` is 75m and the measured margin is 67m. So on the single
+worst day in the record — 2023-10-26, truth 09:30 against a 09:45 floor — the
+margin **against the true first kickoff** is `570 − 518.4 = 51.6m`, **8.4
+minutes short of the registered 60**. It is the same 8.4 minutes the derivation
+found, it is not removable by any choice of floor, and the only remedies are an
+**earlier cron** or a **faster run** — neither of which is a deadline question.
+One day in 715, asserted rather than rounded away.
+
+### AND IT REMOVED THE REFERENCE'S JOB
+
+`measured` 2026-10-19: the earliest kickoff in **any** of the 9 covered leagues
+over the whole record is **10:00**. Both floors sit below it, so the reference's
+minimum is never lower than the floor: **it binds on 0 of 834 days** carrying a
+covered fixture (it bound on 3 under the old percentiles).
+
+> **Fixing the constant did not merely remove the exposure. It removed the
+> coverage gap's path to the deadline, and with it the reference's
+> contribution.**
+
+What the reference still does is **independent monitoring** — the only outside
+check that the floor is not absurd, and it would bind the day a covered league
+schedules before 09:45. The `min()` property stays asserted, driven
+synthetically, because a property currently unexercised in production is still
+what makes consulting an incomplete source safe at all. Easter Monday's
+15-minute coverage error is still measured, and now **cannot reach the answer**.
+
+**NOT A COHORT EVENT:** the deadline is read only by margin reporting and
+alerting. No pick, price or probability depends on it.
+
+## PART B — THE FOLD COUNT, LABELLED
+
+### THE CLEAN HARNESS: 2 EFFECTIVE OF 5
+
+`run_market` skips a cutoff when `len(train) < 300`. `measured` against the
+population as it stood for the recorded 2026-08-07 run:
+
+| cutoff | train | ran? |
+|---|---|---|
+| 2025-08-01 | **0** | skipped, EMPTY TRAIN |
+| 2025-11-01 | **0** | skipped, EMPTY TRAIN |
+| 2026-02-01 | **0** | skipped, EMPTY TRAIN |
+| 2026-05-01 | 1,401 | ran |
+| 2026-07-01 | 2,258 | ran |
+
+**2 of 5, and they are ADJACENT** — the real span is 2026-05-01 … 2026-08-07,
+**about one quarter**, not the twelve months five chronological cutoffs imply.
+Clean odds coverage only begins 2026-02. The reconstruction cross-checks at
+**2,671** rows against that run's own manifest of **2,700 qualified** — a
+29-row agreement, and an upper bound, which is the safe direction: an upper
+bound of zero *is* zero.
+
+**Does any recorded figure state it? NO.** `baseline-*.json` records `cutoffs`,
+`window_days` and `n_shared_matches`; **`clean-20260807.json` records none of
+them** — its manifest states the population in detail and nothing about folds.
+And `docs/stage4-clean-baseline-2026-08-07.md` stated the count **wrongly**:
+"Walk-forward, **five chronological cutoffs**". Corrected in place, with the
+table and the cross-check, under a dated marker.
+
+### AND THE SAME DEFECT IS IN THE DECISIVE TEST
+
+`docs/predictive-audit-2026-08-07.md` records "Five cutoffs … 5,771
+out-of-sample matches (1,710 with bookmaker prices)". The five are right for
+the 5,771. They are **wrong for the 1,710 priced** matches that every
+blend-sweep figure is computed over:
+
+| cutoff | OOS | carrying a 1X2 price |
+|---|---|---|
+| 2025-08-01 | 1,035 | **0** |
+| 2025-11-01 | 1,514 | **0** |
+| 2026-02-01 | 2,099 | 845 |
+| 2026-05-01 | 956 | 872 |
+| 2026-07-01 | 630 | 414 |
+
+**3 effective folds of 5, spanning about six months**, all inside the
+odds-collection era. (Totals 6,234 / 2,131 here against the recorded 5,771 /
+1,710 — the difference is the exclusion filter and a looser "has a price"
+definition; the **zeros** are structural.) Annotated in place.
+
+### IS TWO ENOUGH? STATED, NOT ASSUMED
+
+Both bootstraps resample **observations**, so their intervals stand as given
+for their populations — 926 and 1,710 matched observations respectively. What
+adjacent folds inside a single odds-collection era **cannot** support is
+**temporal generality**, and the recommendation drawn from the second
+(`bookmaker_blend_weight` → 1.0) is a **standing configuration claim**, which
+is exactly the kind that needs it. So: adequate for the stated intervals,
+inadequate for the generality the wording implies.
+
+**No figure moves. No re-run. `BASELINE_REVISION` stays `b2`** and the three
+snapshots keep `b1.unstamped-pre-exclusion`. Going forward the harness returns
+`effective_folds` / `requested_folds` / `folds_ran` / `folds_skipped` with the
+scores — travelling inside each score dict like `_losses` — and `show()`
+**raises** rather than print a table without them. The skip reason
+distinguishes `EMPTY TRAIN` from `train<300`, because one says the window is
+thin and the other says it does not exist.
+
+## PART C — FIRST RESULT, SIZED (REPORT ONLY)
+
+### SITE 1 — `/teams?search=` → `teams_resp[0]`, no name or country check
+
+`measured` 2026-10-19: **1,375 of 1,467** teams carry an `apifootball_team_id`.
+**How many came from this path is UNRECORDED** — `Team` has no provenance
+column — and the last 12 `daily-picks` runs show **zero** "Resolved N team IDs
+via /teams?search" lines. So the population at risk is **bounded above by
+1,375 and cannot be enumerated**; by this project's own rule it is not cited as
+a count. *An entity whose origin is unrecorded cannot be audited*, and that is
+the finding.
+
+### SITE 2 — `_geocode` → `results[0]`
+
+Two different fallbacks: with a country hint it fetches 3 and prefers a country
+match (reason on file: Dunfermline resolving to Illinois); with **no** hint it
+fetches **one** and uses it unconditionally. `measured`: **27 of 30** configured
+leagues carry a hint. The 3 that do not are the **pan-European** competitions,
+where a single country hint would be *wrong by construction* — so **251
+(venue, league) pairs, 419 fixtures, 184 distinct venues** resolve with no
+verification at all.
+
+### THE SPOT-CHECKS, EACH WITH ITS DRAW RULE STATED BEFORE THE RESULT
+
+| sample | rule | result |
+|---|---|---|
+| N=12 | the most frequent venues | **0 wrong** |
+| N=12 | the least frequent venues in the 3 pan-European leagues | **1 wrong, 2 unresolvable** |
+
+The first sample answered a different question than it looked like: Open-Meteo
+ranks by population, and **every one of those 12 had US homonyms ranked below
+it** — London/CA+US, Athens/US, Stockholm/US, Vienna/US, Glasgow/US. The draw
+rule I pre-committed to was biased toward the easy cases, so rather than
+re-draw it a **second sample was taken from the tail with its own rule stated
+first**. Re-drawing the first would have been fishing; drawing a second,
+declared, is not.
+
+**THE ONE WRONG RESULT: `'Bar'` → Qionghai, CN** (19.242, 110.464, population
+528,238) while **Bar, Montenegro** (42.094, 19.098) ranks **fourth**. 94
+degrees apart. Measured effect on that fixture's features for 2026-10-22:
+
+| feature | results[0] (CN) | correct (ME) | delta |
+|---|---|---|---|
+| `weather_temp_c` | 29.3 | 19.7 | **+9.6** |
+| `weather_precip_mm` | 7.2 | 17.8 | **−10.6** |
+| `weather_wind_kmh` | 12.4 | 12.6 | −0.2 |
+| `weather_is_raining` | 1 | 1 | 0 |
+| `weather_is_windy` | 0 | 0 | 0 |
+
+Both continuous features move materially; both binary flags happen to agree on
+that date. `'Biisen'` and `'Hajvalia'` return **no** results and fall to
+`_DEFAULTS` with `weather_available: 0` — the honest outcome.
+
+**Report only.** Fixing either site changes feature values, which is a cohort
+event and belongs with the 11-01 queue.
+
+## THE ENTRY
+
+> **An accommodation and a repair look identical in the margin and opposite in
+> the record.** Raising the minimum to 135 minutes would have cleared every
+> check while leaving a constant two and a half hours laxer than the data;
+> tightening the constant to 09:45 cleared the same checks, removed eight days
+> of exposure, cost zero additional alerts — and revealed that the reference I
+> wired yesterday now contributes nothing to the deadline at all.
+
+## DECLARATION
+
+**CONSTANT TIGHTENED.** Derived, not chosen:
+`floor = ceil_15(ready_binding + 60 registered)`, each day type from its own
+lateness and duration series — **weekday 09:45** (+66.6m margin, 15m worst
+exposure) and **weekend 09:15** (+71.7m, **0m**). Measured minima re-measured
+over the full record and both moved earlier (09:59 → **09:30**, 10:00 →
+**09:45**); **the holiday stratum is not the earliest one**, an ordinary
+Thursday is. **RECOMPUTED EXPOSURE: >60m on ZERO days, every stratum** — from
+8 of 715 weekday days — with the term kept at **zero and still printed** and
+the pre-registered 60 unedited. **ALERT RATE 0.000/wk → 0.000/wk: zero
+additional**, against a 0.69/wk baseline that belonged to the `0 4` regime.
+**Weekday zero-exposure and a 60-minute margin are unreachable together by 8.4
+minutes**, so the worst day in the record carries a **51.6m true margin**, 8
+short of the registered 60 — remediable only by an earlier cron or a faster
+run, and asserted so it cannot be rounded away. **And the reference now binds
+on 0 of 834 days**: fixing the constant removed the coverage gap's path to the
+deadline and reduced the reference to independent monitoring, which is stated
+rather than quietly left in place.
+
+**FOLD COUNT LABELLED.** The clean harness ran **2 effective folds of 5**, both
+adjacent, spanning **one quarter** — three cutoffs had an **entirely empty**
+training set. **No recorded figure stated it**, and
+`docs/stage4-clean-baseline-2026-08-07.md` stated it **wrongly** as "five
+chronological cutoffs"; corrected in place with the table and a 2,671-vs-2,700
+cross-check. **The same defect is in the decisive test**: the predictive
+audit's **1,710 priced** matches rest on **3 folds of 5** (two windows carry
+zero priced matches) while it records five — annotated, and the standing
+`bookmaker_blend_weight` → 1.0 recommendation named as what rests on it.
+Adequate for the stated intervals, **inadequate for temporal generality**.
+The harness now returns the effective count with every score and `show()`
+**refuses to print a table without it**. No figure moved; `b2` holds.
+
+**FIRST-RESULT SIZED.** Site 1 `/teams?search=`: **1,375 of 1,467** teams carry
+an id, the share from the unverified path is **unrecordable** (no provenance
+column, zero resolutions in the last 12 runs) and so is reported as a bound,
+not a count. Site 2 `_geocode`: **419 fixtures across 184 venues** in the 3
+pan-European leagues resolve on `results[0]` with no verification, because a
+country hint would be wrong there by construction. **Spot-checks: 0 wrong of 12
+at the head, 1 wrong of 12 at the tail** — `'Bar'` → **Qionghai, China**, 94
+degrees from Bar, Montenegro, worth **+9.6 °C and −10.6 mm** on that fixture's
+features — with the head sample's bias toward easy cases stated rather than
+hidden, and the tail sample drawn under its own pre-stated rule rather than by
+re-drawing the first.
+
+Gating suite **2152 passed, 6 deselected**. Non-gating **6 passed, 0 skipped**.
+Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.18` /
+`stage5_baseline_20260807.51fbcb`; `BASELINE_REVISION` **UNCHANGED** at `b2`.
+No production write, no schema change, no model change, no cron moved.
+
+*Recorded 2026-10-19. `scripts/schedule_deadline.py`, `scripts/ci_audit.py`,
+`scripts/run_clean_baseline.py`, `docs/stage4-clean-baseline-2026-08-07.md`,
+`docs/predictive-audit-2026-08-07.md`,
+`tests/test_fold_count_and_first_result.py`,
+`tests/test_coverage_residual.py`, `tests/test_reference_deadline.py`,
+`tests/test_cron_split_by_daytype.py`, `tests/test_contamination_and_margin.py`.*

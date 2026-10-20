@@ -158,8 +158,14 @@ def test_every_marked_ungated_site_names_exactly_one_category():
 # ── B: the margin is measured daily, and the fitted date never stands alone ──
 
 def test_the_deadline_is_the_WEEKEND_kickoff_and_says_so():
-    """10:15, and the reason it is not 10:04 is recorded beside it."""
-    assert ci.SCHEDULE_DEADLINE_MIN == 10 * 60 + 15
+    """09:15 since 2026-10-19, and the reason it is not 10:04 is recorded.
+
+    WAS 10:15, a ~5th percentile. The fallback is now a DERIVED FLOOR,
+    `ceil_15(weekend ready_binding 08:03 + 60m registered) = 09:15`. The
+    phantom and independent-source notes below are unchanged and still
+    required: they are why the weekend figure is not 10:04.
+    """
+    assert ci.SCHEDULE_DEADLINE_MIN == 9 * 60 + 15
     src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
     block = src.split("SCHEDULE_DEADLINE_MIN", 1)[0][-1400:]
     assert "sub-second" in block, (

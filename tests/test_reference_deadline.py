@@ -21,6 +21,20 @@ so it is combined with the conservative constant and never substituted:
 
     deadline = min(reference over covered leagues, day-type constant)
 
+**SUPERSEDED IN PART ON 2026-10-19 — THE FLOOR NOW BINDS EVERYWHERE.** The
+fallback was tightened from the 12:00 / 10:15 percentiles to derived floors of
+**09:45 / 09:15**, and `measured` over the full record the earliest kickoff in
+ANY of the 9 covered leagues is **10:00**. So the reference's minimum is never
+below the floor: it binds on **0 of 834** days carrying a covered fixture.
+
+Fixing the constant did not merely remove the exposure — it removed the
+reference's role in the deadline. What the reference still does is
+**independent monitoring**: it is the only outside check that the floor is not
+absurd, and it would bind the day a covered league schedules before 09:45. The
+`min()` property is still asserted below, driven synthetically, because a
+property that is currently never exercised in production is still the property
+that makes consulting an incomplete source safe at all.
+
 THE REPLAY, all values `measured` from production `matches` (truth) and live
 football-data.org (reference) on 2026-10-19 unless marked `simulated`:
 
@@ -71,10 +85,13 @@ def test_POSITIVE_1_good_friday_2026_the_reference_matches_the_truth_exactly():
     ref, c = _combined(dt.date(2026, 4, 3), ("ELC", "2026-04-03T11:30:00Z"),
                        ("PD", "2026-04-03T14:00:00Z"))
     assert ref["state"] == sd.REF_OK
-    assert c["deadline_min"] == 11 * 60 + 30
-    assert c["bound_by"] == "REFERENCE"
-    assert c["constant_min"] - c["deadline_min"] == 30, (
-        "it no longer tightens the constant by the measured 30 minutes")
+    assert ref["min"] == 11 * 60 + 30, "the reference's own value moved"
+    # SINCE THE FLOOR WAS DERIVED (09:45) IT BINDS BELOW THE REFERENCE.
+    assert c["deadline_min"] == 9 * 60 + 45
+    assert c["bound_by"] == "CONSTANT"
+    # and the deadline is now 105 minutes INSIDE the measured truth of 11:30,
+    # where under the 12:00 percentile it sat 30 minutes after it
+    assert 11 * 60 + 30 - c["deadline_min"] == 105
 
 
 def test_POSITIVE_2_easter_monday_2026_tightens_by_90_min():
@@ -82,9 +99,14 @@ def test_POSITIVE_2_easter_monday_2026_tightens_by_90_min():
     constant, while the truth is 10:15 in a league the reference cannot see."""
     ref, c = _combined(dt.date(2026, 4, 6), ("SA", "2026-04-06T10:30:00Z"),
                        ("ELC", "2026-04-06T11:30:00Z"))
-    assert c["deadline_min"] == 10 * 60 + 30
-    assert c["bound_by"] == "REFERENCE"
-    assert c["constant_min"] - c["deadline_min"] == 90
+    assert ref["min"] == 10 * 60 + 30
+    # THE 15-MINUTE RESIDUAL IS GONE ON THIS DATE. The floor 09:45 is below
+    # the truth of 10:15, so the exposure here is ZERO -- where under the
+    # 12:00 percentile the reference's 10:30 left 15 minutes of it.
+    assert c["deadline_min"] == 9 * 60 + 45
+    assert c["bound_by"] == "CONSTANT"
+    TRUTH = 10 * 60 + 15
+    assert max(0, c["deadline_min"] - TRUTH) == 0
 
 
 def test_POSITIVE_3_good_friday_2027_SIMULATED_input_clears():
@@ -92,7 +114,8 @@ def test_POSITIVE_3_good_friday_2027_SIMULATED_input_clears():
     2027-04 schedule yet. It will have one on the day: the horizon sweep
     reached D+32."""
     ref, c = _combined(dt.date(2027, 4, 2), ("ELC", "2027-04-02T11:30:00Z"))
-    assert c["deadline_min"] == 11 * 60 + 30 and c["bound_by"] == "REFERENCE"
+    assert ref["min"] == 11 * 60 + 30
+    assert c["deadline_min"] == 9 * 60 + 45 and c["bound_by"] == "CONSTANT"
 
 
 def test_POSITIVE_4_easter_monday_2027_SIMULATED_input_ALARMS_under_0_4():
@@ -101,8 +124,14 @@ def test_POSITIVE_4_easter_monday_2027_SIMULATED_input_ALARMS_under_0_4():
     +253m and clear. Both `measured` series, one arithmetic.
     """
     ref, c = _combined(dt.date(2027, 4, 5), ("SA", "2027-04-05T10:30:00Z"))
-    assert c["deadline_min"] == 10 * 60 + 30
+    assert ref["min"] == 10 * 60 + 30
+    assert c["deadline_min"] == 9 * 60 + 45
 
+    # THE ALARM IS NOW DRIVEN BY THE FLOOR, NOT THE REFERENCE, AND THE FLOOR
+    # IS TIGHTER -- so under the `0 4` regime it alarms on EVERY weekday, not
+    # only on an early-card one. That is the correct consequence of a floor
+    # derived against `0 0`: it is not a valid floor for a schedule that is
+    # four hours later, and the arithmetic says so instead of hiding it.
     #: `measured`: weekday delay max 304 (`0 4`) / 305 (`0 0`), duration max 72.
     for cron_min, delay_max, expect_alarm in ((240, 304, True),
                                               (0, 305, False)):
@@ -120,11 +149,13 @@ def test_NEGATIVE_1_ordinary_weekday_the_CONSTANT_binds():
     it. The deadline stays 12:00 — conservative, and 285 min inside the
     measured truth of 16:45."""
     ref, c = _combined(dt.date(2026, 9, 17), ("PD", "2026-09-17T17:00:00Z"))
-    assert c["deadline_min"] == 12 * 60
+    assert c["deadline_min"] == 9 * 60 + 45        # the derived floor
     assert c["bound_by"] == "CONSTANT"
     assert "UPPER BOUND" in c["basis"], (
         "the basis does not say why a later reference cannot relax the "
         "constant")
+    # 420 minutes inside the measured truth of 16:45, against 285 before
+    assert 16 * 60 + 45 - c["deadline_min"] == 420
 
 
 def test_NEGATIVE_2_ordinary_weekend_stays_clear_and_is_IMPROVED():
@@ -133,8 +164,11 @@ def test_NEGATIVE_2_ordinary_weekend_stays_clear_and_is_IMPROVED():
     ref, c = _combined(dt.date(2026, 5, 17), ("SA", "2026-05-17T10:00:00Z"),
                        ("PL", "2026-05-17T13:00:00Z"))
     assert c["day_type"] == "weekend"
-    assert c["deadline_min"] == 10 * 60 and c["bound_by"] == "REFERENCE"
-    assert c["constant_min"] - c["deadline_min"] == 15
+    assert ref["min"] == 10 * 60
+    # The weekend floor 09:15 is below the reference's 10:00 AND below the
+    # measured truth of 10:00, so the exposure is zero with 45m to spare.
+    assert c["deadline_min"] == 9 * 60 + 15 and c["bound_by"] == "CONSTANT"
+    assert max(0, c["deadline_min"] - 10 * 60) == 0
 
 
 # ── THE KNOWN-WRONG COVERAGE CASE ────────────────────────────────────────────
@@ -165,13 +199,16 @@ def test_KNOWN_WRONG_an_UNCOVERED_league_carries_the_earliest_kickoff():
         "quantifies has changed")
     assert ref["min"] - TRUTH_MIN == 15
 
-    # ...and the COMBINATION is still never laxer than the constant, which is
-    # the only guarantee on offer. It is NOT a bound on the true minimum.
+    # ...and SINCE 2026-10-19 THE REFERENCE'S ERROR NO LONGER REACHES THE
+    # DEADLINE. The floor 09:45 binds below both the reference's 10:30 and the
+    # truth's 10:15, so the 15-minute coverage error is measured here and
+    # cannot affect the answer. Tightening the constant did not just remove
+    # the exposure; it removed the coverage gap's path to the deadline.
     assert c["deadline_min"] <= c["constant_min"]
-    assert c["deadline_min"] > TRUTH_MIN, (
-        "if this now passes the combination has become a true bound - a "
-        "better outcome, but it must be re-measured and re-stated, not "
-        "assumed")
+    assert c["deadline_min"] < TRUTH_MIN, (
+        "the deadline is no longer inside the measured truth on the one date "
+        "where an uncovered league carries the earliest kickoff")
+    assert c["bound_by"] == "CONSTANT"
 
 
 def test_the_combination_can_only_TIGHTEN_never_relax():
@@ -181,7 +218,7 @@ def test_the_combination_can_only_TIGHTEN_never_relax():
     property that makes an incomplete reference safe to consult at all.
     """
     for day in (dt.date(2026, 4, 6), dt.date(2026, 5, 17)):
-        const = sd.DEADLINE_PERCENTILES[sd.day_type(day)][0]
+        const = sd.DEADLINE_FLOOR[sd.day_type(day)][0]
         for minute in range(6 * 60, 23 * 60, 17):
             iso = (f"{day.isoformat()}T{minute // 60:02d}:"
                    f"{minute % 60:02d}:00Z")
@@ -303,7 +340,7 @@ def test_every_run_reports_WHICH_leagues_were_covered_and_which_were_not():
         fc.REFERENCE_LEAGUES), "present + absent does not account for the map"
 
     line = sd.format_reference_deadline(c)
-    for part in ("serves=2026-10-20", "deadline=12:00", "bound_by=CONSTANT",
+    for part in ("serves=2026-10-20", "deadline=09:45", "bound_by=CONSTANT",
                  "coverage=9 of 30", "present=2", "absent=7", "usable=2",
                  "other_day"):
         assert part in line, f"the report line omits {part!r}: {line}"

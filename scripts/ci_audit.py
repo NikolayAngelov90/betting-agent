@@ -67,6 +67,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 # this step keeps its no-install property.
 from scripts.schedule_deadline import (
     CLEARING_ACTION,
+    DEADLINE_FLOOR as _DEADLINE_FLOOR,
     DEADLINE_PERCENTILES as _DEADLINE_PERCENTILES,
     combined_deadline,
     day_type,
@@ -1038,13 +1039,22 @@ _LEAGUE_IN_FINDING = re.compile(r"^discovery: ([a-z0-9/-]+) found 0 fixtures")
 #:    produced it: Sparta Rotterdam v Feyenoord on 2026-08-09 reads 12:15 CEST
 #:    there and 10:15 UTC here, and it is openfootball's own earliest
 #:    eredivisie kickoff of the season.
+# ── THE FALLBACK IS THE DERIVED FLOOR NOW, NOT THE PERCENTILE. 2026-10-19 ──
+#
+# `_DEADLINE_PERCENTILES` held 12:00 / 10:15 and was the fallback on 1087 of
+# 1090 days, two and a half hours laxer than our own measured earliest weekday
+# kickoff. That gap WAS the exposure tail (max 150m, above 60m on 8 of 715
+# weekday days); it never belonged to the reference. The floor is derived as
+# `ceil_15(ready_binding + 60 registered)` per day type, from each day type's
+# OWN series -- 09:45 weekday, 09:15 weekend. The percentile record is kept
+# under its own name because it is still the right label for what it holds.
 DEADLINE_MIN_BY_DAYTYPE = {
-    k: v[0] for k, v in _DEADLINE_PERCENTILES.items()
+    k: v[0] for k, v in _DEADLINE_FLOOR.items()
 }
 
 #: Which percentile each one is, for the report line.
 DEADLINE_BASIS_BY_DAYTYPE = {
-    k: f"{v[1]} percentile ({v[2]})" for k, v in _DEADLINE_PERCENTILES.items()
+    k: f"{v[1]} ({v[2]})" for k, v in _DEADLINE_FLOOR.items()
 }
 
 #: The WORSE of the two, kept under its old name so a single-cron regime and
@@ -1055,6 +1065,40 @@ SCHEDULE_DEADLINE_MIN = min(DEADLINE_MIN_BY_DAYTYPE.values())
 #: n=10: wall-clock minutes from run start to run end.
 MARGIN_RUN_DURATIONS = [72.3, 53.3, 29.0, 41.8, 47.5, 37.0, 40.8,
                         45.4, 43.2, 42.3]
+
+#: ── EACH DAY TYPE'S OWN DURATION SPREAD. 2026-10-19. ──────────────────────
+#:
+#: `MARGIN_RUN_DURATIONS` above is ONE pooled series (n=10, the `0 0 * * *`
+#: regime, measured 2026-10-10) and the prospective margin used it for BOTH day
+#: types. Borrowing the other day type's spread is precisely what `0 4` got
+#: wrong, and the weekend's is half again as wide: mean+3sd 148.8 against the
+#: weekday's 100.9.
+#:
+#: `measured` 2026-10-19 from every scheduled `daily-picks` run GitHub still
+#: lists (--limit 120), wall-clock minutes from run start to run end, split by
+#: the day of week the run STARTED on. Pooled across cron regimes on purpose:
+#: a run's duration does not depend on when it was triggered, and pooling is
+#: both better powered (n=78 / n=34 against n=10) and more conservative
+#: (weekday mean+3sd 100.9 against 59.4 for the current regime alone).
+#:
+#:   weekday  n=78  max 100.8  mean 42.5  sd 19.5  mean+3sd 100.9
+#:   weekend  n=34  max 129.2  mean 54.8  sd 31.3  mean+3sd 148.8
+MARGIN_RUN_DURATIONS_BY_DAYTYPE = {
+    "weekday": [
+        9.4, 9.8, 13.6, 13.9, 14.9, 15.5, 15.6, 17.3, 18.6, 19.9, 21.9, 22.4,
+        24.7, 25.4, 26.1, 27.3, 27.7, 27.8, 28.1, 29.0, 30.2, 30.3, 30.9, 31.1,
+        31.6, 33.2, 33.4, 33.7, 33.7, 34.5, 35.2, 35.2, 36.1, 36.1, 37.0, 39.4,
+        39.8, 39.9, 40.8, 41.8, 42.0, 42.1, 42.3, 42.5, 42.8, 43.5, 43.7, 44.4,
+        45.8, 46.4, 46.9, 47.1, 47.5, 48.6, 49.2, 50.0, 50.4, 51.8, 53.0, 53.1,
+        55.5, 56.6, 57.6, 59.1, 59.9, 62.2, 63.7, 66.2, 66.5, 67.1, 67.7, 68.0,
+        70.5, 78.5, 82.4, 88.1, 96.7, 100.8,
+    ],
+    "weekend": [
+        10.7, 12.9, 13.1, 13.6, 14.2, 19.4, 23.8, 31.0, 35.6, 36.4, 36.8, 37.3,
+        40.4, 41.1, 41.5, 42.7, 43.2, 45.4, 47.2, 53.1, 53.8, 70.1, 72.0, 72.3,
+        78.0, 78.3, 79.1, 92.5, 92.8, 97.3, 101.2, 101.3, 104.4, 129.2,
+    ],
+}
 
 #: Time from run start to picks complete on a FULL card (>=40 fixtures).
 #: MEASURED 2026-10-01, n=4: 67.4-88.1 min, mean 76.4, sd 10.2.
@@ -1323,7 +1367,7 @@ def format_series_census(series_by_type: dict, crons: dict) -> str:
     for cron, n, window, basis in RETIRED_SERIES:
         lines.append(f"  RETIRED  {cron:16s} n={n:34s} deadline basis: {basis}")
         lines.append(f"           {'':16s}   {window}")
-    from scripts.schedule_deadline import DEADLINE_PERCENTILES
+    from scripts.schedule_deadline import DEADLINE_FLOOR
 
     # ── THE LIVE LABEL WAS A LITERAL, AND IT WENT STALE IN A DAY. ─────────
     #
@@ -1343,7 +1387,7 @@ def format_series_census(series_by_type: dict, crons: dict) -> str:
         cron_min = crons.get(day_type)
         n = len(series_by_type.get(day_type) or [])
         expr = live_exprs.get(day_type) or "UNRESOLVED"
-        _, pct, prov = DEADLINE_PERCENTILES[day_type]
+        _, pct, prov = DEADLINE_FLOOR[day_type]
         state = f"n={n}" if n else "n=0 UNEVALUATED, not clear"
         lines.append(f"  LIVE     {expr:16s} {state:36s} "
                      f"deadline basis: {pct} ({prov.split(';')[0]})")
@@ -2516,7 +2560,8 @@ def main() -> int:
     _prosp = prospective_margin(
         _ahead["deadline_min"], _ahead_cron,
         [lag for _d, lag in (_by_type.get(day_type(_tomorrow)) or [])],
-        MARGIN_RUN_DURATIONS, serves=_tomorrow,
+        MARGIN_RUN_DURATIONS_BY_DAYTYPE[day_type(_tomorrow)],
+        serves=_tomorrow,
         # THE MINIMUM CARRIES THE RESIDUAL. 60m was registered on 2026-10-10
         # against THE DEADLINE; the deadline is now known to sit up to the
         # measured exposure after the first kickoff we bet, because the

@@ -71,13 +71,23 @@ import scripts.schedule_deadline as sd
 
 def test_the_measured_exposure_is_RECORDED_per_stratum():
     """The distribution, not the one observation."""
+    # ── RECOMPUTED 2026-10-19 UNDER THE DERIVED FLOOR. ────────────────────
+    #
+    # The figures below were taken under the 12:00 / 10:15 percentiles:
+    #   weekday  p99 75m  max 150m  >60m on 8 of 715 days
+    #   weekend  p99 15m  max  30m  >60m on 0 of 375 days
+    # The floor (09:45 / 09:15) removed almost all of it, because the tail
+    # belonged to the constant and not to the reference.
     assert set(sd.COVERAGE_EXPOSURE) == {"weekday", "weekend"}
     wd, we = sd.COVERAGE_EXPOSURE["weekday"], sd.COVERAGE_EXPOSURE["weekend"]
-    assert (wd["p99"], wd["max"], wd["n"], wd["over60"]) == (75, 150, 715, 8)
-    assert (we["p99"], we["max"], we["n"], we["over60"]) == (15, 30, 375, 0)
-    assert we["max"] <= 60 < wd["max"], (
-        "the strata no longer fail differently; the weekend was absorbed by "
-        "60m and the weekday was not, and that asymmetry is the finding")
+    assert (wd["p99"], wd["max"], wd["n"], wd["over60"]) == (0, 15, 715, 0)
+    assert (we["p99"], we["max"], we["n"], we["over60"]) == (0, 0, 375, 0)
+    assert wd["over60"] == we["over60"] == 0, (
+        "THE TARGET: zero days above 60 minutes, on every stratum")
+    assert wd["max"] == 15, (
+        "the weekday residual moved off 15m -- it is the single 2023-10-26 "
+        "day at 09:30 against a 09:45 floor, and zero exposure is unreachable "
+        "there by 8.4 minutes")
 
 
 def test_the_MINIMUM_is_DERIVED_from_the_tail_not_chosen():
@@ -93,7 +103,12 @@ def test_the_MINIMUM_is_DERIVED_from_the_tail_not_chosen():
         "residual must be carried as a separate, derived term")
     for dtype, e in sd.COVERAGE_EXPOSURE.items():
         assert sd.EFFECTIVE_MIN_MARGIN[dtype] == 60 + e["p99"]
-    assert sd.EFFECTIVE_MIN_MARGIN == {"weekday": 135, "weekend": 75}
+    # THE TERM IS NOW ZERO AND THE ARITHMETIC IS UNCHANGED. It read 135 / 75
+    # under the old constants; the floor drove the p99 to zero, so the
+    # effective minimum collapses back onto the registered 60. The term is
+    # KEPT rather than removed -- a term that disappears when it is satisfied
+    # cannot be seen to have been satisfied.
+    assert sd.EFFECTIVE_MIN_MARGIN == {"weekday": 60, "weekend": 60}
 
 
 def test_the_derived_minimum_CREATES_NO_ALARM_TODAY():
@@ -102,11 +117,40 @@ def test_the_derived_minimum_CREATES_NO_ALARM_TODAY():
     `measured`: the prospective margin is +225m binding, which clears 135 and
     the max-case 210 alike.
     """
-    MEASURED_BINDING = 225
+    # `measured` 2026-10-19 AFTER the floor was tightened: the prospective
+    # margin is +67m, down from +225m under the 12:00 percentile, because the
+    # deadline moved 135 minutes earlier. It still clears the registered 60.
+    MEASURED_BINDING = 67
     for dtype, m in sd.EFFECTIVE_MIN_MARGIN.items():
         assert MEASURED_BINDING >= m, f"{dtype}: {MEASURED_BINDING} < {m}"
+    # ── AND IT DOES NOT COVER THE MAXIMUM, BY 8 MINUTES. STATED. ──────────
+    #
+    # `60 + max exposure` is 75m and the measured margin is 67m. So on the
+    # single worst day in the record -- 2023-10-26, truth 09:30 against a
+    # 09:45 floor -- the margin against the TRUE first kickoff is
+    # 570 - 518.4 = **51.6m**, which is **8.4 minutes short** of the
+    # registered 60.
+    #
+    # THIS IS THE SAME 8.4 MINUTES THE FLOOR'S DERIVATION FOUND, and it is
+    # not removable by ANY choice of floor: zero exposure needs the floor at
+    # or below 09:30, and a 60-minute margin needs it at or above 09:38. The
+    # window is empty. The only remedies are an EARLIER CRON or a FASTER RUN,
+    # neither of which is a deadline question.
+    #
+    # One day in 715, asserted rather than rounded away, so that moving the
+    # cron or the run time is a decision someone takes rather than a figure
+    # that quietly disappears.
     worst = max(60 + e["max"] for e in sd.COVERAGE_EXPOSURE.values())
-    assert worst == 210 and MEASURED_BINDING >= worst
+    assert worst == 75, (
+        "the worst-case requirement moved off 60 + the 15m weekday maximum")
+    assert MEASURED_BINDING < worst, (
+        "the margin now covers the registered 60 PLUS the measured maximum "
+        "exposure -- a better state than the one recorded here, and it must "
+        "be re-measured and re-stated rather than assumed")
+    SHORTFALL = worst - MEASURED_BINDING
+    assert SHORTFALL == 8, (
+        f"the worst-day shortfall moved to {SHORTFALL}m; it was 8m "
+        f"(51.6m true margin against the registered 60)")
 
 
 def test_the_RESIDUAL_is_printed_BESIDE_the_deadline_with_its_BASIS():
@@ -117,11 +161,13 @@ def test_the_RESIDUAL_is_printed_BESIDE_the_deadline_with_its_BASIS():
         "matches": [{"competition": {"code": "CL"}, "status": "TIMED",
                      "utcDate": "2026-10-20T16:45:00Z"}]})
     c = sd.combined_deadline(day, ref)
-    assert c["exposure"]["p99"] == 75
+    assert c["exposure"]["p99"] == 0
     line = sd.format_reference_deadline(c)
     assert "residual[" in line, "the residual is not printed"
-    for part in ("p99=75m", "max=150m", "over60=8/715d",
-                 "effective minimum 135m", "60m registered + 75m p99",
+    # PRINTED AT ZERO, which is the whole point: the figure must be visible
+    # as SATISFIED rather than absent.
+    for part in ("p99=0m", "max=15m", "over60=0/715d",
+                 "effective minimum 60m", "60m registered + 0m p99",
                  "basis:", "measured 2026-10-19"):
         assert part in line, f"the residual line omits {part!r}:{chr(10)}{line}"
 

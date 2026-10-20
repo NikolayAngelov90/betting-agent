@@ -161,8 +161,16 @@ def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
 def test_the_two_deadlines_are_distinct_and_the_WORSE_is_the_single_value():
     """Callers that do not say which day type they mean get the conservative
     answer, never a wrong one."""
-    assert DEADLINE_MIN_BY_DAYTYPE["weekend"] == 10 * 60 + 15
-    assert DEADLINE_MIN_BY_DAYTYPE["weekday"] == 12 * 60
+    # ── THE VALUES MOVED 2026-10-19: percentiles -> DERIVED FLOORS. ───────
+    #
+    # 12:00 / 10:15 were percentiles and the fallback on 1087 of 1090 days,
+    # the weekday one two and a half hours laxer than our own measured
+    # earliest kickoff. That gap WAS the coverage-exposure tail. The fallback
+    # is now `DEADLINE_FLOOR`, derived per day type as
+    # `ceil_15(ready_binding + 60 registered)` from each day type's OWN
+    # series: 09:45 weekday, 09:15 weekend.
+    assert DEADLINE_MIN_BY_DAYTYPE["weekend"] == 9 * 60 + 15
+    assert DEADLINE_MIN_BY_DAYTYPE["weekday"] == 9 * 60 + 45
     assert SCHEDULE_DEADLINE_MIN == min(DEADLINE_MIN_BY_DAYTYPE.values())
     assert DEADLINE_MIN_BY_DAYTYPE["weekend"] < DEADLINE_MIN_BY_DAYTYPE["weekday"], (
         "the weekend deadline is no longer the earlier one — re-derive which "
@@ -347,12 +355,31 @@ def test_the_1430_figure_is_a_PERCENTILE_not_a_minimum():
     assert WEEKDAY_DAYS_BEFORE_1430 / WEEKDAY_DAYS_MEASURED > 0.10, (
         "fewer than 10% of weekdays now start before 14:30 — re-measure "
         "before treating this finding as current")
-    assert WEEKDAY_EARLIEST_OBSERVED < DEADLINE_MIN_BY_DAYTYPE["weekday"], (
-        "the observed weekday minimum is no longer earlier than the configured "
-        "weekday deadline, so the deadline may now be a real bound")
-    assert WEEKDAY_EARLIEST_OBSERVED < DEADLINE_MIN_BY_DAYTYPE["weekend"], (
-        "a weekday has started EARLIER than the weekend deadline — the day-type "
-        "split no longer describes the data")
+    # ── RE-POINTED 2026-10-19 AT THE RE-MEASURED MINIMUM. ─────────────────
+    #
+    # `WEEKDAY_EARLIEST_OBSERVED` is 09:59, measured over 148 days from
+    # 2026-02-01. Over the FULL record (n=715 weekday days, 2022-07-05
+    # onward) the weekday minimum is **09:30** -- 2023-10-26,
+    # `bulgaria/efbet-league`. A minimum is a function of its window and a
+    # longer window can only lower it.
+    #
+    # The derived floor is 09:45, which is BELOW the old 09:59 figure and
+    # ABOVE the re-measured 09:30. So the claim this test makes -- the
+    # deadline is not a real bound -- still holds, but only against the
+    # current measurement, and the 15-minute gap is the residual exposure
+    # recorded in `COVERAGE_EXPOSURE`.
+    from scripts.schedule_deadline import OBSERVED_EARLIEST_MIN
+
+    assert OBSERVED_EARLIEST_MIN["weekday"] == 9 * 60 + 30, (
+        "the re-measured weekday minimum moved; re-derive the floor, which is "
+        "computed from the ready time and checked against this value")
+    assert OBSERVED_EARLIEST_MIN["weekday"] < DEADLINE_MIN_BY_DAYTYPE["weekday"], (
+        "the observed weekday minimum is no longer earlier than the weekday "
+        "floor, so the floor would now be a real bound - a BETTER outcome, "
+        "but it must be re-measured and re-stated rather than assumed")
+    assert WEEKDAY_EARLIEST_OBSERVED > DEADLINE_MIN_BY_DAYTYPE["weekday"], (
+        "the 2026-02-01-onward figure of 09:59 is no longer later than the "
+        "floor; the floor was derived to sit below it")
 
 
 def test_the_weekday_cron_CLEARS_a_holiday_weekday_since_the_revert():

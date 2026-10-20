@@ -178,6 +178,43 @@ Train on everything before a cutoff, evaluate on the next 60 days. Five cutoffs:
 2025-08-01, 2025-11-01, 2026-02-01, 2026-05-01, 2026-07-01. 5,771 out-of-sample matches
 (1,710 with bookmaker prices). No parameter was fitted on the evaluation windows.
 
+> **ADDENDUM 2026-10-19 — THE PRICED SUBPOPULATION DOES NOT SPAN FIVE WINDOWS.**
+> The five cutoffs are correct for the 5,771 unpriced out-of-sample matches.
+> They are **not** correct for the **1,710 with bookmaker prices**, which is
+> the population every blend-sweep figure in this document is computed over.
+> Odds collection began in **2026-02**, so `measured` 2026-10-19 against the
+> population as it stood on 2026-08-07:
+>
+> | cutoff | OOS matches | carrying a 1X2 price |
+> |---|---|---|
+> | 2025-08-01 | 1,035 | **0** |
+> | 2025-11-01 | 1,514 | **0** |
+> | 2026-02-01 | 2,099 | 845 |
+> | 2026-05-01 | 956 | 872 |
+> | 2026-07-01 | 630 | 414 |
+>
+> (Totals here are 6,234 / 2,131 against the 5,771 / 1,710 recorded above —
+> the difference is the exclusion filter and this query's looser "has a 1X2
+> price" definition. The **zeros** are the robust part and they are structural,
+> not a filter artefact.)
+>
+> **EFFECTIVE FOLDS FOR EVERY PRICED FIGURE: 3 of 5**, spanning
+> **2026-02-01 … 2026-08-07 — about six months**, all of it inside the
+> odds-collection era.
+>
+> **What this does and does not undermine.** The blend sweep is monotone over
+> 1,710 observations and that is a property of those observations; the
+> statistical claim stands. What three adjacent windows in a single
+> odds-collection era cannot support is **temporal generality** — and the
+> recommendation drawn from it (`bookmaker_blend_weight` → 1.0) is a
+> *standing* configuration claim, which is the kind that needs it. The figures
+> are unchanged, nothing was recomputed, and `BASELINE_REVISION` stays `b2`:
+> this is a labelling correction.
+>
+> Found while labelling the clean harness's fold count, which had the same
+> defect: see `docs/stage4-clean-baseline-2026-08-07.md`, 2 effective folds
+> of 5.
+
 ### Poisson (Phase 7)
 
 Half-life and ρ swept on identical out-of-sample matches, 1X2 log-loss:

@@ -223,15 +223,41 @@ def score(pairs):
 
 
 def run_market(ds, label, outcome_fn, model_fns, window_days=60):
-    """Walk-forward every candidate over one market; identical match set."""
+    """Walk-forward every candidate over one market; identical match set.
+
+    THE EFFECTIVE FOLD COUNT IS PART OF THE RESULT. 2026-10-19.
+
+    `CUTOFFS` holds five dates and the guard below skips any whose training set
+    is under 300 rows. MEASURED against the population as it stood for the
+    recorded 2026-08-07 run, **three of those five were skipped with an
+    ENTIRELY EMPTY training set** -- 2025-08-01, 2025-11-01 and 2026-02-01,
+    because clean odds coverage only begins in 2026-02. So that run's figures
+    rest on **TWO** folds, 2026-05-01 and 2026-07-01, which are ADJACENT: the
+    real evaluation span is one quarter, not the twelve months five cutoffs
+    imply.
+
+    `docs/stage4-clean-baseline-2026-08-07.md` recorded it as "Walk-forward,
+    five chronological cutoffs" and nothing stated otherwise, which is the
+    same class of defect as a population count without its query window --
+    and the class this project has paid for most often.
+
+    So the count of folds that actually FIT is returned with the scores, and
+    `show()` refuses to print a table without it.
+    """
     collected = defaultdict(list)   # name -> [(match_id, probs)]
+    folds_ran, folds_skipped = [], []
     for cutoff in CUTOFFS:
         train = [m for m in ds if m.match_date < cutoff]
         test = [m for m in ds
                 if cutoff <= m.match_date < cutoff + timedelta(days=window_days)
                 and label in m.devigged]
         if len(train) < 300 or not test:
+            folds_skipped.append(
+                (cutoff.isoformat(), len(train), len(test),
+                 "EMPTY TRAIN" if not train else
+                 ("train<300" if len(train) < 300 else "no test row")))
             continue
+        folds_ran.append((cutoff.isoformat(), len(train), len(test)))
         states = {"poisson": fit_poisson(train, cutoff), "elo": fit_elo(train, cutoff)}
         for name, fn in model_fns.items():
             for m in test:
@@ -241,6 +267,15 @@ def run_market(ds, label, outcome_fn, model_fns, window_days=60):
 
     if not collected:
         return {}
+    fold_label = {
+        "effective_folds": len(folds_ran),
+        "requested_folds": len(CUTOFFS),
+        "folds_ran": folds_ran,
+        "folds_skipped": folds_skipped,
+        "span": (f"{folds_ran[0][0]} .. "
+                 f"{(date.fromisoformat(folds_ran[-1][0]) + timedelta(days=window_days)).isoformat()}"
+                 if folds_ran else "none"),
+    }
     shared = set.intersection(*[{mid for mid, _ in v} for v in collected.values()])
     out_by_id = {m.id: outcome_fn(m) for m in ds}
     results = {}
@@ -249,6 +284,9 @@ def run_market(ds, label, outcome_fn, model_fns, window_days=60):
                  if mid in shared and out_by_id[mid] is not None]
         s = score(pairs)
         if s:
+            # THE FOLD COUNT TRAVELS WITH THE FIGURE, like `_losses`. A score
+            # that can be printed without it is a score that WILL be.
+            s["_folds"] = fold_label
             results[name] = s
     return results
 
@@ -260,6 +298,26 @@ def show(results, title, baseline_key=None):
     if not results:
         print("  (no data)")
         return
+    # ── THE EFFECTIVE FOLD COUNT, OR NO TABLE. 2026-10-19. ────────────────
+    #
+    # The 2026-08-07 run recorded "five chronological cutoffs" while THREE of
+    # the five were skipped with an entirely empty training set. The figures
+    # rested on TWO adjacent folds -- one quarter, not twelve months -- and
+    # nothing on the page said so.
+    _f = next((m.get("_folds") for m in results.values() if m.get("_folds")),
+              None)
+    if not _f:
+        raise ValueError(
+            "a clean-baseline table was about to print WITHOUT its effective "
+            "fold count. Every figure carries the population it was computed "
+            "over, and the fold count is part of that population: five "
+            "requested cutoffs and two that fit are different experiments.")
+    print(f"  folds: {_f['effective_folds']} EFFECTIVE of "
+          f"{_f['requested_folds']} requested   span {_f['span']}")
+    for c, tr, te in _f["folds_ran"]:
+        print(f"     RAN     {c}  train={tr:5d}  test={te:5d}")
+    for c, tr, te, why in _f["folds_skipped"]:
+        print(f"     SKIPPED {c}  train={tr:5d}  test={te:5d}  {why}")
     print(f"{'candidate':<40}{'LogLoss':>10}{'Brier':>9}{'ECE':>8}{'Acc':>8}{'n':>7}")
     print("-" * 96)
     for name, m in sorted(results.items(), key=lambda kv: kv[1]["log_loss"]):

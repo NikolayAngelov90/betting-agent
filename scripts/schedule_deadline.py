@@ -75,9 +75,141 @@ DEADLINE_PERCENTILES = {
 }
 
 #: Observed MINIMA, which are bounds for the measured window and nothing more.
+#:
+#: RE-MEASURED 2026-10-19 over the FULL record -- n=1090 days, 2022-07-05 ..
+#: 2026-10-19, the 30 configured leagues, phantom exclusion applied. Both moved
+#: EARLIER than the 2026-10-10 figures, which were taken over 2026-02-01
+#: onward: a minimum is a function of its window, and a longer window can only
+#: lower it. The earlier values are kept beside each one so the movement is
+#: visible rather than silent.
 OBSERVED_EARLIEST_MIN = {
-    "weekday": 9 * 60 + 59,     # 2026-06-18 Thu, finland/veikkausliiga, 1 fx
-    "weekend": 10 * 60,         # 2026-02-01..2026-10-10
+    "weekday": 9 * 60 + 30,     # 2023-10-26 Thu, bulgaria/efbet-league
+                                # (was 09:59, 2026-06-18, over 148 days)
+    "weekend": 9 * 60 + 45,     # 2024-10-19 Sat, bulgaria/efbet-league
+                                # (was 10:00, over 2026-02-01..2026-10-10)
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE FALLBACK IS A DERIVED FLOOR, NOT A PERCENTILE — 2026-10-19
+#
+#     Raising the minimum margin accommodates a wrong constant. Fixing the
+#     constant removes the exposure.
+#
+# The 12:00 weekday constant was the fallback on 1087 of 1090 days and it was
+# **two and a half hours laxer than our own measured earliest kickoff**. That
+# gap WAS the exposure tail: max 150m, above 60m on 8 of 715 weekday days. It
+# never belonged to the reference, which can only ever lower the deadline.
+#
+# THE MEASURED EARLIEST KICKOFF, `measured` 2026-10-19 from production
+# `matches`, the 30 CONFIGURED leagues, phantom exclusion applied (sub-second
+# `match_date` is an ingestion stamp; 00:00 rows are placeholders), n=1090
+# days over 2022-07-05 .. 2026-10-19:
+#
+#   stratum              n     MIN     p01     p05     p50   <10:00  <11:00
+#   weekday            715   09:30   10:45   13:00   17:00        2        9
+#     ordinary         693   09:30   11:00   14:00   17:00        2        7
+#     holiday           22   10:15   10:15   10:30   13:00        0        2
+#   weekend            375   09:45   10:00   10:15   11:30        1       96
+#     ordinary         373   09:45   10:00   10:15   11:30        1       96
+#     holiday            2   13:00   13:00   13:00   13:00        0        0
+#
+# THE HOLIDAY STRATUM IS NOT THE EARLIEST ONE, and the earlier analysis implied
+# it was. Holidays shift the whole weekday distribution forward (p50 13:00
+# against 17:00) but the MINIMUM is an ordinary Thursday: 2023-10-26 09:30,
+# `bulgaria/efbet-league`. The weekday minima are 09:30, then 09:59
+# (2026-06-18, `finland/veikkausliiga`), then 10:15 (Easter Monday 2026).
+#
+# THE READY TIME AT `0 0`, each day type from ITS OWN series -- which is the
+# thing `0 4` got wrong by borrowing the other's spread:
+#
+#   day type   lateness (attributed by headSha)   duration (by day type)
+#   weekday    n=7  max 305  mean+3sd 417.5       n=78  max 100.8  m+3sd 100.9
+#   weekend    n=6  max 294  mean+3sd 334.5       n=34  max 129.2  m+3sd 148.8
+#
+#   weekday  ready max 06:45   mean+3sd 08:38   BINDING 08:38
+#   weekend  ready max 07:02   mean+3sd 08:03   BINDING 08:03
+#
+# CAVEAT, STATED: the binding figure is a mean+3sd projection on a lateness
+# series of n=7 / n=6, and it exceeds the observed max by 112 / 40 minutes. The
+# sd is poorly determined at that n, so THE FLOOR IS RE-DERIVABLE and will move
+# EARLIER as the series grows and the sd tightens. Re-derive it, do not defend
+# it. Lateness is attributed per run by its own `headSha` cron, because pooling
+# regimes reads a `37 9` start as 21 hours late; duration is NOT cron-dependent
+# and is pooled across regimes by day type, which is both better powered and
+# more conservative than the current regime alone (weekday n=7 m+3sd 59.4).
+#
+# THE DERIVATION, which is an arithmetic and not a choice:
+#
+#     floor = ceil_to_15min( ready_binding + MIN_ACCEPTABLE_MARGIN_MIN )
+#
+# the TIGHTEST value the measured pipeline can support while clearing the
+# pre-registered 60 minutes. Tighter is safer against an unobserved early
+# kickoff -- which is the only thing a fallback is for -- and the margin
+# requirement is what stops it going lower.
+#
+#   weekday  ceil_15(518.4 + 60) = 09:45   margin +66.6m   exposure 15m worst
+#   weekend  ceil_15(483.3 + 60) = 09:15   margin +71.7m   exposure  0m
+#
+# AND THE WEEKDAY CANNOT HAVE BOTH, BY 8.4 MINUTES. Zero exposure needs
+# `floor <= 09:30` (the observed minimum); the 60-minute margin needs
+# `floor >= 09:38`. The window is empty by **8.4 minutes**, so the weekday
+# keeps a 15-minute residual after rounding -- one day in 715, far inside the
+# 60-minute budget. The weekend windows overlap and its exposure is ZERO.
+#
+# THE ALTERNATIVE, NOT TAKEN: `floor = observed minimum` maximises the margin
+# among zero-exposure choices (weekend 09:45, +101.7m). It was rejected
+# because the observed minimum is a bound for the MEASURED WINDOW and nothing
+# more -- a fixture 20 minutes earlier next season would reintroduce exposure
+# silently, whereas the derived floor already sits 30 minutes below it.
+#
+# WHAT IT COSTS IN ALERTS: `measured` by replaying all 1090 days with each
+# day's own `min(covered-league minimum, floor)` as the deadline and each day
+# type's own binding ready time --
+#
+#   constants            exposure>0   max    >60m   ALARMS   per week
+#   current 12:00/10:15   21 days    150m   8 days     0      0.000
+#   derived 09:45/09:15    1 day      15m   0 days     0      0.000
+#
+# **ZERO additional alerts, and eight fewer days above the 60-minute budget.**
+# For scale, the DISCOVERED-card basis -- the 0.69/wk figure measured under
+# `0 4` -- alarms once in 1090 days under `0 0`, 0.0045/wk; the regime change
+# did that, not this.
+#
+# NOT A COHORT EVENT: the deadline is read only by margin reporting and
+# alerting. No pick, price or probability depends on it.
+
+def _ceil15(v: float) -> int:
+    """Up to the next quarter hour. Rounding UP spends margin, never safety."""
+    import math
+    return int(15 * math.ceil(v / 15))
+
+
+#: `measured` 2026-10-19. The binding projected ready time per day type under
+#: cron `0 0`, each from ITS OWN series. See the derivation above.
+READY_BINDING_MIN = {"weekday": 518.4, "weekend": 483.3}
+
+#: THE FALLBACK IN FORCE. Derived, per the arithmetic above -- not chosen, and
+#: not a percentile. `DEADLINE_PERCENTILES` below is kept as the historical
+#: percentile record and is NO LONGER the fallback: a symbol named
+#: "percentiles" holding a derived floor is the labelling defect this project
+#: has paid for most often.
+DEADLINE_FLOOR = {
+    # day type: (minutes, what it is, provenance)
+    "weekday": (
+        _ceil15(READY_BINDING_MIN["weekday"] + MIN_ACCEPTABLE_MARGIN_MIN),
+        "derived floor",
+        "ceil_15(ready_binding 08:38 + 60m registered) = 09:45; measured "
+        "2026-10-19, lateness n=7 attributed by headSha + duration n=78 by "
+        "day type; observed earliest weekday kickoff 09:30 over n=715 days, "
+        "so 15m of exposure remains on 1 day and ZERO exposure is unreachable "
+        "by 8.4 minutes"),
+    "weekend": (
+        _ceil15(READY_BINDING_MIN["weekend"] + MIN_ACCEPTABLE_MARGIN_MIN),
+        "derived floor",
+        "ceil_15(ready_binding 08:03 + 60m registered) = 09:15; measured "
+        "2026-10-19, lateness n=6 attributed by headSha + duration n=34 by "
+        "day type; observed earliest weekend kickoff 09:45 over n=375 days, "
+        "so exposure is ZERO with 30m to spare"),
 }
 
 #: Kept as documentation of what the filter means; the filter itself runs in
@@ -332,27 +464,26 @@ def format_prospective(m: dict) -> str:
 #: (weekday/holiday max 90m against weekday max 150m), so using the day-type
 #: number is the conservative choice rather than a convenient one.
 COVERAGE_EXPOSURE = {
-    "weekday": {"n": 715, "pos": 14, "p99": 75, "max": 150, "over60": 8},
-    "weekend": {"n": 375, "pos": 7, "p99": 15, "max": 30, "over60": 0},
+    "weekday": {"n": 715, "pos": 1, "p99": 0, "max": 15, "over60": 0},
+    "weekend": {"n": 375, "pos": 0, "p99": 0, "max": 0, "over60": 0},
 }
 
-#: THE DERIVED MINIMUM, and it is derived rather than chosen.
+#: RECOMPUTED 2026-10-19 UNDER THE DERIVED FLOOR, replacing the figures taken
+#: under 12:00 / 10:15. Same population, same definition, same phantom
+#: exclusion -- only the fallback changed:
 #:
-#: `MIN_ACCEPTABLE_MARGIN_MIN` (60) was registered on 2026-10-10 against THE
-#: DEADLINE, before any of this was computed, and it is deliberately NOT
-#: edited here -- retrofitting a pre-registered threshold to a later
-#: measurement is how a stated bound becomes a fitted one. Instead the
-#: exposure is added as its own term, so the requirement reads
+#:   constants            exposure>0   p99    max    >60m
+#:   12:00 / 10:15        21 days      45m    150m   8 days
+#:   09:45 / 09:15 (now)   1 day        0m     15m   0 days
 #:
-#:     margin >= MIN_ACCEPTABLE_MARGIN_MIN + COVERAGE_EXPOSURE[day_type]["p99"]
+#: **THE TARGET IS MET: zero days above 60 minutes, on every stratum** --
+#: weekday ordinary, weekday holiday, weekend ordinary and weekend holiday all
+#: read max 0m except weekday/ordinary, whose single 15m day is 2023-10-26.
 #:
-#: which is **135 minutes on a weekday and 75 on a weekend** against the p99,
-#: or 210/90 against the measured maximum. The p99 is the operating figure and
-#: the max is reported beside it, because a single 150-minute day in four
-#: years is a tail to know about rather than a budget to hold permanently.
-#:
-#: NEITHER FIGURE CREATES AN ALARM TODAY: the measured prospective margin is
-#: +225m, which clears 135 and 210 alike.
+#: THE TERM IS KEPT AT ZERO AND STILL PRINTED. A term that disappears when it
+#: is satisfied cannot be seen to have been satisfied, and the next person to
+#: widen the reference's coverage or move the floor needs to find the figure
+#: already on the line rather than discover that it used to be there.
 EFFECTIVE_MIN_MARGIN = {
     dt: MIN_ACCEPTABLE_MARGIN_MIN + v["p99"]
     for dt, v in COVERAGE_EXPOSURE.items()
@@ -613,7 +744,9 @@ def combined_deadline(day: _dt.date, ref: dict) -> dict:
         REFERENCE_COVERAGE_MEASURED
 
     dtype = day_type(day)
-    const_min, const_what, const_prov = DEADLINE_PERCENTILES[dtype]
+    # THE FLOOR, not the percentile record. Repointed 2026-10-19 when the
+    # fallback stopped being a percentile and became a derived value.
+    const_min, const_what, const_prov = DEADLINE_FLOOR[dtype]
     nc, nt = REFERENCE_COVERAGE_MEASURED
     out = {
         "serves": day.isoformat(),

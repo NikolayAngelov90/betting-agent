@@ -153,8 +153,36 @@ had two priced books at all. Odds collection only began in 2026-02.
 
 ## 3. Clean baseline — market vs model
 
-Walk-forward, five chronological cutoffs, 60-day windows, identical match set
-(n = 926 for 1X2).
+Walk-forward, 60-day windows, identical match set (n = 926 for 1X2).
+
+> **CORRECTED 2026-10-19 — THE FOLD COUNT WAS WRONG HERE.** This line read
+> "five chronological cutoffs". `CUTOFFS` holds five dates, but
+> `run_market` skips any whose training set is under 300 rows, and **three of
+> the five were skipped with an ENTIRELY EMPTY training set** — 2025-08-01,
+> 2025-11-01 and 2026-02-01 — because clean odds coverage only begins in
+> 2026-02. `measured` 2026-10-19 against the population as it stood on
+> 2026-08-07 (2,671 clean rows, against this manifest's 2,700 qualified):
+>
+> | cutoff | train | ran? |
+> |---|---|---|
+> | 2025-08-01 | **0** | skipped, empty train |
+> | 2025-11-01 | **0** | skipped, empty train |
+> | 2026-02-01 | **0** | skipped, empty train |
+> | 2026-05-01 | 1,401 | **ran** |
+> | 2026-07-01 | 2,258 | **ran** |
+>
+> **EFFECTIVE FOLDS: 2 of 5, and they are ADJACENT.** The real evaluation span
+> is **2026-05-01 … 2026-08-07, about one quarter** — not the twelve months
+> five chronological cutoffs imply. The figures below and the paired bootstrap
+> are unchanged and were never recomputed; what was wrong was the label.
+>
+> **What that does and does not undermine:** the paired bootstrap resamples
+> the **926 matched observations**, so its intervals stand as stated for that
+> population. What two adjacent folds cannot support is **temporal
+> generality** — "the model does not beat the market" is established here on
+> one quarter, inside the odds-collection era, and not across a season. No
+> figure moves and `BASELINE_REVISION` stays `b2`: this is a labelling
+> correction, not a re-run.
 
 | Baseline | LogLoss | Brier | ECE | Acc | n |
 |---|---|---|---|---|---|
