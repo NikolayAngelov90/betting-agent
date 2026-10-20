@@ -80,14 +80,19 @@ def test_the_measured_exposure_is_RECORDED_per_stratum():
     # belonged to the constant and not to the reference.
     assert set(sd.COVERAGE_EXPOSURE) == {"weekday", "weekend"}
     wd, we = sd.COVERAGE_EXPOSURE["weekday"], sd.COVERAGE_EXPOSURE["weekend"]
-    assert (wd["p99"], wd["max"], wd["n"], wd["over60"]) == (0, 15, 715, 0)
+    # RE-ANCHORED 2026-10-20: the deadline is the OBSERVED EARLIEST KICKOFF (weekday 09:30, weekend 09:45), not ceil_15(ready+60). The self-anchored floor was a TAUTOLOGY -- it made margin>=60 true by construction -- and freezing it against a live series breached 60 within a day when mean+3sd drifted +11.4m on one new observation.
+    # Exposure is now ZERO BY CONSTRUCTION on both strata: the deadline IS
+    # the observed minimum, so max(0, deadline - true) cannot be positive
+    # over the measured window. The 15-minute weekday residual existed
+    # only because the self-anchored floor sat ABOVE the minimum.
+    assert (wd["p99"], wd["max"], wd["n"], wd["over60"]) == (0, 0, 715, 0)
     assert (we["p99"], we["max"], we["n"], we["over60"]) == (0, 0, 375, 0)
     assert wd["over60"] == we["over60"] == 0, (
         "THE TARGET: zero days above 60 minutes, on every stratum")
-    assert wd["max"] == 15, (
-        "the weekday residual moved off 15m -- it is the single 2023-10-26 "
-        "day at 09:30 against a 09:45 floor, and zero exposure is unreachable "
-        "there by 8.4 minutes")
+    assert wd["max"] == 0, (
+        "a weekday exposure reappeared; the deadline is the observed "
+        "minimum, so this can only happen if the minimum was re-measured "
+        "lower without re-anchoring the deadline")
 
 
 def test_the_MINIMUM_is_DERIVED_from_the_tail_not_chosen():
@@ -111,46 +116,47 @@ def test_the_MINIMUM_is_DERIVED_from_the_tail_not_chosen():
     assert sd.EFFECTIVE_MIN_MARGIN == {"weekday": 60, "weekend": 60}
 
 
-def test_the_derived_minimum_CREATES_NO_ALARM_TODAY():
-    """Raising the requirement must be shown not to manufacture a finding.
+def test_the_deadline_now_FAILS_the_registered_60_AND_THAT_IS_THE_FINDING():
+    """RENAMED AND INVERTED 2026-10-20. It was
+    `test_the_derived_minimum_CREATES_NO_ALARM_TODAY`, and it passed because
+    the deadline was SELF-ANCHORED at `ceil_15(ready + 60)` -- which makes
+    "the margin clears 60" true by construction. A check that cannot fail is
+    not a check.
 
-    `measured`: the prospective margin is +225m binding, which clears 135 and
-    the max-case 210 alike.
+    Re-anchored to the OBSERVED EARLIEST KICKOFF, the arithmetic reports the
+    truth, `measured` 2026-10-20:
+
+        weekday  deadline 09:30   ready 08:49   margin **+40m**  vs 60
+        weekend  deadline 09:45   ready 08:03   margin +101.7m   clears
+
+    **19.8 minutes short on the weekday**, and the self-anchoring was hiding
+    15 of them. The registered 60 is NOT edited -- it was stated 2026-10-10
+    before any of this -- so the breach stands as a finding.
+
+    NO DEADLINE CHOICE CLEARS IT: the earliest kickoff is a fact and the ready
+    time is ours. The levers are an earlier cron or a faster run, and the
+    duration profile sized the second at ~7 min (injury loop) + ~7 min (Claude
+    review) + up to ~9 min (AF upsert) -- any two of which close 19.8 minutes.
     """
-    # `measured` 2026-10-19 AFTER the floor was tightened: the prospective
-    # margin is +67m, down from +225m under the 12:00 percentile, because the
-    # deadline moved 135 minutes earlier. It still clears the registered 60.
-    MEASURED_BINDING = 67
-    for dtype, m in sd.EFFECTIVE_MIN_MARGIN.items():
-        assert MEASURED_BINDING >= m, f"{dtype}: {MEASURED_BINDING} < {m}"
-    # ── AND IT DOES NOT COVER THE MAXIMUM, BY 8 MINUTES. STATED. ──────────
-    #
-    # `60 + max exposure` is 75m and the measured margin is 67m. So on the
-    # single worst day in the record -- 2023-10-26, truth 09:30 against a
-    # 09:45 floor -- the margin against the TRUE first kickoff is
-    # 570 - 518.4 = **51.6m**, which is **8.4 minutes short** of the
-    # registered 60.
-    #
-    # THIS IS THE SAME 8.4 MINUTES THE FLOOR'S DERIVATION FOUND, and it is
-    # not removable by ANY choice of floor: zero exposure needs the floor at
-    # or below 09:30, and a 60-minute margin needs it at or above 09:38. The
-    # window is empty. The only remedies are an EARLIER CRON or a FASTER RUN,
-    # neither of which is a deadline question.
-    #
-    # One day in 715, asserted rather than rounded away, so that moving the
-    # cron or the run time is a decision someone takes rather than a figure
-    # that quietly disappears.
-    worst = max(60 + e["max"] for e in sd.COVERAGE_EXPOSURE.values())
-    assert worst == 75, (
-        "the worst-case requirement moved off 60 + the 15m weekday maximum")
-    assert MEASURED_BINDING < worst, (
-        "the margin now covers the registered 60 PLUS the measured maximum "
-        "exposure -- a better state than the one recorded here, and it must "
-        "be re-measured and re-stated rather than assumed")
-    SHORTFALL = worst - MEASURED_BINDING
-    assert SHORTFALL == 8, (
-        f"the worst-day shortfall moved to {SHORTFALL}m; it was 8m "
-        f"(51.6m true margin against the registered 60)")
+    #: `measured` 2026-10-20: weekday ready_binding 529.8, deadline 570.
+    MEASURED_WEEKDAY_MARGIN = 40
+    assert sd.MIN_ACCEPTABLE_MARGIN_MIN == 60, (
+        "the registered minimum was edited to make the breach go away")
+    assert MEASURED_WEEKDAY_MARGIN < sd.EFFECTIVE_MIN_MARGIN["weekday"], (
+        "the weekday margin now clears the effective minimum -- better than "
+        "the state recorded on 2026-10-20, and it must be re-measured and "
+        "re-stated rather than assumed")
+    shortfall = sd.EFFECTIVE_MIN_MARGIN["weekday"] - MEASURED_WEEKDAY_MARGIN
+    assert shortfall == 20, (
+        f"the shortfall moved to {shortfall}m; it was 19.8 rounded to 20")
+
+    # the exposure term is ZERO and the trade moved into the margin
+    assert sd.COVERAGE_EXPOSURE["weekday"]["max"] == 0
+    assert sd.EFFECTIVE_MIN_MARGIN == {"weekday": 60, "weekend": 60}
+
+    # the rejected design is retained so nobody re-derives it
+    assert sd.REJECTED_SELF_ANCHORED_FLOOR["weekday"] == 9 * 60 + 45
+    assert "tautology" in sd.REJECTED_SELF_ANCHORED_FLOOR["why_rejected"]
 
 
 def test_the_RESIDUAL_is_printed_BESIDE_the_deadline_with_its_BASIS():
@@ -166,7 +172,7 @@ def test_the_RESIDUAL_is_printed_BESIDE_the_deadline_with_its_BASIS():
     assert "residual[" in line, "the residual is not printed"
     # PRINTED AT ZERO, which is the whole point: the figure must be visible
     # as SATISFIED rather than absent.
-    for part in ("p99=0m", "max=15m", "over60=0/715d",
+    for part in ("p99=0m", "max=0m", "over60=0/715d",
                  "effective minimum 60m", "60m registered + 0m p99",
                  "basis:", "measured 2026-10-19"):
         assert part in line, f"the residual line omits {part!r}:{chr(10)}{line}"

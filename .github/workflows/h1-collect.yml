@@ -79,8 +79,39 @@ on:
   # at 19:00 UTC on Thursday alone. A trajectory needs simultaneity inside a
   # 120-minute band, so the collection is weighted MIDWEEK, which is the
   # opposite of where the card is.
-  schedule:
-    - cron: '0 9 * * 2,3,4'
+  # ── SCHEDULE DISABLED 2026-10-20. THE WINDOW CLOSED 2026-10-17. ──────────
+  #
+  # THE EXPERIMENT IS CLOSED: n=4 of 39, floor 33, power 0.073, NO ANALYSIS.
+  # The reservation deactivated on 2026-10-17 — `h1_reservation(2026-10-20)`
+  # is 0 and `allocate()` reports `h1_reserved: 0`, `normal_ceiling: 350`.
+  #
+  # AND THE CRON KEPT FIRING. Run 39435238427 started 2026-10-20T13:59:38Z on
+  # `event: schedule`, and MEASURED at 16:13 UTC it had already claimed:
+  #
+  #     theoddsapi      used 334 / 450   remaining 16   updated 16:01:45
+  #     theoddsapi:h1   used  14 / 500                  updated 16:01:46
+  #
+  # The in-window attributed figure recorded on 2026-10-18 was **6** credits
+  # (ledger line 27192, "H1 ATTRIBUTED credits: 6 / bound 168"). So the
+  # POST-WINDOW LEAK IS **8 TheOddsAPI CREDITS**, and because the reservation
+  # is 0 they came out of the NORMAL pool — the one that funds tomorrow's
+  # picks, which had 16 credits left while this job still had ~1h50m to run.
+  #
+  # WHICH POOL: there is no H1 pool any more. `theoddsapi:h1` is an
+  # ATTRIBUTION counter, not an allocation — `remaining()` returns the same 16
+  # for `for_h1=True` and `for_h1=False`, so a closed experiment was spending
+  # the pricing pool.
+  #
+  # THE HEADER COMMENT ABOVE IS STALE and says so now: it reads "NO CRON YET —
+  # `workflow_dispatch` ONLY, DELIBERATELY", which was true until `d8df667`
+  # added this cron for the collection loop. It was never disabled when the
+  # window closed, and the reservation-guard revert (87 refs / 31 assertions /
+  # 9 files) did not touch it — the trigger and the guard are separate things,
+  # and only the guard was reverted.
+  #
+  # `workflow_dispatch` is KEPT so the 2026-11-01 re-run decision can be
+  # executed without a push. RE-ENABLE CONDITION: that decision, taken
+  # deliberately, with a fresh pre-registration — not a resumption of this one.
 
   workflow_dispatch:
     inputs:

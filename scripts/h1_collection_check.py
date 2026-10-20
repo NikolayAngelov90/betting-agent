@@ -62,6 +62,19 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 TARGET_N = 39                 #: stop condition, upper end of the 33-39 band
 CREDIT_CEILING = 200          #: the other stop condition, whichever comes first
 _H1_WINDOW_FROM = '2026-10-09'   #: the reservation window's start, for the DID_NOT_START message
+#: THE WINDOW'S END, AND IT CLOSES THE POPULATION. Added 2026-10-20 after a
+#: scheduled collection run fired THREE DAYS PAST the window and wrote rows.
+#:
+#: `load_observations` had only a lower bound, so `h1_analysis` -- whose
+#: `--since` defaults to 2026-10-01 -- would have counted anything collected
+#: afterwards. **n is 4 and the analysis is closed**; a trajectory collected
+#: after the pre-registered window is not evidence for it, and post-window data
+#: entering a closed experiment's count is how a dead result becomes a live one
+#: by accident. The analysis now passes this as `until`, always.
+#:
+#: EXCLUSIVE, matching the pre-registration: the window is
+#: 2026-10-09 -> 2026-10-17 exclusive.
+H1_WINDOW_TO = '2026-10-17'
 MIN_GAP_MINUTES = 30          #: separation
 MAX_INTERVAL_RATIO = 2.0      #: comparability of the two intervals
 OVERROUND_LO = 1.005          #: below this a book is not pricing a real market
@@ -214,7 +227,8 @@ def in_band(value: Optional[float]) -> bool:
 
 # ── THE QUERY ────────────────────────────────────────────────────────────────
 
-def load_observations(session, since: datetime) -> Tuple[List[dict], dict]:
+def load_observations(session, since: datetime,
+                      until: datetime = None) -> Tuple[List[dict], dict]:
     """Pre-kickoff, non-phantom observations that clear the overround band.
 
     Returns `(observations, dropped)` — the counts of what was excluded and
@@ -248,9 +262,10 @@ def load_observations(session, since: datetime) -> Tuple[List[dict], dict]:
         FROM odds_snapshots o
         JOIN matches m ON m.id = o.match_id
         WHERE o.observed_at >= :since
+          AND (:until IS NULL OR o.observed_at < :until)
           AND m.training_exclusion_reason IS NULL
           AND o.observed_at < m.match_date
-    """), {"since": since}).fetchall()
+    """), {"since": since, "until": until}).fetchall()
 
     # ── COERCE THE INSTANT TO A DATETIME (added 2026-10-10) ─────────────────
     #

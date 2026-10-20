@@ -50,6 +50,7 @@ from scripts.h1_collection_check import (
     MAX_INTERVAL_RATIO,
     MIN_GAP_MINUTES,
     attach_fixture_identity,
+    H1_WINDOW_TO,
     load_observations,
     provider_of,
     qualifying_triple,
@@ -345,13 +346,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     with db.get_session() as session:
-        observations, dropped = load_observations(session, since)
+        # ── THE POPULATION IS CLOSED. ALWAYS. 2026-10-20. ─────────────
+        #
+        # `--since` could only ever narrow the lower edge; there was NO upper
+        # bound, so this analysis would have counted rows collected after the
+        # registered window -- and a scheduled collection run fired on
+        # 2026-10-20, three days past it, and wrote rows. n is 4, the analysis
+        # is closed, and the bound is passed here rather than remembered at
+        # the call site.
+        until = datetime.fromisoformat(H1_WINDOW_TO)
+        observations, dropped = load_observations(session, since, until=until)
         attach_fixture_identity(session, observations)
         picked = picked_selections(session)
         trajectories = build_trajectories(observations)
         actionable = one_price_per_fixture(trajectories, picked)
 
-    print(f"H1 ANALYSIS DRY RUN — observations since {since:%Y-%m-%d}")
+    print(f"H1 ANALYSIS DRY RUN — observations in the REGISTERED WINDOW "
+          f"{since:%Y-%m-%d} .. {H1_WINDOW_TO} (exclusive)")
+    print(f"   the upper bound is not optional: anything collected after "
+          f"{H1_WINDOW_TO} is outside the closed experiment and cannot raise n")
     print("")
     print("STEP 1  load, with every contamination control applied")
     print(f"   in-band pre-kickoff observations     : {len(observations)}")

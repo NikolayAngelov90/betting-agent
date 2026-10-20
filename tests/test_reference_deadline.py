@@ -87,11 +87,10 @@ def test_POSITIVE_1_good_friday_2026_the_reference_matches_the_truth_exactly():
     assert ref["state"] == sd.REF_OK
     assert ref["min"] == 11 * 60 + 30, "the reference's own value moved"
     # SINCE THE FLOOR WAS DERIVED (09:45) IT BINDS BELOW THE REFERENCE.
-    assert c["deadline_min"] == 9 * 60 + 45
+    # RE-ANCHORED 2026-10-20 to the observed earliest kickoff: 09:30.
+    assert c["deadline_min"] == 9 * 60 + 30
     assert c["bound_by"] == "CONSTANT"
-    # and the deadline is now 105 minutes INSIDE the measured truth of 11:30,
-    # where under the 12:00 percentile it sat 30 minutes after it
-    assert 11 * 60 + 30 - c["deadline_min"] == 105
+    assert 11 * 60 + 30 - c["deadline_min"] == 120
 
 
 def test_POSITIVE_2_easter_monday_2026_tightens_by_90_min():
@@ -103,7 +102,7 @@ def test_POSITIVE_2_easter_monday_2026_tightens_by_90_min():
     # THE 15-MINUTE RESIDUAL IS GONE ON THIS DATE. The floor 09:45 is below
     # the truth of 10:15, so the exposure here is ZERO -- where under the
     # 12:00 percentile the reference's 10:30 left 15 minutes of it.
-    assert c["deadline_min"] == 9 * 60 + 45
+    assert c["deadline_min"] == 9 * 60 + 30
     assert c["bound_by"] == "CONSTANT"
     TRUTH = 10 * 60 + 15
     assert max(0, c["deadline_min"] - TRUTH) == 0
@@ -115,7 +114,7 @@ def test_POSITIVE_3_good_friday_2027_SIMULATED_input_clears():
     reached D+32."""
     ref, c = _combined(dt.date(2027, 4, 2), ("ELC", "2027-04-02T11:30:00Z"))
     assert ref["min"] == 11 * 60 + 30
-    assert c["deadline_min"] == 9 * 60 + 45 and c["bound_by"] == "CONSTANT"
+    assert c["deadline_min"] == 9 * 60 + 30 and c["bound_by"] == "CONSTANT"
 
 
 def test_POSITIVE_4_easter_monday_2027_SIMULATED_input_ALARMS_under_0_4():
@@ -125,7 +124,7 @@ def test_POSITIVE_4_easter_monday_2027_SIMULATED_input_ALARMS_under_0_4():
     """
     ref, c = _combined(dt.date(2027, 4, 5), ("SA", "2027-04-05T10:30:00Z"))
     assert ref["min"] == 10 * 60 + 30
-    assert c["deadline_min"] == 9 * 60 + 45
+    assert c["deadline_min"] == 9 * 60 + 30
 
     # THE ALARM IS NOW DRIVEN BY THE FLOOR, NOT THE REFERENCE, AND THE FLOOR
     # IS TIGHTER -- so under the `0 4` regime it alarms on EVERY weekday, not
@@ -149,13 +148,13 @@ def test_NEGATIVE_1_ordinary_weekday_the_CONSTANT_binds():
     it. The deadline stays 12:00 — conservative, and 285 min inside the
     measured truth of 16:45."""
     ref, c = _combined(dt.date(2026, 9, 17), ("PD", "2026-09-17T17:00:00Z"))
-    assert c["deadline_min"] == 9 * 60 + 45        # the derived floor
+    assert c["deadline_min"] == 9 * 60 + 30        # the observed minimum
     assert c["bound_by"] == "CONSTANT"
     assert "UPPER BOUND" in c["basis"], (
         "the basis does not say why a later reference cannot relax the "
         "constant")
     # 420 minutes inside the measured truth of 16:45, against 285 before
-    assert 16 * 60 + 45 - c["deadline_min"] == 420
+    assert 16 * 60 + 45 - c["deadline_min"] == 435
 
 
 def test_NEGATIVE_2_ordinary_weekend_stays_clear_and_is_IMPROVED():
@@ -167,7 +166,7 @@ def test_NEGATIVE_2_ordinary_weekend_stays_clear_and_is_IMPROVED():
     assert ref["min"] == 10 * 60
     # The weekend floor 09:15 is below the reference's 10:00 AND below the
     # measured truth of 10:00, so the exposure is zero with 45m to spare.
-    assert c["deadline_min"] == 9 * 60 + 15 and c["bound_by"] == "CONSTANT"
+    assert c["deadline_min"] == 9 * 60 + 45 and c["bound_by"] == "CONSTANT"
     assert max(0, c["deadline_min"] - 10 * 60) == 0
 
 
@@ -340,7 +339,7 @@ def test_every_run_reports_WHICH_leagues_were_covered_and_which_were_not():
         fc.REFERENCE_LEAGUES), "present + absent does not account for the map"
 
     line = sd.format_reference_deadline(c)
-    for part in ("serves=2026-10-20", "deadline=09:45", "bound_by=CONSTANT",
+    for part in ("serves=2026-10-20", "deadline=09:30", "bound_by=CONSTANT",
                  "coverage=9 of 30", "present=2", "absent=7", "usable=2",
                  "other_day"):
         assert part in line, f"the report line omits {part!r}: {line}"

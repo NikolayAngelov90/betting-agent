@@ -178,38 +178,91 @@ OBSERVED_EARLIEST_MIN = {
 # NOT A COHORT EVENT: the deadline is read only by margin reporting and
 # alerting. No pick, price or probability depends on it.
 
-def _ceil15(v: float) -> int:
-    """Up to the next quarter hour. Rounding UP spends margin, never safety."""
-    import math
-    return int(15 * math.ceil(v / 15))
+# `_ceil15` was DELETED 2026-10-20 with the self-anchored floor: it existed
+# only to round `ready_binding + 60` up to a quarter hour, and the
+# world-anchored deadline is a measured kickoff, which needs no rounding.
 
 
-#: `measured` 2026-10-19. The binding projected ready time per day type under
-#: cron `0 0`, each from ITS OWN series. See the derivation above.
-READY_BINDING_MIN = {"weekday": 518.4, "weekend": 483.3}
+#: `READY_BINDING_MIN` was DELETED 2026-10-20 with the self-anchored floor.
+#: It held 518.4 / 483.3 -- the ready times measured on 2026-10-19 -- and the
+#: world-anchored deadline does not read them. Keeping a stale measured
+#: constant that nothing consumes is the defect this project deletes: by the
+#: next morning the weekday figure was already 529.8, and a frozen 518.4
+#: sitting in the module would have been quoted by someone.
+#: The live figures come from `collect_lag_series_by_daytype()` at use.
 
-#: THE FALLBACK IN FORCE. Derived, per the arithmetic above -- not chosen, and
-#: not a percentile. `DEADLINE_PERCENTILES` below is kept as the historical
-#: percentile record and is NO LONGER the fallback: a symbol named
-#: "percentiles" holding a derived floor is the labelling defect this project
-#: has paid for most often.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RE-ANCHORED 2026-10-20: THE DEADLINE IS A FACT ABOUT FOOTBALL, NOT ABOUT US
+#
+#     A deadline derived from our own readiness makes the margin a tautology.
+#
+# WHAT I SHIPPED YESTERDAY WAS WRONG, and it failed on its first real exposure.
+# `floor = ceil_15(ready_binding + MIN_ACCEPTABLE_MARGIN_MIN)` has two defects:
+#
+#   1. IT IS A TAUTOLOGY. If the deadline is defined as `ready + 60`, then
+#      `margin >= 60` is true BY CONSTRUCTION at the instant of derivation.
+#      Re-deriving it each run would make the prospective alarm **unable to
+#      fire** -- a vacuous filter, the shape this project names VAC-1.
+#   2. IT WAS FROZEN AGAINST A MOVING INPUT. Deriving once from a live series
+#      and then hard-coding the result is the stale-literal defect fixed three
+#      days ago in the `LIVE 0 4 * * 1-5` cron label. Measured: the weekday
+#      lateness series went n=7 -> n=8 overnight and `mean+3sd` moved
+#      417.5 -> 428.9, because the new point LOWERED the mean (255.2 -> 241.3)
+#      and RAISED the sd (54.1 -> 62.5), and 3sd dominates. `ready_binding`
+#      drifted +11.4m and the margin fell +66.6 -> **+55.2m**, breaching the
+#      registered 60 and reddening the audit three times.
+#
+#      I had flagged the instability and got the DIRECTION wrong: the note said
+#      the floor "will move EARLIER as the series grows". It moved later.
+#
+# SO THE DEADLINE IS ANCHORED TO THE OBSERVED EARLIEST KICKOFF -- the world --
+# and the margin becomes a real measurement again:
+#
+#   day type   deadline            ready (measured)   margin
+#   weekday    09:30 (2023-10-26)  08:49              **+40.2m  FAILS 60**
+#   weekend    09:45 (2024-10-19)  08:03              +101.7m   clears
+#
+# AND THAT BREACH IS THE TRUTH, NOT A BUG. Under the self-anchored floor the
+# margin read +55.2m; world-anchored it reads **+40.2m, 19.8 minutes short of
+# the registered 60.** The self-anchoring was hiding 15 minutes of it. The
+# registered 60 is NOT edited -- it was stated on 2026-10-10 before any of
+# this -- so the breach stands as a finding.
+#
+# THE CLEARING ACTION IS NOT A DEADLINE CHOICE. No anchoring clears it: the
+# earliest kickoff is a fact and the ready time is ours. The levers are an
+# EARLIER CRON or a FASTER RUN, and the duration profile already sized the
+# second: ~7 min in the sequential injury loop, ~7 min in the sequential Claude
+# review, up to ~9 min in the AF upsert loop. **Any two of those close 19.8
+# minutes.** That is the decision, and it is Niki's.
+#
+# EXPOSURE BECOMES ZERO BY CONSTRUCTION. The deadline now IS the observed
+# minimum, so `max(0, deadline - true_earliest)` is 0 for every day in the
+# measured window -- the coverage-exposure term is satisfied rather than
+# traded, and it is still printed.
 DEADLINE_FLOOR = {
     # day type: (minutes, what it is, provenance)
     "weekday": (
-        _ceil15(READY_BINDING_MIN["weekday"] + MIN_ACCEPTABLE_MARGIN_MIN),
-        "derived floor",
-        "ceil_15(ready_binding 08:38 + 60m registered) = 09:45; measured "
-        "2026-10-19, lateness n=7 attributed by headSha + duration n=78 by "
-        "day type; observed earliest weekday kickoff 09:30 over n=715 days, "
-        "so 15m of exposure remains on 1 day and ZERO exposure is unreachable "
-        "by 8.4 minutes"),
+        OBSERVED_EARLIEST_MIN["weekday"], "observed earliest kickoff",
+        "09:30 on 2023-10-26, bulgaria/efbet-league; measured 2026-10-20 over "
+        "n=715 weekday days, the 30 configured leagues, phantoms excluded. A "
+        "bound for the measured window and nothing more -- re-measure as the "
+        "record grows, and a longer window can only lower it"),
     "weekend": (
-        _ceil15(READY_BINDING_MIN["weekend"] + MIN_ACCEPTABLE_MARGIN_MIN),
-        "derived floor",
-        "ceil_15(ready_binding 08:03 + 60m registered) = 09:15; measured "
-        "2026-10-19, lateness n=6 attributed by headSha + duration n=34 by "
-        "day type; observed earliest weekend kickoff 09:45 over n=375 days, "
-        "so exposure is ZERO with 30m to spare"),
+        OBSERVED_EARLIEST_MIN["weekend"], "observed earliest kickoff",
+        "09:45 on 2024-10-19, bulgaria/efbet-league; measured 2026-10-20 over "
+        "n=375 weekend days, same population and exclusions"),
+}
+
+#: RETAINED for the record: what the self-anchored derivation produced, and
+#: what it cost. Nothing computes from this -- it is here so the next reader
+#: meets the rejected design rather than re-deriving it.
+REJECTED_SELF_ANCHORED_FLOOR = {
+    "weekday": 9 * 60 + 45, "weekend": 9 * 60 + 15,
+    "why_rejected": "ceil_15(ready_binding + 60) is a tautology -- it makes "
+                    "the margin >= 60 by construction -- and freezing it "
+                    "against a live series breached 60 within one day when "
+                    "mean+3sd drifted +11.4m on a single new observation",
 }
 
 #: Kept as documentation of what the filter means; the filter itself runs in
@@ -464,26 +517,32 @@ def format_prospective(m: dict) -> str:
 #: (weekday/holiday max 90m against weekday max 150m), so using the day-type
 #: number is the conservative choice rather than a convenient one.
 COVERAGE_EXPOSURE = {
-    "weekday": {"n": 715, "pos": 1, "p99": 0, "max": 15, "over60": 0},
+    "weekday": {"n": 715, "pos": 0, "p99": 0, "max": 0, "over60": 0},
     "weekend": {"n": 375, "pos": 0, "p99": 0, "max": 0, "over60": 0},
 }
 
-#: RECOMPUTED 2026-10-19 UNDER THE DERIVED FLOOR, replacing the figures taken
-#: under 12:00 / 10:15. Same population, same definition, same phantom
-#: exclusion -- only the fallback changed:
+#: RECOMPUTED 2026-10-20 WHEN THE DEADLINE WAS RE-ANCHORED TO THE WORLD.
 #:
-#:   constants            exposure>0   p99    max    >60m
-#:   12:00 / 10:15        21 days      45m    150m   8 days
-#:   09:45 / 09:15 (now)   1 day        0m     15m   0 days
+#:   constants                     exposure>0   p99    max    >60m
+#:   12:00 / 10:15 (percentiles)    21 days      45m   150m   8 days
+#:   09:45 / 09:15 (self-anchored)   1 day        0m    15m   0 days
+#:   09:30 / 09:45 (observed min)    0 days       0m     0m   0 days
 #:
-#: **THE TARGET IS MET: zero days above 60 minutes, on every stratum** --
-#: weekday ordinary, weekday holiday, weekend ordinary and weekend holiday all
-#: read max 0m except weekday/ordinary, whose single 15m day is 2023-10-26.
+#: **ZERO BY CONSTRUCTION**, because the deadline now IS the observed earliest
+#: kickoff: `max(0, deadline - true_earliest)` cannot be positive over the
+#: measured window. The 15-minute weekday residual that the self-anchored floor
+#: carried is gone -- it existed only because that floor sat 15 minutes ABOVE
+#: the observed minimum in order to manufacture a 60-minute margin.
 #:
-#: THE TERM IS KEPT AT ZERO AND STILL PRINTED. A term that disappears when it
-#: is satisfied cannot be seen to have been satisfied, and the next person to
-#: widen the reference's coverage or move the floor needs to find the figure
-#: already on the line rather than discover that it used to be there.
+#: THE TERM IS STILL PRINTED AT ZERO. It is satisfied, not absent, and the next
+#: person to widen the reference's coverage or re-measure the minimum needs to
+#: find the figure already on the line. A term that disappears when satisfied
+#: cannot be seen to have been satisfied.
+#:
+#: AND THE TRADE MOVED, IT DID NOT VANISH: the exposure is zero and the MARGIN
+#: now fails instead -- +40.2m against the registered 60. That is the honest
+#: accounting. The self-anchored floor bought a passing margin by accepting
+#: exposure and by defining the margin in terms of itself.
 EFFECTIVE_MIN_MARGIN = {
     dt: MIN_ACCEPTABLE_MARGIN_MIN + v["p99"]
     for dt, v in COVERAGE_EXPOSURE.items()

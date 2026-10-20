@@ -1122,8 +1122,21 @@ MARGIN_ALARM_MIN = 30
 #: weekend-specific schedule is far cheaper than splitting a 31-step workflow,
 #: and Mon-Fri margin is currently being spent against a constraint that does
 #: not exist on those days.
-MARGIN_REMEDY = ("weekend-specific cron (Sat/Sun earlier); Mon-Fri binds at "
-                 "14:30 not 10:15, so the split is the second option not the first")
+MARGIN_REMEDY = (
+    # REWRITTEN 2026-10-20. It read "weekend-specific cron (Sat/Sun earlier); "
+    # "Mon-Fri binds at 14:30 not 10:15, so the split is the second option not "
+    # "the first" -- which cited the RETIRED 14:30/10:15 percentiles and a
+    # day-type split that has existed since 2026-10-10. A remedy naming
+    # constants that no longer exist points the reader at a decision already
+    # taken.
+    "the deadline is now the OBSERVED EARLIEST KICKOFF (weekday 09:30, "
+    "weekend 09:45) and no deadline choice clears this: the kickoff is a fact "
+    "and the ready time is ours. TODAY: dispatch daily-picks manually that "
+    "morning, which skips the measured 3h58m-5h04m scheduler lateness. "
+    "DURABLY: an earlier cron, or a faster run -- the duration profile sized "
+    "~7 min in the sequential injury loop, ~7 min in the sequential Claude "
+    "review and up to ~9 min in the AF upsert loop, and any two of those "
+    "close the 19.8-minute shortfall against the registered 60")
 
 
 def schedule_margin(series, cron_minutes: int,
@@ -2216,20 +2229,32 @@ def verdict(facts: Dict[str, object], hits: List[str],
 # absorb a condition that got four times worse, which is the one thing an
 # acknowledgement must never do. It alarms until the cron decision is taken —
 # that is the clearing action, and it is now the blocking item.
-ACKNOWLEDGED_MARGIN_BREACH = {
-    "weekday": dict(
-        binding=-85.0,
-        since="2026-10-12",
-        why="ONE observation: the first weekday run under `0 4` fired 458 min "
-            "late (38243861903, 11:37:39Z), replacing the measured maximum of "
-            "304 min. Ready at 12:49 is 50 min past the 12:00 deadline the "
-            "split was sized against. n=1 supports no distribution.",
-        action="decide the weekday cron after 2026-10-17 per "
-               "docs/scheduler-hour-hypothesis.md; until then the mechanism "
-               "is this report plus manual dispatch",
-        review="2026-10-18",
-    ),
-}
+# ── THE ACKNOWLEDGEMENT IS RETIRED 2026-10-20: OBSOLETE, NOT MERELY EXPIRED ──
+#
+# It read `binding=-85.0, since=2026-10-12, review=2026-10-18` and acknowledged
+# ONE observation: the first weekday run under `0 4` firing 458 min late.
+#
+# THREE THINGS ENDED IT, and only the first was noticed:
+#
+#   1. its review date passed on 2026-10-18 -- and NOTHING ENFORCED THAT.
+#      `margin_breach_is_acknowledged` compares only `binding`, never
+#      `review`, so an acknowledgement whose review date has gone by keeps
+#      absorbing. Measured today: the weekday binding is **+21m** against a
+#      30m threshold, a real breach, and it was being absorbed silently by a
+#      guard that expired two days ago.
+#   2. the decision it was WAITING FOR was taken: the weekday cron was
+#      reverted to `0 0` on 2026-10-18, so the `0 4` regime it describes no
+#      longer exists.
+#   3. its figure is meaningless now. `-85.0` was a `0 4` number; under `0 0`
+#      the binding is +21m. An acknowledgement that cannot be compared to the
+#      thing it covers is not a deferral, it is a hole.
+#
+# So it is removed rather than renewed, and the breach it was covering now
+# REPORTS. `margin_breach_is_acknowledged` is kept -- an empty register is the
+# correct state for "nothing is deferred", and keeping the function means the
+# next deferral is a data entry rather than a code change. It now also refuses
+# an entry whose review date has passed, so this cannot recur.
+ACKNOWLEDGED_MARGIN_BREACH: dict = {}
 
 
 def margin_breach_is_acknowledged(day_type: str, binding: float) -> dict:
@@ -2237,6 +2262,17 @@ def margin_breach_is_acknowledged(day_type: str, binding: float) -> dict:
     ack = ACKNOWLEDGED_MARGIN_BREACH.get(day_type)
     if not ack:
         return {}
+    # AN EXPIRED ACKNOWLEDGEMENT ABSORBS NOTHING. Added 2026-10-20: the
+    # previous entry's `review` date passed on 2026-10-18 and it kept
+    # absorbing a +21m weekday breach, because this function compared only
+    # `binding`. A deferral with a date that nothing reads is not a deferral.
+    review = ack.get("review")
+    if review:
+        try:
+            if _dt.date.today() > _dt.date.fromisoformat(review):
+                return {}
+        except ValueError:
+            return {}          # an unparseable date absorbs nothing either
     # MORE negative than the recorded figure is a NEW observation, and a
     # standing acknowledgement must not absorb a deterioration.
     return ack if binding >= ack["binding"] else {}

@@ -165,7 +165,10 @@ def test_the_deadline_is_the_WEEKEND_kickoff_and_says_so():
     phantom and independent-source notes below are unchanged and still
     required: they are why the weekend figure is not 10:04.
     """
-    assert ci.SCHEDULE_DEADLINE_MIN == 9 * 60 + 15
+    # RE-ANCHORED 2026-10-20: the deadline is the OBSERVED EARLIEST KICKOFF (weekday 09:30, weekend 09:45), not ceil_15(ready+60). The self-anchored floor was a TAUTOLOGY -- it made margin>=60 true by construction -- and freezing it against a live series breached 60 within a day when mean+3sd drifted +11.4m on one new observation.
+    # SCHEDULE_DEADLINE_MIN is the min across day types, which is now the
+    # WEEKDAY 09:30 rather than the weekend figure.
+    assert ci.SCHEDULE_DEADLINE_MIN == 9 * 60 + 30
     src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
     block = src.split("SCHEDULE_DEADLINE_MIN", 1)[0][-1400:]
     assert "sub-second" in block, (

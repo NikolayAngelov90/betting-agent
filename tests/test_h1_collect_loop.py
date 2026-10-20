@@ -327,38 +327,50 @@ def test_it_has_its_OWN_concurrency_group():
         "job will delay the card")
 
 
-def test_the_cron_COMPENSATES_for_the_measured_scheduler_lateness():
-    """A cron is a request for a start time, not a start time.
+def test_the_H1_SCHEDULE_IS_DISABLED_and_the_cron_rationale_is_HISTORY():
+    """RETIRED-AND-REPLACED 2026-10-20. It asserted that `0 9` compensates for
+    the measured 3h58m-5h04m scheduler lateness so the 120-minute band lands
+    on the 19:00 UTC European slot. That reasoning was correct and is now
+    history: **the schedule is gone.**
 
-    MEASURED 2026-10-10: this repo's crons fire 3h58m-5h04m late (mean 4h31m,
-    sd 18.2, n=9). The band a job observes is only 120 minutes wide, so the
-    cron must be set EARLY by roughly the mean delay. `0 9` targets the 19:00
-    UTC European slot: start lands 12:58-14:04 against a required
-    [13:00, 15:00).
+    WHY. The window closed 2026-10-17 and the reservation deactivated
+    (`h1_reservation` returns 0, `allocate()` reports `h1_reserved: 0`), but
+    the cron kept firing. Run 39435238427 started 2026-10-20T13:59:38Z on
+    `event: schedule` and, measured at 16:13, had claimed:
 
-    THE TARGET IS IN UTC, and it was 22:00 for three hours on 2026-10-10
-    because the density probe reads Flashscore pages that render in
-    Europe/Kyiv (UTC+3). Verified against the production `matches` table, which
-    stores UTC. A cron set to the local figure would have opened its band AFTER
-    kickoff.
+        theoddsapi     used 334 / 450   remaining 16
+        theoddsapi:h1  used  14 / 500   (6 in-window, recorded 2026-10-18)
+
+    so **8 TheOddsAPI credits leaked post-window from the NORMAL pool** -- the
+    one that funds tomorrow's picks -- because with the reservation at 0 there
+    is no H1 pool to draw on. `remaining()` returns the same 16 for
+    `for_h1=True` and `for_h1=False`.
+
+    The run was cancelled before its third round claimed (~4 more credits
+    saved, verified: the budget did not move after 16:01:45).
+
+    `workflow_dispatch` is retained for the 2026-11-01 re-run decision.
     """
-    _d, on, _job = _wf()
-    crons = [c["cron"] for c in on["schedule"]]
-    assert crons == ["0 9 * * 2,3,4"], crons
-    hour = int(crons[0].split()[1])
-    # the target kickoff slot, and the start window the band requires
-    target_ko = 19 * 60   # 19:00 UTC == 22:00 Europe/Kyiv
-    need_lo = target_ko - 360
-    need_hi = target_ko - (h1c.H1_ROUNDS - 1) * h1c.H1_GAP_MINUTES
-    start_lo = hour * 60 + (3 * 60 + 58)
-    start_hi = hour * 60 + (5 * 60 + 4)
-    overlap = min(start_hi, need_hi) - max(start_lo, need_lo)
-    assert overlap > 0, (
-        f"the measured start range {start_lo}-{start_hi} does not intersect "
-        f"the required {need_lo}-{need_hi} — the cron cannot hit the band")
-    assert overlap / (start_hi - start_lo) >= 0.9, (
-        f"only {overlap / (start_hi - start_lo):.0%} of the measured lateness "
-        f"range lands inside the band")
+    import pathlib
+
+    import yaml
+
+    wf = yaml.safe_load(pathlib.Path(".github/workflows/h1-collect.yml")
+                        .read_text(encoding="utf-8"))
+    on = wf.get("on") or wf.get(True)
+    assert "schedule" not in on, (
+        "H1 is scheduled again. Its window closed 2026-10-17 and a scheduled "
+        "run spent 8 credits from the normal pricing pool three days later. "
+        "Re-enabling needs the 2026-11-01 decision and a fresh "
+        "pre-registration -- not a resumption of the closed experiment.")
+    assert "workflow_dispatch" in on, (
+        "dispatch was removed too, so the re-run decision cannot be executed "
+        "without a push")
+    src = pathlib.Path(".github/workflows/h1-collect.yml").read_text(
+        encoding="utf-8")
+    for part in ("SCHEDULE DISABLED 2026-10-20", "8 TheOddsAPI CREDITS",
+                 "normal_ceiling: 350", "39435238427"):
+        assert part in src, f"the disable no longer records {part!r}"
 
 
 def test_the_scheduled_path_pins_the_MEASURED_league_set():

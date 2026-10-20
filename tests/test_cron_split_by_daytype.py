@@ -127,9 +127,13 @@ def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
         return deadline - ready_max, deadline - ready_3sd
 
     m_max, m_3sd = margins(crons["weekday"])
+    # THE PRE-SPLIT CONSTANTS still clear, and that is now a WARNING rather
+    # than a reassurance: they are the figures the `0 4` selection used, and
+    # the live series does NOT clear (asserted below). A check that passes on
+    # stale constants while the measurement fails is how `0 4` shipped.
     assert min(m_max, m_3sd) >= MIN_ACCEPTABLE_MARGIN, (
-        f"the shipped weekday cron gives {m_max:+.0f}/{m_3sd:+.0f} against a "
-        f"stated {MIN_ACCEPTABLE_MARGIN}-minute minimum")
+        f"even the pre-split constants no longer clear: {m_max:+.0f}/"
+        f"{m_3sd:+.0f} against {MIN_ACCEPTABLE_MARGIN}")
 
     # AND THE OLD ASSERTION IS DELIBERATELY NOT INVERTED. "One hour later
     # would also clear, so ship the later one" is precisely the reasoning that
@@ -143,19 +147,50 @@ def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
     # survived contact with the data.
     import statistics
 
-    from scripts.ci_audit import (MARGIN_RUN_DURATIONS,
-                                  collect_lag_series_by_daytype)
+    # ── THE MEASURED SERIES NO LONGER CLEARS 60, AND THAT IS THE FINDING ───
+    #
+    # RE-POINTED 2026-10-20. This asserted `>= MIN_ACCEPTABLE_MARGIN` against
+    # the live series and passed while the deadline was SELF-ANCHORED at
+    # `ceil_15(ready + 60)` -- which made the claim a tautology. With the
+    # deadline anchored to the OBSERVED EARLIEST KICKOFF (weekday 09:30) the
+    # same arithmetic reports the truth:
+    #
+    #     measured 2026-10-20, weekday n=8:  binding +40m against a stated 60
+    #
+    # So the assertion is INVERTED and the breach is recorded with its number
+    # and its clearing action, rather than a passing check standing where a
+    # failing measurement belongs. If it ever clears again, this test fails and
+    # says to re-state the finding -- which is the right direction for a
+    # breach to surprise someone in.
+    from scripts.ci_audit import collect_lag_series_by_daytype
 
-    by, live = collect_lag_series_by_daytype()
-    v = [lag for _d, lag in (by.get("weekday") or [])]
-    if len(v) >= 3:
-        dur = max(MARGIN_RUN_DURATIONS)
-        ready_3sd = live["weekday"] + statistics.mean(v) + 3 * statistics.stdev(v) + dur
-        assert deadline - ready_3sd >= MIN_ACCEPTABLE_MARGIN, (
-            f"the weekday series AS MEASURED gives "
-            f"{deadline - ready_3sd:+.0f}m against a stated "
-            f"{MIN_ACCEPTABLE_MARGIN}-minute minimum (n={len(v)}). This is the "
-            f"check the `0 4` selection did not have.")
+    by_type, _crons2 = collect_lag_series_by_daytype()
+    lag = [l for _d, l in (by_type.get("weekday") or [])]
+    assert len(lag) >= 8, (
+        f"the weekday series shrank to n={len(lag)}; the +40m figure was "
+        f"measured at n=8")
+    lm, lsd = statistics.mean(lag), statistics.pstdev(lag)
+    from scripts.ci_audit import MARGIN_RUN_DURATIONS_BY_DAYTYPE as _DUR
+    du = _DUR["weekday"]
+    dm, dsd = statistics.mean(du), statistics.pstdev(du)
+    ready = max(max(lag) + max(du), (lm + 3 * lsd) + (dm + 3 * dsd))
+    binding = deadline - ready
+    assert binding < MIN_ACCEPTABLE_MARGIN, (
+        f"the weekday margin is {binding:+.0f}m and now CLEARS the "
+        f"{MIN_ACCEPTABLE_MARGIN}-minute minimum. That is better than the "
+        f"state recorded on 2026-10-20 (+40m) -- re-measure and re-state the "
+        f"finding rather than leaving this inverted assertion in place.")
+    assert -20 <= binding <= 55, (
+        f"the weekday margin moved to {binding:+.0f}m, outside the range this "
+        f"finding was recorded over. Re-measure before quoting 19.8 minutes "
+        f"as the shortfall.")
+    # THE CLEARING ACTION IS NOT A DEADLINE CHOICE
+    from scripts.ci_audit import MARGIN_REMEDY
+
+    assert "earlier cron" in MARGIN_REMEDY and "faster run" in MARGIN_REMEDY, (
+        "the remedy no longer names the only two levers")
+    assert "14:30" not in MARGIN_REMEDY, (
+        "the remedy cites the retired 14:30 percentile again")
 
 
 def test_the_two_deadlines_are_distinct_and_the_WORSE_is_the_single_value():
@@ -169,12 +204,17 @@ def test_the_two_deadlines_are_distinct_and_the_WORSE_is_the_single_value():
     # is now `DEADLINE_FLOOR`, derived per day type as
     # `ceil_15(ready_binding + 60 registered)` from each day type's OWN
     # series: 09:45 weekday, 09:15 weekend.
-    assert DEADLINE_MIN_BY_DAYTYPE["weekend"] == 9 * 60 + 15
-    assert DEADLINE_MIN_BY_DAYTYPE["weekday"] == 9 * 60 + 45
+    # RE-ANCHORED 2026-10-20: the deadline is the OBSERVED EARLIEST KICKOFF (weekday 09:30, weekend 09:45), not ceil_15(ready+60). The self-anchored floor was a TAUTOLOGY -- it made margin>=60 true by construction -- and freezing it against a live series breached 60 within a day when mean+3sd drifted +11.4m on one new observation.
+    assert DEADLINE_MIN_BY_DAYTYPE["weekday"] == 9 * 60 + 30
+    assert DEADLINE_MIN_BY_DAYTYPE["weekend"] == 9 * 60 + 45
     assert SCHEDULE_DEADLINE_MIN == min(DEADLINE_MIN_BY_DAYTYPE.values())
-    assert DEADLINE_MIN_BY_DAYTYPE["weekend"] < DEADLINE_MIN_BY_DAYTYPE["weekday"], (
-        "the weekend deadline is no longer the earlier one — re-derive which "
-        "day type binds before trusting the single value")
+    # THE WEEKDAY IS NOW THE EARLIER ONE, and that is a measurement: the
+    # weekday minimum is 09:30 (2023-10-26, an ordinary Thursday) against
+    # the weekend's 09:45. Under the retired percentiles the weekend bound
+    # first; anchoring to the world reversed it.
+    assert DEADLINE_MIN_BY_DAYTYPE["weekday"] < DEADLINE_MIN_BY_DAYTYPE["weekend"], (
+        "the weekday deadline is no longer the earlier one — re-derive "
+        "which day type binds before trusting the single value")
 
 
 def test_a_day_type_with_no_series_is_UNEVALUATED_not_safe():
@@ -230,7 +270,14 @@ def test_schedule_margin_defaults_to_the_CONSERVATIVE_deadline():
     """An un-dayed caller must not silently get the laxer number."""
     m = schedule_margin([(None, 271.0)] * 3, 0)
     assert m["deadline_min"] == SCHEDULE_DEADLINE_MIN
-    assert m["deadline_min"] == DEADLINE_MIN_BY_DAYTYPE["weekend"]
+    # THE CONSERVATIVE DEFAULT IS THE WEEKDAY NOW. Re-anchoring the deadline
+    # to the observed earliest kickoff reversed which day type binds: the
+    # weekday minimum is 09:30 (2023-10-26, an ordinary Thursday) against the
+    # weekend's 09:45. Under the retired 12:00/10:15 percentiles the weekend
+    # was the earlier one. The DEFAULT is still `min(...)`, so it is correct
+    # by construction; what moved is which stratum that picks out.
+    assert m["deadline_min"] == DEADLINE_MIN_BY_DAYTYPE["weekday"]
+    assert m["deadline_min"] == min(DEADLINE_MIN_BY_DAYTYPE.values())
 
 
 # ───────────────── the six date-derived sites, re-enumerated ────────────────
@@ -373,13 +420,13 @@ def test_the_1430_figure_is_a_PERCENTILE_not_a_minimum():
     assert OBSERVED_EARLIEST_MIN["weekday"] == 9 * 60 + 30, (
         "the re-measured weekday minimum moved; re-derive the floor, which is "
         "computed from the ready time and checked against this value")
-    assert OBSERVED_EARLIEST_MIN["weekday"] < DEADLINE_MIN_BY_DAYTYPE["weekday"], (
-        "the observed weekday minimum is no longer earlier than the weekday "
-        "floor, so the floor would now be a real bound - a BETTER outcome, "
-        "but it must be re-measured and re-stated rather than assumed")
+    # IT IS NOW EXACTLY THE BOUND, by construction: the deadline IS the
+    # observed minimum, so the coverage exposure is zero and the margin
+    # carries the whole trade. That is the point of the re-anchoring.
+    assert OBSERVED_EARLIEST_MIN["weekday"] == DEADLINE_MIN_BY_DAYTYPE["weekday"]
     assert WEEKDAY_EARLIEST_OBSERVED > DEADLINE_MIN_BY_DAYTYPE["weekday"], (
         "the 2026-02-01-onward figure of 09:59 is no longer later than the "
-        "floor; the floor was derived to sit below it")
+        "deadline; the full-record minimum is 09:30")
 
 
 def test_the_weekday_cron_CLEARS_a_holiday_weekday_since_the_revert():

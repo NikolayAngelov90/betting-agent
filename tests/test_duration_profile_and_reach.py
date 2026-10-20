@@ -110,7 +110,9 @@ def test_the_REGISTERED_60_and_the_8_4_RESIDUAL_are_UNTOUCHED():
     import scripts.schedule_deadline as sd
 
     assert sd.MIN_ACCEPTABLE_MARGIN_MIN == 60
-    assert sd.COVERAGE_EXPOSURE["weekday"]["max"] == 15
+    # Zero since the 2026-10-20 re-anchoring; the trade moved from the
+    # exposure term to the MARGIN, which now fails at +40m against 60.
+    assert sd.COVERAGE_EXPOSURE["weekday"]["max"] == 0
     assert sd.EFFECTIVE_MIN_MARGIN == {"weekday": 60, "weekend": 60}
 
 

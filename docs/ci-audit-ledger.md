@@ -29961,3 +29961,290 @@ behaviour changed by the reconciliation.
 `tests/test_finding_register.py`. Changed `scripts/ci_audit.py`,
 `src/scrapers/injury_scraper.py`, `tests/test_alarm_surface.py`,
 `tests/test_duration_profile_and_reach.py`.*
+
+---
+
+# H1 WAS SPENDING THE PICKS POOL THREE DAYS PAST ITS WINDOW. AND MY OWN DEADLINE WAS A TAUTOLOGY.
+
+*2026-10-20*
+
+## PART 0 — H1 JOB DISPOSED
+
+**Run `39435238427`**, trigger `schedule`, headSha `ee5cc5d`, started
+**2026-10-20T13:59:38Z**, discovered `in_progress` at **2h13m**. Step 7 *"Report
+the stop and the budget BEFORE spending"* had completed; step 8 *"Collect"* was
+running. **Logs are unavailable for an in-progress run**, so the database was
+the authoritative source — which it is anyway.
+
+### IT WAS SPENDING, AND FROM THE NORMAL POOL
+
+| quantity | measured 2026-10-20 16:13Z |
+|---|---|
+| `h1_reservation(2026-10-20)` | **0** |
+| `allocate()` | pool **350**, `h1_reserved` **0**, `normal_ceiling` **350** |
+| window | `('2026-10-09', '2026-10-17')` — **closed** |
+| `remaining()` `for_h1=False` | **16** |
+| `remaining()` `for_h1=True` | **16** — *the same number* |
+| `theoddsapi` | used **334 / 450**, updated **16:01:45** |
+| `theoddsapi:h1` | used **14 / 500**, updated **16:01:46** |
+
+> **WHICH POOL: there is no H1 pool any more.** `theoddsapi:h1` is an
+> **attribution counter**, not an allocation — `remaining()` returns the same
+> 16 whichever side asks. With the reservation at 0, a closed experiment was
+> claiming from the pricing pool that funds tomorrow's picks, and that pool had
+> **16 credits left**.
+
+**THE LEAK, measured:** the in-window attributed figure recorded on 2026-10-18
+was **6** credits (this ledger, line 27192: *"H1 ATTRIBUTED credits: 6 / bound
+168"*). It now reads **14**. The only H1 run after 2026-10-17 is this one.
+
+> **POST-WINDOW LEAK: 8 TheOddsAPI credits.**
+
+**`for_h1` attribution still works** — the `:h1` row incremented one second
+after the pool row, so the figure is separable. That is the only reason this
+number exists.
+
+**TERMINAL STATE:** heading for `COMPLETE`. Three rounds at 120-minute gaps
+from a 13:59 start: round 1 ~14:00, **round 2 claimed at 16:01:45**, round 3 due
+**~18:01**. Not `NO_CARD`, not `NO_FIXTURE_IN_BAND`, not
+`RESERVATION_EXHAUSTED` — it was collecting normally against a dead question.
+
+**CANCELLED**, on Niki's decision. Verified: `completed/cancelled`, and the
+budget **did not move after 16:01:45** — round 3 never claimed. **~4 further
+credits saved**, pool holds at 334/450.
+
+### 0b — WHY IT WAS SCHEDULED AT ALL
+
+The cron `0 9 * * 2,3,4` **was live**, added at `d8df667` ("H1 on in-job
+waits") for the collection loop, and **never disabled when the window closed**.
+
+**The reservation-guard revert did NOT touch it.** That revert (87 refs / 31
+assertions / 9 files) restored the *guard*; the *trigger* is a separate thing
+and only the guard was reverted. Nothing connected the window closing to the
+schedule.
+
+**And the file's own header said otherwise:** *"NO CRON YET —
+`workflow_dispatch` ONLY, DELIBERATELY. The trial precedes the loop."* True
+until `d8df667` added the cron, stale ever since. A workflow whose header
+denies its own trigger is how a scheduled job becomes invisible.
+
+**COST SINCE 10-17:** one run, **8 TheOddsAPI credits**, ~2h14m of runner
+minutes (terminated early), and the rows below.
+
+### THE ROW QUESTION, WHICH MATTERS MORE THAN THE CREDITS
+
+`odds_snapshots` holds **20,971** rows on/after 2026-10-18, latest
+**16:03:10** — though that table is shared with the ordinary closing-line
+capture, so the count is not all H1's.
+
+**THE REAL DEFECT IS NOT THE ROWS, IT IS THAT NOTHING EXCLUDED THEM.**
+`load_observations` had **only a lower bound**, and `h1_analysis --since`
+defaults to **2026-10-01**. So every post-window row **would have entered the
+closed experiment's population**, and n would have risen above 4 silently —
+exactly the way a dead result becomes a live one by accident.
+
+Added `H1_WINDOW_TO = '2026-10-17'` as a registered constant, an optional
+`until` on `load_observations` (default `None`, so the operational check is
+unchanged), and the analysis now **always** passes it and prints it.
+
+**DISCRIMINATION CONTROL** — an invariance claim needs one:
+
+| | observations | kept |
+|---|---|---|
+| bounded (`< 2026-10-17`) | **25,381** | 9,857 |
+| unbounded | **40,134** | 15,582 |
+| **excluded by the bound** | **14,753** | — |
+
+**A 58% inflation of the closed experiment's population, avoided.** The bound
+is emphatically not inert. The clamped analysis reports `STATE: NO DATA` and
+**n did not rise**.
+
+### 0c — THE DISPOSITION
+
+**Schedule disabled**, with the measurement, the pool arithmetic and the run id
+recorded in the workflow. `workflow_dispatch` retained so the **2026-11-01**
+re-run decision can be executed without a push; re-enabling requires that
+decision **and a fresh pre-registration**, not a resumption. It is a producer
+running against a closed question — the same disposition as the weather
+producer yesterday — and it is in **neither** `AWAITING_CONSUMER` nor any
+registered-question list, so **DELETE**, not `DECLARE`. The three
+ordering/terminal states are retained.
+
+## PART 1 — AUDIT REDS CLASSIFIED
+
+### THREE REDS, NOT TWO. ONE FINDING.
+
+`39447838694` (15:22), `39447999236` (15:23), `39450360042` (15:38) — all
+headSha **`ee5cc5d`**, all `workflow_run`. Verbatim, identical in all three:
+
+```
+::error::audit alarm — prospective margin +55m for 2026-10-21 < 60m
+  (deadline 09:45 bound_by CONSTANT, reference OK, 9 of 30 configured leagues)
+::error::Process completed with exit code 1.
+```
+
+**PARTITION:** `exit_annotations` 1, `self_emitted_annotations` 1 (the
+`audit alarm` line), `foreign_annotations` 0, **`unexplained_nonzero_exit` 0**.
+`tracebacks` 0, `steps_failed` 0. **Exit 1 is a finding, not machinery** —
+the audit worked and reported something true.
+
+**ONE finding, three runs.** One has been the answer every time it was counted.
+
+**THE NINTH SURFACE IS NOT FIRING, and could not have been:** all three runs
+predate `f0ac3bb`, which shipped the register. Its first exposure is still
+ahead, so there is nothing yet to classify.
+
+**`_config_diverges` → `UNEVALUATED` is OUTSIDE `alarmed`, deliberately.** The
+register's count never alarms; only an *untriaged* entry or a dateless
+`DECLARE` does. An unreadable register prints
+`diagnosed_findings[UNEVALUATED: … which is NOT an empty backlog]` and adds
+nothing to `alarmed` — because "could not look" is not a finding about the
+backlog, it is a finding about the instrument, and conflating them is what the
+third state exists to prevent.
+
+**The H1 collection runs reddened nothing.** The four prior runs succeeded;
+today's is `cancelled`, which is not `failure`.
+
+### AND THE CAUSE WAS MINE, FROM YESTERDAY
+
+I shipped `floor = ceil_15(ready_binding + MIN_ACCEPTABLE_MARGIN_MIN)`. Two
+defects, and the second is the serious one.
+
+**1. IT WAS FROZEN AGAINST A MOVING INPUT.** Measured overnight: the weekday
+lateness series went **n=7 → n=8** and `mean+3sd` moved **417.5 → 428.9**,
+because the new point **lowered the mean** (255.2 → 241.3) and **raised the
+sd** (54.1 → 62.5) — and 3sd dominates. `ready_binding` drifted **+11.4m** and
+the margin fell **+66.6 → +55.2m**. I had flagged the instability and got the
+**direction wrong**: the note said the floor "will move EARLIER as the series
+grows". It moved later. Freezing a derived quantity is the stale-literal
+defect I fixed in the `LIVE 0 4 * * 1-5` cron label three days earlier.
+
+**2. IT WAS A TAUTOLOGY.** If the deadline is *defined* as `ready + 60`, then
+"the margin clears 60" is true **by construction**. Re-deriving it each run —
+the obvious fix — would have made the prospective alarm **unable to fire**:
+VAC-1, a filter that cannot fail. The tempting repair was worse than the bug.
+
+### RE-ANCHORED: THE DEADLINE IS A FACT ABOUT FOOTBALL, NOT ABOUT US
+
+| day type | deadline | basis | ready | margin |
+|---|---|---|---|---|
+| weekday | **09:30** | observed earliest kickoff, 2023-10-26 `bulgaria/efbet-league`, n=715 | 08:49 | **+40.2m — FAILS 60** |
+| weekend | **09:45** | observed earliest kickoff, 2024-10-19, n=375 | 08:03 | +101.7m clears |
+
+**THE BREACH IS THE TRUTH, NOT A BUG.** Self-anchored it read +55.2m;
+world-anchored it reads **+40.2m, 19.8 minutes short of the registered 60** —
+**the self-anchoring was hiding 15 of those minutes.** The registered 60 is
+**not** edited; it was stated 2026-10-10 before any of this.
+
+**Exposure becomes ZERO by construction** (the deadline *is* the observed
+minimum), so the coverage term is satisfied rather than traded — and still
+printed at zero. **The trade moved, it did not vanish:** exposure 15m → 0 and
+margin +55 → +40.
+
+**THE CLEARING ACTION IS NOT A DEADLINE CHOICE.** No anchoring clears it: the
+kickoff is a fact, the ready time is ours. **Today:** manual dispatch, which
+skips the measured 3h58m–5h04m lateness. **Durably:** an earlier cron or a
+faster run — and the duration profile already sized the second at **~7 min**
+(sequential injury loop) + **~7 min** (sequential Claude review) + up to
+**~9 min** (AF upsert loop). **Any two of those close 19.8 minutes.** That
+decision is Niki's, and it is the same conclusion the profile reached — now
+with a live alarm behind it instead of a hypothetical.
+
+### A SECOND FINDING SURFACED WHILE CLASSIFYING THE FIRST
+
+The weekday **margin acknowledgement was obsolete *and* expired, and was still
+absorbing**:
+
+* its `review` date was **2026-10-18** — two days gone — and
+  `margin_breach_is_acknowledged` compared only `binding`, **never `review`**.
+  A deferral with a date that nothing reads is not a deferral.
+* the decision it was waiting for **was taken**: the weekday cron reverted to
+  `0 0` on 2026-10-18, so the `0 4` regime it describes no longer exists.
+* its figure `-85.0` was a `0 4` number. Under `0 0` the binding is **+21m**.
+  An acknowledgement that cannot be compared to the thing it covers is a hole.
+
+**Retired** — an empty register is the right state for "nothing is deferred" —
+and **expiry is now enforced**, so a past `review` date absorbs nothing and an
+unparseable one absorbs nothing either. The **+21m breach now reports.**
+
+`MARGIN_REMEDY` also cited the **retired** 14:30/10:15 percentiles and a
+day-type split taken on 2026-10-10. Rewritten to name the two real levers.
+
+### THE REMAINDER — WHICH IS THE SIGNAL
+
+**TWO true alarms, ONE root cause, ONE clearing action:**
+
+```
+audit alarm — prospective margin +40m for 2026-10-21 < 60m
+              (deadline 09:30 bound_by CONSTANT, reference OK, 9 of 30);
+              schedule margin +21m < 30m
+```
+
+Both say the weekday pipeline is not fast enough against the earliest kickoff
+football actually schedules. **Nothing is marked `resolved`: the cause is not
+fixed, it is now visible.**
+
+**Housekeeping that fell out:** `READY_BINDING_MIN` (518.4 — already stale at
+529.8 by morning) and `_ceil15` existed only for the rejected derivation and
+had no consumer after it; both **deleted**, returning the PNC backlog 35 → 33.
+`REJECTED_SELF_ANCHORED_FLOOR` is **retained** with its reason so nobody
+re-derives the tautology.
+
+## THE ENTRY
+
+> **A deadline derived from our own readiness is a mirror, not a measurement.**
+> It cleared 60 by construction, breached it within a day when the series
+> twitched, and the repair that suggested itself — re-derive it each run —
+> would have built a check that could never fail. Anchoring it to the earliest
+> kickoff football schedules turns +55 into +40 and the pass into a finding,
+> which is the number that was always true.
+
+## DECLARATION
+
+**H1 JOB DISPOSED.** Run `39435238427`, `schedule`-triggered, **was spending**:
+`theoddsapi` **334/450** with **16 remaining**, `theoddsapi:h1` **14** against
+**6** recorded in-window on 2026-10-18 — **a post-window leak of 8 TheOddsAPI
+credits**, claimed **from the normal pricing pool**, because `h1_reserved` is 0
+and `remaining()` returns the same 16 to both sides: `theoddsapi:h1` is an
+attribution counter, not an allocation. `for_h1` tagging still works, which is
+the only reason the figure is separable. **Cancelled on decision** before round
+3 claimed — verified by the budget not moving after 16:01:45, **~4 more credits
+saved**. **Schedule disabled**; the cron was added at `d8df667` for the
+collection loop and **never disabled when the window closed**, the
+reservation-guard revert did not touch it, and the file's own header still
+claimed "NO CRON YET". **POST-WINDOW ROWS: the rows exist and nothing excluded
+them** — `load_observations` had no upper bound and `h1_analysis` defaults to
+`--since 2026-10-01`, so n would have risen silently. `H1_WINDOW_TO` added and
+always passed; **discrimination control: the bound excludes 14,753 of 40,134
+observations**, a 58% inflation avoided, and the clamped analysis still reports
+`NO DATA` with **n = 4**.
+
+**AUDIT REDS CLASSIFIED. THREE runs, ONE finding** —
+`prospective margin +55m for 2026-10-21 < 60m` — exit 1, self-emitted,
+`unexplained_nonzero_exit` **0**, no tracebacks, no failed steps: a finding,
+not machinery. The **ninth surface is not firing and could not be**, since all
+three runs predate the register's commit. **`UNEVALUATED` is outside
+`alarmed`, deliberately.** H1's runs reddened nothing.
+**THE CAUSE WAS MY OWN FLOOR FROM YESTERDAY**, in two ways: frozen against a
+series that drifted **+11.4m overnight** on one new observation, and
+**tautological** — `ready + 60` makes the margin clear by construction, so
+re-deriving it would have made the alarm unable to fire. **RE-ANCHORED to the
+observed earliest kickoff** (weekday **09:30**, weekend **09:45**): exposure
+falls to **zero by construction** and the margin reads **+40m, 19.8 short of
+the registered 60**, of which the self-anchoring was hiding 15. **The registered
+60 is unedited and the breach stands as a finding**, clearable only by an
+earlier cron or a faster run. **A second finding surfaced:** the margin
+acknowledgement was obsolete *and* expired — review date 2026-10-18, compared
+only by `binding` — and had been silently absorbing a **+21m** breach; retired,
+with expiry now enforced. **Two true alarms, one root cause, one clearing
+action, nothing marked resolved.**
+
+Gating suite **2184 passed, 6 deselected**. Non-gating **6 passed, 0 skipped**.
+Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.18` /
+`stage5_baseline_20260807.51fbcb`. No production write, no schema change, no
+model change, no cron moved — one schedule **removed**.
+
+*Recorded 2026-10-20. `.github/workflows/h1-collect.yml`,
+`scripts/schedule_deadline.py`, `scripts/ci_audit.py`,
+`scripts/h1_collection_check.py`, `scripts/h1_analysis.py`, and the tests
+re-pointed at the world-anchored deadline.*

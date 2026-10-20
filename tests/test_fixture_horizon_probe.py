@@ -338,12 +338,28 @@ def test_the_probe_does_not_overlap_H1_or_daily_picks():
         assert probe_end_hi > probe_start_lo, "the window is not a window"
 
         # H1: starts cron+delay, runs (rounds-1)*gap, ends there
-        h1_cron = int(on2["schedule"][0]["cron"].split()[1]) * 60
+        # ── H1'S SCHEDULE WAS DISABLED 2026-10-20. ────────────────────
+        #
+        # Its window closed 2026-10-17 and a scheduled run fired three days
+        # later and spent 8 TheOddsAPI credits from the NORMAL pool. The cron
+        # is gone, so there is no H1 start time to clear -- and a clearance
+        # check over a missing cron would pass while asserting nothing, which
+        # is the VAC-1 shape this file already handles for the probe's own
+        # cron. Same treatment: the last live value as a FIXTURE, with the
+        # state named.
+        _h1_sched = (on2.get("schedule") or [])
+        h1_state = ("H1_CRON_LIVE" if _h1_sched
+                    else "H1_CLEARANCE_NOT_APPLICABLE_NO_SCHEDULE")
+        #: `measured`: H1 ran under `0 9 * * 2,3,4` until 2026-10-20.
+        h1_cron = (int(_h1_sched[0]["cron"].split()[1]) * 60 if _h1_sched
+                   else 9 * 60)
+        assert h1_state in ("H1_CRON_LIVE",
+                            "H1_CLEARANCE_NOT_APPLICABLE_NO_SCHEDULE")
         h1_end_hi = (h1_cron + DELAY_MAX
                      + (h1c.H1_ROUNDS - 1) * h1c.H1_GAP_MINUTES)
         assert probe_start_lo > h1_end_hi, (
-            f"[{state}] the probe can start at {probe_start_lo} while H1 runs "
-            f"until {h1_end_hi} -- they overlap")
+            f"[{state}/{h1_state}] the probe can start at {probe_start_lo} "
+            f"while H1 runs until {h1_end_hi} -- they overlap")
         assert probe_start_lo - h1_end_hi >= 60, (
             f"[{state}] only {probe_start_lo - h1_end_hi} min of clearance "
             f"from H1")
