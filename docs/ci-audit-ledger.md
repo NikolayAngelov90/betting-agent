@@ -29712,3 +29712,252 @@ optimisation applied.
 `scripts/run_baseline.py`, `config/config.yaml`, `config/config.example.yaml`,
 `tests/test_duration_profile_and_reach.py`, `tests/test_coverage_residual.py`,
 `tests/test_fold_count_and_first_result.py`.*
+
+---
+
+# SEVENTY-FOUR DAYS, MEASURED. SIX OF THE EIGHT ARE COHORT EVENTS, WHICH IS WHY.
+
+*2026-10-20*
+
+## PART A — LEDGER HARVESTED
+
+**THE PREDICATE, STATED BEFORE IT RAN:** (1) a defect named with a
+**mechanism**, not a symptom; (2) a **location** — file, line, symbol, table or
+workflow step; (3) **no subsequent entry** recording a fix, a deletion, a
+declaration or a deliberate exemption.
+
+**THE QUERY WINDOW, AND IT IS THE HONEST LIMIT.** Exactly **one** document in
+this repository carries findings in a form that predicate can be applied to
+mechanically: `docs/predictive-audit-2026-08-07.md` lines **645–657**, a
+thirteen-row `# | File | Location | Defect` table. The ledger's **29,700 lines
+are prose**, and a mechanical harvest of "diagnosis without subsequent fix"
+from prose would be a confident guess rather than a measurement — which is
+precisely why Part C's answer is a **register** and not a scan.
+
+**Consequence, stated rather than hidden:** every age below is the same **74
+days**, so **the median carries no spread**. That is a property of the source,
+not of the backlog.
+
+| | |
+|---|---|
+| entries harvested | **13** |
+| still live against today's tree | **8** |
+| fixed since | **5** — findings 1, 2, 3, 5, 9 |
+| `UNEVALUATED` | 0 |
+| untriaged | **0** |
+| median age of the still-live | **74 days** (point mass) |
+
+### THE KNOWN-WRONG CONTROL PASSES
+
+Row **6** — *"Injury and weather features excluded from training but computed
+at predict time → dropped by `_align_features`. Dead work on every fixture"* —
+**appears in the output and reads LIVE.** That is the correct reading: the
+**weather half was deleted yesterday**, 74 days after the row was written, and
+the **injury half is unchanged**. A half-fixed row is live, not fixed, and the
+register says which half.
+
+### THE FIVE THAT WERE FIXED, AND HOW THAT WAS VERIFIED
+
+| # | location | why it is no longer true |
+|---|---|---|
+| 1 | `bayesian_weights.update()` | now takes `market`; a falsy league updates only the market-global scope |
+| 2 | `_params_to_weights()` | the symbol no longer exists; the compressing normalisation went with it |
+| 3 | `betting_agent.py:3295` | the `ml_models._models` misspelling is gone |
+| 5 | `get_stats` `avg_clv` | the mislabelled quantity is now `avg_divergence`, with the error written out beside it, and `avg_clv` derives from stored `closing_odds` |
+| 9 | config divergence | both files now agree on `max_total_kelly_pct` and the excluded-market list — *at 0, i.e. the cap is disabled in both; the **divergence** is what the row named and it is resolved* |
+
+An entry fixed incidentally is **not a finding**. Five of thirteen were.
+
+## PART B — TRIAGED, NOTHING LEFT UNMARKED
+
+| outcome | n | findings |
+|---|---|---|
+| `FIX` | **1** | **13** — `data/models/` untracked, `feature_list.json` missing |
+| `DELETE` | **1** | **6** — the injury half of the dead-work row |
+| `DECLARE` | **6** | **4, 7, 8, 10, 11, 12** |
+
+Every `DECLARE` carries a re-triage date of **2026-11-23**; every `FIX` and
+`DELETE` carries an estimated size. **Nothing is unmarked, because an unmarked
+entry is how 74 days happened.**
+
+* **`FIX` 13** — infrastructure only: write `feature_list.json` at fit time and
+  assert it on load. No fitted input changes. The real risk is that the pickles
+  survive only via the Actions cache, so an eviction loses them and the next
+  run retrains silently.
+* **`DELETE` 6** — the injury **features** have no consumer: not among the 111
+  fitted names, dropped by alignment. Deletable on the same 8-fixture
+  aligned-vector gate the weather half passed. **The injury SCRAPER is not
+  deletable:** `analysis.injury_report` reaches the Claude review prompt.
+* **`DECLARE` 4** — refitting ML as-of would change the tuned weights. The
+  Poisson/Elo half *was* fixed by a "leak-resistant refit"; the ML asymmetry
+  the row named is the remainder.
+* **`DECLARE` 7** — **five** of the 111 fitted features come from the rolling
+  50-match standings (`home/away_league_league_position`,
+  `home/away_league_relegation_gap`, `relegation_gap_diff`). Correcting the
+  semantics changes fitted inputs.
+* **`DECLARE` 8** — removing `_estimate_league_rhos` changes rho and therefore
+  every Poisson probability. *"Nil measured benefit" is not "no numerical
+  effect."*
+* **`DECLARE` 10** — both 8-sample stat blocks are still injected into the
+  decision prompt; removing them changes what Claude sees and therefore the
+  KEEP/CHANGE decisions.
+* **`DECLARE` 11** — `_auto_calibrate_ev_threshold` moves `min_ev`, which
+  decides which picks are taken. Selection-affecting by definition.
+* **`DECLARE` 12** — `calibrate_from_pick_outcomes` writes factors the ensemble
+  reads, so changing it changes every probability.
+
+### AND THAT IS THE EXPLANATION OF THE SEVENTY-FOUR DAYS
+
+> **Six of the eight still-live findings are `DECLARE` because they touch the
+> predictive core.** The backlog did not stall because nobody looked. It
+> stalled because most of it is cohort-affecting, and this project will not
+> change a fitted input or a selection rule inside an observability stage.
+> **The two that were not cohort-affecting are the two that moved**: weather
+> (deleted yesterday) and `data/models/` (a bounded fix, listed today).
+
+That reframes the latency. 74 days is not a measure of inattention; it is the
+measure of **how long a cohort-affecting finding waits when every stage is
+observability**. Which is a decision someone should take deliberately, with
+this list in front of them.
+
+## PART C — THE MECHANISM, AND THE HONEST NO
+
+**Can `docs/ci-audit-ledger.md` carry a machine-readable marker for an open
+diagnosed finding? NO.** Annotating a 2026-08-07 entry with today's status
+**rewrites it**, and historical entries are not rewritten — a rule that has now
+held four times. So the alternative the directive anticipated is the one taken:
+**a separate register that REFERENCES ledger and doc lines rather than
+annotating them.** `scripts/finding_register.py` holds the status; the source
+prose is untouched, and a test asserts the source carries no status column and
+no back-reference to the register.
+
+* **the pre-existing backlog was counted BEFORE anything was wired: 8.**
+* **reported daily, report-only.** `ci_audit` prints
+  `diagnosed_findings[13 harvested, 8 still live, 0 UNEVALUATED, 0 untriaged]`
+  plus one line per live finding with its outcome and re-triage date. **The
+  count does not alarm**, same disposition as `pnc_scan`: a triaged backlog is
+  a decision, and alarming on six deliberately-declared entries every day is
+  how red comes to mean nothing.
+* **what DOES alarm** is an entry with no outcome, or a `DECLARE` with no
+  re-triage date. **Ninth alarm surface**, and the pinned enumeration was
+  updated deliberately rather than bumped.
+* **CLR-2, confirmed to change the predicate:** a **fix** or a **deletion**
+  flips `is_live` to `False`; a **declaration with a date** empties
+  `untriaged`. A test strips every re-triage date and confirms the untriaged
+  predicate fires, and confirms at least one finding has been observed to clear.
+
+### A DEFECT IN THIS REGISTER'S OWN FIRST DRAFT
+
+`_config_diverges` returned `False` on `ImportError`. The audit step installs
+no packages, so `yaml` is unavailable there — and finding 9 would have been
+reported **FIXED** in exactly the place the register is read. *A predicate that
+answers "no defect" when it could not evaluate* is the third-state failure this
+register exists to catch, one level up. It now **raises**, `evaluate()` records
+`UNEVALUATED`, and a test simulates the missing import to prove it.
+
+## PART D — INJURY BUDGET RECONCILED
+
+### IT DISAGREED WITH ITSELF THREE WAYS
+
+| where | value |
+|---|---|
+| docstring | *"the cap (default 30)"* |
+| code | `max_injury = 15`, twice |
+| `config.yaml` / `config.example.yaml` | **30** — what production runs |
+
+So the code's own default was **dead and wrong at the same time**. One
+definition now: **`DEFAULT_INJURY_BUDGET = 30`**, referenced by the assignment,
+by the `config.get` default and by the docstring.
+
+### THE DERIVATION IT CARRIED WAS STALE, AND IS CORRECTED IN PLACE
+
+It read: *"Keep budget at ≤15 so the sequential API+DB loop finishes within the
+5-minute (300s) asyncio timeout. 26 fixtures × ~11s each = ~299s which always
+times out."* **Two of its three inputs have moved**, and the correction names
+what it used to reference:
+
+| input | then | now |
+|---|---|---|
+| timeout | 300 s | **720 s** (`asyncio.wait_for` at the caller) |
+| per-call cost | ~11 s assumed | **14–20 s** `measured` 2026-10-20 |
+
+**RE-DERIVED:** `safe budget = 720 / 20 = 36`; at 30 the loop needs
+`30 × 20 = 600 s`, **120 s inside** the timeout.
+
+> **WAS 30 EVER CORRECT? NO — it was never safe when it was written.** Under
+> the 300 s timeout the same arithmetic gives 15 at the measured rate, or 27 at
+> the rate the comment assumed; 30 needed 600 s against a 300 s limit. **It
+> became correct when the timeout was raised to 720 s for an unrelated reason
+> — "88 fixtures × ~8s = ~12 min worst case" — not when anyone re-derived it.
+> Right by accident.**
+
+**THE VALUE IS UNCHANGED at 30, deliberately.** Production already runs 30, so
+reconciling the definitions changes no behaviour. Raising it toward the derived
+36 would change **which** fixtures get injury data, and injury data reaches the
+Claude review prompt — value-affecting, and a separate stage.
+
+**NO CONCURRENCY CHANGE.** The sequential loop holds ~7 min on a full card, but
+the binding risk is **budget-claim atomicity**: `if fetched >= injury_budget`
+is a read-modify-write inside the loop, so parallelising without an atomic
+claim changes which fixtures are covered. That is value-affecting and has its
+own stage. The comment now records why it is deferred.
+
+## THE ENTRY
+
+> **A backlog nobody counts cannot be noticed, and a backlog nobody triages
+> cannot be decided.** The weather producer was diagnosed correctly, located to
+> the line, and left alone for seventy-four days — and the honest reason is not
+> inattention: six of its eight surviving siblings require a cohort bump, and
+> every stage since has been observability. The number that was missing was
+> never "is this broken". It was "how long has this been known".
+
+## DECLARATION
+
+**LEDGER HARVESTED.** Predicate stated before running; **query window is one
+document** — the ledger's prose cannot be harvested mechanically, which is the
+finding that produced Part C's answer rather than a shortfall in the sweep.
+**13 entries, 8 still live, 5 fixed, 0 UNEVALUATED, 0 untriaged, median age 74
+days — a point mass, and said so.** **KNOWN-WRONG CONTROL PASSES:** row 6 is in
+the output and reads **live**, because the weather half was deleted yesterday
+and the injury half is not. The five fixed are named with how each was
+verified.
+
+**TRIAGED:** `FIX` **1** (finding 13, infrastructure, sized), `DELETE` **1**
+(finding 6's injury features, same aligned-vector gate the weather half
+passed), `DECLARE` **6** (findings 4, 7, 8, 10, 11, 12, each with a
+**2026-11-23** re-triage date). **Nothing unmarked.** And the shape is the
+answer: **six of eight are cohort events**, so the backlog stalled because
+every stage since has been observability — the two non-cohort items are exactly
+the two that moved.
+
+**THE MECHANISM, with an honest no.** The ledger **cannot** carry a marker
+without rewriting history, so the register **references** doc and line and a
+test asserts the source was not annotated. Backlog **counted before wiring
+(8)**. Reported daily and **report-only**; the **ninth** alarm surface fires
+only on an **untriaged** entry or a dateless `DECLARE`, never on the count.
+**CLR-2 confirmed:** a fix or deletion flips `is_live`, a declaration empties
+`untriaged`, and a test strips the dates to prove the predicate fires. And the
+register's own first draft reported finding 9 as **FIXED** when `yaml` was
+unavailable — *"could not look" is not "no defect"* — now `UNEVALUATED`, with a
+simulated-ImportError test.
+
+**INJURY BUDGET RECONCILED.** One definition, `DEFAULT_INJURY_BUDGET = 30`,
+replacing a docstring that said 30, code that said 15 twice, and a config that
+said 30. **Re-derived against the figures in force: 720 / 20 = 36, so 30 sits
+120 s inside the timeout.** **30 was NEVER right when written** — it needed
+600 s against a 300 s timeout — and became correct only when that timeout was
+raised 2.4× for an unrelated reason. **Right by accident**, and the stale
+derivation is corrected in place naming exactly what it used to reference.
+**Value unchanged; no concurrency change**, with budget-claim atomicity
+recorded as the reason.
+
+Gating suite **2184 passed, 6 deselected**. Non-gating **6 passed, 0 skipped**.
+Invariants pass, count not cited. Fingerprint **UNCHANGED** at `s5.18` /
+`stage5_baseline_20260807.51fbcb`; `BASELINE_REVISION` **UNCHANGED** at `b2`.
+No production write, no schema change, no model change, no cron moved, and no
+behaviour changed by the reconciliation.
+
+*Recorded 2026-10-20. NEW `scripts/finding_register.py`,
+`tests/test_finding_register.py`. Changed `scripts/ci_audit.py`,
+`src/scrapers/injury_scraper.py`, `tests/test_alarm_surface.py`,
+`tests/test_duration_profile_and_reach.py`.*

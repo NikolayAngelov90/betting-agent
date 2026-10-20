@@ -206,12 +206,38 @@ def test_the_FULL_alarm_surface_is_enumerated_here():
     src = inspect.getsource(ci)
     appends = [l.strip() for l in src.splitlines()
                if "alarmed.append(" in l]
-    assert len(appends) == 8, (
+    assert len(appends) == 9, (
         f"the alarm surface changed: {len(appends)} append sites, expected "
-        f"8 (workflow state, run verdict, schedule margin, model integrity "
+        f"9 (workflow state, run verdict, schedule margin, model integrity "
         f"failure, model signature missing, scheduled run never existed, "
-        f"unparseable workflow on main, PROSPECTIVE MARGIN for tomorrow). "
-        f"Sites: " + repr(appends))
+        f"unparseable workflow on main, prospective margin for tomorrow, "
+        f"UNTRIAGED DIAGNOSED FINDING). Sites: " + repr(appends))
+
+
+def test_the_NINTH_surface_is_an_UNTRIAGED_finding_NOT_the_backlog_count():
+    """Added 2026-10-20. The distinction is the whole design.
+
+    The weather producer was diagnosed on 2026-08-07 and deleted on
+    2026-10-20 — seventy-four days — and nothing counted it in between. The
+    register now reports the backlog daily, but **a triaged backlog is a
+    decision, not a finding**, so the count must NOT alarm: six of the eight
+    still-live entries are `DECLARE` because they touch the predictive core,
+    and alarming on them every day would make red mean nothing, which is the
+    `fixtures_zero_active` failure this project has paid for.
+
+    What alarms is an entry with **no outcome**, or a `DECLARE` with **no
+    re-triage date** — because an unmarked entry is how 74 days happened.
+    """
+    import inspect
+
+    src = inspect.getsource(ci.main)
+    assert "diagnosed finding(s) UNTRIAGED" in src
+    assert "if _fr_bad:" in src, "the alarm is not gated on the untriaged set"
+    assert "if _fr_live:" not in src, (
+        "the audit alarms on the live backlog count, which would fire every "
+        "day on a deliberately-declared entry")
+    # and an unreadable register is UNEVALUATED, not an empty backlog
+    assert "NOT an empty backlog" in src
 
 
 def test_the_EIGHTH_surface_is_the_PROSPECTIVE_margin_and_why_it_moved_here():

@@ -510,40 +510,75 @@ def test_INJURIES_are_NOT_deletable_because_they_HAVE_a_consumer():
     assert "injury_impact" in vc
 
 
-def test_the_INJURY_CAP_disagrees_with_itself_THREE_WAYS():
-    """Sized, not changed. The constant the 9.7 minutes hangs on.
+def test_the_INJURY_CAP_is_RECONCILED_to_ONE_definition():
+    """RETIRED-AND-REPLACED 2026-10-20. It pinned the three-way disagreement
+    -- docstring 30, code 15 twice, config 30 (production ran 30) -- so the
+    finding could not go stale. Reconciled: `DEFAULT_INJURY_BUDGET` is the one
+    definition and the docstring and the `config.get` default both reference
+    it.
 
-    `measured` 2026-10-20 by reading the three places it is stated:
-
-      docstring   "the cap (default 30)"
-      code        `max_injury = 15` / `config.get(..., 15)`
-      config      `max_injury_budget: 30`   <- what production runs
-
-    And the comment deriving it cites a **300s** asyncio timeout
-    ("26 fixtures x ~11s each = ~299s which always times out"), while the
-    caller now uses **720s**. So the cap is NOT a provider rate limit: it is a
-    timeout workaround whose timeout has since doubled, and whose per-call
-    cost is now measured at 14-20s rather than the ~8-11s the comments cite.
+    THE VALUE IS UNCHANGED at 30, deliberately: production already ran 30, so
+    reconciling changes no behaviour. Raising it toward the re-derived 36
+    would change WHICH fixtures get injury data, which reaches the Claude
+    review prompt -- value-affecting, and a separate stage.
     """
-    inj = pathlib.Path("src/scrapers/injury_scraper.py").read_text(
+    import src.scrapers.injury_scraper as m
+
+    assert m.DEFAULT_INJURY_BUDGET == 30
+    src = pathlib.Path("src/scrapers/injury_scraper.py").read_text(
         encoding="utf-8")
-    assert "the cap (default 30)" in inj
-    assert "max_injury = 15" in inj
-    assert "sequential API+DB loop" in inj
-    assert "300s" in inj, "the stale timeout derivation is gone"
+    code_lines = [l for l in src.splitlines()
+                  if not l.lstrip().startswith("#")]
+    code = chr(10).join(code_lines)
+    assert "max_injury = 15" not in code, (
+        "a bare 15 default is back in the code; the docstring and config both "
+        "say 30 and production runs 30")
+    assert code.count("DEFAULT_INJURY_BUDGET") >= 3, (
+        "the one definition is no longer referenced by both the assignment "
+        "and the config default")
 
     import yaml
 
-    cfg = yaml.safe_load(pathlib.Path("config/config.yaml").read_text(
+    cfg = yaml.safe_load(pathlib.Path("config/config.example.yaml").read_text(
         encoding="utf-8"))
     assert (cfg.get("models") or {}).get("max_injury_budget") == 30, (
-        "the configured budget moved; the 9.7-minute figure was measured at 30")
+        "the shipped budget moved; the 9.7-minute figure and the re-derivation "
+        "were both measured at 30")
 
+
+def test_the_RE_DERIVATION_states_that_30_was_NEVER_right_when_written():
+    """The stale derivation is corrected IN PLACE, naming what it referenced.
+
+    Its three inputs: a 300 s timeout that is now 720 s, an assumed ~11 s per
+    call against a measured 14-20 s, and the cap itself. Re-derived,
+    720 / 20 = 36, so 30 sits 120 s inside the timeout -- and under the 300 s
+    timeout it needed 600 s. It became correct when the timeout was raised for
+    an unrelated reason.
+    """
+    src = pathlib.Path("src/scrapers/injury_scraper.py").read_text(
+        encoding="utf-8")
+    # NUMBERS EXACT, PROSE CASE-INSENSITIVE. The first draft asserted
+    # "never safe when it was written" against a comment that writes it in
+    # capitals -- a case mismatch in my own test, which is the same family as
+    # the markdown-emphasis and line-wrap mismatches already hit in this file
+    # set. Figures must match exactly; wording should not fail on shouting.
+    for part in ("300s", "720s", "14-20s", "720 / 20 = 36"):
+        assert part in src, f"the re-derivation omits the figure {part!r}"
+    low = src.lower()
+    for phrase in ("never safe when it was written", "right by accident"):
+        assert phrase in low, f"the re-derivation omits {phrase!r}"
     agent = pathlib.Path("src/agent/betting_agent.py").read_text(
         encoding="utf-8")
     assert "timeout=720" in agent, (
-        "the injury timeout moved off 720s; the cap's own derivation cites "
-        "300s and is already stale by a factor of 2.4")
+        "the timeout moved again; re-derive the budget rather than trusting "
+        "the comment")
+    # AND NO CONCURRENCY CHANGE
+    inj = src
+    assert "asyncio.gather" not in inj, (
+        "the loop became concurrent -- that is value-affecting through the "
+        "budget claim and belongs in its own stage")
+    assert "budget-claim atomicity" in inj, (
+        "the comment no longer records why concurrency is deferred")
 
 
 def test_the_DB_WRITE_is_INSIDE_the_injury_loop():

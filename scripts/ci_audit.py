@@ -2518,6 +2518,48 @@ def main() -> int:
     print()
     _unparseable = unparseable_workflow_runs()
     print(format_unparseable(_unparseable))
+
+    # ── THE DIAGNOSED-AND-UNACTIONED COUNT, REPORTED DAILY. 2026-10-20. ───
+    #
+    # The weather producer was diagnosed on 2026-08-07 and deleted on
+    # 2026-10-20: SEVENTY-FOUR DAYS. Nothing counted it in between, so
+    # nothing could notice. `scripts/finding_register.py` references the
+    # source doc and line and holds the status itself -- the ledger's own
+    # entries are NEVER rewritten, a rule that has held four times.
+    #
+    # REPORT-ONLY, like `pnc_scan`: a triaged backlog is a decision, not a
+    # finding, so the count does not alarm. What DOES alarm is an UNTRIAGED
+    # live finding, because an unmarked entry is how 74 days happened.
+    #
+    # CLR-2: the clearing action is a FIX, a DELETION, or a DECLARATION with
+    # a re-triage date, and each changes the predicate -- a fix or deletion
+    # flips `is_live` to False, a declaration flips `untriaged` to empty.
+    try:
+        from scripts.finding_register import evaluate as _fr_eval
+        from scripts.finding_register import untriaged as _fr_untriaged
+        _fr = _fr_eval()
+        _fr_live = [r for r in _fr if r["is_live"] is True]
+        _fr_unev = [r for r in _fr if r["is_live"] is None]
+        _fr_bad = _fr_untriaged(_fr)
+        print(f"{chr(10)}diagnosed_findings[{len(_fr)} harvested, "
+              f"{len(_fr_live)} still live, {len(_fr_unev)} UNEVALUATED, "
+              f"{len(_fr_bad)} untriaged | median age "
+              f"{max((r['age_days'] for r in _fr_live), default=0)}d | "
+              f"source: docs/predictive-audit-2026-08-07.md]")
+        for _r in sorted(_fr_live, key=lambda x: x["id"]):
+            print(f"  {_r['outcome']:8s} [{_r['id']:2d}] {_r['file']} :: "
+                  f"{_r['location'][:46]}"
+                  + (f"  re-triage {_r['retriage']}" if _r.get("retriage")
+                     else ""))
+        if _fr_bad:
+            alarmed.append(
+                f"{len(_fr_bad)} diagnosed finding(s) UNTRIAGED: "
+                + ", ".join(str(r["id"]) for r in _fr_bad)
+                + " - a fix, a deletion, or a declaration with a date")
+    except Exception as _fr_err:            # noqa: BLE001
+        print(f"{chr(10)}diagnosed_findings[UNEVALUATED: "
+              f"{type(_fr_err).__name__} - could not read the register, which "
+              f"is NOT an empty backlog]")
     _unp_main = [r for r in _unparseable if r.get("headBranch") == "main"]
     if _unp_main:
         alarmed.append(

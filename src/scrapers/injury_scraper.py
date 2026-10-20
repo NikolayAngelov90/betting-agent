@@ -16,6 +16,54 @@ from src.utils.logger import get_logger
 logger = get_logger()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# THE INJURY REQUEST BUDGET — ONE DEFINITION, RE-DERIVED 2026-10-20
+#
+# IT DISAGREED WITH ITSELF THREE WAYS. The docstring said "the cap (default
+# 30)", the code said `max_injury = 15` twice, and `config.yaml` said 30 --
+# which is what production ran, so the code's own default was dead and wrong
+# at the same time. THE HABIT: one rule, three definitions.
+#
+# AND THE DERIVATION IT CARRIED WAS STALE. The comment here read:
+#
+#     "Keep budget at <=15 so the sequential API+DB loop finishes within the
+#      5-minute (300s) asyncio timeout. 26 fixtures x ~11s each = ~299s which
+#      always times out; 15 x 11s = ~165s which always completes."
+#
+# Two of its three inputs have since moved:
+#
+#   the timeout      300s  ->  **720s**, set at `betting_agent.py` where
+#                             `asyncio.wait_for(self.injury_tracker.update(...))`
+#                             is called, with its own comment "88 fixtures x
+#                             ~8s = ~12 min worst case"
+#   per-call cost    ~11s  ->  **14-20s** `measured` 2026-10-20 by phase
+#                             profile over 3 runs (6.9 / 3.6 / 9.7 min for
+#                             30 / 12 / 30 fixtures)
+#
+# RE-DERIVED against the figures in force:
+#
+#     safe budget = timeout / measured worst per-call = 720 / 20 = 36
+#     at 30:  30 x 20s = 600s,  120s inside the 720s timeout
+#
+# SO 30 IS SAFE NOW -- AND IT WAS NEVER SAFE WHEN IT WAS WRITTEN. Under the
+# 300s timeout the same arithmetic gives 300/20 = 15 at the measured rate, or
+# 300/11 = 27 at the rate the comment assumed; 30 needed 600s against a 300s
+# limit. **The number became correct when the timeout was raised to 720s for
+# an unrelated reason, not when anyone re-derived it.** Right by accident.
+#
+# THE VALUE IS UNCHANGED at 30, deliberately: it is what production already
+# runs, so reconciling the definitions changes no behaviour. Raising it toward
+# the derived 36 would change WHICH fixtures get injury data, and injury data
+# reaches the Claude review prompt -- value-affecting, and a separate stage.
+#
+# NO CONCURRENCY CHANGE HERE. The sequential loop holds ~7 min on a full card,
+# but the binding risk is budget-claim atomicity: `if fetched >= injury_budget`
+# is a read-modify-write inside the loop, so parallelising without an atomic
+# claim changes which fixtures are covered. That is value-affecting and has
+# its own stage.
+DEFAULT_INJURY_BUDGET = 30
+
+
 class InjuryScraper:
     """Fetches injury data from API-Football for today's fixtures."""
 
@@ -34,8 +82,9 @@ class InjuryScraper:
 
         Uses the shared APIFootballScraper instance so all requests count
         against the single daily quota.  Budget is min(fixture_count,
-        remaining requests, max_injury_budget) — the cap (default 30)
-        leaves room for targeted backfill after injuries complete.
+        remaining requests, max_injury_budget) — see
+        `DEFAULT_INJURY_BUDGET` for the one definition and its derivation.
+        The cap leaves room for targeted backfill after injuries complete.
 
         Args:
             priority_fixture_ids: Optional list of match DB IDs to fetch first.
@@ -46,13 +95,12 @@ class InjuryScraper:
             return
 
         # Dynamic budget: use remaining requests, capped to fixture count and
-        # a configurable max to leave room for targeted backfill after injuries.
-        # Keep budget at ≤15 so the sequential API+DB loop finishes within
-        # the 5-minute (300s) asyncio timeout.  26 fixtures × ~11s each = ~299s
-        # which always times out; 15 × 11s = ~165s which always completes.
-        max_injury = 15
+        # a configurable max to leave room for targeted backfill after
+        # injuries.  ONE DEFINITION — see `DEFAULT_INJURY_BUDGET`.
+        max_injury = DEFAULT_INJURY_BUDGET
         if hasattr(self.config, 'get'):
-            max_injury = self.config.get("models.max_injury_budget", 15)
+            max_injury = self.config.get("models.max_injury_budget",
+                                         DEFAULT_INJURY_BUDGET)
         injury_budget = min(self.apifootball.remaining_budget(), max_injury)
         today_start = datetime.combine(date.today(), datetime.min.time())
 
