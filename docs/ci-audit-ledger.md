@@ -30248,3 +30248,200 @@ model change, no cron moved — one schedule **removed**.
 `scripts/schedule_deadline.py`, `scripts/ci_audit.py`,
 `scripts/h1_collection_check.py`, `scripts/h1_analysis.py`, and the tests
 re-pointed at the world-anchored deadline.*
+
+---
+
+## Workflow inventory, and 3.1 of the 19.8 minutes — 2026-10-20
+
+### PART A — WORKFLOWS INVENTORIED
+
+**SIX, NOT SEVEN.** The directive asked for seven; `.github/workflows/` holds
+six. The full table, interaction graph and daily totals are in
+`docs/workflow-inventory.md`. The figures that matter here:
+
+* **2,981 runner minutes over 30 days = 99.4/day**, 389 runs.
+* **`h1-collect` 1,106.7 + `fixture-horizon-probe` 40.7 = 1,147.4 min = 38.5%
+  of all runner time**, spent on a closed question and a question closed by
+  arithmetic. `h1-collect` cost **221.3 min per run** — the most expensive
+  thing in the repository — five times, for n=4 and no analysis.
+* After the two disables the projection is **~61 min/day**.
+* `ci-audit` 185 runs / **79 failures**; `daily-picks` 35 / **10**.
+
+**EVERY WORKFLOW GUARDS ITSELF AND NOTHING GUARDS THE SET.** All six declare a
+concurrency group named after themselves, all `cancel-in-progress: false`. Two
+runs of one workflow never overlap; any two *different* workflows may run
+together without restriction. `closing-lines` and `paper-trading-report` share
+the identical cron `47 10 * * *`.
+
+**THREE OF THE FOUR DEPENDENCIES ARE EXPRESSED AS CLOCKS.** Only `ci-audit`
+uses `workflow_run`. `closing-lines`, `paper-trading-report` and `h1-collect`
+all infer "daily-picks has written the card" from the time of day. A nominal
+gap cannot order two jobs that are both late, and the measured instance is H1:
+three runs inside the 10-13…10-17 outage succeeded, spent 0 credits, wrote 0
+rows and reported `RUNNING_AND_FINE`.
+
+**FOUR OF SIX DRAW ON ONE TheOddsAPI POOL** (334/450 used, 16 left). A closed
+experiment took 8 of those from the pricing pool.
+
+**`odds_snapshots` HAS THREE PRODUCERS AND NO PRODUCER TAG** — `daily-picks`,
+`closing-lines`, `h1-collect`. That is why 20,971 rows could not be attributed
+to H1 without the `theoddsapi:h1` credit counter.
+
+**DISPOSITIONS.** `KEEP` daily-picks, closing-lines, ci-audit. `DELETE`
+fixture-horizon-probe (zero deadlines in 8 fetching runs; its 30-league
+coverage advantage is now inside the deadline that binds, and the reference
+binds on 0 of 834 days). `DELETE` h1-collect, re-triage **2026-11-01**.
+
+**`paper-trading-report` → THE DECISION IS NIKI'S, AND IT IS NOT KEEP-OR-KILL.**
+Cheapest workflow here: 0.8 min/run, 23.7 min/30 days, zero provider calls. Its
+content is live — 1,534 settled, win 58.0%, flat ROI **−4.67% [−8.8%, −0.5%]**,
+Brier 0.2466 model vs **0.2433 market**. But on success it writes an artifact
+nobody is notified about; **Telegram fires only on failure.** So the choice is
+*deliver it* (six lines to Telegram, as the daily card already is) or *stop
+producing it*. The third option — a daily artifact nobody is told about — is the
+one in force by default.
+
+### PART B — 19.8 NOT CLOSABLE WITHOUT A COHORT BUMP
+
+#### B1. Which of the three is timing-only
+
+| candidate | measured | timing-only? | mechanism |
+|---|---|---|---|
+| **injury loop** | 6.9–9.7 min, 30 requests | **the REQUESTS are not, the PACING is** | free tier is 10/min, and `cap=2` is recorded in-code as having caused 429s on *every* run with at least 2 fixtures. 30 requests take 3.0 min or more however they are issued: **BY NECESSITY.** But the gap was an unconditional `sleep(6)` *after* each response, so the ~7 s of DB writes was added on top. That part is ours. |
+| **Claude review** | 2.0–9.5 min, ~9 s/fixture | **NO** | the decisions are per-match independent (prompt per match, `_apply_decision` filters by `match_id`), but `_mark_sent` is an **unlocked read-modify-write on one JSON file**, and the marker it writes is `final:<match_id>` — the day-freeze that stops a later run regenerating picks behind the ruling. A lost marker changes which bet is tracked. Value-affecting **by race**, and the prerequisite is a correctness fix, not a timing change. |
+| **AF upsert loop** | **MY OWN ATTRIBUTION WAS WRONG** | the big part NO, the rest ~0 | see below. |
+
+**THE AF UPSERT LOOP: I HAD MIS-ATTRIBUTED IT, AND THE RUN SHOWS IT.** The
+duration profile said the 10.1 min was "in the per-fixture upsert loop, not the
+HTTP call", reasoning from a gap that sits *after* `AF_LEAGUE_FILTER` — which is
+emitted at the **end** of a date's loop. A gap there spans the *next* date's
+fetch and its silent loop, so the gap's position cannot separate them; the
+profile's own caveat says so. `measured` 2026-10-20 from run 39358701217:
+
+```
+API-Football: 236 fixtures on 2026-10-20 -> 0 created, 33 updated
+API-Football: 199 fixtures on 2026-10-19 -> 0 created, 13 updated
+```
+
+**TWO date calls, not seven, and ZERO slow-path fixtures.** The league filter is
+the first statement in the loop body, so the rejected fixtures cost no round
+trips at all, and 46 fast-path updates cost ~26 round trips, about **4 s**, not
+10 minutes. The loop was never the cost. What *is* the cost is the sleeps:
+**83 requests x 6 s = 8.3 min in one run.**
+
+A round trip to the DB is **168 ms** (median, n=12, `measured` 2026-10-20 **from
+this workstation, not from a CI runner** — the runner's latency is unmeasured).
+
+#### B2. The one timing-only change, done
+
+**`_api_get`'s gap is now a DEADLINE, not a sleep.** `_AF_MIN_REQUEST_GAP_S =
+6.0`; `_next_request_at` is armed the instant a response lands and waited out
+before the next request starts.
+
+**THE GUARANTEE IS UNCHANGED AND THAT IS PROVABLE.** Old spacing (response end
+to next request start) is `6 + W`; new is `max(6, W)`. Both are at least 6. The
+new one is never looser and never tighter than 6, and its tightest case, `W = 0`,
+is the case the xG and odds loops **already run today**, because both collect
+their results and write once at the end. Nothing is paced closer together than
+something already running.
+
+It also makes pacing **stricter** in one place: the error branches used to
+`return None` with no sleep at all, so an errored call was followed immediately
+by the next one. Every issued request now arms the gap.
+
+**WHAT IT RECOVERS, per loop, measured from run 39358701217:**
+
+| loop | requests | work after each response | recovered |
+|---|---|---|---|
+| injury | 30 | ~7 s of DB writes | **180 s = 3.0 min** |
+| fixtures-by-date | 2 | 0 s and 4.4 s | 4 s |
+| odds | 35 | ~0 — written after the gather | **0** |
+| xG | 16 | ~0 — one commit at the end | **0** |
+
+**About 3.1 min.** The odds and xG loops recover nothing *because there is
+nothing to overlap*: their 6 s is the provider's floor, not ours. 83 requests at
+10/min is 8.3 min and no amount of restructuring changes it.
+
+`tests/test_request_pacing.py` — 5 tests on a virtual clock. `test_3` is the
+**discrimination control**: with 12 s of work the two semantics differ by 1.5x
+(49.6 s against 73.6 s), so it fails under the old behaviour instead of passing
+under either. Both expectations are *derived from the parameters* — the first
+draft hard-coded 48 and 72 and forgot the request's own duration, which is the
+same class of mistake as pacing from the wrong instant.
+
+#### B3. The margin after it
+
+```
+BEFORE  binding +40.2   shortfall 19.8
+AFTER   binding +43.3   shortfall 16.7      recovered +3.1
+```
+
+A 3.1 min shift clamps nothing (series min 9.4 min), so the sd is unchanged and
+the term falls by exactly 3.1. **This assumes every run had a full 30-fixture
+injury budget, which is the most favourable assumption** — a 13-fixture day
+recovers 1.3 min, not 3.0. The duration series carries no per-run card size, so
+the true mean effect cannot be computed from it. +3.1 is an upper bound.
+
+#### WHY THE REMAINING 16.7 IS NOT A TIMING PROBLEM
+
+```
+cron                0.0   already the earliest a same-day cron can be
+delay  mean+3sd   428.9   n=8   <- GitHub's scheduler. 4.25x the duration term.
+duration mean+3sd 100.9   n=78  <- the only term we own
+deadline          570.0   09:30, observed earliest kickoff
+```
+
+**OF THE DURATION TERM, 58.4 MINUTES IS SPREAD, NOT LEVEL** (`3 * sd`, sd 19.5
+over runs of 9.4 to 100.8 min). **Halving the spread would buy 29.2 minutes,
+more than the whole shortfall, while cutting the mean buys 1:1.** The variance
+comes from card size and from the intermittent 5.6-min ML retrain sitting inside
+the picks path. That is the largest lever available and it is not a timing
+change: capping per-run work changes which fixtures get analysed, which is
+**selection-affecting and needs a cohort bump**.
+
+**The estimator is not a lever.** `ready_3sd` adds two 3-sigma tails as if they
+co-occur, and the delay tail rests on n=8. Reopening it to clear an alarm would
+be fitting the instrument to the reading, and `MIN_ACCEPTABLE_MARGIN_MIN = 60`
+was pre-registered 2026-10-10. Neither is touched.
+
+**THE THREE ROUTES TO 16.7, AND PRECISELY WHAT EACH COSTS.** Strictly, two of
+them need no cohort bump — but neither is timing-only, which is why the
+declaration stands:
+
+1. **Parallelise the Claude review** (~7.5 min on a 65-fixture card). Needs the
+   marker write made atomic FIRST. Decision-identical afterwards, so **no bump**
+   — but bounded by a limit that is **UNEVALUATED**: CI resolves the backend to
+   `claude_code` (the secret exists), so each review is a headless CLI
+   subprocess with a 900 s timeout, and the Pro subscription's concurrency limit
+   is not something I have measured. "Could not look" is not "no limit".
+2. **Batch the AF per-fixture commits.** **No bump**, but it converts partial
+   failure into total: today a mid-loop exception leaves fixtures 1..k
+   committed; batched, all roll back.
+3. **Cap the per-run work to cut the variance.** The biggest lever, and the one
+   that **needs the bump**.
+
+A fourth, not costed: move the ML retrain off the picks path. It is 5.6 min and
+it fires on the *slow* days, so it cuts the mean and the spread together.
+
+### ONE FINDING, RECORDED NOT FIXED
+
+`tests/_review_new_features.py` (non-gating) **errors on collection** and has
+been doing so independently of this change — proved by stashing the change and
+re-running. Root cause visible in the warning it swallows: `FeatureEngineer`
+has no attribute `_preload_cache`, caught by a broad `except` in
+`_get_bookmaker_features` and returned as **0.0**, which the file then asserts
+against (`expected 0.5455, got 0.0`). The falsy-zero class again, in a file
+that gates nothing. Not fixed here: one stage, one thing.
+
+### DISCIPLINE
+
+Gating **2,193 passed, 1 skipped**, after one failure found and fixed:
+`test_no_secrets_in_repo` flagged my own placeholder `api_key` literal, which it
+was right to do; replaced with the empty string. Non-gating: the pre-existing
+collection error above. Invariants pass, count not cited. Fingerprint
+**UNCHANGED at s5.18 / 51fbcb** — the pacing change alters no prediction, no
+selection and no stored value. No production write, no schema change, no cron
+moved.
+
+*Recorded 2026-10-20. `src/scrapers/apifootball_scraper.py`,
+`tests/test_request_pacing.py`, `docs/workflow-inventory.md`.*

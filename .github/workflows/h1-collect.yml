@@ -21,12 +21,30 @@ name: H1 Collection
 # would consume ~1,680 of 2,000 monthly minutes over seven days and this design
 # would not be affordable.
 #
-# NO CRON YET — `workflow_dispatch` ONLY, DELIBERATELY. The trial precedes the
-# loop. The cron is added after a dispatched trial reports its measured gaps,
-# so that a scheduled run can never be the first time this path executes.
-# When it is added, three rounds 120 minutes apart must finish before the
-# evening kickoff cluster: a 14:30 UTC start puts requests at ~14:30 / 16:30 /
-# 18:30, which sits inside the 360-minute window of a 20:00 kickoff.
+# ── CORRECTED 2026-10-20. THIS PARAGRAPH WAS WRONG FOR ELEVEN DAYS. ────────
+#
+# It read: "NO CRON YET — `workflow_dispatch` ONLY, DELIBERATELY. The trial
+# precedes the loop. The cron is added after a dispatched trial reports its
+# measured gaps, so that a scheduled run can never be the first time this path
+# executes." That was true when written and FALSE from `d8df667`, which added
+# `0 9 * * 2,3,4` for the collection loop.
+#
+# A HEADER THAT CONTRADICTS THE FILE IT SITS IN IS THE MOST LOAD-BEARING STALE
+# STRING THIS PROJECT HAS FOUND. Anyone auditing the trigger — including me,
+# three times — read the paragraph and stopped. The cron then fired three days
+# past the experiment's window and spent 8 TheOddsAPI credits from the pricing
+# pool, and the reason nobody caught it is written here.
+#
+# THE PLAN IT DESCRIBES WAS CARRIED OUT: the dispatched trial ran 2026-10-10
+# (38053287510), the cron was added, and four scheduled runs followed on 10-13,
+# 10-14, 10-15 and 10-20. The experiment closed at n=4 of 39 (power 0.073) and
+# the cron is now REMOVED — see the `on:` block below for the measurement.
+#
+# THE SCHEDULING ARITHMETIC IS RETAINED because a re-run would need it: three
+# rounds 120 minutes apart must finish before the evening kickoff cluster, and
+# a 14:30 UTC start puts requests at ~14:30 / 16:30 / 18:30, inside the
+# 360-minute window of a 20:00 kickoff. `0 9` was chosen to land there after
+# the measured 3h58m–5h04m scheduler lateness.
 
 on:
   # ── THE CRON COMPENSATES FOR THE SCHEDULER'S OWN LATENESS ─────────────────

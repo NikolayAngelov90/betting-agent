@@ -8,6 +8,7 @@ Includes real bookmaker odds via the /odds endpoint.
 import asyncio
 import os
 import re
+import time as _time
 import unicodedata
 from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional
@@ -526,6 +527,29 @@ def names_share_an_anchor(a: str, b: str) -> bool:
     return bool(_anchors(a) & _anchors(b))
 
 
+#: MINIMUM GAP BETWEEN REQUESTS, in seconds. The free tier allows 10 req/min,
+#: so 6.0 s is the limit exactly; the margin comes from the request's own
+#: duration, because start-to-start spacing is always HTTP + this, never this
+#: alone.
+#:
+#: IT USED TO BE AN UNCONDITIONAL `await asyncio.sleep(6)` AFTER EVERY
+#: RESPONSE. That paces correctly and also charges the caller for work it does
+#: AFTER the response: the injury loop spends ~7 s per fixture writing to the
+#: DB, so its real spacing was 6 + 7 s and the 6 was dead time. `measured`
+#: 2026-10-20 from run 39358701217: 83 requests x 6 s = 8.3 min of sleep in one
+#: run, of which the 30 injury calls (3.0 min) sat on top of work that already
+#: exceeded the gap. The odds and xG loops collect their results and write
+#: once at the end, so they have no work to overlap and recover nothing --
+#: their 6 s is the provider's floor, not ours.
+#:
+#: THE GUARANTEE IS UNCHANGED: no request starts less than this long after the
+#: previous one's RESPONSE. The old code delivered that PLUS the caller's work;
+#: this delivers exactly that. It can never issue requests closer together
+#: than the old code's tightest case, which is the xG loop -- that loop
+#: already ran at exactly this spacing, with no rateLimit retry observed.
+_AF_MIN_REQUEST_GAP_S = 6.0
+
+
 class APIFootballScraper(BaseScraper):
     """Fetches xG, match statistics, fixtures, and odds from API-Football."""
 
@@ -583,6 +607,11 @@ class APIFootballScraper(BaseScraper):
         self._rate_limit_retries = 0  # Count 429-triggered retries for telemetry
         self._account_suspended = False  # Set True when API returns account-suspended error
         self._xg_all_failed = False  # Set True when xG backfill attempts all return None
+        # Monotonic deadline: no request may START before this. Set after
+        # EVERY issued request, the error paths included -- those used to
+        # `return None` without pacing at all, so an errored call was
+        # followed immediately by the next one.
+        self._next_request_at = 0.0
 
     def _shared_budget(self):
         """The cross-process budget store, or None when unavailable.
@@ -650,8 +679,18 @@ class APIFootballScraper(BaseScraper):
         import random as _random
         for _rl_attempt in range(4):  # 1 initial attempt + up to 3 retries
             try:
+                # Wait out whatever is LEFT of the gap. `getattr` because this
+                # class is also built via `__new__` (see `_shared_budget`), and
+                # an unpaced request is the safe degradation there, not a raise.
+                _gap_left = (getattr(self, "_next_request_at", 0.0)
+                             - _time.monotonic())
+                if _gap_left > 0:
+                    await asyncio.sleep(_gap_left)
                 data = await self.fetch_json(url, params=params, headers=headers)
                 self._requests_today += 1
+                # Arm the next gap from THIS response, before any branch below
+                # can return: the error paths return without pacing otherwise.
+                self._next_request_at = _time.monotonic() + _AF_MIN_REQUEST_GAP_S
                 errors = data.get("errors", {})
                 if errors:
                     if "rateLimit" in errors:
@@ -687,11 +726,13 @@ class APIFootballScraper(BaseScraper):
                     else:
                         logger.error(f"API-Football errors: {errors}")
                     return None
-                # Pace requests to stay under 10/min free-tier limit (6s = safe margin)
-                await asyncio.sleep(6)
+                # Paced by `_next_request_at`, armed above the moment the
+                # response landed -- NOT by sleeping here, which charged the
+                # caller's own post-response work on top of the gap.
                 return data
             except Exception as e:
                 self._requests_today += 1
+                self._next_request_at = _time.monotonic() + _AF_MIN_REQUEST_GAP_S
                 logger.error(f"API-Football request failed: {e}")
                 return None
         return None  # exhausted all rate-limit retries
