@@ -45,6 +45,29 @@ CHECKPOINTS = [
 #: Phase 20 alert threshold.
 MIN_CLV_COVERAGE = 0.80
 
+#: EXIT CODE FOR "THE REPORT RAN AND A HEALTH CHECK ALARMED". Distinct from 1,
+#: which now means only "the report could not run".
+#:
+#: WHY IT NEEDED TO BE DISTINCT. 2026-10-21: the workflow ran this module as
+#: `python -m scripts.paper_trading_report | tee logs/...`, and a pipeline
+#: returns the LAST command's status. GitHub runs `run:` under `bash -e`
+#: WITHOUT `-o pipefail`, so `tee` returned 0 and python's exit code was
+#: discarded. Verified: `python -c 'raise SystemExit(1)' | tee /dev/null`
+#: exits 0 bare, 1 under pipefail.
+#:
+#: SO THE 80% COVERAGE THRESHOLD HAD NEVER FIRED. The inventory measured this
+#: workflow at 31 runs / 31 ok / 0 fail, and that record was the swallowing,
+#: not health -- coverage has been 12.5%. A threshold whose breach cannot
+#: change any observable is a check that cannot fail.
+#:
+#: The workflow now sets `pipefail` and treats this code as a FINDING: a
+#: GitHub warning, the alert carried in the delivered summary, and the job
+#: still green. A genuine crash exits 1 and fails, and the existing
+#: "the instrument is blind today" alert then says something true -- which it
+#: would NOT have for a health alert, because the instrument worked and that
+#: is how it found the problem.
+HEALTH_ALERT_EXIT = 2
+
 
 def _load_env() -> None:
     """Load .env — from main() only, never at import (see the note in
@@ -66,7 +89,8 @@ class _Pick:
                  "closing_odds", "closing_odds_captured_at", "closing_status",
                  "closing_fair", "kickoff", "is_paper", "model_version",
                  "review_action", "model_market", "model_selection",
-                 "model_result", "observations", "disposition")
+                 "model_result", "observations", "disposition",
+                 "evidence_status", "training_exclusion_reason")
 
     def __init__(self, r):
         for f in self.__slots__:
@@ -97,6 +121,11 @@ class _Pick:
         # (currently only 'consolidated' — superseded by a sibling pick on the
         # same match). Kept in the MODEL series, excluded from FINAL.
         self.disposition = getattr(r, "disposition", None)
+        # 2026-10-20: the two gates this report applied NOWHERE. See
+        # src/reporting/experiment_summary.GATES.
+        self.evidence_status = getattr(r, "evidence_status", None)
+        self.training_exclusion_reason = getattr(
+            r, "training_exclusion_reason", None)
         # Stage 9: the model series resolves its close in the MODEL's market,
         # which may differ from the final one after a Claude CHANGE.
         self.model_market = r.model_market
@@ -137,6 +166,8 @@ def load_picks(days: int, include_live: bool, model_version: Optional[str]):
             SavedPick.model_version, SavedPick.review_action,
             SavedPick.model_market, SavedPick.model_selection,
             SavedPick.model_result, SavedPick.disposition,
+            SavedPick.evidence_status,
+            Match.training_exclusion_reason,
             Match.match_date,
         ).join(Match, Match.id == SavedPick.match_id).filter(
             SavedPick.pick_date >= cutoff)
@@ -586,6 +617,41 @@ def _section_by_review_action(picks: List[_Pick]) -> None:
         print("            the final selection's close is never substituted.")
 
 
+def _to_rows(picks: List[_Pick]):
+    """`_Pick` -> `experiment_summary.Row`. One place, so the gated figures and
+    the Telegram body can never range over a different population than the
+    block printed above them."""
+    from src.reporting.experiment_summary import Row
+    return [Row(
+        pick_id=p.id, match_id=p.match_id, pick_date=p.pick_date,
+        result=p.result, is_paper=bool(p.is_paper),
+        model_version=p.model_version, disposition=p.disposition,
+        evidence_status=p.evidence_status,
+        training_exclusion_reason=p.training_exclusion_reason,
+        odds=p.odds, prob=p.prob, market_prob=p.market_prob,
+    ) for p in picks]
+
+
+def section_experiment_summary(picks: List[_Pick], days: int) -> dict:
+    """Every headline figure with the population it ranges over.
+
+    THE BLOCK ABOVE THIS ONE IS THE UNGATED VIEW, KEPT DELIBERATELY. Both are
+    printed so the gates' effect is visible rather than asserted: measured
+    2026-10-20, they move the settled count 1534 -> 1519 and the ROI
+    -4.67% -> -4.73%, and the paper/live split moves it -5.53% / -1.33%. The
+    gates matter for correctness, not for the headline, and saying so requires
+    showing both.
+    """
+    from datetime import date as _date, timedelta as _td
+    from src.reporting.experiment_summary import format_block, summarise
+    today = _date.today()
+    s = summarise(_to_rows(picks), today - _td(days=days), today, today)
+    print()
+    for line in format_block(s):
+        print(line)
+    return s
+
+
 def section_outcomes(picks: List[_Pick]) -> None:
     print("\n" + "=" * 88)
     print("OUTCOMES")
@@ -597,6 +663,14 @@ def section_outcomes(picks: List[_Pick]) -> None:
     profits = [p.profit for p in decided]
     lo, hi = _boot(profits, clusters=[p.match_id for p in decided])
     wins = sum(1 for p in decided if p.result == "win")
+    # RULE 2: a ratio without its population is not a figure. This block is
+    # the UNGATED view and says so; the gated one follows immediately.
+    _paper = sum(1 for p in decided if p.is_paper)
+    _cohorts = len({p.model_version or "UNVERSIONED" for p in decided})
+    print(f"  population         : UNGATED — {_paper} paper + "
+          f"{len(decided) - _paper} live, {_cohorts} cohort(s) POOLED, "
+          f"no disposition/evidence_status gate. The gated figures are in "
+          f"EXPERIMENT SUMMARY below.")
     print(f"  settled            : {len(decided)}")
     print(f"  win rate           : {wins / len(decided):.1%}")
     print(f"  flat ROI           : {np.mean(profits):+.2%}  95% CI {_fmt_ci(lo, hi)}")
@@ -608,15 +682,35 @@ def section_outcomes(picks: List[_Pick]) -> None:
         ll = np.mean([-math.log(max(min(p.prob if p.result == "win"
                                         else 1 - p.prob, 1 - 1e-9), 1e-9))
                       for p in scored])
-        print(f"  Brier (model)      : {brier:.4f}   (n={len(scored)})")
+        print(f"  Brier (model, ALL) : {brier:.4f}   (n={len(scored)})  "
+              f"NOT comparable to the market figure — see below")
         print(f"  log loss (model)   : {ll:.4f}")
 
-    mscored = [p for p in decided if p.market_prob]
-    if mscored:
-        mbrier = np.mean([(p.market_prob - (1.0 if p.result == "win" else 0.0)) ** 2
-                          for p in mscored])
-        print(f"  Brier (market)     : {mbrier:.4f}   (n={len(mscored)}) "
-              f"<- the number the model must beat")
+    # ── THE PAIR IS PAIRED. 2026-10-20. ────────────────────────────────────
+    #
+    # This printed a model Brier over every scored pick beside a market Brier
+    # over the subset carrying `market_probability` (populated only after
+    # migration 004), labelled "<- the number the model must beat". Measured
+    # on the live record that was 0.2466 (n=1534) against 0.2433 (n=479):
+    # different populations, presented as a comparison.
+    #
+    # PAIRED on the 479 they share: model 0.2434 vs market 0.2433, delta
+    # +0.0001, t=+0.07. The whole apparent gap was the populations. It does
+    # not rescue the model -- t=0.07 is no evidence either way -- but the
+    # report was OVERSTATING the deficit, and in the direction nobody checks.
+    from src.reporting.experiment_summary import paired_brier
+    b = paired_brier(_to_rows(decided))
+    if b["state"] == "PAIRED":
+        _t = f"t={b['t']:+.2f}" if b["t"] is not None else "t UNEVALUATED"
+        print(f"  Brier PAIRED       : model {b['model']:.4f} vs market "
+              f"{b['market']:.4f} on the SAME n={b['n_paired']}")
+        print(f"    delta            : {b['delta']:+.4f}  "
+              f"se {b['se']:.4f}  {_t}  <- the only honest comparison")
+        print(f"    not compared     : {b['n_model_only']} picks carry the "
+              f"model's probability and NOT the market's")
+    else:
+        print(f"  Brier PAIRED       : {b['state']} — no pick carries both "
+              f"probabilities, so there is nothing to pair")
 
 
 def section_calibration(picks: List[_Pick]) -> None:
@@ -678,8 +772,15 @@ def section_claude(picks: List[_Pick]) -> None:
               "model_result — cannot compare.")
 
 
-def section_health(picks: List[_Pick]) -> int:
-    """Phase 20 — explicit health checks. Returns the number of alerts."""
+def section_health(picks: List[_Pick]) -> List[str]:
+    """Phase 20 — explicit health checks. Returns the ALERT TEXTS.
+
+    It returned a count until 2026-10-21. The count was used only for
+    truthiness and for an exit code, and that exit code was discarded by
+    `| tee` in the workflow (see `HEALTH_ALERT_EXIT`), so no alert raised here
+    had ever reached a person. Returning the texts lets them travel inside the
+    delivered summary, which is a channel that works.
+    """
     print("\n" + "=" * 88)
     print("DATA QUALITY HEALTH CHECKS")
     print("=" * 88)
@@ -698,7 +799,7 @@ def section_health(picks: List[_Pick]) -> int:
     if not scoped:
         print("  INFO  no Stage 5 picks yet — coverage checks will start "
               "reporting once the frozen model writes its first prediction")
-        return 0
+        return []
 
     resolved = [p for p in scoped
                 if p.kickoff and p.kickoff.date() < date.today()]
@@ -744,7 +845,7 @@ def section_health(picks: List[_Pick]) -> int:
         print(f"  ALERT {line}")
     if not alerts:
         print("\n  All health checks pass.")
-    return len(alerts)
+    return alerts
 
 
 def section_checkpoints(picks: List[_Pick]) -> None:
@@ -793,6 +894,11 @@ def main():
                     help="include non-paper picks (default: paper only when any exist)")
     ap.add_argument("--model-version", default=None)
     ap.add_argument("--health-only", action="store_true")
+    ap.add_argument("--telegram", action="store_true",
+                    help="deliver the six-line summary to Telegram on SUCCESS. "
+                         "Until 2026-10-20 the only Telegram message this job "
+                         "ever sent was its failure alert, so a working report "
+                         "was indistinguishable from no report.")
     args = ap.parse_args()
 
     picks = load_picks(args.days, args.include_live, args.model_version)
@@ -806,7 +912,10 @@ def main():
         return
 
     if args.health_only:
-        raise SystemExit(1 if section_health(picks) else 0)
+        # Same code as the full path, for the same reason: this mode is a GATE
+        # somebody may wire up later, and two meanings for exit 1 is how the
+        # swallowing went unnoticed in the first place.
+        raise SystemExit(HEALTH_ALERT_EXIT if section_health(picks) else 0)
 
     section_operational(picks)
     section_volume(picks)
@@ -814,12 +923,50 @@ def main():
     section_pricing(picks)
     section_clv(picks)
     section_outcomes(picks)
+    summary = section_experiment_summary(picks, args.days)
     section_calibration(picks)
     section_claude(picks)
     section_checkpoints(picks)
     alerts = section_health(picks)
+
+    if args.telegram:
+        from src.reporting.experiment_summary import format_telegram
+        body = format_telegram(summary)
+        # The health alerts travel WITH the figures. Their exit code was the
+        # only channel they had, and it was being swallowed.
+        if alerts:
+            _heads = "; ".join(a.split(" — ")[0] for a in alerts)
+            body += f"{chr(10)}⚠️ {len(alerts)} health alert(s): {_heads[:260]}"
+        print()
+        print("-" * 88)
+        print("TELEGRAM BODY (delivered on success):")
+        # The body carries an emoji, as the daily card does. Printing it
+        # raised UnicodeEncodeError on a cp1251 console (reproduced
+        # 2026-10-21), and a decorative character must not be able to fail
+        # the step that produces the report. The DELIVERED text is unaffected:
+        # only this echo degrades.
+        try:
+            print(body)
+        except UnicodeEncodeError:
+            print(body.encode("ascii", "replace").decode("ascii"))
+            print("  (echo transliterated: this console cannot encode the "
+                  "body; the delivered message is unchanged)")
+        # Delivery failure must not fail the report: the artifact is still
+        # written and the figures are still in the log. It is REPORTED, never
+        # swallowed -- a silent send is how the broken alert survived months.
+        try:
+            from scripts.ci_alert import send
+            print(f"  delivered: {bool(send(body))}")
+        except Exception as e:
+            print(f"  NOT DELIVERED: {type(e).__name__}: {e}")
+
     print()
-    raise SystemExit(1 if alerts else 0)
+    if alerts:
+        # A GitHub annotation so the finding is visible on the run page even
+        # when the job is green, which it now stays for a health alert.
+        print(f"::warning::paper-trading-report: {len(alerts)} health "
+              f"alert(s) — {'; '.join(alerts)[:400]}")
+    raise SystemExit(HEALTH_ALERT_EXIT if alerts else 0)
 
 
 if __name__ == "__main__":

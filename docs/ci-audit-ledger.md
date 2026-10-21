@@ -30445,3 +30445,265 @@ moved.
 
 *Recorded 2026-10-20. `src/scrapers/apifootball_scraper.py`,
 `tests/test_request_pacing.py`, `docs/workflow-inventory.md`.*
+
+---
+
+## The weekly report, audited against this project's own rules — 2026-10-21
+
+### PART A — REPORT AUDITED
+
+Measured against `--days 120 --include-live`, the invocation CI actually used.
+Window `pick_date >= 2026-06-22`, measured 2026-10-20 (figures re-measured
+2026-10-21 where the date roll moved them).
+
+#### The per-figure population table
+
+| figure as printed | n | window | paper/live | cohorts | `disposition` | `evidence_status` | `training_exclusion_reason` | paired? |
+|---|---|---|---|---|---|---|---|---|
+| `settled 1,534` | 1534 | rolling 120d | **POOLED** 1240+294 | **15** | **not applied** | **not applied** | **not applied** | n/a |
+| `win rate 58.0%` | 1534 | rolling 120d | **POOLED** | **15** | no | no | no | n/a |
+| `flat ROI -4.67%` | 1534 | rolling 120d | **POOLED** | **15** | no | no | no | n/a |
+| `95% CI [-8.8%, -0.5%]` | 1534 | rolling 120d | **POOLED** | **15** | no | no | no | cluster bootstrap on **fixtures** — **this one was already right** |
+| `Brier (model) 0.2466` | **1534** | rolling 120d | **POOLED** | **15** | no | no | no | — |
+| `Brier (market) 0.2433` | **479** | rolling 120d | **POOLED** | **15** | no | no | no | **NO — different population** |
+| `KEEP n=788 ROI -6.4%` | 788 | rolling 120d | **POOLED** | **15** | no | no | no | n/a |
+
+No fold or era count applies: the report is prospective, not cross-validated.
+The fold caveat belongs to the `bookmaker_blend_weight` recommendation, and it
+was absent — now carried in `ON_RECORD`.
+
+#### IS ANY FIGURE A RATIO OVER A MIXED POPULATION? YES — ALL OF THEM.
+
+**Fifteen `model_version` cohorts in one ROI**, with per-cohort ROIs from
+**-18.28% to +31.00%**:
+
+```
+UNVERSIONED                        n=294  win=57.1%  ROI= -1.47%
+stage5_baseline_20260807.694a60    n=293  win=60.4%  ROI= -0.34%
+stage5_baseline_20260807.485823    n=235  win=54.9%  ROI=-10.83%
+...                                (11 more)
+stage5_baseline_20260807.dfe302    n= 19  win=78.9%  ROI=+31.00%
+```
+
+This is `s5.2`'s own precedent: picks from different configurations are
+different experiments and the project already declared they must not be
+pooled. The single all-time ROI is **not wrong so much as not about anything**.
+
+#### THE REPORT WAS THE ONLY CONSUMER THAT APPLIED NO GATES
+
+`_live_only()` and `_valid_evidence()` have **eleven call sites in
+`betting_agent.py` and had zero here.** What that admitted:
+
+```
+disposition='consolidated'          4 settled picks, excluded from the live record everywhere else
+evidence_status='void_corrupt_features'  11, real wagers whose model inputs described a DIFFERENT CLUB
+training_exclusion_reason           11 matches corrupt enough to be excluded from training
+```
+
+Gate by gate, on the settled 120-day set:
+
+| population | n | win | ROI |
+|---|---|---|---|
+| as printed, no gate | 1534 | 58.0% | **-4.67%** |
+| + `disposition IS NULL` | 1530 | 58.1% | -4.54% |
+| + `evidence_status IS NULL` | 1519 | 58.0% | -4.73% |
+| + `training_exclusion_reason IS NULL` | 1519 | 58.0% | -4.73% |
+| **paper only** (rule 3) | 1227 | 58.2% | **-5.53%** |
+| **live only** (rule 3) | 292 | 57.2% | **-1.33%** |
+
+The gates move the headline by 6 basis points. **They matter for correctness,
+not for the number** — which is why both views are now printed rather than one
+asserted.
+
+#### THE BRIER PAIR WAS NOT A COMPARISON, AND THE ERROR RAN AGAINST THE MODEL
+
+`prob` is populated for every pick; `market_prob` only after migration 004. The
+report printed a Brier over **1,534** beside a Brier over **479** and labelled
+the second "<- the number the model must beat".
+
+```
+AS PRINTED   model 0.2466 (n=1534)  vs  market 0.2433 (n= 479)   apparent gap -0.0033
+PAIRED       model 0.2434 (n= 479)  vs  market 0.2433 (n= 479)   delta +0.0001
+             paired delta se 0.0016, t=+0.07
+```
+
+**The entire apparent gap was the populations.** On the picks they share the
+model and the market are indistinguishable. This does **not** rescue the model
+— t=0.07 is no evidence either way, and the no-information conclusion stands on
+its four routes — but the report had been **overstating the deficit**, in the
+direction nobody audits.
+
+### PART B — THE STANDING REQUEST: NOT DONE, AND IT IS 57 DAYS OLD
+
+**Was the change made? NO.** The workflow still passed `--include-live` and
+`--days 120`, so the report counted a rolling window across every cohort.
+
+**AGE.** The request's reference point was `1,074 picks / 52%`. That figure was
+the standing settled record by **2026-08-10** (`docs/stage10.2-model-identity`)
+and was quoted in a prompt on **2026-08-25** (`docs/stage-16-prompt.md`, dated
+by `git log`). So the request is **at least 57 days old** as of 2026-10-21.
+Provenance: `inferred` from the reference figure's own date, not `measured` —
+the verbatim request is conversational and is in no document.
+
+**WHAT "WHEN THE EXPERIMENT STARTED" RESOLVES TO.** Four readings, and they do
+not agree:
+
+```
+1. the first pick ever                       2026-02-28  n=2314  win=55.2%  ROI=-4.69%
+2. the first SETTLED pick                    2026-02-28  n=2314  win=55.2%  ROI=-4.69%
+3. the first pick carrying a model_version   2026-08-11  n=1240  win=58.2%  ROI=-5.42%
+4. the first cohort that still has picks     2026-08-11  n=1240  win=58.2%  ROI=-5.42%
+```
+
+**CHOSEN: 2026-08-11, readings 3 and 4, which coincide.** The justification is
+not a preference. The unversioned block is **n=1074, win 51.7%** — *exactly*
+the "1,074 picks / 52%" the request named. **The request identified the
+population to drop by quoting its figure**, so the date that drops precisely
+that population is what it meant. Readings 1 and 2 are the same date here,
+which is itself worth keeping: the first pick settled, so that distinction
+cannot be drawn from this data.
+
+#### AND `--include-live` WAS NEVER ADDING LIVE RESULTS
+
+`is_paper` and `model_version` are **perfectly collinear** — both off-diagonal
+cells are zero:
+
+```
+is_paper=live  x UNVERSIONED : 1074   2026-02-28 .. 2026-08-10
+is_paper=paper x versioned   : 1316   2026-08-11 .. 2026-10-20
+```
+
+**THERE HAS NEVER BEEN A LIVE WAGER.** `is_paper=False` is a pre-experiment
+default, so `--include-live` added the legacy era under a flag named for
+something else. **Rule 3 and Part B's request are therefore the same fix**, and
+the live arm is now empty *by construction* — which is the proof.
+
+### PART C — REBUILT
+
+`src/reporting/experiment_summary.py`. Every figure carries `n`, its window,
+its cohort set and its provenance; paper and live are separate arms that are
+never added; the Brier pair is paired on the intersection with its delta, se
+and t; the CI names its method and that it resamples **fixtures**; and the
+no-information routes plus the `bookmaker_blend_weight` caveats ("three
+effective folds of five, adjacent, atypical odds era") travel *with* the
+figures. A gate that drops nothing prints `dropped 0` rather than vanishing.
+
+Live output, 2026-10-21:
+
+```
+  experiment start     : 2026-08-11
+  excluded as pre-experiment : 288 picks
+  disposition                  dropped    4  {'consolidated': 4}
+  evidence_status              dropped   11  {'void_corrupt_features': 11}
+  training_exclusion_reason    dropped    0
+  PAPER (VERSIONED COHORTS)
+    n                  : 1250 settled picks over 1240 fixtures, 2026-08-11 .. 2026-10-20
+    flat ROI           : -5.52%  95% CI [-10.00%, -1.06%]
+    cohorts POOLED     : 14 — enumerated below
+    Brier PAIRED       : model 0.2434 vs market 0.2433 on the SAME n=484
+      delta            : +0.0001  se 0.0016  t=+0.05
+  live (pre-versioning legacy): NO SETTLED PICKS IN SCOPE (n=0)
+```
+
+**THE SUMMARY IS INVARIANT TO `--include-live`** — 1250 picks and -5.52% with
+or without it, verified 2026-10-21. So the flag is now *kept deliberately*: it
+loads the legacy era so the summary can exclude it **with a count** instead of
+never loading it and printing 0. The ungated block above it is retained and now
+**names its own population** on its first line.
+
+**DISCRIMINATION CONTROLS** — `tests/test_experiment_summary.py`, 21 tests
+rendered against a hand-computed fixture (6 wins at 2.00, 4 losses → ROI
++20.00%, win 60.0%). Each control perturbs **one** thing and asserts the figure
+**moves**: each gate drops its own pick; adding losing live picks leaves the
+paper figure at +20.00%; the cohort count tracks the cohorts; and clustering
+ten picks onto five fixtures **widens** the interval. Plus the one that matters:
+`test_the_unpaired_comparison_would_have_given_a_DIFFERENT_answer`, which fails
+if the fixture cannot tell the two populations apart. `NO_PAIRED_PICKS` is a
+state, asserted never to render as `0.0000`.
+
+### PART D — REPORT DELIVERED
+
+**Sent, verified `delivered: True` 2026-10-21.** Six lines, 507 characters:
+
+```
+📈 PAPER TRADING — 1250 settled picks, 2026-08-11..2026-10-20
+population: PAPER only, from 2026-08-11 (experiment start), 14 cohorts POOLED, 1240 fixtures
+win 58.2%  •  flat ROI -5.52% 95% CI [-10.0%, -1.1%]
+Brier PAIRED on n=484: model 0.2434 vs market 0.2433, Δ+0.0001 t=+0.05
+live arm reported SEPARATELY (n=0, pre-versioning legacy — never pooled with paper)
+gates dropped 15; 288 pre-experiment picks excluded. Model adds no information over the price — 4 routes, 2026-08-07. Detail in the run artifact.
+```
+
+Line 1 carries n and the span; **line 2 is the population**, because a figure
+whose population lives in a linked artifact is a figure read without it.
+
+**THE CRON COLLISION, FIXED NOT WORKED AROUND.** `47 10 * * *` → **`23 10 * * *`**.
+The report moved and `closing-lines` did not: its 10:47 slot is
+measurement-justified (early-kickoff picks are written 10:07–10:32 UTC; at
+10:17 only 8 of 54 existed), so moving it would change what it captures. This
+job is read-only and spends nothing. Its header also claimed daily-picks fires
+09:37 (it has been `0 0` since 2026-10-18) and that the first capture is 11:17
+— **the stated reason for its own time described a schedule that no longer
+existed**. Corrected in place.
+
+### THE FINDING THE DELIVERY UNCOVERED: THE EXIT CODE WAS BEING SWALLOWED
+
+Running the report locally exited **1** while the inventory had measured this
+workflow at **31 runs / 31 ok / 0 fail**. Both are true, and the reconciliation
+is the defect:
+
+```
+bash -e -c 'python -c "raise SystemExit(1)" | tee /dev/null'   -> exit 0
+bash    -c 'set -o pipefail; ...              | tee /dev/null' -> exit 1
+```
+
+GitHub runs `run:` under `bash -e` **without `-o pipefail`**, so the pipeline
+returned `tee`'s status and the report's exit code was discarded. **The 80%
+closing-coverage threshold had therefore never been able to fail this job** —
+and coverage is **12.5% (165/1316)**. `31/31 ok` was the swallowing, not health.
+A threshold whose breach cannot change any observable is a check that cannot
+fail.
+
+Fixed, with the two outcomes kept apart:
+
+* `set -o pipefail`, so the code survives.
+* **`HEALTH_ALERT_EXIT = 2`** — "the report ran and a check alarmed". The alert
+  now travels in the delivered summary and in a `::warning::` annotation, and
+  the job stays **green**.
+* Exit 1 keeps its single meaning, "could not run", which is the only case
+  where the existing *"the experiment is still collecting, but its instrument
+  is blind today"* alert says something true. For a health alert it would have
+  been false: the instrument worked, and that is how it found the problem.
+* `section_health` returns the alert **texts**, not a count. An integer cannot
+  reach a person; its only channel was the code that was being dropped.
+
+Verified: the full report now exits **2** and emits
+`::warning::paper-trading-report: 1 health alert(s) — closing capture coverage
+12.5% ... below the 80% threshold`.
+
+### TWO MISTAKES OF MINE, FOR THE RECORD
+
+**A literal backspace byte reached a source file.** A heredoc collapsed
+`\bin\bash` to a real `\x08`, so `grep` and the terminal rendered
+`Gitinash.exe` while Python saw `Git\x08in\x08ash` — which is why an exact-match
+replace kept reporting "already fixed" against a line I could see. The
+candidate was never reached because `shutil.which` matched first, so the test
+passed with a corrupt constant in it. Repaired, and **every file touched in
+this stage and the last was scanned for stray control characters: none remain.**
+
+**A skipped control is not a control.** The pipefail control first failed
+because `["bash", ...]` resolved to Windows' WSL stub, which exits **1** for
+"could not exec" — indistinguishable from a propagated failure. It now probes
+the interpreter with `exit 7` and proves it runs before trusting any code from
+it, and resolves a real bash rather than skipping.
+
+### DISCIPLINE
+
+Gating **2,215 passed, 1 skipped**. Invariants pass, count not cited. Fingerprint
+**UNCHANGED at s5.18 / 51fbcb** — changing what a report counts changed nothing
+about what anything predicts. No production write, no schema change, no model
+change. One cron moved, deliberately, to end a collision.
+
+*Recorded 2026-10-21. `src/reporting/experiment_summary.py`,
+`tests/test_experiment_summary.py`, `scripts/paper_trading_report.py`,
+`.github/workflows/paper-trading-report.yml`.*

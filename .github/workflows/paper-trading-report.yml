@@ -10,19 +10,30 @@ name: Paper Trading Report
 # 100/200/500 checkpoints would only ever be seen if someone ran the script by
 # hand.
 #
-# WHEN
+# WHEN — CORRECTED 2026-10-21. THIS BLOCK WAS WRONG IN TWO WAYS.
 #
-# After the day's data is complete, not before:
+# It said daily-picks fires 09:37 (it has been `0 0` since 2026-10-18) and
+# that closing-lines' first slot is 11:17, so this job at 10:47 ran "before
+# the first capture". But closing-lines ALSO carries `47 10 * * *`, added
+# deliberately at Stage 15 L4 — so the two fired in the SAME MINUTE, every
+# day, and the stated reason for this job's time was describing a schedule
+# that no longer existed.
 #
-#   09:37 UTC  daily-picks   — settles yesterday's matches, then generates today's
-#   11:17 UTC  closing-lines — first capture slot of the day
-#   ...        closing-lines — every 2h through 23:17 UTC
-#   10:47 UTC  THIS JOB      — after settlement, before the first capture
+# THE ACTUAL SCHEDULE:
 #
-# Running between the daily pipeline and the first capture means the report
-# always describes a settled, quiet state rather than one mid-write. It is a
-# running summary of the whole experiment, so it does not need to wait for
-# today's picks to reach kickoff.
+#   00:00 UTC  daily-picks   — settles yesterday, then generates today
+#                              (+ a measured 3h58m–5h04m scheduler lateness)
+#   10:23 UTC  THIS JOB      — after settlement, before the first capture
+#   10:47 UTC  closing-lines — first capture slot
+#   11:17+     closing-lines — every 2h through 23:17 UTC
+#
+# WHY THIS JOB MOVED AND closing-lines DID NOT. closing-lines' 10:47 slot is
+# load-bearing and measurement-justified: picks for early kickoffs are written
+# between 10:07 and 10:32 UTC, and at 10:17 only 8 of 54 existed. Moving it
+# would change what it captures. This job is read-only, spends nothing and
+# only needs to be after settlement and not mid-write, so it is the one that
+# moves. 10:23 keeps the original intent — a settled, quiet state — and ends
+# the collision.
 #
 # COST
 #
@@ -33,9 +44,10 @@ name: Paper Trading Report
 
 on:
   schedule:
-    # 10:47 UTC (13:47 Sofia). Off-hour minute to dodge scheduler congestion;
-    # ~70 min after daily-picks starts, ~30 min before the first capture.
-    - cron: '47 10 * * *'
+    # 10:23 UTC (13:23 Sofia). MOVED OFF `47 10` 2026-10-21: that minute is
+    # closing-lines' first capture slot and the two collided every day. See
+    # the WHEN block above for why this job moved rather than that one.
+    - cron: '23 10 * * *'
   workflow_dispatch:
     inputs:
       days:
@@ -103,12 +115,51 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
           TABLES_CREATED: '1'
+          # DELIVERY ON SUCCESS, 2026-10-21. Until today the only Telegram
+          # message this job could send was its FAILURE alert, so a working
+          # report and no report at all looked identical from the outside: the
+          # content went to an artifact nobody is told about. These two secrets
+          # are what `--telegram` needs; the report still succeeds if the send
+          # fails, and says so rather than swallowing it.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           DAYS="${{ inputs.days }}"
           MV="${{ inputs.model_version }}"
-          ARGS="--days ${DAYS:-120} --include-live"
+          # `--include-live` IS DELIBERATE, and it no longer pools anything.
+          # It loads the pre-versioning era so the EXPERIMENT SUMMARY can
+          # exclude it WITH A COUNT ("288 pre-experiment picks excluded")
+          # instead of never loading it and printing 0. The gated figures are
+          # invariant to the flag -- verified 2026-10-21, 1250 picks and
+          # -5.52% either way -- and the ungated block above them now names
+          # its own population.
+          ARGS="--days ${DAYS:-120} --include-live --telegram"
           if [ -n "$MV" ]; then ARGS="$ARGS --model-version $MV"; fi
-          python -m scripts.paper_trading_report $ARGS | tee logs/paper-trading-report.txt
+
+          # `pipefail` ADDED 2026-10-21, AND IT IS THE WHOLE POINT OF THIS
+          # BLOCK. GitHub runs `run:` under `bash -e` WITHOUT `-o pipefail`, so
+          # a pipeline returns `tee`'s status and the report's exit code was
+          # discarded. Verified: `python -c 'raise SystemExit(1)' | tee
+          # /dev/null` exits 0 bare and 1 under pipefail. The 80% closing-
+          # coverage threshold therefore had NEVER been able to fail this job
+          # — the inventory's "31 runs / 31 ok / 0 fail" was the swallowing,
+          # not health, while coverage sat at 12.5%.
+          set -o pipefail
+          rc=0
+          python -m scripts.paper_trading_report $ARGS \
+            | tee logs/paper-trading-report.txt || rc=$?
+
+          # TWO OUTCOMES, KEPT APART. 2 means the report RAN and a health check
+          # alarmed: the alert is already in the delivered summary and in a
+          # ::warning:: annotation, so the job stays green and the "instrument
+          # is blind today" alert — which would be false — does not fire.
+          # Anything else non-zero means the report could not run, which is a
+          # real failure and the one that alert correctly describes.
+          if [ "$rc" = "2" ]; then
+            echo "Report ran; health alert(s) present and delivered. Not a failure."
+            exit 0
+          fi
+          exit "$rc"
 
       - name: Upload report
         if: always()
