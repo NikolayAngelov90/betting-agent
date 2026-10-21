@@ -215,13 +215,22 @@ def test_the_BACKLOG_is_EMPTY_and_every_EXEMPTION_names_its_GROUND():
 def test_the_gate_EXCLUDES_both_markers_and_the_other_step_RUNS_them():
     """The separation the markers exist to express, asserted on the workflow.
     """
+    # ── THE TWO SELECTIONS ARE NOW IN TWO WORKFLOWS. 2026-10-21. ──────────
+    # They were two steps of `daily-picks`, which stopped a reminder gating
+    # capture but not reddening the run. The partition is unchanged; only its
+    # address is.
     wf = pathlib.Path(".github/workflows/daily-picks.yml").read_text(
+        encoding="utf-8")
+    rem = pathlib.Path(".github/workflows/reminders.yml").read_text(
         encoding="utf-8")
     assert '-m "not calendar and not live"' in wf, (
         "the gate no longer excludes both markers")
-    assert '-m "calendar or live"' in wf, (
-        "the non-gating step no longer runs them, so a marked test would "
+    assert '-m "calendar or live"' in rem, (
+        "the reminder workflow no longer runs them, so a marked test would "
         "never run at all")
+    assert '-m "calendar or live"' not in wf, (
+        "the reminder selection is back inside the capture workflow, whose "
+        "conclusion then carries two facts again")
 
 
 def test_the_predicate_is_PURELY_STATIC_and_that_is_why_it_may_gate():

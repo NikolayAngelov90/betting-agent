@@ -212,13 +212,28 @@ def test_continue_on_error_is_still_set_on_every_core_step():
     # pipeline problem — on the step whose entire purpose is to describe a
     # pipeline problem. Named here rather than absorbed into the number,
     # because this guard exists so a step cannot LOSE the flag silently.
-    assert len(guarded) == 11, (
-        f"{len(guarded)} steps carry continue-on-error, expected 11 — if a step "
+    # 11 -> 10 on 2026-10-21, AND IT IS A REMOVAL, NOT A LOSS. The calendar
+    # step LEFT this workflow for `.github/workflows/reminders.yml`: its flag
+    # stopped it gating capture but not REDDENING the run, so on 2026-10-21
+    # daily-picks concluded `failure` with all five critical steps green. A
+    # separate workflow cannot do either. The flag now lives on the reminder
+    # step there, for its own reason (the log must still upload), and
+    # `test_calendar_separation` asserts it.
+    assert len(guarded) == 10, (
+        f"{len(guarded)} steps carry continue-on-error, expected 10 — if a step "
         "lost it, the job now HALTS there instead of merely reporting red; if "
         "one gained it, name it here and say why")
-    assert any("calendar" in n for n in guarded), (
-        "the calendar step lost continue-on-error — a date-dependent assertion "
-        "can stop price capture again, which is the 2026-10-09 incident")
+    assert not any("calendar" in n for n in guarded), (
+        "a calendar step is back inside the capture workflow; the separation "
+        "is across WORKFLOWS now, not across steps")
+    import yaml as _yaml
+    _rem = _yaml.safe_load(pathlib.Path(
+        ".github/workflows/reminders.yml").read_text(encoding="utf-8"))
+    _rsteps = [s for j in _rem["jobs"].values() for s in j.get("steps", [])]
+    assert any(s.get("id") == "reminders" and s.get("continue-on-error") is True
+               for s in _rsteps), (
+        "the reminder step lost continue-on-error — its log no longer uploads "
+        "and the step that explains the failure never runs")
     assert any("Generate, review, and send picks" in n for n in guarded), (
         "the picks step lost continue-on-error — the job will now halt before "
         "update-results, the second settle, and the cache saves")

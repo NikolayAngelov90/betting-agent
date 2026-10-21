@@ -1,0 +1,192 @@
+name: Reminders
+
+# WHY THIS EXISTS — ONE RUN, ONE MEANING. 2026-10-21.
+#
+# `daily-picks` concluded `failure` while all five of its critical steps
+# succeeded, because a self-expiring calendar guard reached its date. Its
+# conclusion was carrying TWO independent facts:
+#
+#     did price capture work?        and        is a reminder due?
+#
+# A human reading red cannot separate them, and that inability is what cost
+# six cards on 2026-10-13..18: a red run was triaged as a pipeline failure
+# when capture had actually succeeded, and the reverse is the dangerous
+# direction — a red that means "a reminder is due" trains people to ignore red.
+#
+# So the reminders move out. After this, `daily-picks` concluding `failure`
+# means CAPTURE FAILED and nothing else, and `tests/test_one_meaning_per_run.py`
+# asserts that a reminder cannot redden it.
+#
+# WHY `workflow_run` AND NOT A CLOCK. Ordering is guaranteed by dependency,
+# never by a clock — a nominal gap cannot order two jobs that are both late,
+# and this project has paid for that twice (the H1 collector ran through the
+# 10-13..10-17 outage reporting RUNNING_AND_FINE, and `closing-lines` captures
+# nothing when daily-picks is late). `ci-audit` is the precedent and it works.
+#
+# IT RUNS WHETHER `daily-picks` SUCCEEDED OR FAILED, AND SAYS WHICH. The
+# fixture-horizon probe's whole lifetime was lost to a dependency that looked
+# fine, so this job never infers the upstream state — it prints it.
+
+on:
+  workflow_run:
+    workflows:
+      - Daily Betting Picks
+    # NOT `[success]`. A reminder is due on its own date whatever the pipeline
+    # did, and the day the pipeline breaks is the day a pending decision is
+    # most likely to be relevant.
+    types: [completed]
+  schedule:
+    # BACKSTOP ONLY, for a dropped `workflow_run` event. 13:00 UTC is after
+    # daily-picks' observed completion window with margin. A reminder that
+    # fires a day late is still a reminder; one that never fires is not.
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+concurrency:
+  # One reminder pass at a time. Two would send the same decision twice.
+  group: reminders
+  cancel-in-progress: false
+
+jobs:
+  reminders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Report the UPSTREAM state, before anything else
+        # PRINTED, NEVER INFERRED. `workflow_run` carries the upstream
+        # conclusion and this job does not depend on it, so the first thing in
+        # the log is what daily-picks actually did.
+        env:
+          UP_NAME: ${{ github.event.workflow_run.name }}
+          UP_CONCL: ${{ github.event.workflow_run.conclusion }}
+          UP_URL: ${{ github.event.workflow_run.html_url }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "workflow_run" ]; then
+            echo "upstream       : ${UP_NAME}"
+            echo "its conclusion : ${UP_CONCL}"
+            echo "its run        : ${UP_URL}"
+          else
+            echo "upstream       : none — triggered by ${EVENT}"
+            echo "its conclusion : UNEVALUATED (no workflow_run payload)"
+          fi
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # BEFORE the install, deliberately. `test_config_identity` requires the
+      # config copy to precede the test run, and it locates that run by the
+      # FIRST occurrence of the test runner's name -- which also appears in
+      # the pip line below, and would have appeared in this comment had it
+      # been spelled out. Copying first makes the ordering unambiguous rather
+      # than arguing with a guard whose point is sound.
+      - name: Create directories
+        run: mkdir -p data/models logs
+
+      - name: Create config from example
+        run: cp config/config.example.yaml config/config.yaml
+
+      - name: Install dependencies
+        # Minimal, as paper-trading-report is: the reminder selection reads the
+        # DB, the GitHub API and football-data.org, and trains nothing.
+        #
+        # THE SQLALCHEMY BOUND IS REPEATED HERE because this step does not read
+        # requirements.txt. SQLAlchemy 2.1 resolves a bare `postgresql://` URL
+        # to psycopg v3, which is not installed, so every `create_engine`
+        # raises.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c constraints.txt "sqlalchemy>=2.0.0,<2.1" \
+            psycopg2-binary pyyaml python-dotenv loguru numpy scipy pytest
+
+      - name: Run the reminders
+        id: reminders
+        continue-on-error: true
+        env:
+          # ── THE CREDENTIALS ARE GIVEN DELIBERATELY, AND THAT IS THE POINT ──
+          #
+          # On 2026-10-21 a reminder reported "the weekday series shrank to
+          # n=0" from a step that had no GH token. It had turned the absence of
+          # a credential into a finding about football. The test now reports
+          # UNEVALUATED in that case (rule 3) — but a reminder that can only
+          # ever say UNEVALUATED is not a reminder, so the token it needs is
+          # supplied here rather than left out and worked around.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FOOTBALL_DATA_ORG_KEY: ${{ secrets.FOOTBALL_DATA_ORG_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+          TABLES_CREATED: '1'
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -o pipefail
+          python -m pytest tests/ -v --tb=short -m "calendar or live" \
+            | tee logs/reminders.txt
+
+      - name: Upload the reminder log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reminders-${{ github.run_number }}
+          path: logs/reminders.txt
+          retention-days: 30
+
+      - name: Say what it means
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          O_REMINDERS: ${{ steps.reminders.outcome }}
+          UP_CONCL: ${{ github.event.workflow_run.conclusion }}
+          EVENT: ${{ github.event_name }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'EOF'
+          import os
+          import subprocess
+          import sys
+
+          outcome = os.environ.get("O_REMINDERS", "")
+          up = os.environ.get("UP_CONCL") or "UNEVALUATED"
+          event = os.environ.get("EVENT", "")
+          url = os.environ.get("RUN_URL", "")
+
+          # TWO MESSAGES THAT MUST NOT LOOK ALIKE. "a reminder is due" and
+          # "today's card was lost" arrive in the same Telegram chat, so each
+          # names the workflow it came from and what it means. The daily-picks
+          # alert keeps its own wording and is not touched.
+          if outcome == "failure":
+              body = (
+                  "\U0001f4c5 REMINDERS — A DECISION IS DUE.\n"
+                  "A self-expiring guard has reached its date. Delete it or "
+                  "take the decision it was holding; do NOT extend it.\n"
+                  "THIS IS NOT A PIPELINE FAILURE. Price capture lives in "
+                  "`daily-picks`, which reports its own state separately "
+                  f"(its conclusion on this trigger: {up}).\n"
+                  f"trigger: {event}\n{url}")
+              print(body)
+              subprocess.run([sys.executable, "-m", "scripts.ci_alert", body],
+                             check=False)
+              sys.exit(1)
+
+          if outcome not in ("success", "failure"):
+              # THIRD STATE. `skipped`/`cancelled` is not "no reminder due".
+              body = (
+                  "❓ REMINDERS — UNEVALUATED.\n"
+                  f"The reminder step did not run to completion "
+                  f"(outcome={outcome!r}), so whether a decision is due is "
+                  f"UNKNOWN. This is not a clear result.\n{url}")
+              print(body)
+              subprocess.run([sys.executable, "-m", "scripts.ci_alert", body],
+                             check=False)
+              sys.exit(1)
+
+          print(f"Reminders: nothing due. upstream={up} trigger={event}")
+          sys.exit(0)
+          EOF

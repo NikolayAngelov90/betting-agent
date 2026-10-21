@@ -48,6 +48,39 @@ import yaml
 
 WF = pathlib.Path(".github/workflows/daily-picks.yml")
 
+#: ── THE SEPARATION MOVED FROM STEPS TO WORKFLOWS. 2026-10-21. ─────────────
+#:
+#: Stage 28 put the calendar assertions in their own STEP with
+#: `continue-on-error`, which stopped them gating capture. It did not stop
+#: them REDDENING the run: the critical-step alert read their outcome and
+#: exited 1, so on 2026-10-21 `daily-picks` concluded `failure` while all five
+#: critical steps succeeded. One conclusion, two facts -- and a human reading
+#: red cannot separate them, which is what cost six cards on 10-13..18.
+#:
+#: They now live in their own workflow, triggered on this one's
+#: `workflow_run: completed` (by dependency, never by a clock) and running
+#: whether it succeeded or failed.
+REM = pathlib.Path(".github/workflows/reminders.yml")
+
+
+def _steps_of(path):
+    d = yaml.safe_load(path.read_text(encoding="utf-8"))
+    jobs = d["jobs"]
+    return jobs[next(iter(jobs))]["steps"]
+
+
+def _code_of(path):
+    """A workflow's text with COMMENT LINES removed.
+
+    The first draft of the re-pointed assertions failed on ITS OWN COMMENT
+    explaining that a reference had been removed -- the comment-blind text
+    scan, again. Only lines whose first non-space character is `#` are
+    dropped, which covers the YAML comments and the Python comments inside a
+    `run:` block alike.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return chr(10).join(l for l in lines if not l.lstrip().startswith("#"))
+
 #: Measured 2026-10-09 by evaluating the predicates at explicit dates.
 #:
 #:   h1_reservation          0 -> 168 at 2026-10-09, 168 -> 0 at 2026-10-17
@@ -126,6 +159,9 @@ def _steps():
     return d["jobs"]["daily-picks"]["steps"]
 
 
+WF_STEPS = _steps_of(WF)
+
+
 def _step_named(frag):
     for i, s in enumerate(_steps()):
         if frag in (s.get("name") or ""):
@@ -133,15 +169,22 @@ def _step_named(frag):
     raise AssertionError(f"no step containing {frag!r}")
 
 
-def test_DIRECTION_1_the_calendar_step_does_NOT_gate_capture():
-    """A calendar failure must not prevent `--update`."""
-    i_cal, cal = _step_named("calendar")
-    i_cap, cap = _step_named("Run daily update")
-    assert cal.get("continue-on-error") is True, (
-        "the calendar step halts the job on failure, so it still gates capture "
-        "— which is the whole defect this split exists to remove")
-    assert i_cal < i_cap, "the calendar step runs after capture, so it proves nothing"
-    assert "-m" in str(cal.get("run", "")) and "calendar" in str(cal.get("run"))
+
+def test_DIRECTION_1_the_reminders_CANNOT_gate_capture():
+    """A reminder must not prevent `--update`.
+
+    STRENGTHENED 2026-10-21. It used to assert `continue-on-error: true` on a
+    step inside `daily-picks`, which made a reminder unable to gate capture
+    but still able to redden the run. The reminders are now a SEPARATE
+    WORKFLOW, so they cannot touch capture at all -- a stronger form of the
+    same claim, and one that does not depend on a flag staying set.
+    """
+    for st in WF_STEPS:
+        run = str(st.get("run", ""))
+        assert '-m "calendar or live"' not in run, (
+            f"step {st.get('name')!r} runs the reminder selection inside the "
+            f"capture workflow again")
+    assert REM.exists(), "the reminder workflow is gone"
 
 
 def test_DIRECTION_2_the_correctness_suite_STILL_gates_capture():
@@ -158,42 +201,65 @@ def test_DIRECTION_2_the_correctness_suite_STILL_gates_capture():
     assert t.get("timeout-minutes") == 15, "the hang bound was lost"
 
 
-def test_the_two_steps_PARTITION_the_suite():
-    """`not calendar` + `calendar` must cover every test exactly once.
+
+def test_the_two_WORKFLOWS_PARTITION_the_suite():
+    """`not calendar and not live` + `calendar or live` must cover every test
+    exactly once.
 
     A selector that drops tests silently is worse than no split: the dropped
-    ones stop running and nothing says so.
+    ones stop running and nothing says so. The two selections now live in two
+    workflows, so the partition is asserted across them.
     """
-    _, gate = _step_named("Run tests")
-    _, cal = _step_named("calendar")
-    assert "-m" in str(gate.get("run")) and "not calendar" in str(gate.get("run"))
-    assert re.search(r"-m\s+[\"']?calendar", str(cal.get("run"))), cal.get("run")
+    gate = [str(st.get("run", "")) for st in WF_STEPS]
+    assert any('-m "not calendar and not live"' in r for r in gate), (
+        "the capture gate's selection changed")
+    rem = [str(st.get("run", "")) for st in _steps_of(REM)]
+    assert any('-m "calendar or live"' in r for r in rem), (
+        "the reminder workflow does not run the complementary selection")
 
 
-def test_the_calendar_failure_REDS_the_run_and_ALERTS():
-    """`continue-on-error` must not mean "ignored"."""
-    _, cal = _step_named("calendar")
-    assert cal.get("id"), "the calendar step has no id, so no later step can read it"
-    text = WF.read_text(encoding="utf-8")
-    assert f"steps.{cal['id']}.outcome" in text, (
-        f"nothing reads steps.{cal['id']}.outcome — the step fails silently and "
-        f"the run stays green")
 
+def test_a_reminder_failure_REDS_THE_REMINDER_RUN_and_ALERTS():
+    """`continue-on-error` must not mean "ignored" -- now in the new home.
 
-def test_the_ALERT_TEXT_says_capture_may_have_SUCCEEDED():
-    """A red run whose capture succeeded is a NEW STATE.
-
-    Anyone triaging it needs to know the two are independent now, and the place
-    they will read is the alert — not the ledger.
+    The reminder step carries `continue-on-error` so its artifact still
+    uploads, and the step after it reads the outcome and exits 1. That is what
+    makes the REMINDER run red while `daily-picks` stays green.
     """
-    text = WF.read_text(encoding="utf-8")
-    # Located by the ALERT STEP, not by the first occurrence of the word
-    # "calendar" — which is now in the scheduler-envelope comment ("the same
-    # calendar day for both crons"). The first version of this assertion split
-    # there and read the wrong block.
-    alert = text.split("- name: Alert on critical step failure", 1)[1]
-    assert "O_CALENDAR" in alert, (
-        "the alert step cannot see the calendar step's outcome")
+    steps = _steps_of(REM)
+    rem = next(st for st in steps if st.get("id") == "reminders")
+    assert rem.get("continue-on-error") is True, (
+        "the reminder step halts the job, so the log never uploads")
+    text = REM.read_text(encoding="utf-8")
+    assert f"steps.{rem['id']}.outcome" in text, (
+        f"nothing reads steps.{rem['id']}.outcome -- the step fails silently "
+        f"and the reminder run stays green")
+    teller = next(st for st in steps if "means" in str(st.get("name", "")))
+    assert "sys.exit(1)" in str(teller.get("run", "")), (
+        "the reminder run cannot go red, so a due decision passes unnoticed")
+
+
+
+def test_the_REMINDER_ALERT_says_it_is_NOT_a_capture_failure():
+    """A red reminder run is a different fact from a lost card.
+
+    Anyone triaging it reads the alert, not the ledger -- and the two messages
+    arrive in the same Telegram chat, so each must name its workflow and say
+    what it is NOT.
+    """
+    text = REM.read_text(encoding="utf-8")
+    assert "REMINDERS" in text and "A DECISION IS DUE" in text
+    assert "NOT A PIPELINE FAILURE" in text, (
+        "the reminder alert does not say what it is NOT, so it reads like a "
+        "capture failure")
+    assert "daily-picks" in text, (
+        "the reminder alert does not name where capture actually lives")
+    # and the capture alert must not have acquired reminder language
+    picks_code = _code_of(WF)
+    for phrase in ("A DECISION IS DUE", "self-expiring", "CALENDAR ASSERTION"):
+        assert phrase not in picks_code, (
+            f"daily-picks' alert says {phrase!r}, so the two messages are "
+            f"converging again")
 
     # THE WORDING IS ASSERTED ON THE EXECUTED MESSAGE, not on the file. Two
     # earlier versions of this test read the source and both were wrong about
@@ -279,8 +345,14 @@ def _alert_decision(monkeypatch, outcomes: dict):
 
     for var, key in (("O_UPDATE", "update"), ("O_SETTLE1", "settle1"),
                      ("O_PICKS", "picks"), ("O_RESULTS", "results"),
-                     ("O_SETTLE2", "settle2"), ("O_CALENDAR", "calendar")):
+                     ("O_SETTLE2", "settle2")):
         monkeypatch.setenv(var, outcomes[key])
+    # O_CALENDAR IS GONE. 2026-10-21: the reminders moved to their own
+    # workflow, so daily-picks' alert can no longer see them and an injected
+    # calendar outcome would be a variable the shipped script never reads.
+    assert "calendar" not in outcomes, (
+        "the harness was handed a calendar outcome, which the shipped alert "
+        "no longer reads -- the test would be exercising nothing")
     monkeypatch.setenv("RUN_URL", "http://example/run")
 
     sent = []
@@ -298,53 +370,66 @@ _CAPTURE_OK = dict(update="success", settle1="success", picks="success",
                    results="success", settle2="success")
 
 
-def test_POSITIVE_CONTROL_calendar_fails_CAPTURE_SUCCEEDS_alert_FIRES(monkeypatch):
-    """THE CONTROL. The state that has never been observed in production."""
-    sent, code = _alert_decision(monkeypatch,
-                                 dict(_CAPTURE_OK, calendar="failure"))
-    assert sent, (
-        "a calendar failure with every capture step green produced NO alert — "
-        "the run would go green and the expiry would pass unnoticed, which is "
-        "SUP-1 with extra steps")
-    msg = " ".join(str(x) for x in sent[0][0])
-    assert "CALENDAR ASSERTION FAILED" in msg
-    assert "do not extend it" in msg.lower(), (
-        "the alert does not say the remedy is DELETION, so the reader has to "
-        "find the test to learn what decision is due")
-    assert "CAPTURE IS UNAFFECTED" in msg, (
-        "the alert does not say capture survived, so a reader will assume this "
-        "run produced nothing")
-    assert code == 1, (
-        f"the run exits {code}, so a calendar failure leaves it GREEN — "
-        f"`continue-on-error` became `ignored`")
+
+def test_POSITIVE_CONTROL_capture_OK_now_exits_0_and_SAYS_NOTHING(monkeypatch):
+    """THE CONTROL, INVERTED BY THE MOVE. 2026-10-21.
+
+    It used to assert that a calendar failure with every capture step green
+    produced an alert AND exit 1. That was correct while the two facts shared
+    a conclusion. Now they do not: with capture green, `daily-picks` must say
+    NOTHING and exit 0, whatever any reminder is doing -- that is the whole
+    content of "one run, one meaning".
+
+    The reminder's own alert is asserted by
+    `test_a_reminder_failure_REDS_THE_REMINDER_RUN_and_ALERTS` above, so the
+    state is still covered; it has simply moved to the workflow that owns it.
+    """
+    sent, code = _alert_decision(monkeypatch, dict(_CAPTURE_OK))
+    assert code == 0, (
+        f"daily-picks exits {code} with every capture step green -- something "
+        f"other than capture can still redden it")
+    assert not sent, (
+        f"daily-picks alerted with every capture step green: {sent}")
 
 
 def test_the_control_in_the_OTHER_direction_a_clean_run_stays_silent(monkeypatch):
     """Without this, the alert above carries no information."""
-    sent, code = _alert_decision(monkeypatch,
-                                 dict(_CAPTURE_OK, calendar="success"))
+    sent, code = _alert_decision(monkeypatch, dict(_CAPTURE_OK))
     assert sent == [], "the alert fires on a fully clean run"
     assert code == 0
 
 
-def test_a_CAPTURE_failure_still_alerts_when_the_calendar_PASSED(monkeypatch):
-    """The split must not have made capture failures quieter."""
+def test_a_CAPTURE_failure_still_alerts_after_the_WORKFLOW_SPLIT(monkeypatch):
+    """Neither split must have made capture failures quieter.
+
+    RENAMED 2026-10-21: there is no calendar outcome to pass any more, so the
+    old name described a condition the harness can no longer express.
+    """
     sent, code = _alert_decision(
-        monkeypatch, dict(_CAPTURE_OK, picks="failure", calendar="success"))
+        monkeypatch, dict(_CAPTURE_OK, picks="failure"))
     assert sent, "a picks failure no longer alerts"
     msg = " ".join(str(x) for x in sent[0][0])
     assert "FAILED" in msg and "picks" in msg
-    assert "CALENDAR ASSERTION FAILED" not in msg, (
-        "a capture failure is being reported as a calendar failure")
+    assert "CALENDAR" not in msg.upper(), (
+        "a capture failure is being reported with calendar language")
+    assert code == 1
 
 
-def test_BOTH_failing_reports_BOTH(monkeypatch):
-    """They are independent now, so the alert must not collapse them."""
-    sent, _ = _alert_decision(
-        monkeypatch, dict(_CAPTURE_OK, update="failure", calendar="failure"))
+
+def test_a_CAPTURE_failure_is_reported_ON_ITS_OWN_TERMS(monkeypatch):
+    """RE-POINTED 2026-10-21. "Both failing" was a state of ONE run; with the
+    split it is two runs, each reporting its own fact. What must still hold is
+    that a capture failure is reported as a capture failure and nothing else.
+    """
+    sent, code = _alert_decision(
+        monkeypatch, dict(_CAPTURE_OK, update="failure", picks="failure"))
+    assert sent, "a capture failure no longer alerts"
     msg = " ".join(str(x) for x in sent[0][0])
-    assert "CALENDAR ASSERTION FAILED" in msg
-    assert "update" in msg, "the capture failure vanished behind the calendar one"
+    assert "update" in msg and "picks" in msg, (
+        "a failing step vanished from the alert")
+    assert "CALENDAR" not in msg.upper(), (
+        "a capture failure is being reported with calendar language")
+    assert code == 1
 
 
 # ── THE THIRD DECLARED MEMBER: H1's 10-14 DECISION POINT (added 2026-10-10) ──
@@ -465,3 +550,164 @@ def test_the_ACKNOWLEDGEMENT_records_the_figure_the_reason_and_the_COST():
         "the clearing action does not protect the attribution flag, which is "
         "what keeps H1's spend measurable at 6 of 168 rather than inferred")
     assert len(A["why_not_retired"]) > 100
+
+
+# ══════════ ONE RUN, ONE MEANING — the workflow split, 2026-10-21 ══════════
+#
+# Rule 1: a run's conclusion carries ONE fact. Two facts need two workflows.
+# These were briefly a separate file, `tests/test_one_meaning_per_run.py`,
+# which was itself the duplication rule 1 forbids: this file already owned the
+# "where do calendar assertions live" contract. Folded in, file deleted.
+
+
+def test_a_REMINDER_CANNOT_REDDEN_daily_picks():
+    """THE ASSERTION THAT MATTERS. After the move, `daily-picks` concluding
+    `failure` means capture failed and nothing else."""
+    src = _code_of(WF)
+    assert "O_CALENDAR" not in src, (
+        "the calendar outcome is wired into daily-picks again, so a reminder "
+        "can redden a run whose capture succeeded")
+    assert "steps.calendar" not in src, "the calendar step id is referenced"
+    assert "cal_msg" not in src, (
+        "the alert still composes a calendar message, so it still speaks "
+        "about something other than capture")
+    alert = next(st for st in WF_STEPS
+                 if st.get("name") == "Alert on critical step failure")
+    body = str(alert["run"])
+    tail = body[body.index("All critical steps OK"):][:200]
+    assert "sys.exit(0)" in tail, "the clean path no longer exits 0"
+    assert "sys.exit(1)" not in tail, (
+        "the clean path can still exit 1, so something other than capture can "
+        "redden this run")
+
+
+def test_the_REMINDERS_are_ordered_by_DEPENDENCY_not_a_clock():
+    """Rule 2. A nominal gap cannot order two jobs that are both late, and
+    this project has paid for that twice: the H1 collector ran through the
+    10-13..10-17 outage reporting RUNNING_AND_FINE, and `closing-lines`
+    captures nothing when daily-picks is late."""
+    d = yaml.safe_load(REM.read_text(encoding="utf-8"))
+    trig = d.get(True) or d.get("on") or {}
+    assert "workflow_run" in trig, "ordered by a clock again"
+    assert "Daily Betting Picks" in trig["workflow_run"]["workflows"]
+    # `completed`, NOT `success`: a reminder is due on its own date whatever
+    # the pipeline did, and the day the pipeline breaks is the day a pending
+    # decision is most likely to matter
+    assert trig["workflow_run"]["types"] == ["completed"], (
+        f"types={trig['workflow_run']['types']} - on [success] a reminder "
+        f"would be silenced by the pipeline breaking")
+    if "schedule" in trig:
+        assert "BACKSTOP" in REM.read_text(encoding="utf-8").upper(), (
+            "the reminder workflow has a cron not declared a backstop")
+
+
+def test_it_REPORTS_the_upstream_state_rather_than_inferring_it():
+    """The fixture-horizon probe's whole lifetime was lost to a dependency
+    that looked fine, so this job prints the upstream conclusion."""
+    upstream = next(st for st in _steps_of(REM)
+                    if "UPSTREAM" in str(st.get("name", "")))
+    assert "workflow_run.conclusion" in str(upstream.get("env", {})), (
+        "the upstream conclusion is not read")
+    assert "UNEVALUATED" in str(upstream.get("run", "")), (
+        "a non-workflow_run trigger must report UNEVALUATED rather than "
+        "leaving the upstream state blank and readable as success")
+
+
+def test_an_UNEVALUATED_reminder_step_is_its_OWN_message():
+    """Third state. `skipped`/`cancelled` is not "no reminder due"."""
+    rem = _code_of(REM)
+    assert "UNEVALUATED" in rem
+    assert 'outcome not in ("success", "failure")' in rem, (
+        "a reminder step that did not complete is treated as one that did")
+
+
+def test_the_reminders_are_GIVEN_the_credentials_they_need():
+    """Rule 3: an alarm reports a finding only from data it actually read.
+
+    On 2026-10-21 a reminder reported "the weekday series shrank to n=0" from
+    a step with no GH token -- a finding about football from the absence of a
+    credential. The test now reports UNEVALUATED instead, but a reminder that
+    can ONLY say UNEVALUATED is not a reminder, so the new home supplies the
+    token deliberately rather than leaving it out and working around it.
+    """
+    step = next(st for st in _steps_of(REM) if st.get("id") == "reminders")
+    env = step.get("env") or {}
+    for key in ("GH_TOKEN", "FOOTBALL_DATA_ORG_KEY", "DATABASE_URL"):
+        assert key in env, (
+            f"{key} is not supplied, so the reminder that needs it can only "
+            f"ever report UNEVALUATED")
+
+
+def test_the_UNEVALUATED_fix_is_STILL_IN_PLACE_in_the_test_itself():
+    """Belt and braces: the credential is supplied AND the test still refuses
+    to invent a verdict without it. Either alone is a defect."""
+    src = pathlib.Path("tests/test_cron_split_by_daytype.py").read_text(
+        encoding="utf-8")
+    assert "UNEVALUATED, not clear" in src
+    assert "pytest.skip(" in src
+    assert "GH_TOKEN" in src, (
+        "the skip reason does not say whether a credential was present, so "
+        "'could not look' and 'nothing there' are indistinguishable again")
+
+
+#: THE KNOWN-WRONG CASE: this morning's reminder, in shape.
+THE_REMINDER_THAT_REDDENED_CAPTURE = '''"""The 2026-10-21 reminder, verbatim in shape."""
+import pytest
+import scripts.ci_audit as ci
+
+
+@pytest.mark.live
+def test_the_weekday_cron_CLEARS_the_stated_margin():
+    by_type, _crons = ci.collect_lag_series_by_daytype()
+    lag = [l for _d, l in (by_type.get("weekday") or [])]
+    assert len(lag) >= 8, f"the weekday series shrank to n={len(lag)}"
+'''
+
+
+def test_KNOWN_WRONG_todays_reminder_reddens_REMINDERS_and_NOT_daily_picks():
+    """THE CONTROL, drawn from the morning that motivated the split.
+
+      * the CAPTURE GATE deselects it entirely -> `daily-picks` stays green;
+      * the REMINDER selection collects it      -> that workflow can go red.
+
+    Asserted by RUNNING both selections over the planted test, because the
+    claim is about which selection picks it up -- a fact about pytest, not
+    about the YAML.
+    """
+    import subprocess
+    import sys
+
+    planted = pathlib.Path("tests/test_zz_one_meaning_probe.py")
+    planted.write_text(THE_REMINDER_THAT_REDDENED_CAPTURE, encoding="utf-8")
+    try:
+        gate = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", str(planted),
+             "-p", "no:cacheprovider", "-m", "not calendar and not live"],
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=300)
+        rem = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", str(planted),
+             "-p", "no:cacheprovider", "--collect-only",
+             "-m", "calendar or live"],
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=300)
+    finally:
+        planted.unlink(missing_ok=True)
+
+    gate_out = gate.stdout + gate.stderr
+    rem_out = rem.stdout + rem.stderr
+
+    # EXIT 5 IS "NO TESTS COLLECTED", NOT A FAILURE. The probe runs alone
+    # here, so deselecting its only test leaves nothing to run; in the real
+    # gate the whole tree runs alongside it and 5 cannot occur.
+    assert "deselected" in gate_out, gate_out[-800:]
+    assert gate.returncode in (0, 5), (
+        f"the capture gate was reddened by a reminder (rc={gate.returncode}): "
+        f"{gate_out[-1000:]}")
+    assert " failed" not in gate_out, (
+        f"a reminder FAILED inside the capture gate: {gate_out[-1000:]}")
+
+    assert "no tests ran" not in rem_out, (
+        "the reminder selection does not collect the reminder, so moving it "
+        "out silenced it instead of relocating it")
+    assert "1 test" in rem_out or "test collected" in rem_out, rem_out[-800:]

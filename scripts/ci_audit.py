@@ -93,7 +93,13 @@ LOGS = pathlib.Path("ci_logs")
 #: a new file under `.github/workflows/` fails the suite until it is either
 #: listed here or named in `UNAUDITED_WORKFLOWS` with a reason.
 WORKFLOWS = ("daily-picks.yml", "closing-lines.yml", "paper-trading-report.yml",
-             "ci-audit.yml", "h1-collect.yml", "fixture-horizon-probe.yml")
+             "ci-audit.yml", "h1-collect.yml", "fixture-horizon-probe.yml",
+             # ADDED 2026-10-21 WITH THE WORKFLOW ITSELF, in the same commit.
+             # `ci-audit.yml` was created on 2026-09-25 and added here a month
+             # later, and eight of its red runs survived unrecorded in the
+             # gap. A workflow and its registration ship together or the gap
+             # happens again.
+             "reminders.yml")
 
 #: Workflow files deliberately outside the audit, each with its reason. Empty
 #: today: every workflow is audited. An entry here is a decision, not an

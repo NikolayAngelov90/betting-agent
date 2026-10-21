@@ -4,8 +4,20 @@ A workflow is a producer. The same three outcomes apply as to any producer: a
 **live consumer**, a **registered question with a date**, or it runs against
 something **closed**.
 
-**SIX, NOT SEVEN.** The directive asked for seven; `.github/workflows/` holds
-six. Stated rather than padded.
+**SIX AT THE TIME OF WRITING; SEVEN SINCE 2026-10-21.** The directive asked
+for seven and `.github/workflows/` held six, stated rather than padded. A
+seventh was then created deliberately: **`reminders.yml`**, which took the
+calendar and reminder assertions out of `daily-picks` so that one run
+carries one fact. It is registered in the audit's `WORKFLOWS` in the same
+commit that created it — `ci-audit.yml` went a month unregistered and eight
+of its red runs survived unrecorded in the gap.
+
+| **reminders** (added 2026-10-21) | `workflow_run` on daily-picks `completed`, `0 13 * * *` backstop, dispatch | — | ~2 (est.) | — | none | `logs/reminders.txt` → artifact | **Niki — Telegram when a decision is due**, worded so it cannot be mistaken for a lost card | is a self-expiring guard due? **OPEN** | **KEEP** |
+
+The row above is appended rather than folded into the table, because every
+figure in that table is `measured` over 2026-09-20…2026-10-20 and this
+workflow did not exist then. Its cost is `assumed`, from
+`paper-trading-report`'s 0.8 min/run plus a dependency install.
 
 **Query window:** 2026-09-20 … 2026-10-20 (30 days) for run counts and runner
 minutes; TheOddsAPI figures are month-keyed and therefore October-to-date.

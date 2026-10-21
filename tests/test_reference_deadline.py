@@ -473,14 +473,17 @@ def test_the_NON_GATING_test_step_can_RUN_the_live_check():
     """The `live` test needs the key too, or it skips forever."""
     import yaml
 
-    wf = yaml.safe_load(pathlib.Path(".github/workflows/daily-picks.yml")
+    # RE-POINTED 2026-10-21: the non-gating suite moved to its own workflow,
+    # and the key is on the STEP that runs it rather than the job -- which is
+    # the tighter place for it, so this checks there.
+    wf = yaml.safe_load(pathlib.Path(".github/workflows/reminders.yml")
                         .read_text(encoding="utf-8"))
-    job = [j for j in wf["jobs"].values()
-           if any('-m "calendar or live"' in str(s.get("run", ""))
-                  for s in j.get("steps", []))]
-    assert job, "no job runs the non-gating suite any more"
-    assert sd.REFERENCE_KEY_ENV in (job[0].get("env") or {}), (
-        f"{sd.REFERENCE_KEY_ENV} is not in that job's env, so "
+    steps = [s for j in wf["jobs"].values() for s in j.get("steps", [])
+             if '-m "calendar or live"' in str(s.get("run", ""))]
+    assert steps, "no step runs the non-gating suite any more"
+    env = {k for s in steps for k in (s.get("env") or {})}
+    assert sd.REFERENCE_KEY_ENV in env, (
+        f"{sd.REFERENCE_KEY_ENV} is not in that step's env, so "
         f"test_LIVE_the_reference_answers_for_TOMORROW would skip on every "
         f"CI run and prove nothing")
 
