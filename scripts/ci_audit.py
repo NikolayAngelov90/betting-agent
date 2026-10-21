@@ -75,6 +75,8 @@ from scripts.schedule_deadline import (
     format_two_margins,
     format_reference_deadline,
     prospective_margin,
+    structural_breach_is_acknowledged,
+    STRUCTURAL_ACK,
     two_margins,
     reference_earliest)
 
@@ -200,7 +202,84 @@ SELF_EMITTED_ANNOTATIONS = (
     # from a finding, not the presence of the annotation.
     ("::error::PROBE ALARM", "scripts/fixture_horizon_probe.py"),
     ("::error::PROBE REFUSED", "scripts/fixture_horizon_probe.py"),
+    # Added 2026-10-21 with the workflow that emits it. It is followed
+    # immediately by `sys.exit(1)`, so it explains exactly one exit and the
+    # remainder stays honest.
+    ("::error::REMINDER DUE", ".github/workflows/reminders.yml"),
 )
+
+#: ── WORKFLOWS WHOSE RED IS A VERDICT, NOT A FAILURE. 2026-10-21. ──────────
+#:
+#: `reminders.yml` exists to go red when a self-expiring guard reaches its
+#: date. Alarming on that is `fixtures_zero_active` again -- an alarm that
+#: fires daily with nothing a reader can do about it. But SILENCING THE
+#: WORKFLOW IS NOT AVAILABLE: that is precisely what hid eight `ci-audit` reds
+#: and the probe's `BROKEN`, and it is why `NEVER_ALARM_WORKFLOWS` is kept as
+#: small as it is.
+#:
+#: So the red is CLASSIFIED instead, three-valued:
+#:
+#:   VERDICT         red WITH the registered marker -> does NOT alarm
+#:   FAILURE         red WITHOUT it                 -> DOES alarm
+#:   UNCLASSIFIABLE  cancelled, empty log, or the marker cannot be read
+#:
+#: A crashed reminder workflow -- a syntax error, a missing credential, a
+#: traceback -- carries no marker and therefore still alarms. Both directions
+#: are controlled in `tests/test_red_is_classified_per_workflow.py`.
+#:
+#: THE MARKER IS THE RENDERED FORM, because that is what THIS TOOL OBSERVES.
+#: GitHub consumes the workflow command: the log holds `##[error]X`, and
+#: `::error::X` survives only in the `##[group]Run ...` echo of the step's own
+#: source. Pinning the source literal is the exact mistake that made the
+#: annotation matcher count echoed script text and miss every real annotation
+#: -- measured on three runs 2026-10-13.
+DELIBERATE_RED_MARKERS = {
+    ".github/workflows/reminders.yml": (
+        "##[error]REMINDER DUE",
+        "a self-expiring guard reached its date; this workflow exists to say "
+        "so, and price capture is reported separately by daily-picks"),
+}
+
+#: Where `UNCLASSIFIABLE` goes, stated rather than left to the reader: INSIDE
+#: `alarmed`. "The marker could not be read" is not "there was no marker" --
+#: the third-state rule -- and a workflow whose red cannot be classified is
+#: the case where silence has cost the most here. It is the conservative side
+#: and it is the side a cancelled run lands on, which is noisy by design.
+UNCLASSIFIABLE_ALARMS = True
+
+#: VERDICT requires the marker AND the non-zero exit it explains. A marker
+#: with no exit means the step printed the annotation and then succeeded, so
+#: the red came from somewhere else and is NOT explained -- that is the
+#: co-occurrence precondition, and ignoring it is what let the partition
+#: report a phantom remainder of 1 on every red audit run.
+def classify_red(workflow: str, log: str, facts: Dict[str, object]) -> tuple:
+    """`(state, why)` for a run that concluded `failure`.
+
+    `workflow` is the FILE PATH, as `WORKFLOWS` spells it, because a `name:`
+    can be edited without the file moving.
+    """
+    entry = DELIBERATE_RED_MARKERS.get(workflow)
+    if entry is None:
+        return ("FAILURE", "no registered marker for this workflow, so every "
+                           "red is a failure")
+    marker, why = entry
+    if log is None or len(log.strip()) < _MIN_AUDITABLE_LOG_BYTES:
+        return ("UNCLASSIFIABLE",
+                f"log is empty or too short to read ({0 if log is None else len(log.strip())} "
+                f"bytes), so the marker could not be looked for")
+    if str(facts.get("run_conclusion") or "").lower() == "cancelled":
+        return ("UNCLASSIFIABLE", "the run was cancelled, so it never reached "
+                                  "the point where it would have marked itself")
+    if marker not in log:
+        return ("FAILURE",
+                f"red WITHOUT {marker!r} - a crashed reminder workflow must "
+                f"still be heard")
+    if not facts.get("exit_annotations"):
+        return ("UNCLASSIFIABLE",
+                f"{marker!r} is present but NO non-zero exit accompanies it, "
+                f"so the marker explains nothing and the red is unaccounted "
+                f"for")
+    return ("VERDICT", why)
 
 # ────────────────────── RESOLVED RUNS (CLR-2, Stage 27, 2026-10-02) ──────────
 #
@@ -700,7 +779,25 @@ def extract(log: str) -> Dict[str, object]:
                    "no_fixtures_at_all", "unpriced_check_dead",
                    "implausible_check_dead",
                    "duplicate_fixture_refusals", "picks_run_guard_declined",
-                   "report_sent"):
+                   "report_sent",
+                   # ── ADDED 2026-10-21, AND THESE TWO COULD NOT FIRE ──────
+                   #
+                   # Found by the surface census, which asked which surfaces
+                   # had ever been proved CAPABLE of firing. Both patterns
+                   # match plain markers with no numeric capture group, so
+                   # `int()` raised, the key never reached `facts`, and
+                   # `facts.get("model_integrity_failures")` was always
+                   # falsy. The model-integrity and model-signature alarms
+                   # were REGISTERED, PATTERN-MATCHED AND INCAPABLE OF
+                   # ALARMING since they were written on 2026-10-12.
+                   #
+                   # The fallback was telling us: it prints "matched but
+                   # produced no number ... NOT COUNTED" — but only when the
+                   # pattern matches, which needs a real integrity failure to
+                   # happen first. The same shape as
+                   # `unpriced_check_dead`, named three lines below, which
+                   # this list was extended for once already.
+                   "model_integrity_failures", "model_unsigned_loads"):
             f[key] = len(ms)
         elif key == "injuries_saved":
             f["injuries_saved"] = int(ms[-1][0])
@@ -1231,10 +1328,22 @@ MARGIN_REMEDY = (
     "weekend 09:45) and no deadline choice clears this: the kickoff is a fact "
     "and the ready time is ours. TODAY: dispatch daily-picks manually that "
     "morning, which skips the measured 3h58m-5h04m scheduler lateness. "
-    "DURABLY: an earlier cron, or a faster run -- the duration profile sized "
-    "~7 min in the sequential injury loop, ~7 min in the sequential Claude "
-    "review and up to ~9 min in the AF upsert loop, and any two of those "
-    "close the 19.8-minute shortfall against the registered 60")
+    # RE-STATED 2026-10-21, because every figure in the old sentence was
+    # superseded within a day. "~7 min in the injury loop" was the SLEEP, and
+    # only the pacing part was recoverable (3.1 min, shipped). "~9 min in the
+    # AF upsert loop" was never real -- that loop costs ~4 SECONDS. And the
+    # "19.8-minute shortfall" was computed against a duration term that
+    # measured run start to run END. A remedy quoting retired numbers points
+    # the reader at work that does not exist, which is why the previous
+    # version of this text was rewritten for the same reason on 2026-10-20.
+    "DURABLY: an earlier cron, or a faster run. MEASURED 2026-10-21 over "
+    "n=72 runs, against the structural margin: parallelising the Claude "
+    "review behind an atomic marker buys +30.5m on its own, because it cuts "
+    "the SPREAD (sd 18.4 -> 10.8) and the bound is mean+3sd; moving the ML "
+    "retrain off the picks path buys +3.5m; the shipped request-pacing "
+    "change buys +4.0m once it reaches the series. The remaining structural "
+    "deficit is 7.4m, so retrain + pacing very nearly closes it and the "
+    "review closes it outright")
 
 
 def schedule_margin(series, cron_minutes: int,
@@ -2538,6 +2647,10 @@ def main() -> int:
         # Run metadata, not log-derived: the only evidence that
         # separates "still running" from "log unavailable".
         facts["run_status"] = r.get("status")
+        # Added 2026-10-21 for `classify_red`: a cancelled run never reached
+        # the point where it would have marked itself, which is
+        # UNCLASSIFIABLE rather than FAILURE.
+        facts["run_conclusion"] = r.get("conclusion")
         # Only the DAY'S FIRST run of a workflow exercises discovery from cold.
         # A same-day re-run legitimately finds no NEW fixtures, because the
         # first run already added them — so applying the per-source check to
@@ -2569,9 +2682,28 @@ def main() -> int:
         # CLR-2. A resolved run leaves the ALARM's scope because a row says so,
         # and stays in the TABLE because it happened. Recording the resolution
         # is the clearing action and it changes this predicate.
+        # ── A RED MEANS "FAILURE" ONLY FOR WORKFLOWS WHOSE REDS ARE
+        # FAILURES. 2026-10-21, rule 1: the declaration is READ, never
+        # assumed. `reminders.yml` is designed to redden when a guard reaches
+        # its date; a crashed reminders run carries no marker and still
+        # alarms. Silencing the workflow is NOT available -- that is what hid
+        # eight ci-audit reds and the probe's BROKEN.
+        _red_state, _red_why = (None, None)
+        if str(r.get("conclusion") or "").lower() == "failure" \
+                and r["workflow"] in DELIBERATE_RED_MARKERS:
+            _red_state, _red_why = classify_red(r["workflow"], log, facts)
+            print(f"  red classified: {_red_state} - {_red_why}")
+        if _red_state == "UNCLASSIFIABLE" and UNCLASSIFIABLE_ALARMS:
+            alarmed.append(
+                f"{rid} {r['workflow']} red UNCLASSIFIABLE - {_red_why}")
+        # Read IMMEDIATELY ABOVE the predicate it gates. It used to sit at the
+        # top of this block, and the red-classification inserted between them
+        # put 582 characters of code in the gap -- which broke the CLR-2
+        # guard's window and, more to the point, separated a value from its
+        # only use.
         _resolved = RESOLVED_RUNS.get(str(rid))
         if v in fail_on and r["workflow"] not in NEVER_ALARM_WORKFLOWS \
-                and not _resolved:
+                and not _resolved and _red_state != "VERDICT":
             alarmed.append(f"{rid} {r['workflow']} {v}")
 
         # ── THE FOURTH ALARM SITE, added 2026-10-12 and written down ────────
@@ -2775,11 +2907,36 @@ def main() -> int:
     # action available to the operator clears it, which is the definition of
     # the thing CLR-2 says must not be an alarm.
     if _struct.get("verdict") == "ALARM":
-        _sack = _struct["acknowledged"]
-        print(f"   structural margin {_struct['binding']:+.0f} min for "
-              f"{_tomorrow} is below {_struct['min_margin']} min and is "
-              f"ACKNOWLEDGED since {_sack['since']}, review {_sack['review']}."
-              f" It does NOT alarm: {_sack['action']}")
+        # ── ACKNOWLEDGED, BUT ONLY WHILE IT HOLDS. 2026-10-21. ─────────────
+        #
+        # This printed the acknowledgement unconditionally, so a structural
+        # margin that DETERIORATED would have gone on reporting "does NOT
+        # alarm" with a stale figure beside it. The predicate compares the
+        # figure AND the review date -- the retired
+        # `ACKNOWLEDGED_MARGIN_BREACH` compared only the figure and absorbed
+        # a breach for days past its own review date.
+        _deficit = _struct["binding"] - _struct["min_margin"]
+        _sack = structural_breach_is_acknowledged(_deficit)
+        if _sack:
+            print(f"   structural margin {_struct['binding']:+.0f} min for "
+                  f"{_tomorrow} is below {_struct['min_margin']} min "
+                  f"(deficit {_deficit:+.1f}) and is ACKNOWLEDGED since "
+                  f"{_sack['since']}, review {_sack['review']}. It does NOT "
+                  f"alarm: {_sack['action']}")
+        else:
+            print(f"!! STRUCTURAL MARGIN {_struct['binding']:+.0f} min for "
+                  f"{_tomorrow} (deficit {_deficit:+.1f}) is NO LONGER "
+                  f"COVERED by the acknowledgement made "
+                  f"{STRUCTURAL_ACK['since']} at "
+                  f"{STRUCTURAL_ACK['binding']:+.1f} (review "
+                  f"{STRUCTURAL_ACK['review']}): it has either DETERIORATED "
+                  f"or passed its review date. CLEARING ACTION: "
+                  f"{STRUCTURAL_ACK['action']}")
+            alarmed.append(
+                f"structural margin deficit {_deficit:+.1f}m for {_tomorrow} "
+                f"is worse than the acknowledged "
+                f"{STRUCTURAL_ACK['binding']:+.1f}m, or the acknowledgement "
+                f"(review {STRUCTURAL_ACK['review']}) has expired")
 
     if _cron is None:
         print("!! daily-picks carries no single `m h * * *` cron — the margin is "

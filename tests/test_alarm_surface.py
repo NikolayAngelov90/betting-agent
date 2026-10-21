@@ -206,12 +206,31 @@ def test_the_FULL_alarm_surface_is_enumerated_here():
     src = inspect.getsource(ci)
     appends = [l.strip() for l in src.splitlines()
                if "alarmed.append(" in l]
-    assert len(appends) == 9, (
+    # 9 -> 11 on 2026-10-21, both named rather than absorbed into the number.
+    #
+    # THE TENTH is a RED THIS AUDIT CANNOT CLASSIFY. `reminders.yml` reddens
+    # deliberately when a self-expiring guard reaches its date, so its red is
+    # a VERDICT and does not alarm -- but a red whose marker cannot be read
+    # (empty log, cancelled run, or a marker with no exit beside it) is
+    # UNCLASSIFIABLE, and that alarms, because "could not classify" is not
+    # "nothing to classify".
+    #
+    # THE ELEVENTH is the STRUCTURAL MARGIN DETERIORATING past its
+    # acknowledged figure. The structural breach is acknowledged and reports
+    # without alarming; it alarms again when it gets WORSE than the recorded
+    # figure or when its review date passes. The previous acknowledgement
+    # compared only the figure and absorbed a breach for days past its own
+    # review date, so both are compared now.
+    #
+    # The census of all eleven -- firings, distinct findings, and firings that
+    # produced a change -- is in `tests/test_silent_surfaces_can_fire.py`.
+    assert len(appends) == 11, (
         f"the alarm surface changed: {len(appends)} append sites, expected "
-        f"9 (workflow state, run verdict, schedule margin, model integrity "
-        f"failure, model signature missing, scheduled run never existed, "
-        f"unparseable workflow on main, prospective margin for tomorrow, "
-        f"UNTRIAGED DIAGNOSED FINDING). Sites: " + repr(appends))
+        f"11 (workflow state, red UNCLASSIFIABLE, run verdict, model "
+        f"integrity failure, model signature missing, scheduled run never "
+        f"existed, UNTRIAGED DIAGNOSED FINDING, unparseable workflow on "
+        f"main, actionable margin for tomorrow, structural margin "
+        f"deterioration, schedule margin). Sites: " + repr(appends))
 
 
 def test_the_NINTH_surface_is_an_UNTRIAGED_finding_NOT_the_backlog_count():

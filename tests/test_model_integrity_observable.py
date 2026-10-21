@@ -158,14 +158,22 @@ def test_both_markers_reach_the_ALARM_and_not_just_the_report():
 
     import scripts.ci_audit as ci
 
+    import tests.conftest as conftest
+
     src = inspect.getsource(ci.main if hasattr(ci, "main") else ci)
-    whole = inspect.getsource(ci)
+    # ── COMMENT-STRIPPED BEFORE SPLITTING. 2026-10-21. ────────────────────
+    # The anchor `facts.get("<key>")` now also appears in a COMMENT in the
+    # count-style key list -- the comment that records these two alarms were
+    # incapable of firing until that list was extended. Splitting on the raw
+    # source landed the window inside that prose. Same defect this suite has
+    # hit repeatedly; `conftest.code_of` tokenises and drops comments.
+    whole = conftest.code_of(inspect.getsource(ci))
     for key in ("model_integrity_failures", "model_unsigned_loads"):
         block = whole.split(f'facts.get("{key}")', 1)
         assert len(block) == 2, f"{key} is never read from facts"
         assert "alarmed.append" in block[1][:400], (
             f"{key} is read but does not reach `alarmed` within the branch")
-    assert "CLEARING ACTION" in whole
+    assert "CLEARING ACTION" in inspect.getsource(ci)
 
 
 def test_the_markers_are_NOT_registered_error_annotations():

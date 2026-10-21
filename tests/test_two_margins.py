@@ -195,9 +195,12 @@ def test_the_ACKNOWLEDGEMENT_carries_the_RE_MEASURED_figure():
     """A figure in an acknowledgement is the one thing a reader trusts
     without checking, so it must not be allowed to drift."""
     ack = sd.STRUCTURAL_ACK
-    assert ack["binding"] == pytest.approx(-7.0), (
-        f"the acknowledgement still claims {ack['binding']}; it was -19.8 "
-        f"against a duration term that measured the wrong quantity")
+    assert ack["binding"] == pytest.approx(-7.4), (
+        f"the acknowledgement claims {ack['binding']}. It must be the "
+        f"MEASURED deficit: -19.8 was computed against a duration term that "
+        f"measured the wrong quantity, and -7.0 was a loose transcription of "
+        f"60 - 52.6 that the deterioration predicate caught on its first "
+        f"exposure")
     assert "INSTRUMENTATION ERROR" in ack["why"], (
         "the acknowledgement does not record that most of the original "
         "shortfall was a measurement error rather than slow code")
@@ -215,3 +218,97 @@ def test_VARIANCE_BEFORE_MEAN_is_recorded_with_its_arithmetic():
     for fig in ("+30.5", "18.4", "10.8", "+3.5", "+4.0"):
         assert fig in act, f"{fig} is not recorded in the clearing action"
     assert "n=72" in act, "the model's sample size is not stated"
+
+
+# ═══════ THE ACKNOWLEDGEMENT, AFTER THE RESTATEMENT — 2026-10-21 ══════════
+#
+# The structural figure moved -19.8 -> -7.0 when the duration term started
+# measuring time-to-picks. An acknowledgement compares a figure, and the LAST
+# one silently absorbed a breach because it compared only `binding` and never
+# `review`: a deferral with a date nothing reads is not a deferral.
+
+
+def test_the_ACKNOWLEDGEMENT_matches_the_RESTATED_figure():
+    ack = sd.STRUCTURAL_ACK
+    assert ack["binding"] == pytest.approx(-7.4), (
+        "the figure must be the MEASURED deficit; -7.0 was a loose "
+        "transcription of 60 - 52.6 and the predicate caught it on its "
+        "first exposure")
+    # NOT asserted here: that the LIVE margin sits at that deficit. The first
+    # draft did, using this module's synthetic DELAYS/DURATIONS, which give a
+    # margin of +102 -- it was checking a fixture and reporting it as a fact
+    # about production. That belongs to a `live` test, and conflating the two
+    # is the thing the marker exists to prevent.
+    assert "7.4" in ack["action"], (
+        "the action does not restate the figure it is acknowledging")
+    assert "INSTRUMENTATION ERROR" in ack["why"], (
+        "the acknowledgement does not record WHY the figure moved from -19.8")
+
+
+def test_it_ALARMS_ON_DETERIORATION_and_the_drive_is_EXPLICIT():
+    """The figures the directive named, driven."""
+    today = dt.date(2026, 10, 21)
+    for covered in (-7.4, -7.0, -6.9, -6.0, 0.0, 5.0):
+        assert sd.structural_breach_is_acknowledged(covered, today), (
+            f"deficit {covered:+.1f} is no worse than the acknowledged -7.4 "
+            f"and must be COVERED")
+    for alarms in (-7.5, -8.0, -20.0, -100.0):
+        assert sd.structural_breach_is_acknowledged(alarms, today) == {}, (
+            f"deficit {alarms:+.1f} is WORSE than the acknowledged -7.4 and "
+            f"must alarm -- deterioration is an event")
+
+
+def test_it_EXPIRES_and_the_REVIEW_DATE_is_actually_COMPARED():
+    """The retired `ACKNOWLEDGED_MARGIN_BREACH` compared only the figure, so
+    it absorbed a breach for days past its own review date."""
+    review = dt.date.fromisoformat(sd.STRUCTURAL_ACK["review"])
+    assert sd.structural_breach_is_acknowledged(-7.4, review), (
+        "it expires ON the review date; the date itself is still covered")
+    assert sd.structural_breach_is_acknowledged(
+        -7.4, review + dt.timedelta(days=1)) == {}, (
+        "the acknowledgement outlived its review date")
+    assert sd.structural_breach_is_acknowledged(
+        -7.4, review + dt.timedelta(days=365)) == {}
+
+
+def test_an_UNPARSEABLE_or_MISSING_review_date_absorbs_NOTHING():
+    """An acknowledgement that cannot be dated is not one."""
+    import copy
+    for bad in (None, "", "soon", "2026-13-45", "21/11/2026"):
+        patched = copy.deepcopy(sd.STRUCTURAL_ACK)
+        patched["review"] = bad
+        real, sd.STRUCTURAL_ACK = sd.STRUCTURAL_ACK, patched
+        try:
+            assert sd.structural_breach_is_acknowledged(
+                -7.4, dt.date(2026, 10, 21)) == {}, (
+                f"review={bad!r} still absorbed the breach")
+        finally:
+            sd.STRUCTURAL_ACK = real
+
+
+def test_the_REGISTERED_MINIMUM_is_UNEDITED_and_the_EXPOSURE_PRINTS_AT_ZERO():
+    """The acknowledgement answers "has this been seen and recorded", not "is
+    it acceptable". It must not have moved the bar instead."""
+    assert sd.MIN_ACCEPTABLE_MARGIN_MIN == 60
+    assert sd.EFFECTIVE_MIN_MARGIN == {"weekday": 60, "weekend": 60}
+    assert sd.COVERAGE_EXPOSURE["weekday"]["p99"] == 0
+    # a term that disappears when satisfied cannot be seen to have been
+    # satisfied, so it must still be in the rendered output at zero
+    out = sd.format_reference_deadline(
+        sd.combined_deadline(WEEKDAY, _ref(16 * 60 + 45)))
+    assert "p99=0m" in out, (
+        "the exposure term vanished from the rendered deadline; at zero it "
+        "must still print, or nobody can see it was satisfied")
+
+
+def test_the_AUDIT_consults_the_predicate_rather_than_printing_unconditionally():
+    import ast
+    import inspect
+
+    import scripts.ci_audit as _ci
+    src = inspect.getsource(_ci.main)
+    assert "structural_breach_is_acknowledged" in src, (
+        "the audit prints the acknowledgement without checking whether it "
+        "still holds, so a deteriorated margin would report 'does NOT alarm'")
+    assert "NO LONGER" in src and "DETERIORATED" in src, (
+        "there is no branch for an acknowledgement that stopped covering")

@@ -152,7 +152,18 @@ def test_CLR2_the_clearing_action_CHANGES_the_predicate():
     """Stated explicitly: recording the resolution is the action, and it moves
     the alarm. If the predicate ignored the marker, recording it would be
     theatre."""
-    src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
+    import tests.conftest as conftest
+
+    # COMMENT-STRIPPED BEFORE SLICING. 2026-10-21: a seven-line comment was
+    # inserted between the `_resolved` read and the predicate it gates --
+    # explaining that a reminders VERDICT must not alarm -- which pushed
+    # `not _resolved` past the 400-character window. The claim is about CODE.
+    # `code_of` leaves a blank line where each comment was, so the window
+    # would still be measuring whitespace. Collapse it, so 400 characters
+    # means 400 characters OF CODE.
+    _stripped = conftest.code_of(
+        pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8"))
+    src = chr(10).join(l for l in _stripped.splitlines() if l.strip())
     block = src.split("_resolved = RESOLVED_RUNS.get", 1)[1][:400]
     assert "not _resolved" in block, (
         "RESOLVED_RUNS is read but does not gate `alarmed` — the clearing "

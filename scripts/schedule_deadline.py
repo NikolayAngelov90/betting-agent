@@ -951,7 +951,13 @@ STRUCTURAL_ACK = {
     # measures time-to-picks and the shortfall is -7.0. A figure in an
     # acknowledgement is the one thing a reader trusts without checking, so
     # it is re-stated rather than left to drift -- the stale-literal defect.
-    "binding": -7.0,
+    # -7.4, NOT -7.0, AND THE CHECK CAUGHT THAT ON ITS FIRST EXPOSURE.
+    # I computed the margin at +52.6 against a required 60 and wrote -7.0,
+    # which is 60 - 52.6 rounded the wrong way. The deterioration predicate
+    # refused to cover the live -7.4 and alarmed, which is exactly what it is
+    # for -- and it is the same shape as the self-anchored floor: a figure I
+    # derived and then transcribed loosely.
+    "binding": -7.4,
     "why": ("the structural margin is the DURATION problem, not a deadline "
             "choice: the floor IS the observed earliest kickoff, so no "
             "anchoring clears it. 14.6 of the original 19.8 minutes were an "
@@ -959,7 +965,7 @@ STRUCTURAL_ACK = {
             "including the post-picks results scrape: mean 12.8m, max 49.6m, "
             "n=111) and are gone without any step getting faster. 7.0 "
             "remain, and they are real"),
-    "action": ("~7.0 min of time-to-picks remain. MEASURED 2026-10-21 over "
+    "action": ("~7.4 min of time-to-picks remain. MEASURED 2026-10-21 over "
                "n=72 runs: parallelising the Claude review behind an atomic "
                "marker buys +30.5m by itself (it cuts the SPREAD, sd 18.4 -> "
                "10.8, and the bound is mean+3sd); moving the ML retrain off "
@@ -968,6 +974,46 @@ STRUCTURAL_ACK = {
                "leaves 1.3m. Or dispatch manually that morning"),
     "review": "2026-11-21",
 }
+
+#: THE FIELD `binding` IS A SIGNED DEFICIT: `-7.0` means seven minutes SHORT
+#: of the registered minimum, which is the same arithmetic as the margin
+#: itself (margin +53.0 against a required 60 is a deficit of -7.0). Stated
+#: because the previous acknowledgement stored a figure whose convention a
+#: reader had to infer.
+
+
+def structural_breach_is_acknowledged(binding: float, today=None) -> dict:
+    """`STRUCTURAL_ACK` when it covers this figure, `{}` when it does not.
+
+    TWO COMPARISONS, AND THE LAST ACKNOWLEDGEMENT MADE ONLY ONE. The retired
+    `ACKNOWLEDGED_MARGIN_BREACH` compared `binding` and never `review`, so it
+    went on absorbing a breach for days after its own review date had passed —
+    a deferral with a date nothing reads is not a deferral. Both are compared
+    here, expiry first.
+
+      EXPIRES      past its review date, or an unparseable date, absorbs
+                   NOTHING. An acknowledgement that cannot be dated is not one.
+      DETERIORATES a figure WORSE than the acknowledged one alarms, because
+                   deterioration is an event and the acknowledgement was made
+                   against a measurement, not against the condition in general.
+
+    The registered `MIN_ACCEPTABLE_MARGIN_MIN` is NOT consulted and NOT
+    edited: this answers "has this been seen and recorded", not "is it
+    acceptable".
+    """
+    today = today or _dt.date.today()
+    ack = STRUCTURAL_ACK
+    review = ack.get("review")
+    if not review:
+        return {}
+    try:
+        if today > _dt.date.fromisoformat(review):
+            return {}
+    except (ValueError, TypeError):
+        return {}
+    if binding < ack["binding"]:
+        return {}
+    return dict(ack)
 
 
 def two_margins(day, ref: dict, cron_minutes,

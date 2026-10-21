@@ -162,6 +162,19 @@ jobs:
           # names the workflow it came from and what it means. The daily-picks
           # alert keeps its own wording and is not touched.
           if outcome == "failure":
+              # ── THE REGISTERED MARKER. 2026-10-21. ─────────────────────
+              # This workflow is DESIGNED to redden when a reminder reaches
+              # its date, so `ci-audit` must be able to tell that red from a
+              # crash. It does that by looking for this annotation IN THE
+              # LOG, so the annotation has to exist -- before this line the
+              # red showed up only as "Process completed with exit code 1",
+              # indistinguishable from a traceback.
+              #
+              # It is emitted IMMEDIATELY BEFORE the exit it explains, because
+              # the audit's partition subtracts one exit per registered
+              # annotation and a marker without its exit loses headroom.
+              print("::error::REMINDER DUE - a self-expiring guard reached "
+                    "its date. This red is a VERDICT, not a failure.")
               body = (
                   "\U0001f4c5 REMINDERS — A DECISION IS DUE.\n"
                   "A self-expiring guard has reached its date. Delete it or "

@@ -31435,3 +31435,229 @@ declared backstop.
 `scripts/schedule_deadline.py`, `tests/test_calendar_separation.py`,
 `tests/test_two_margins.py`, `docs/workflow-inventory.md`, and the pins.
 `tests/test_one_meaning_per_run.py` created and deleted in the same stage.*
+
+---
+
+## Red classified per workflow; two surfaces could never fire — 2026-10-21
+
+### PART A — RED CLASSIFIED PER WORKFLOW
+
+**First, the premise is anticipatory and I will not report it as observed.**
+`reminders.yml` was created at 16:39 today and triggers on `daily-picks`
+completion; `daily-picks` last ran at 08:29. **It has never run.** So no red
+of its has reached the audit yet, and nothing in the census below is its doing.
+
+#### Every red in scope, with its finding verbatim
+
+| run | workflow | trigger | finding |
+|---|---|---|---|
+| 39535760768 | ci-audit | `workflow_run` | `39532208006 daily-picks DID_NOT_RUN; prospective margin +37m for 2026-10-22 < 60m; schedule margin …` |
+| 39577012541 | ci-audit | `workflow_run` | `prospective margin +37m for 2026-10-22 < 60m; schedule margin …` |
+| 39624918038 | ci-audit | `workflow_run` | `schedule margin +19m < 30m` |
+| 39627683612 | ci-audit | `workflow_run` | `schedule margin +19m < 30m` |
+| 39630251098 | ci-audit | `workflow_run` | `schedule margin +19m < 30m` |
+| 39569612160 | daily-picks | dispatch | the calendar assertion — **capture succeeded**, all five critical steps green |
+
+**ONE FINDING, and the set SHRANK across the day as the causes were taken:**
+3 findings → 2 → **1**. The `DID_NOT_RUN` went with the dispatch (465146a);
+the prospective margin went with the two-margin split (6150053). One has been
+the answer every time it was counted this month, and it is again.
+
+Also first exposures, both clean: `paper-trading-report` ran at 15:21 and
+printed `closing capture coverage 12.54% … within the ratchet band [12.00%,
+15.00%)` with `delivered: True`, concluding **success** — the ratchet, the
+`pipefail` fix and the success delivery all working.
+
+#### The three states
+
+```
+VERDICT         red WITH the registered marker  -> does NOT alarm
+FAILURE         red WITHOUT it                  -> DOES alarm
+UNCLASSIFIABLE  cancelled, empty log, or a marker with no exit beside it
+```
+
+**The marker had to be created first.** `reminders.yml` reddened by
+`sys.exit(1)` and emitted **no annotation at all**, so its red appeared only
+as `Process completed with exit code 1` — indistinguishable from a traceback.
+It now prints `::error::REMINDER DUE` immediately before that exit.
+
+**Pinned to what the AUDIT OBSERVES**, per rule 3: `DELIBERATE_RED_MARKERS`
+holds `##[error]REMINDER DUE`, the **rendered** form. `::error::` survives only
+in the `##[group]Run` echo of the step's own source, and pinning the source
+literal is exactly what made the annotation matcher count echoed script text
+and miss every real annotation — measured on three runs 2026-10-13.
+
+**The co-occurrence precondition is enforced at both ends.** The marker is
+registered in `SELF_EMITTED_ANNOTATIONS`, whose subtraction allows one exit per
+annotation — and `classify_red` returns `UNCLASSIFIABLE`, not `VERDICT`, when
+the marker is present with **no** non-zero exit beside it, because then it
+explains nothing and the red is unaccounted for.
+
+**`UNCLASSIFIABLE` alarms.** Stated in code as `UNCLASSIFIABLE_ALARMS = True`:
+"the marker could not be read" is not "there was no marker", and a workflow
+whose red cannot be classified is the case where silence has cost most here.
+
+**Silencing was not used.** `reminders.yml` is **not** in
+`NEVER_ALARM_WORKFLOWS` and **is** in `WORKFLOWS`, both asserted — rule 2, and
+that cost has been paid twice.
+
+#### BOTH KNOWN-WRONG CONTROLS
+
+* **red WITH the marker → `VERDICT`, does not alarm.**
+* **red WITHOUT it → `FAILURE`, alarms** — parametrised over four real crash
+  shapes: a traceback, a failed install, a YAML syntax error, a missing
+  credential. One direction is not a control.
+
+Plus the third state three ways in: an empty/short log, a cancelled run, and a
+marker with no exit.
+
+### PART B — ACKNOWLEDGEMENT RESTATED
+
+The structural figure moved `−19.8 → −7.0` with the duration correction. The
+acknowledgement **had a `review` date that nothing compared** — the exact
+defect named: the retired `ACKNOWLEDGED_MARGIN_BREACH` compared only `binding`
+and absorbed a breach for days past its own review date.
+
+`structural_breach_is_acknowledged(binding, today)` now compares **both**,
+expiry first. Driven:
+
+```
+deficit  -7.4  -7.0  -6.9  -6.0   0.0   ->  COVERED
+deficit  -7.5  -8.0 -20.0 -100.0  ->  ALARMS   (deterioration is an event)
+on 2026-11-21 (the review date)   ->  COVERED
+on 2026-11-22                     ->  EXPIRED, alarms
+review None / "" / "soon" / "2026-13-45" / "21/11/2026" -> absorbs NOTHING
+```
+
+**AND IT CAUGHT MY OWN FIGURE ON ITS FIRST EXPOSURE.** I computed the margin at
++52.6 against a required 60 and wrote **−7.0**; the live deficit is **−7.4**,
+so the predicate refused to cover it and alarmed. `60 − 52.6 = 7.4`, rounded
+the wrong way — the same shape as the self-anchored floor, a figure I derived
+and then transcribed loosely. Corrected to −7.4, and the audit now prints
+`ACKNOWLEDGED … It does NOT alarm`.
+
+The registered `MIN_ACCEPTABLE_MARGIN_MIN = 60` is **unedited**,
+`EFFECTIVE_MIN_MARGIN` is still `{weekday: 60, weekend: 60}`, and the exposure
+term still prints at zero (`p99=0m max=0m over60=0/715d`) — asserted, because
+a term that disappears when satisfied cannot be seen to have been satisfied.
+
+`MARGIN_REMEDY` was also re-stated: it still cited "~7 min in the injury loop"
+(that was the sleep; only 3.1 was recoverable), "~9 min in the AF upsert loop"
+(never real — that loop costs ~4 **seconds**) and "the 19.8-minute shortfall"
+(computed against the wrong quantity). Every figure in it had been superseded
+within a day.
+
+### PART C — SURFACE CENSUS
+
+`measured` 2026-10-21, window **2026-09-21 … 2026-10-21**, from `ci-audit`'s
+own alarm lines across its **86 red runs of 183**.
+
+| # | surface | firings | distinct findings | **produced a change** | positive control? |
+|---|---|---|---|---|---|
+| 1 | workflow state | 0 | 0 | 0 | **yes** (`a_disabled_workflow_alarms_even_with_ZERO_runs`) |
+| 2 | red `UNCLASSIFIABLE` | 0 | 0 | 0 | **yes** (new today, both directions) |
+| 3 | per-run verdict | **103** | 2 | **2** | yes |
+| 4 | model integrity failure | 0 | 0 | 0 | **NO → added today** |
+| 5 | model signature missing | 0 | 0 | 0 | **NO → added today** |
+| 6 | scheduled run NEVER started | 0 | 0 | 0 | **NO → added today** |
+| 7 | diagnosed finding UNTRIAGED | 0 | 0 | 0 | **NO → added today** |
+| 8 | unparseable push on main | 0 | 0 | 0 | **NO → added today** |
+| 9 | actionable margin | 8 | 2 | 2 | yes |
+| 10 | structural deterioration | 0 | 0 | 0 | **yes** (new today, driven) |
+| 11 | schedule margin | **52** | 2 | **1** | yes |
+| | **total** | **163** | **6** | **5** | |
+
+**163 firings bought 5 changes — 33 firings per change**, and three of eleven
+surfaces produced every firing. The 103 and the 52 are the same two findings
+repeating for days.
+
+#### TWO SURFACES WERE VACUOUS, AND THE CENSUS IS WHAT FOUND THEM
+
+`model_integrity_failures` and `model_unsigned_loads` matched their patterns
+and **produced no number**, so `int()` raised, the key never reached `facts`,
+and `facts.get(...)` was **always falsy**. Both alarms had been **registered,
+pattern-matched and incapable of firing since they were written on
+2026-10-12.**
+
+The audit was saying so in its own voice — *"pattern matched but produced no
+number … NOT COUNTED"* — but that line only prints when the pattern matches,
+which needs a real integrity failure to happen first. Same shape as
+`unpriced_check_dead`, which this very list was extended for once before. Both
+are now count-style keys and both fire, with a control in each direction.
+
+#### Proposals for the firings-with-few-changes surfaces
+
+* **surface 3 (103 firings, 2 changes)** — keep as is. The repetition is the
+  `RESOLVED_RUNS` mechanism working: a run-specific finding keeps firing until
+  a resolution is **recorded**, which is the clearing action, and both findings
+  were resolved that way (7514a50, 465146a).
+* **surface 11, schedule margin (52 firings, 1 change)** — the `+19m` finding
+  has produced **no change** and is the remainder below. **Not** proposed for
+  `report-only`: unlike `fixtures_zero_active` it has a named action that is
+  available today (a manual dispatch), so it is an alarm a person can clear.
+  If it is still firing unchanged at the 2026-11-21 review, `report-only` is
+  the right call then.
+
+#### Totals
+
+* **alarm items: 163 / 30 days = 5.4 per day.** With the two margin surfaces
+  now acknowledged or `UNEVALUATED`, the projection is **~1.7 per day**
+  (surface 11 alone), `simulated` from the same window.
+* **Telegram messages: ~6.2 per day** — ci-audit 2.9 (86 reds / 30), the daily
+  card 1, the settlement report 1, `paper-trading-report` 1 (**new today**,
+  previously 0 on success), daily-picks failures 0.3, reminders 0 so far.
+
+### PART D — THE REMAINDER
+
+Re-ran the audit after the changes. **Exactly one finding:**
+
+```
+::error::audit alarm — schedule margin +19m < 30m
+```
+
+> **The weekday pipeline, measured retrospectively, finishes 19 minutes before
+> the earliest kickoff football schedules, against a 30-minute alarm
+> threshold.** Clearing action: **available today** — dispatch `daily-picks`
+> manually that morning, which skips the measured 3h58m–5h04m scheduler
+> lateness. Durably: parallelise the Claude review (+30.5m, needs the atomic
+> marker first), move the ML retrain off the picks path (+3.5m), and the
+> shipped request-pacing change (+4.0m once it reaches the series).
+
+Resolved and no longer alarming: the `DID_NOT_RUN` (465146a), the prospective
+margin (6150053, the two-margin split), and the structural margin (acknowledged
+at its **measured** figure, −7.4). Nothing was silenced to get there.
+
+**What the audit will redden on tomorrow**, so a green audit is a prediction
+rather than a relief: `schedule margin +19m < 30m` again, unless the morning's
+`daily-picks` is dispatched by hand. The structural margin will report and not
+alarm while it stays at −7.4 or better and before 2026-11-21. The actionable
+margin will be `UNEVALUATED` on any day football-data.org has no covered
+fixture — 299 of 904 days in the record.
+
+### THREE SLICE WINDOWS, AND THE SAME DEFECT AGAIN
+
+Three pins broke on insertion, and two were the comment-blind slice: a test
+split on `facts.get("model_integrity_failures")` and landed inside **my own
+comment** recording that those alarms could not fire, and the CLR-2 guard's
+400-character window was pushed past `not _resolved` by a comment block. Both
+now strip comments with `conftest.code_of` before slicing, and the CLR-2 one
+collapses blank lines so that 400 characters means 400 characters **of code**.
+The third, the surface enumeration, moved 9 → 11 with both new surfaces named
+rather than absorbed into the number.
+
+And `_resolved` was moved to sit **immediately above the predicate it gates** —
+582 characters of inserted code had separated a value from its only use.
+
+### DISCIPLINE
+
+Gating selection **2,273 passed, 7 deselected**; non-gating 6 passed, 1
+skipped. Invariants pass, count not cited. Fingerprint **UNCHANGED at
+s5.18 / 51fbcb** — this stage is instrumentation. No production write, no
+schema change, no model change, no cron moved.
+
+*Recorded 2026-10-21. `scripts/ci_audit.py`, `scripts/schedule_deadline.py`,
+`.github/workflows/reminders.yml`,
+`tests/test_red_is_classified_per_workflow.py`,
+`tests/test_silent_surfaces_can_fire.py`, `tests/test_two_margins.py`,
+`tests/test_alarm_surface.py`, `tests/test_model_integrity_observable.py`,
+`tests/test_saturation_and_resolution.py`.*
