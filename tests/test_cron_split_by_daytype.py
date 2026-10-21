@@ -90,7 +90,28 @@ def test_the_weekend_cron_is_UNCHANGED():
         f"00:00 deliberately")
 
 
+@pytest.mark.live
 def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
+    # ── `live` ADDED 2026-10-21, AFTER THIS TEST KILLED A CARD ──────────────
+    #
+    # It calls `collect_lag_series_by_daytype()`, which queries the GitHub
+    # API. That is the `live` marker's definition verbatim: "a test that
+    # queries LIVE EXTERNAL STATE ... its outcome changes with no code
+    # change". The test step runs `-m "not calendar and not live"` and gets no
+    # GH credentials, so the series came back EMPTY and the n>=8 guard fired:
+    #
+    #     run 39532208006, 2026-10-21 02:17Z, headSha b8d91c1
+    #     "the weekday series shrank to n=0; the +40m figure was measured at n=8"
+    #
+    # It passes locally (n=8, `gh` is authed) and fails in CI. First CI
+    # exposure was today; the assertion was added yesterday in 269aea9.
+    #
+    # THE GUARD ITSELF WAS RIGHT -- n=0 is not a measurement, and refusing to
+    # compute a margin from an empty series is the correct behaviour. What was
+    # wrong is WHERE it ran: `daily-picks.yml` carries a comment four lines
+    # above its pytest command recording that calendar assertions were moved
+    # out of this gate on 2026-10-18 "at a cost of SIX CARDS", and a live test
+    # went straight back into it four days later. Mine.
     """REWRITTEN 2026-10-18. Was: "`0 4` is the LATEST that clears".
 
     THAT RULE IS RETIRED, AND ITS FAILURE IS THE REASON. `0 4` was chosen by

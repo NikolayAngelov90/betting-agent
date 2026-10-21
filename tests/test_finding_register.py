@@ -124,10 +124,41 @@ def test_the_COUNTS_and_the_MEDIAN_with_its_caveat():
     rows = fr.evaluate(today=dt.date(2026, 10, 20))
     assert len(rows) == 13
     live = [r for r in rows if r["is_live"] is True]
-    assert len(live) == 8, (
-        f"{len(live)} findings still live, expected 8. If one was fixed, move "
-        f"it and say so; if one regressed, that is the finding.")
-    assert {r["id"] for r in live} == {4, 6, 7, 8, 10, 11, 12, 13}
+
+    # ── FINDING 13 IS ENVIRONMENT-DEPENDENT BY CONSTRUCTION. 2026-10-21. ────
+    #
+    # Its predicate is `not Path("data/models/feature_list.json").exists()`,
+    # which reads the WORKING TREE. On a dev box the file is absent, so the
+    # finding is live; in CI `actions/cache` restores `data/models/` before the
+    # tests run, so it is NOT live. Pinning it made this test pass locally and
+    # fail in CI, and because it sits in the capture-gating suite it took
+    # today's card with it (run 39532208006, "7 findings still live, expected
+    # 8").
+    #
+    # IT IS NOT MARKED `live` AND NOT DELETED. Both would hide a true finding.
+    # The split below pins the twelve predicates that read only committed
+    # source, and asserts 13 SEPARATELY as two-valued with its reason named --
+    # so its state is still reported, and nobody re-pins it.
+    #
+    # And the disagreement is itself finding 13's own point, measured: the
+    # pickles exist in CI only because a cache restored them.
+    _ENV_DEPENDENT = {13}
+    stable_live = {r["id"] for r in live} - _ENV_DEPENDENT
+    assert stable_live == {4, 6, 7, 8, 10, 11, 12}, (
+        f"the source-only live set is {sorted(stable_live)}, expected "
+        f"[4, 6, 7, 8, 10, 11, 12]. If one was fixed, move it and say so; if "
+        f"one regressed, that is the finding.")
+    assert len(stable_live) == 7
+
+    f13 = next(r for r in rows if r["id"] == 13)
+    assert f13["is_live"] in (True, False), "finding 13 lost its third state"
+    assert f13["file"] == "data/models/"
+    # the predicate must stay a filesystem read, or this carve-out is stale
+    import inspect
+    pred = next(f["live"] for f in fr.FINDINGS if f["id"] == 13)
+    assert "exists()" in inspect.getsource(pred), (
+        "finding 13's predicate no longer reads the filesystem -- fold it back "
+        "into the pinned set above and delete this carve-out")
     assert all(r["age_days"] == 74 for r in rows), (
         "the ages moved off 74 days -- every row comes from one dated source")
     text = fr.format_register(rows)
