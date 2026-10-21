@@ -30978,3 +30978,240 @@ cron moved in this stage.
 `tests/test_no_live_state_in_the_capture_gate.py`,
 `scripts/paper_trading_report.py`, `scripts/ci_audit.py`,
 `tests/test_experiment_summary.py`.*
+
+---
+
+## One predicate, two margins — 2026-10-21
+
+### FIRST, THE CARD FROM THE MORNING: RECOVERED IN FULL
+
+Run 39569612160, dispatched 08:29:09Z on 465146a:
+
+```
+fixtures 13 | odds rows 1,879 | picks 11 | reviewed by Claude 11/11
+earliest kickoff 15:30 UTC — every fixture still unkicked when picks were saved
+All critical steps OK: update, settle (pre-picks), picks (incl. review),
+                       update-results, settle (post-results)
+```
+
+**The run's conclusion is `failure` and the pipeline is fine** — which is the
+Stage 28 separation working exactly as built:
+
+> 📅 A CALENDAR ASSERTION FAILED — a self-expiring guard has reached its date
+> … CAPTURE IS UNAFFECTED: prices and picks ran independently … This run is RED
+> because a decision is due, not because the pipeline failed.
+
+**AND THE FAILING CALENDAR ASSERTION WAS MINE AGAIN, FOR THE SAME REASON ONE
+LAYER OUT.** Marking `test_the_weekday_cron_CLEARS…` as `live` took it out of
+the capture gate — capture then succeeded — but the **non-gating step has no GH
+credentials either**, so the series came back empty there too and the `n>=8`
+guard fired again. I had reported a finding about football from the absence of
+a credential. `n=0` with no way to ask is **UNEVALUATED**, and the test now
+skips with that word and prints whether `GH_TOKEN` was present, failing only
+when the series is short *while reachable*. A daily red that no action clears
+is an alarm that always fires.
+
+### PART A — ONE PREDICATE
+
+**THE DEFECT CLASS, NAMED PROPERLY: a gating test is a pure function of the
+repository at that commit.** Two guards existed — one for calendar-dependent
+tests (2026-10-18), one for live readers (mine, 2026-10-21) — and *neither*
+covered the 10-21 pair, because each covered part of the class while both
+looked covered. `tests/test_no_live_state_in_the_capture_gate.py` is
+**deleted**; its rule lives in `scripts/calendar_marker_scan.py` as a third
+reason. Two guards for one class is the shape rule 1 forbids.
+
+#### Why the existing scanner missed both, measured
+
+`scan_function` returned **`()`** for both failing tests. Two causes:
+
+1. **Tuple unpacking defeated the taint tracking.** It required
+   `len(targets) == 1 and isinstance(targets[0], Name)`, so
+   `by_type, _crons = collect_lag_series_by_daytype()` bound **nothing** —
+   while `collect_lag_series_by_daytype` was *already* in `LIVE_NAMES`. The
+   guard was pointed at the right function and could not see the call.
+2. **The taint was not transitive.** `lag = [l for _d, l in by_type…]` derives
+   from a tainted name rather than from a live call, so even once `by_type` was
+   tainted the assertion was clean. Now it iterates to a fixed point, because
+   `ast.walk` does not visit statements in source order.
+
+And `finding_register.evaluate` joined the live set — **not as a network
+call**: finding 13's predicate is
+`not Path("data/models/feature_list.json").exists()`, a working-tree read that
+`actions/cache` restores in CI. "Live" in this scanner means *outside the
+commit*, which is the class.
+
+#### THE CENSUS, before and after
+
+| | total findings | unmarked | after exemptions |
+|---|---|---|---|
+| at HEAD | 4 | 1 | 0 |
+| first draft (transitive taint on BOTH sets) | **19** | **14** | — |
+| bare name `evaluate` in `LIVE_NAMES` | 8 | 3 | 1 |
+| **final** | **8** | **3** | **0** |
+
+The 19 is the measurement that mattered. Propagating the **clock** set as well
+took it from 1 to 14, and **11 of the 13 new ones were false** —
+`trained_at = utcnow(); assert not stale` is hermetic forever, because the test
+controls the clock-derived input and `now` is always now. All three known-wrong
+cases are the **live-state** rule, not the clock rule, so transitivity applies
+to `live` only and the clock rule keeps its 2026-10-18 binding exactly.
+
+Two further false positives were measured and removed:
+
+* **the bare name `evaluate`** refused
+  `test_h1_precondition::test_NO_FIXTURE_IN_BAND_is_SEPARATE_from_NO_CARD`,
+  which calls `pre.evaluate(_Sess(68, 68, 9, 0), …)` — a *different* `evaluate`
+  driven by a fake session. Now qualified, as `requests.get` already was.
+* **walking the target for Names** tainted the *receiver* of an attribute
+  assignment: `agent.predictor.ml_models.trained_at = utcnow()` marked `agent`
+  clock-derived. One false positive, `test_ml_stale_when_goals_model_missing`.
+
+Two genuinely new findings remain and are **exempted, not marked** — both are
+hermetic in fact, and marking them would move real coverage out of the gate to
+silence a scan that was over-reaching. The exemption contract now requires each
+entry to name one of four **grounds**; "it is fine" is not one, and the list is
+pinned at 3.
+
+#### THE THREE KNOWN-WRONG CONTROLS, each refused by name
+
+| control | source | refused by |
+|---|---|---|
+| the test that cost **six cards** (2026-10-13) | already on file | `DATE LITERAL compared against LIVE STATE` |
+| the **`collect_lag_series_by_daytype()` caller** | 269aea9, verbatim | `COUNT compared against LIVE STATE` |
+| the **`feature_list.json` working-tree read** | f0ac3bb, verbatim | `COUNT compared against LIVE STATE` |
+
+**POSITIVE CONTROL**: the same planted test, marked `@pytest.mark.live`, is
+accepted — and under the gate's own `-m "not calendar and not live"` it is
+*deselected*. Without it the three refusals would prove only that *something*
+fails, and a guard that refused everything would pass them all.
+
+#### WHAT THE PREDICATE CANNOT DETECT — its coverage statement
+
+Rule 2. Seven kinds, enumerated in code and asserted to be enumerated:
+**indirection through an unregistered helper**; **dependence via a fixture**;
+**a module-level constant computed at import**; **a pure-clock test with no
+fixed side** (the legitimate both-sides-moving form is deliberately not
+flagged); **a filesystem read on a computed path**, since only a literal can
+be checked against the index; **unseeded randomness, test order and shared
+mutable state**; and **the database**, which a different mechanism covers.
+Every one of them would have passed the scan on 2026-10-20.
+
+#### AND THE SEQUENCE IS THE FINDING — SECOND CONFIRMATION
+
+The remedy for this exact shape shipped on **2026-10-18 in `7514a50`**. The
+warning sits **four lines above the gate's own pytest command**. On 2026-10-20
+I added two more, and on 2026-10-21 they cost a card. *A remedy that must be
+remembered is not a remedy* — the sentence was already at the top of that test
+file, and this is its second confirmation. It has to be a check, which is now
+what it is.
+
+### PART B — TWO MARGINS
+
+`min(reference, floor)` always returned the floor, because the floor **is** the
+observed earliest kickoff over all 30 configured leagues. So one number carried
+two different facts. Measured 2026-10-21: floor **09:30** against the day's
+actual earliest kickoff of **15:30** — six hours pessimistic.
+
+```
+PROSPECTIVE MARGINS for 2026-10-22 (weekday) - TWO FACTS, NOT ONE
+  STRUCTURAL    +37m  deadline 09:30  verdict ALARM  [ALL 30 configured leagues]
+             basis: FLOOR observed earliest kickoff - ALL 30 configured leagues
+  ACTIONABLE UNEVALUATED  deadline --:--  [9 of 30 configured leagues]
+             the reference supplied no value (NO_FIXTURE) ... NOT a clear margin.
+  RESIDUAL on the ACTIONABLE margin: it is an UPPER BOUND. p50=75m p99=592m
+             max=1185m, > 60m on 312/605 days (51.6%).
+  STRUCTURAL is ACKNOWLEDGED since 2026-10-21 at -19.8m against the registered
+             60m (NOT edited), review 2026-11-21.
+  ALARMS ON: actionable (CLR-2 - the only one a dispatch changes)
+```
+
+**The alarm moved to the actionable margin**, because that is the quantity a
+manual dispatch changes. The structural margin is **reported and acknowledged**
+with a dated review (2026-11-21), the registered 60 **unedited**, and the
+exposure still its own term at zero.
+
+#### THE FIRING RATE, measured over the record (n=904 days, from 2024-01-01)
+
+| | fires |
+|---|---|
+| **structural** (vs the floor) | **629 / 904 = 69.6%** |
+| **actionable** (vs the reference) | **4 / 605 = 0.7%** |
+
+The alarm becoming rare is the point, and the structural term stays printed
+every run so nothing is hidden by the change. On 299 of 904 days the reference
+would see no fixture at all → `UNEVALUATED`, with the structural half still
+reported.
+
+#### THE UNSAFE DIRECTION — AND THE DIRECTIVE'S PREMISE WAS WRONG
+
+The directive said the residual was *"already measured at 15 minutes"* and
+asked me to confirm the threshold exceeds it. **It does not, and the 15 minutes
+was a different quantity.** That figure was the **self-anchored floor's**
+exposure, which is now **zero by construction** because the floor *is* the
+observed minimum. The **reference's own** residual had never been measured.
+
+`simulated` 2026-10-21 over **n=605** days, comparing the earliest kickoff
+among the reference's 9 covered league keys against the earliest over all 30
+configured (phantom 00:00 ingestion stamps excluded):
+
+```
+p50   75 min      <- today's case exactly: 16:45 reported, 15:30 true
+p75  210 min
+p90  360 min
+p95  480 min
+p99  592 min
+max 1185 min
+residual > 60m on 312 of 605 days (51.6%); == 0 on 212
+```
+
+**THE THRESHOLD IS EXCEEDED BY THE RESIDUAL ON 51.6% OF DAYS.** So an
+actionable margin clearing 60 is **NECESSARY, NOT SUFFICIENT**, and that
+sentence is printed beside the figure every run. Raising the threshold to p99
+would make it fire every day, which rule 4 forbids; subtracting the residual
+reproduces the floor. Neither is an improvement, so the residual is **reported
+beside the margin rather than folded into it** — and this is precisely why the
+structural term must keep carrying the safety claim.
+
+#### KNOWN-WRONG CONTROL
+
+`test_KNOWN_WRONG_a_day_whose_EARLIEST_is_an_UNCOVERED_league` replays the
+2026-10-21 case: the reference reports 16:45, the truth is 15:30. It asserts
+the actionable margin is optimistic by **exactly 75 minutes**, that the
+structural margin is **unchanged** by the reference being wrong, and that the
+rendered output still contains `STRUCTURAL` and `UPPER BOUND` — so the pair can
+never be silently reduced to the optimistic half.
+
+### FOUR PINS RE-POINTED, ONE STRENGTHENED
+
+The rename broke four deliberate pins. Three were re-pointed from
+`"prospective margin"` to `"actionable margin"` (plus a new assertion that the
+`structural` half is still present). The fourth,
+`test_the_exposure_the_VERDICT_uses_is_the_one_PRINTED`, matched
+`min_margin=_ahead["exposure"]["effective_min"]` **in the audit's source**; the
+invariant it protects is a fact about *numbers*, so it now asserts
+`min_margin == EFFECTIVE_MIN_MARGIN[dtype]` for **both** halves on a weekday
+and a weekend, which a rename cannot defeat. Same lesson as the comment-blind
+text scans.
+
+One pin also had to move its anchor: it sliced 700 characters from the first
+occurrence of the phrase, which now lands in a comment, so it measured prose
+instead of the message. And `bound_by` was dropped from its required parts
+**deliberately** — with the `min()` gone the actionable margin is
+reference-derived by definition and there is no side to name; `coverage`,
+`reference_state` and the new `residual`/`UPPER` carry what that pin was
+protecting.
+
+### DISCIPLINE
+
+Gating selection `-m "not calendar and not live"`: **2,228 passed, 7
+deselected**. Non-gating `-m "calendar or live"`: 6 passed, 1 skipped.
+Invariants pass, count not cited. Fingerprint **UNCHANGED at s5.18 / 51fbcb** —
+this stage is instrumentation. No production write, no schema change, no model
+change, no cron moved.
+
+*Recorded 2026-10-21. `scripts/calendar_marker_scan.py`,
+`scripts/schedule_deadline.py`, `scripts/ci_audit.py`, `tests/conftest.py`,
+`tests/test_calendar_marker_enforced.py`, `tests/test_two_margins.py`,
+`tests/test_cron_split_by_daytype.py`, and the four re-pointed pins.
+`tests/test_no_live_state_in_the_capture_gate.py` DELETED.*

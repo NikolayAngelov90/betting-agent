@@ -187,10 +187,34 @@ def test_the_exposure_the_VERDICT_uses_is_the_one_PRINTED():
     assert "COVERAGE_EXPOSURE[dtype]" in src or "COVERAGE_EXPOSURE[" in src
     import scripts.ci_audit as ci
 
-    audit = inspect.getsource(ci.main)
-    assert 'min_margin=_ahead["exposure"]["effective_min"]' in audit, (
-        "the audit no longer takes its minimum from the same exposure dict it "
-        "prints, so the two can diverge")
+    # ── ASSERTED AS AN EQUALITY, NOT A SOURCE STRING. 2026-10-21. ─────────
+    #
+    # This matched `min_margin=_ahead["exposure"]["effective_min"]` in the
+    # audit's source. The two-margin split routes the minimum through
+    # `two_margins`, so the literal moved -- but the invariant it protects
+    # ("the minimum the verdict uses is the one printed") is a fact about
+    # NUMBERS, and comparing them directly cannot be defeated by a rename.
+    # Same lesson as the comment-blind text scans: assert the value.
+    import datetime as dt
+
+    delays = [200.0, 240.0, 260.0, 280.0, 300.0, 220.0, 230.0, 250.0]
+    durations = [30.0, 40.0, 42.0, 45.0, 50.0, 60.0, 35.0, 38.0]
+    for day in (dt.date(2026, 10, 22), dt.date(2026, 10, 24)):   # wkday, wkend
+        dtype = sd.day_type(day)
+        m = sd.two_margins(day, {"min": 16 * 60, "state": "OK"}, 0,
+                           delays, durations)
+        for half in ("structural", "actionable"):
+            assert m[half]["min_margin"] == sd.EFFECTIVE_MIN_MARGIN[dtype], (
+                f"{half} verdict uses {m[half]['min_margin']} while the "
+                f"printed effective minimum is "
+                f"{sd.EFFECTIVE_MIN_MARGIN[dtype]} -- the two have diverged")
+        # and the printed effective minimum is still built from the exposure
+        # that `coverage_exposure` reports, at whatever value that is
+        assert sd.EFFECTIVE_MIN_MARGIN[dtype] == (
+            sd.MIN_ACCEPTABLE_MARGIN_MIN
+            + sd.coverage_exposure(day)["p99"]), (
+            "the effective minimum is no longer the registered minimum plus "
+            "the exposure this module measures")
 
 
 def test_the_combination_can_only_LOWER_the_exposure():

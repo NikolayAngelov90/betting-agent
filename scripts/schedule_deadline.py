@@ -884,3 +884,182 @@ def format_reference_deadline(c: dict) -> str:
            f"{MIN_ACCEPTABLE_MARGIN_MIN}m registered + {e['p99']}m p99 | "
            f"basis: {e['basis']}]"
            if (e := c.get("exposure")) else ""))
+
+
+# ══════════════════════ TWO MARGINS, NOT ONE ══════════════════════════════
+#
+#     2026-10-21. "Separate the structural margin from the actionable one."
+#
+# `combined_deadline` returns `min(reference, floor)`, and the floor sits AT
+# the earliest kickoff any covered league has ever had -- so the floor binds
+# every day and one number was carrying two different facts. Measured
+# 2026-10-21: floor 09:30 against today's actual earliest kickoff of 15:30,
+# six hours pessimistic.
+#
+#   STRUCTURAL  against the conservative floor. True every day, NO action
+#               clears it, and it is a statement about the pipeline's duration
+#               against the worst case football can produce. It is the
+#               duration problem, already sized at 16.7 minutes.
+#
+#   ACTIONABLE  against THE DAY'S earliest kickoff per the reference. This is
+#               the one a manual dispatch answers, so by CLR-2 it is the one
+#               that may alarm.
+#
+# ─────────────────────── AND THE UNSAFE DIRECTION ─────────────────────────
+#
+# THE ACTIONABLE MARGIN IS AN UPPER BOUND, AND ITS RESIDUAL EXCEEDS THE
+# REGISTERED MINIMUM ON MOST DAYS. The reference covers 9 of 30 configured
+# leagues, so its minimum errs LATE whenever an uncovered league opens the
+# card. `simulated` 2026-10-21 over n=605 days with a covered fixture, using
+# the reference's own league set as the proxy for its coverage:
+#
+#     p50   75 min      <- today's case exactly: 16:45 reported, 15:30 true
+#     p75  210 min
+#     p90  360 min
+#     p95  480 min
+#     p99  592 min
+#     max 1185 min
+#     residual > 60m on 312 of 605 days (51.6%); == 0 on 212
+#
+# SO THE ALARM'S THRESHOLD DOES *NOT* EXCEED THE RESIDUAL. It is exceeded by
+# it on 51.6% of days. That is the opposite of what a safety threshold needs,
+# and it is why the structural margin is still printed and still carries the
+# safety claim: an actionable margin clearing 60 is NECESSARY, not SUFFICIENT.
+# Raising the threshold to p99 would make it fire every day, which rule 4
+# forbids, and subtracting the residual reproduces the floor. Neither is an
+# improvement, so the residual is REPORTED beside the margin instead of being
+# folded into it.
+REFERENCE_RESIDUAL = {
+    "n_days": 605,
+    "p50": 75, "p75": 210, "p90": 360, "p95": 480, "p99": 592, "max": 1185,
+    "over_60": 312, "zero": 212,
+    "provenance": ("simulated 2026-10-21 from our own card over 2024-01-01.., "
+                   "comparing the earliest kickoff among the reference's 9 "
+                   "covered league keys against the earliest over all 30 "
+                   "configured; the phantom 00:00 ingestion stamps excluded"),
+    "exceeds_threshold": True,
+    "today_case": "2026-10-21: reference 16:45, true earliest 15:30 = 75m",
+}
+
+#: THE STRUCTURAL BREACH, ACKNOWLEDGED WITH A DATE. The registered 60 is NOT
+#: edited -- it was stated 2026-10-10 before any of this -- and the exposure
+#: stays its own term at zero rather than being folded in.
+STRUCTURAL_ACK = {
+    "since": "2026-10-21",
+    "binding": -19.8,
+    "why": ("the structural margin is the DURATION problem, not a deadline "
+            "choice: the floor IS the observed earliest kickoff, so no "
+            "anchoring clears it. Sized 2026-10-21 at 16.7 minutes remaining "
+            "after the 3.1 recovered by the request-pacing change"),
+    "action": ("close the remaining ~16.7 min of time-to-picks (parallelise "
+               "the Claude review behind an atomic marker, batch the AF "
+               "per-fixture commits, or cap per-run work to cut the variance "
+               "- the last needs a cohort bump), or dispatch manually that "
+               "morning"),
+    "review": "2026-11-21",
+}
+
+
+def two_margins(day, ref: dict, cron_minutes,
+                delays, durations) -> dict:
+    """Both margins for `day`, each with its basis and its coverage.
+
+    THE PAIR IS NEVER REDUCED TO THE OPTIMISTIC HALF. `structural` is always
+    present; `actionable` carries a `verdict` of `UNEVALUATED` when the
+    reference supplied no value, which is a different fact from a clear
+    margin and says so.
+    """
+    from src.scrapers.footballdata_competitions import \
+        REFERENCE_COVERAGE_MEASURED
+
+    dtype = day_type(day)
+    floor_min, floor_what, floor_prov = DEADLINE_FLOOR[dtype]
+    nc, nt = REFERENCE_COVERAGE_MEASURED
+    coverage_all = f"ALL {nt} configured leagues (the observed minimum)"
+    coverage_ref = f"{nc} of {nt} configured leagues"
+
+    # THE MINIMUM COMES FROM THE SAME EXPOSURE DICT THAT IS PRINTED, so the
+    # two cannot diverge -- the contract
+    # `test_the_exposure_the_VERDICT_uses_is_the_one_PRINTED` pins. The
+    # exposure belongs to THIS margin and not to the actionable one: it
+    # measures how far the FLOOR can sit after the true earliest kickoff, and
+    # it is zero by construction because the floor IS that kickoff. The
+    # reference's own residual is a different quantity, reported separately as
+    # REFERENCE_RESIDUAL rather than folded into a threshold.
+    _exposure = coverage_exposure(day)
+    structural = prospective_margin(
+        floor_min, cron_minutes, delays, durations, serves=day,
+        min_margin=_exposure["effective_min"],
+        deadline_basis=f"FLOOR {floor_what} - {coverage_all}")
+    structural["kind"] = "STRUCTURAL"
+    structural["coverage"] = coverage_all
+    structural["exposure"] = _exposure
+    structural["clearing_action"] = STRUCTURAL_ACK["action"]
+    structural["acknowledged"] = STRUCTURAL_ACK
+
+    rmin = ref.get("min")
+    actionable = prospective_margin(
+        rmin, cron_minutes, delays, durations, serves=day,
+        deadline_basis=(f"REFERENCE {REFERENCE_NAME} - {coverage_ref}"))
+    actionable["kind"] = "ACTIONABLE"
+    actionable["coverage"] = coverage_ref
+    actionable["reference_state"] = ref.get("state")
+    actionable["residual"] = REFERENCE_RESIDUAL
+    actionable["clearing_action"] = CLEARING_ACTION
+    if rmin is None:
+        actionable["verdict"] = "UNEVALUATED"
+        actionable["reason"] = (
+            f"the reference supplied no value ({ref.get('state')}), so there "
+            f"is no day-specific kickoff to measure against. NOT a clear "
+            f"margin.")
+    return {
+        "serves": day.isoformat(),
+        "day_type": dtype,
+        "structural": structural,
+        "actionable": actionable,
+        "residual": REFERENCE_RESIDUAL,
+        # WHICH ONE MAY ALARM. CLR-2: an alarm fires on the quantity its
+        # clearing action changes, and a manual dispatch changes only the
+        # day-specific one. The structural margin is reported and
+        # acknowledged; it is the duration problem and nobody clears it by
+        # dispatching.
+        "alarms_on": "actionable",
+    }
+
+
+def format_two_margins(m: dict) -> str:
+    """Both lines, every run, each naming its basis and its coverage."""
+    out = [f"PROSPECTIVE MARGINS for {m['serves']} ({m['day_type']}) - "
+           f"TWO FACTS, NOT ONE"]
+    for key in ("structural", "actionable"):
+        a = m[key]
+        dl = a.get("deadline_min")
+        dls = (f"{dl // 60:02d}:{dl % 60:02d}" if dl is not None else "--:--")
+        if a.get("verdict") == "UNEVALUATED":
+            out.append(f"  {a['kind']:10s} UNEVALUATED  deadline {dls}  "
+                       f"[{a['coverage']}]")
+            out.append(f"             {a.get('reason', '')}")
+            continue
+        out.append(
+            f"  {a['kind']:10s} {a['binding']:+6.0f}m  deadline {dls}  "
+            f"verdict {a['verdict']}  [{a['coverage']}]")
+        out.append(f"             basis: {a['deadline_basis']}")
+    r = m["residual"]
+    out.append(
+        f"  RESIDUAL on the ACTIONABLE margin: it is an UPPER BOUND. "
+        f"p50={r['p50']}m p99={r['p99']}m max={r['max']}m, "
+        f"> 60m on {r['over_60']}/{r['n_days']} days "
+        f"({r['over_60'] / r['n_days']:.1%}).")
+    out.append(
+        f"             so clearing {MIN_ACCEPTABLE_MARGIN_MIN}m on the "
+        f"actionable margin is NECESSARY, NOT SUFFICIENT - the threshold does "
+        f"NOT exceed the residual. {r['provenance']}")
+    ack = m["structural"]["acknowledged"]
+    out.append(
+        f"  STRUCTURAL is ACKNOWLEDGED since {ack['since']} at "
+        f"{ack['binding']:+.1f}m against the registered "
+        f"{MIN_ACCEPTABLE_MARGIN_MIN}m (NOT edited), review {ack['review']}.")
+    out.append(f"             {ack['why']}")
+    out.append(f"  ALARMS ON: {m['alarms_on']} (CLR-2 - the only one a "
+               f"dispatch changes)")
+    return "\n".join(out)

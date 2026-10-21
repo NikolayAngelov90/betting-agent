@@ -58,15 +58,20 @@ def test_the_detector_runs_against_the_LIVE_repo_and_2026_10_12_is_NOT_missing()
 '''
 
 
-def _plant(body: str, name: str):
-    """A probe inside `tests/`, where the conftest applies, removed after."""
+def _plant(body: str, name: str, extra=()):
+    """A probe inside `tests/`, where the conftest applies, removed after.
+
+    `extra` passes further pytest arguments, so the positive control can run
+    the probe under the GATE'S OWN marker selection rather than a paraphrase
+    of it.
+    """
     import os
     p = pathlib.Path("tests") / f"test_zz_cal_{name}_{os.getpid()}.py"
     p.write_text(body, encoding="utf-8")
     try:
         r = subprocess.run(
             [sys.executable, "-m", "pytest", "-q", str(p),
-             "-p", "no:cacheprovider"],
+             "-p", "no:cacheprovider", *extra],
             capture_output=True, encoding="utf-8", errors="replace",
             cwd=str(pathlib.Path.cwd()), timeout=300)
         return r, r.stdout + r.stderr
@@ -160,26 +165,51 @@ def test_BOTH_SIDES_MOVING_TOGETHER_is_NOT_refused():
 
 # ── THE BACKLOG, REPORTED AND PINNED ────────────────────────────────────────
 
-def test_the_BACKLOG_is_one_and_it_is_EXEMPTED_with_a_reason():
+#: THE ONLY GROUNDS ON WHICH AN EXEMPTION MAY REST. An exemption says "the
+#: scan is right that this LOOKS time-varying and wrong that it IS", so it has
+#: to name which way it is wrong. "It is fine" is not a ground.
+#:
+#: The second ground was added 2026-10-21 with the two `finding_register`
+#: entries: `evaluate()` is live only through finding 13, and neither test's
+#: assertions reach that row. The dependence exists in the callee and does not
+#: reach the verdict — which is a different fact from both sides moving
+#: together, and collapsing them into one phrase would have meant accepting a
+#: reason that does not explain anything.
+EXEMPTION_GROUNDS = (
+    "MOVE TOGETHER",            # the expected value tracks the actual one
+    "DOES NOT REACH",           # the live/clock input never reaches the assert
+    "WAS REMOVED, NOT DECLARED",  # the dependence was engineered out
+    "ASSERTS ABOUT FINDING",    # only a committed-source row is asserted
+)
+
+
+def test_the_BACKLOG_is_EMPTY_and_every_EXEMPTION_names_its_GROUND():
     """Reported before the check was wired, and pinned so it cannot grow.
 
-    Its single member is in the GATE, which is why it is exempted rather than
+    Every member is in the GATE, which is why each is exempted rather than
     marked: `tests/conftest.py`'s own rule is that a correctness test which
-    happens to use a date stays in the gating suite.
+    happens to touch a date or a registry stays in the gating suite.
+
+    THE COUNT MOVED 1 -> 3 ON 2026-10-21, deliberately, when
+    `finding_register.evaluate` was added to the live set after one of its
+    callers cost a card. Both new entries are hermetic in fact; marking them
+    would have moved real coverage out of the gate to silence a scan that was
+    over-reaching, which is the wrong direction.
     """
     bad = [f for f in scan.unmarked(scan.scan())
            if f.nodeid not in conftest.CALENDAR_SCAN_ALLOWED]
     assert bad == [], (
         f"the backlog grew: {[f.nodeid for f in bad]}. Mark them, fix them, "
         f"or add them to CALENDAR_SCAN_ALLOWED with a reason.")
-    assert len(conftest.CALENDAR_SCAN_ALLOWED) == 1, (
+    assert len(conftest.CALENDAR_SCAN_ALLOWED) == 3, (
         f"the exemption list moved to {len(conftest.CALENDAR_SCAN_ALLOWED)}; "
-        f"each entry must carry why both sides move together")
+        f"each entry must name one of {EXEMPTION_GROUNDS}")
     for nodeid, reason in conftest.CALENDAR_SCAN_ALLOWED.items():
         assert "::" in nodeid
         assert len(reason) > 80, f"{nodeid} has no real reason"
-        assert "MOVE TOGETHER" in reason.upper(), (
-            f"{nodeid}'s exemption does not explain why it is safe")
+        assert any(g in reason.upper() for g in EXEMPTION_GROUNDS), (
+            f"{nodeid}'s exemption does not name a ground from "
+            f"{EXEMPTION_GROUNDS}; 'it is fine' is not one")
 
 
 def test_the_gate_EXCLUDES_both_markers_and_the_other_step_RUNS_them():
@@ -227,3 +257,137 @@ def test_the_predicate_is_PURELY_STATIC_and_that_is_why_it_may_gate():
         f"the scan itself calls {sorted(called)} - its verdict could then "
         f"change with no code change, which is the defect it exists to "
         f"refuse")
+
+
+# ───────────────────── THE 2026-10-21 PAIR, AND THE COLLAPSE ─────────────────
+#
+# A SECOND GUARD EXISTED FOR ONE DAY AND IS GONE.
+# `tests/test_no_live_state_in_the_capture_gate.py` was written on 2026-10-21
+# for the live-reader kind; its rule now lives in this scanner as a third
+# reason, because two guards for one defect class is the shape that let the
+# 10-21 pair through — each guard covered part of the class and both looked
+# covered. The class is: A GATING TEST IS A PURE FUNCTION OF THE REPOSITORY AT
+# THAT COMMIT.
+#
+# AND THE SEQUENCE IS THE FINDING, which is the second confirmation of the
+# sentence at the top of this file. The remedy for this exact shape shipped on
+# 2026-10-18 in `7514a50`. The warning sits FOUR LINES above the gate's own
+# pytest command in `daily-picks.yml`. On 2026-10-20 I added two more, and on
+# 2026-10-21 they cost a card. A remedy that must be remembered is not a
+# remedy; it has to be a check.
+
+#: KNOWN WRONG, verbatim as written on 2026-10-20. Tuple unpacking defeated the
+#: taint tracking: `by_type, _crons = collect_lag_series_by_daytype()` bound
+#: nothing, so the live result was clean at the assertion.
+THE_TUPLE_UNPACK_TEST = '''import statistics
+import scripts.ci_audit as ci
+
+
+def test_planted_weekday_margin():
+    by_type, _crons = ci.collect_lag_series_by_daytype()
+    lag = [l for _d, l in (by_type.get("weekday") or [])]
+    assert len(lag) >= 8, f"the weekday series shrank to n={len(lag)}"
+'''
+
+#: KNOWN WRONG, verbatim as written on 2026-10-20. The dependence is a
+#: WORKING-TREE read inside a registry predicate: finding 13 is
+#: `not Path("data/models/feature_list.json").exists()`, which actions/cache
+#: restores in CI and a dev box does not have.
+THE_WORKING_TREE_TEST = '''import datetime as dt
+import scripts.finding_register as fr
+
+
+def test_planted_counts():
+    rows = fr.evaluate(today=dt.date(2026, 10, 20))
+    live = [r for r in rows if r["is_live"] is True]
+    assert len(live) == 8, f"{len(live)} findings still live, expected 8"
+'''
+
+
+def test_KNOWN_WRONG_the_TUPLE_UNPACK_caller_is_REFUSED():
+    """Control 2 of 3. Named: the `collect_lag_series_by_daytype()` caller."""
+    r, out = _plant(THE_TUPLE_UNPACK_TEST, "tup")
+    assert r.returncode != 0, f"it was ACCEPTED:{chr(10)}{out[-1200:]}"
+    assert ("COUNT compared against LIVE STATE" in out
+            or "no injection seam" in out), out[-1500:]
+    assert "no tests ran" in out, (
+        "the probe body RAN - the refusal is not at collection")
+
+
+def test_KNOWN_WRONG_the_WORKING_TREE_read_is_REFUSED():
+    """Control 3 of 3. Named: the `feature_list.json` predicate."""
+    r, out = _plant(THE_WORKING_TREE_TEST, "wt")
+    assert r.returncode != 0, f"it was ACCEPTED:{chr(10)}{out[-1200:]}"
+    assert "COUNT compared against LIVE STATE" in out, out[-1500:]
+    assert "no tests ran" in out
+
+
+def test_POSITIVE_CONTROL_the_same_test_MARKED_is_accepted():
+    """The marker must be what clears the refusal.
+
+    Without this the three controls above prove only that SOMETHING fails, and
+    a guard that refuses everything would pass them all.
+    """
+    marked = THE_TUPLE_UNPACK_TEST.replace(
+        "import scripts.ci_audit as ci",
+        "import pytest\nimport scripts.ci_audit as ci").replace(
+        "def test_planted_weekday_margin():",
+        "@pytest.mark.live\ndef test_planted_weekday_margin():")
+    assert "@pytest.mark.live" in marked
+    r, out = _plant(marked, "pos")
+    assert "This test's verdict can change" not in out, (
+        f"the marker did NOT clear the refusal, so the marker is not what the "
+        f"guard reads:{chr(10)}{out[-1200:]}")
+    # it is deselected by the gate's own selection, which is the point
+    r2, out2 = _plant(marked, "pos2", extra=["-m", "not calendar and not live"])
+    assert "1 deselected" in out2 or "deselected" in out2, out2[-800:]
+
+
+#: WHAT THIS PREDICATE CANNOT DETECT. Rule 2: the uncoverable list IS the
+#: guard's coverage statement, and it is more useful than the hit count.
+#:
+#: Each line is a way a gating test's verdict could still move without the
+#: scan seeing it. They are not hypothetical shapes — every one of them would
+#: have passed the scan on 2026-10-20.
+UNCOVERABLE = (
+    "INDIRECTION THROUGH A HELPER the scan does not know: a test calling a "
+    "local function that itself reads the clock, the network or the working "
+    "tree. Only the names in LIVE_NAMES, LIVE_QUALIFIED and SEAMLESS_READERS "
+    "are known, and a reader nobody registered is invisible.",
+    "DEPENDENCE VIA A FIXTURE: a conftest fixture that reads live state hands "
+    "it to the test as an argument, and the test body is clean.",
+    "A MODULE-LEVEL CONSTANT computed at import from live state - the scan "
+    "reads function bodies.",
+    "A PURE-CLOCK TEST with no comparison against a fixed side: `assert "
+    "f(date.today())` is flagged only when something frozen is on the other "
+    "side, and the legitimate form (both sides moving) is deliberately not.",
+    "A FILESYSTEM READ ON A COMPUTED PATH: only a literal argument can be "
+    "checked against the index, so `open(base / name)` is invisible.",
+    "UNSEEDED RANDOMNESS, test ORDER dependence, and shared mutable state - "
+    "none of which is time-varying in this sense but all of which can move a "
+    "verdict with no code change.",
+    "THE DATABASE: conftest strips DATABASE_URL and the SQLite fallback is "
+    "refused, so this is covered by a different mechanism, not by this scan.",
+)
+
+
+def test_the_UNCOVERABLE_kinds_are_ENUMERATED_not_implied():
+    """Rule 2. A guard narrower than its defect class leaves the rest
+    unguarded and looking covered, so the gap is written down."""
+    assert len(UNCOVERABLE) >= 7
+    for kind in UNCOVERABLE:
+        assert len(kind) > 60, f"too vague to be a coverage statement: {kind}"
+    joined = " ".join(UNCOVERABLE).upper()
+    for must in ("FIXTURE", "INDIRECTION", "COMPUTED PATH", "DATABASE"):
+        assert must in joined, f"{must} is not in the uncoverable list"
+
+
+def test_the_SECOND_GUARD_IS_GONE_and_its_rule_is_HERE():
+    """Rule 1: one predicate per defect class. Three guards would mean the
+    class was never named correctly."""
+    assert not pathlib.Path(
+        "tests/test_no_live_state_in_the_capture_gate.py").exists(), (
+        "the second guard is back; fold its rule into the scan instead")
+    assert scan.SEAMLESS_READERS, "its rule did not survive the collapse"
+    assert "collect_lag_series_by_daytype" in scan.SEAMLESS_READERS
+    assert scan.TRANSPORT_STUBS, "the stub carve-out did not survive"

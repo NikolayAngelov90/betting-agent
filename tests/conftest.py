@@ -305,6 +305,26 @@ CALENDAR_SCAN_ALLOWED = {
         "date. The scan sees a file read as 'fixed' because it cannot know "
         "the file is clock-derived. The 2026-10-13 defect was the opposite: a "
         "FROZEN literal against a moving window, where only one side moved.",
+    # ── ADDED 2026-10-21, when `finding_register.evaluate` joined the live
+    # set. Both are EXEMPTED rather than marked, because both are hermetic in
+    # fact and marking them would move real coverage out of the capture gate.
+    "tests/test_finding_register.py::test_the_COUNTS_and_the_MEDIAN_with_its_caveat":
+        "THE ENVIRONMENT DEPENDENCE WAS REMOVED, NOT DECLARED. `evaluate()` "
+        "is live only through finding 13, whose predicate is "
+        "`not Path('data/models/feature_list.json').exists()`. This test no "
+        "longer pins that: it pins the twelve source-only predicates and "
+        "asserts 13 SEPARATELY as two-valued, with a guard that 13's "
+        "predicate still reads the filesystem so the carve-out cannot go "
+        "stale. Proven by control on 2026-10-21: it passes with "
+        "feature_list.json present AND absent, which is the exact "
+        "disagreement that cost that morning's card.",
+    "tests/test_finding_register.py::test_KNOWN_WRONG_the_WEATHER_entry_appears_in_the_harvest":
+        "IT ASSERTS ABOUT FINDING 6 ONLY, whose predicate reads "
+        "`src/features/feature_engineer.py` -- committed source, so its "
+        "verdict moves only when the code moves. Finding 13 is the sole "
+        "working-tree-dependent member of the register and this test never "
+        "touches it. The scan flags the call because `evaluate` is live "
+        "wholesale; it cannot see which row is being asserted.",
 }
 
 

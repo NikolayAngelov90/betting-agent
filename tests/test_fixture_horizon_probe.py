@@ -1073,7 +1073,7 @@ def test_the_PROSPECTIVE_margin_is_no_longer_the_probes_to_lose():
     import scripts.ci_audit as ci
 
     src = inspect.getsource(ci.main)
-    assert "prospective margin" in src, (
+    assert "actionable margin" in src, (
         "the audit no longer computes the prospective margin, so disabling "
         "the probe DOES lose something and the workflow comment is wrong")
     wf = pathlib.Path(".github/workflows/fixture-horizon-probe.yml").read_text(

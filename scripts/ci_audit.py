@@ -72,8 +72,10 @@ from scripts.schedule_deadline import (
     combined_deadline,
     day_type,
     format_prospective,
+    format_two_margins,
     format_reference_deadline,
     prospective_margin,
+    two_margins,
     reference_earliest)
 
 LEDGER = pathlib.Path("docs/ci-audit-ledger.md")
@@ -2670,33 +2672,53 @@ def main() -> int:
         print(f"  reference covered : {', '.join(_ref['leagues_present']) or 'NONE'}")
         print(f"  reference did NOT : {', '.join(_ref['leagues_absent'])}")
     _ahead_cron = _crons.get(day_type(_tomorrow))
-    _prosp = prospective_margin(
-        _ahead["deadline_min"], _ahead_cron,
+
+    # ── TWO MARGINS, AND THE ALARM MOVES TO THE ACTIONABLE ONE. 2026-10-21 ─
+    #
+    # One number was carrying two facts. `min(reference, floor)` always
+    # returned the floor, because the floor IS the observed earliest kickoff,
+    # so every day reported a structural statement about the pipeline's
+    # duration dressed as a day-specific deadline. Measured 2026-10-21: floor
+    # 09:30 against today's actual earliest kickoff of 15:30.
+    #
+    # CLR-2: the alarm fires on the quantity its clearing action changes. A
+    # manual dispatch changes the DAY-SPECIFIC margin and does nothing to the
+    # structural one, which is the duration problem.
+    #
+    # FIRING RATE, measured over the record (n=904 days, 2024-01-01..):
+    #     structural  629/904 = 69.6%
+    #     actionable    4/605 =  0.7%   (605 days the reference could see)
+    # The alarm becoming rare is the point. The structural term stays printed
+    # every run, so nothing is hidden by the change -- and it has to stay,
+    # because the actionable margin's residual EXCEEDS the registered 60 on
+    # 51.6% of days and so cannot carry the safety claim on its own.
+    _m2 = two_margins(
+        _tomorrow, _ref, _ahead_cron,
         [lag for _d, lag in (_by_type.get(day_type(_tomorrow)) or [])],
-        MARGIN_RUN_DURATIONS_BY_DAYTYPE[day_type(_tomorrow)],
-        serves=_tomorrow,
-        # THE MINIMUM CARRIES THE RESIDUAL. 60m was registered on 2026-10-10
-        # against THE DEADLINE; the deadline is now known to sit up to the
-        # measured exposure after the first kickoff we bet, because the
-        # reference sees 9 of 30 leagues. So the requirement is 60 + p99,
-        # which is 135m on a weekday and 75m on a weekend. The registered 60
-        # is NOT edited -- refitting a pre-registered threshold to a later
-        # measurement is how a stated bound becomes a fitted one.
-        min_margin=_ahead["exposure"]["effective_min"],
-        deadline_basis=f"{_ahead['bound_by']} via {_ahead['reference']}, "
-                       f"{_ahead['coverage']}")
-    print(format_prospective(_prosp))
-    if _prosp.get("verdict") == "ALARM":
-        print(f"!! PROSPECTIVE MARGIN {_prosp['binding']:+.0f} min for "
-              f"{_tomorrow} is below {_prosp['min_margin']} min. "
+        MARGIN_RUN_DURATIONS_BY_DAYTYPE[day_type(_tomorrow)])
+    print(format_two_margins(_m2))
+    _act, _struct = _m2["actionable"], _m2["structural"]
+    if _act.get("verdict") == "ALARM":
+        print(f"!! ACTIONABLE MARGIN {_act['binding']:+.0f} min for "
+              f"{_tomorrow} is below {_act['min_margin']} min. "
               f"CLEARING ACTION: {CLEARING_ACTION}")
         alarmed.append(
-            f"prospective margin {_prosp['binding']:+.0f}m for {_tomorrow} "
-            f"< {_prosp['min_margin']}m (deadline "
-            f"{_ahead['deadline_min'] // 60:02d}:"
-            f"{_ahead['deadline_min'] % 60:02d} bound_by "
-            f"{_ahead['bound_by']}, reference {_ahead['reference_state']}, "
-            f"{_ahead['coverage']})")
+            f"actionable margin {_act['binding']:+.0f}m for {_tomorrow} "
+            f"< {_act['min_margin']}m (deadline "
+            f"{_act['deadline_min'] // 60:02d}:"
+            f"{_act['deadline_min'] % 60:02d} from {_ahead['reference']}, "
+            f"{_act['coverage']}, reference {_ahead['reference_state']}; "
+            f"residual p50={_m2['residual']['p50']}m so this is an UPPER "
+            f"BOUND)")
+    # REPORTED AND ACKNOWLEDGED, NEVER ALARMED. It is true every day and no
+    # action available to the operator clears it, which is the definition of
+    # the thing CLR-2 says must not be an alarm.
+    if _struct.get("verdict") == "ALARM":
+        _sack = _struct["acknowledged"]
+        print(f"   structural margin {_struct['binding']:+.0f} min for "
+              f"{_tomorrow} is below {_struct['min_margin']} min and is "
+              f"ACKNOWLEDGED since {_sack['since']}, review {_sack['review']}."
+              f" It does NOT alarm: {_sack['action']}")
 
     if _cron is None:
         print("!! daily-picks carries no single `m h * * *` cron — the margin is "

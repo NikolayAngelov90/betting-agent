@@ -59,6 +59,7 @@ CLOCK_NAMES = {"today", "now", "utcnow", "monotonic"}
 LIVE_NAMES = {"missing_scheduled_runs", "unparseable_workflow_runs",
               "collect_lag_series_by_daytype", "workflow_states", "fetch_log",
               "urlopen"}
+
 #: NOT live, and each was measured into this comment. `probe_fixtures` and
 #: `verify_offset` are driven with monkeypatched scrapers and a local SQLite
 #: session in every test that calls them, and `subprocess.run` of a local
@@ -67,7 +68,63 @@ LIVE_NAMES = {"missing_scheduled_runs", "unparseable_workflow_runs",
 
 #: Matched on the QUALIFIED form, so `subprocess.run` counts and `x.run` does
 #: not.
-LIVE_QUALIFIED = {("requests", "get"), ("requests", "post")}
+#:
+#: ── `evaluate` IS QUALIFIED, AND THAT IS NOT FASTIDIOUSNESS. 2026-10-21. ──
+#:
+#: `finding_register.evaluate()` runs each finding's `live` predicate, and
+#: finding 13's is `not Path("data/models/feature_list.json").exists()` -- a
+#: read of a path git does not track, which `actions/cache` restores in CI and
+#: a dev box does not have. Its result therefore depends on something outside
+#: the commit, which is this scanner's whole subject; "live" here means that,
+#: not "networked". `test_the_COUNTS_and_the_MEDIAN...` asserted a COUNT
+#: against it and cost a card on 2026-10-21.
+#:
+#: BUT PUTTING THE BARE NAME IN `LIVE_NAMES` REFUSED
+#: `test_h1_precondition::test_NO_FIXTURE_IN_BAND_is_SEPARATE_from_NO_CARD`,
+#: which calls `pre.evaluate(_Sess(68, 68, 9, 0), ...)` -- a DIFFERENT
+#: `evaluate`, driven by a fake session, entirely hermetic. Measured: one
+#: false positive from one unqualified name. Hence the qualified form, exactly
+#: as `requests.get` is qualified so that `x.run` does not match
+#: `subprocess.run`.
+LIVE_QUALIFIED = {("requests", "get"), ("requests", "post"),
+                  ("fr", "evaluate"), ("finding_register", "evaluate")}
+
+#: ── THE THIRD KIND, FOLDED IN FROM A SECOND GUARD. 2026-10-21. ────────────
+#:
+#: `tests/test_no_live_state_in_the_capture_gate.py` existed for one day and
+#: is deleted: two guards for one defect class is the shape rule 1 forbids,
+#: and the class is "a test whose outcome depends on anything not in the
+#: commit". Its rule is kept here as a third reason.
+#:
+#: WHY IT IS NOT REDUNDANT WITH `LIVE_NAMES`. That set is consulted only at an
+#: ASSERTION, so a test that CALLS a live reader without comparing its result
+#: still passes -- yet its outcome can still move, because the call itself can
+#: raise, return empty, or drive a `pytest.skip`. These three have NO
+#: injection seam, so there is no safe way to call one from a gating test.
+SEAMLESS_READERS = {
+    "collect_lag_series_by_daytype":
+        "queries the GitHub API for run timings and takes no fetcher; it "
+        "returns an EMPTY series where there are no credentials, which is "
+        "exactly how 2026-10-21 lost its card",
+    "fetch_log": "downloads a run log from the GitHub API; no seam",
+    "missing_scheduled_runs": "enumerates live runs from the GitHub API",
+}
+
+#: Stubbing the TRANSPORT makes such a call hermetic, and that is a legitimate
+#: way to exercise a seamless reader from inside the gate. `ci._sh` is the
+#: shell runner all three go through. `current_crons_by_daytype` is here
+#: because stubbing it SHORT-CIRCUITS `missing_scheduled_runs` before the
+#: network: that function reads the crons first and returns UNEVALUATED on
+#: None or an all-None dict, both BEFORE its `_sh(...)` call -- verified
+#: against the source, not assumed.
+#:
+#: Measured 2026-10-21: without this, three hermetic tests in
+#: test_absent_run_and_unparseable.py were refused, and flagging
+#: `reference_earliest(fetch=...)` and `current_crons_by_daytype(sha=...)` as
+#: calls produced 20 more. A guard that cries wolf is deleted, and the real
+#: one goes with it.
+TRANSPORT_STUBS = {"_sh", "_sh_json", "fetch_log", "_reference_fetch",
+                   "current_crons_by_daytype"}
 
 #: The markers that declare a test out of the capture-gating suite.
 MARKERS = {"calendar", "live"}
@@ -116,6 +173,20 @@ def _is_clock_read(node) -> bool:
     return isinstance(node, ast.Call) and _call_name(node) in CLOCK_NAMES
 
 
+def _stubs_transport(fn) -> bool:
+    """True when this test replaces the transport, or the reader itself."""
+    for call in ast.walk(fn):
+        if not (isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "setattr"):
+            continue
+        for a in call.args:
+            if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                if a.value in TRANSPORT_STUBS or a.value in SEAMLESS_READERS:
+                    return True
+    return False
+
+
 def _is_live_call(node) -> bool:
     n = _call_name(node)
     return bool(n) and (n in LIVE_NAMES
@@ -155,15 +226,87 @@ def scan_function(fn) -> Tuple[str, ...]:
     """The reasons this test's verdict can move on its own, or ()."""
     clock: Set[str] = set()
     live: Set[str] = set()
+    assigns = []
     for node in ast.walk(fn):
-        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)):
+        if not isinstance(node, ast.Assign):
             continue
-        target = node.targets[0].id
-        if any(_is_clock_read(x) for x in ast.walk(node.value)):
-            clock.add(target)
-        elif any(_is_live_call(x) for x in ast.walk(node.value)):
-            live.add(target)
+        # ── TUPLE UNPACKING TAINTS EVERY NAME IT BINDS. 2026-10-21. ────────
+        #
+        # This required `len(targets) == 1 and isinstance(targets[0], Name)`,
+        # so `by_type, _crons = collect_lag_series_by_daytype()` bound NOTHING
+        # and the live call's result was clean from there on. That is exactly
+        # how `test_the_weekday_cron_CLEARS...` passed this scanner while
+        # calling a function already listed in LIVE_NAMES, and then lost a
+        # card on 2026-10-21. Measured: `scan_function` returned `()` for it.
+        #
+        # Every Name bound by the statement is tainted FOR THE LIVE SET,
+        # however it is spelled. Over-tainting is the safe direction there:
+        # the cost is a marker, and the cost of under-tainting is a day's
+        # prices.
+        #
+        # THE CLOCK SET USES THE ORIGINAL BINDING AND ONLY THAT. Walking the
+        # target for Names taints the RECEIVER of an attribute assignment --
+        # `agent.predictor.ml_models.trained_at = utcnow()` marked `agent`
+        # clock-derived, so `agent._ml_models_stale(...) is True` read as a
+        # clock value against a fixed literal. Measured: one false positive,
+        # `test_ml_stale_when_goals_model_missing`, which is hermetic because
+        # `now` is always now and the staleness comes from the OTHER model
+        # being None. A predicate calibrated to 1 finding on 2026-10-18 is not
+        # re-opened as a side effect of fixing a different one.
+        targets = []
+        for t in node.targets:
+            for sub in ast.walk(t):
+                if isinstance(sub, ast.Name):
+                    targets.append(sub.id)
+        if not targets:
+            continue
+        simple = (node.targets[0].id
+                  if len(node.targets) == 1
+                  and isinstance(node.targets[0], ast.Name) else None)
+        assigns.append((targets, node.value, simple))
+
+    # ── TAINT IS TRANSITIVE, TO A FIXED POINT. 2026-10-21. ─────────────────
+    #
+    # One pass marked only names assigned DIRECTLY from a live call, so
+    #
+    #     by_type, _crons = collect_lag_series_by_daytype()   # tainted
+    #     lag = [l for _d, l in (by_type.get("weekday") or [])]   # CLEAN
+    #     assert len(lag) >= 8
+    #
+    # reached the assertion with a clean name, and the 2026-10-21 card went
+    # with it. Derivation has to carry the taint, and `ast.walk` does not
+    # visit statements in source order, so this iterates rather than assuming
+    # the assignment it needs has already been seen.
+    # TRANSITIVITY APPLIES TO `live` ONLY, AND THAT IS MEASURED. Propagating
+    # the CLOCK set as well took the census from 1 unmarked finding to 14, and
+    # 11 of the 13 new ones were false: `trained_at = utcnow(); assert not
+    # stale` is hermetic forever, because the test controls the clock-derived
+    # input and `now` is always now. The clock rule was calibrated to 1 on
+    # 2026-10-18 and is left exactly as it was.
+    #
+    # All THREE known-wrong cases are the LIVE-STATE rule, not the clock rule:
+    # the 10-13 date literal against `missing_scheduled_runs()`, and both of
+    # 2026-10-21's counts against live-derived values. So the gap was here and
+    # only here.
+    for _ in range(len(assigns) + 1):
+        before = len(live)
+        for targets, value, _simple in assigns:
+            nodes = list(ast.walk(value))
+            if any(_is_clock_read(x) for x in nodes):
+                continue
+            names = {x.id for x in nodes if isinstance(x, ast.Name)}
+            if any(_is_live_call(x) for x in nodes) or (names & live):
+                live.update(targets)
+        if len(live) == before:
+            break
+    # THE CLOCK SET KEEPS ITS 2026-10-18 BINDING RULE EXACTLY: a single Name
+    # target, no tuple unpacking, no transitivity. Widening it to every bound
+    # Name added four findings and all four were false. A predicate calibrated
+    # to 1 is not re-opened as a side effect of fixing a different one.
+    for _targets, value, simple in assigns:
+        if simple is not None and any(
+                _is_clock_read(x) for x in ast.walk(value)):
+            clock.add(simple)
 
     def clockish(node) -> bool:
         return any(_is_clock_read(x)
@@ -208,6 +351,19 @@ def scan_function(fn) -> Tuple[str, ...]:
                 reasons.append(
                     f"{kind} compared against LIVE STATE - it asserts over a "
                     f"rolling window and expires when the window moves")
+
+    # THE THIRD KIND: a CALL to a seamless reader, asserted on or not.
+    if not _stubs_transport(fn):
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            name = (f.attr if isinstance(f, ast.Attribute)
+                    else getattr(f, "id", ""))
+            if name in SEAMLESS_READERS:
+                reasons.append(
+                    f"it CALLS {name}(), which has no injection seam - "
+                    f"{SEAMLESS_READERS[name]}")
 
     return tuple(sorted(set(reasons)))
 

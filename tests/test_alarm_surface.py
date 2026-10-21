@@ -263,7 +263,13 @@ def test_the_EIGHTH_surface_is_the_PROSPECTIVE_margin_and_why_it_moved_here():
     import textwrap
 
     src = inspect.getsource(ci.main)
-    assert "prospective margin" in src, "the eighth surface is gone"
+    # RENAMED 2026-10-21: the single margin became TWO, and the alarm
+    # moved to the ACTIONABLE one because that is the only quantity a
+    # manual dispatch changes (CLR-2). The surface still exists.
+    assert "actionable margin" in src, "the eighth surface is gone"
+    assert "structural margin" in src, (
+        "the structural half is gone, so the pair was reduced to the "
+        "optimistic half")
 
     # BY AST, NOT BY TEXT -- AND THIS IS THE THIRD TIME TODAY. A text scan
     # for `DATABASE_URL` matched the COMMENT above the new block, which names
@@ -301,11 +307,24 @@ def test_the_prospective_alarm_CARRIES_the_deadline_its_BASIS_and_COVERAGE():
     import inspect
 
     src = inspect.getsource(ci.main)
-    block = src[src.index("prospective margin"):][:700]
-    for part in ("deadline", "bound_by", "reference_state", "coverage"):
+    # ANCHOR ON THE ALARM TEXT, NOT THE FIRST MENTION. 2026-10-21: the
+    # phrase now also appears in the comment above the block, and a
+    # slice from there measured prose instead of the message.
+    block = src[src.index(chr(102) + chr(34) + "actionable margin "):][:700]
+    # `bound_by` IS GONE, DELIBERATELY. 2026-10-21: the deadline was
+    # `min(reference, floor)` and `bound_by` named which side won -- which was
+    # always the floor, because the floor IS the observed earliest kickoff.
+    # The two are now separate margins, so the actionable one is
+    # reference-derived BY DEFINITION and there is no side to name. What the
+    # pin was really protecting -- can the reader tell how much of the card
+    # was visible -- is carried by `coverage` and `reference_state`, and
+    # `residual` is added because that is what says the figure is an UPPER
+    # BOUND rather than leaving the reader to infer it from "9 of 30".
+    for part in ("deadline", "reference", "reference_state", "coverage",
+                 "residual", "UPPER"):
         assert part in block, (
-            f"the prospective alarm omits {part!r}, so the reader cannot tell "
-            f"which side bound it or how much of the card was visible")
+            f"the actionable alarm omits {part!r}, so the reader cannot tell "
+            f"how much of the card was visible or that it is an upper bound")
     assert "CLEARING_ACTION" in src, (
         "the alarm does not name the action that clears it")
 

@@ -187,9 +187,31 @@ def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
 
     by_type, _crons2 = collect_lag_series_by_daytype()
     lag = [l for _d, l in (by_type.get("weekday") or [])]
+
+    # ── "COULD NOT LOOK" IS NOT "THE SERIES SHRANK". 2026-10-21, second fix.
+    #
+    # Marking this `live` took it out of the capture gate, and capture then
+    # succeeded -- but the test still FAILED in the non-gating step, because
+    # that step has no GH credentials either, so the series came back empty
+    # there too (run 39569612160). An empty series with no way to ask is
+    # UNEVALUATED; my assertion called it a shrinkage and reported a finding
+    # about football from the absence of a credential. That is the same
+    # third-state defect this project keeps paying for, in a test I wrote to
+    # guard against defects.
+    #
+    # A daily red that no action clears is also an alarm that always fires.
+    # So: refuse to measure, and SAY which it is.
+    if not lag:
+        import os
+        pytest.skip(
+            "UNEVALUATED, not clear: the weekday lag series is empty and "
+            "there is no way to ask here (GH_TOKEN present: "
+            f"{bool(os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN'))}). "
+            "n=0 is not a measurement, and the absence of a credential is not "
+            "a fact about the schedule.")
     assert len(lag) >= 8, (
-        f"the weekday series shrank to n={len(lag)}; the +40m figure was "
-        f"measured at n=8")
+        f"the weekday series shrank to n={len(lag)} WITH the series "
+        f"reachable; the +40m figure was measured at n=8")
     lm, lsd = statistics.mean(lag), statistics.pstdev(lag)
     from scripts.ci_audit import MARGIN_RUN_DURATIONS_BY_DAYTYPE as _DUR
     du = _DUR["weekday"]
