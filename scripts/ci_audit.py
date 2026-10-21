@@ -261,6 +261,41 @@ RESOLVED_RUNS = {
                     "the allocator's first day); both pinned to their regime, "
                     "and calendar assertions moved out of the capture gate so "
                     "a calendar failure can no longer skip --update"),
+    # ── 2026-10-21: THE SAME SHAPE, A THIRD TIME, AND IT WAS MINE ──────────
+    #
+    # Partition IDENTICAL to the six-day outage above:
+    #   exit=2 self=1 foreign=0 unexplained_nonzero_exit=1 tracebacks=0
+    #   steps_failed=[]
+    # and the cause is the same class: a test in the CAPTURE-GATING selection
+    # that reads LIVE EXTERNAL STATE. 7514a50 resolved that one on 2026-10-18
+    # by marking it `live`; I put a new one in on 2026-10-20 in 269aea9, and
+    # today was its first CI exposure.
+    #
+    # TWO assertions failed, both added in the preceding 24 hours, both
+    # passing locally and failing only in CI:
+    #   * test_the_weekday_cron_CLEARS... called
+    #     `collect_lag_series_by_daytype()`, which queries the GitHub API. The
+    #     test step has no GH credentials, so the series came back EMPTY and
+    #     the n>=8 guard fired. The GUARD was right; where it ran was not.
+    #   * test_the_COUNTS_and_the_MEDIAN... pinned finding 13, whose predicate
+    #     is `not Path("data/models/feature_list.json").exists()` -- a
+    #     WORKING-TREE read. `actions/cache` restores that file in CI and a dev
+    #     box does not have it, so the live count was 7 in CI and 8 locally.
+    #
+    # NOT the pipefail change in 06e54c6: that touched ONE file
+    # (paper-trading-report.yml) and this run predates it (headSha b8d91c1).
+    #
+    # Card status: NOTHING IRREVERSIBLE. The run died at the gate before
+    # discovery, pricing or saving -- 0 fixtures, 0 odds, 0 picks -- and was
+    # recovered by a dispatch at 08:29Z the same morning.
+    "39532208006": ("465146a",
+                    "two assertions added in the previous 24h, both in the "
+                    "capture-gating selection and both environment-dependent: "
+                    "a GitHub-API series read (now marked `live`) and a "
+                    "working-tree predicate (now asserted separately with its "
+                    "reason, not pinned). Third occurrence of this shape; "
+                    "test_no_live_state_in_the_capture_gate added to stop a "
+                    "fourth"),
 }
 
 #: Matches a ledger row's run id whether or not it is bolded. The original

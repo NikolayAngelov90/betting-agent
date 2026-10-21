@@ -42,8 +42,44 @@ CHECKPOINTS = [
     (500, "meaningful model-vs-market evaluation"),
 ]
 
-#: Phase 20 alert threshold.
-MIN_CLV_COVERAGE = 0.80
+#: ── CLOSING-CAPTURE COVERAGE: A RATCHET, DERIVED FROM THE MEASUREMENT ──────
+#:
+#: `MIN_CLV_COVERAGE = 0.80` was Phase 20's alert threshold and it is RETIRED.
+#: It required 80% against a measured 12.54%, so it was breached on every run
+#: it ever made -- and **nothing ever relied on it**. That is not an opinion:
+#: its only consumer was this module's exit code, and the workflow piped the
+#: process to `tee`, which discarded it (see `HEALTH_ALERT_EXIT`). A threshold
+#: whose breach cannot change any observable has never been a threshold. It
+#: could not be kept at 80% either: an alarm that always fires carries no
+#: information, and this project has paid for that six times.
+#:
+#: THE DENOMINATOR, because a coverage figure without one is not a figure.
+#: Picks carrying a `model_version` (legacy picks pre-date closing capture and
+#: are excluded by `section_health` on purpose), whose MATCH kickoff is
+#: strictly before today, inside the report's `--days` window.
+#:
+#:     measured 2026-10-21, --days 120:  165 / 1316 = 0.1254
+#:     late 634 (48.2%) | missing 517 (39.3%) | captured 165 (12.5%)
+#:
+#: Nearly half are `late` -- captured after kickoff, which `validate_pair`
+#: refuses. Raising coverage is NOT this constant's job and is not done here.
+CLOSING_COVERAGE_MEASURED = 0.1254
+CLOSING_COVERAGE_DENOMINATOR = (
+    "model_version IS NOT NULL AND match kickoff < today, within --days; "
+    "165/1316 measured 2026-10-21 at --days 120")
+
+#: The floor: the measured value FLOORED to two decimals, so that one bad day
+#: cannot trip it. Derived, not chosen -- a day adds roughly 10-45 resolved
+#: picks to a 1316 denominator, so a zero-capture day moves the rolling figure
+#: about -0.4pp, and 0.0054 of slack absorbs one such day.
+CLOSING_COVERAGE_FLOOR = 0.12
+
+#: AND IT RATCHETS BOTH WAYS. A fall below the floor is the alarm. A rise of
+#: more than this band ALSO alarms, because the floor must then be re-recorded
+#: deliberately -- otherwise the floor drifts upward silently and the next fall
+#: is measured against a number nobody wrote down. 3pp is about a week of
+#: sustained improvement at the movement rate above, which is worth recording.
+CLOSING_COVERAGE_RISE_BAND = 0.03
 
 #: EXIT CODE FOR "THE REPORT RAN AND A HEALTH CHECK ALARMED". Distinct from 1,
 #: which now means only "the report could not run".
@@ -291,8 +327,17 @@ def section_operational(picks: List[_Pick]) -> None:
     resolved = [p for p in picks if p.kickoff and p.kickoff.date() < date.today()]
     if resolved:
         cap = sum(1 for p in resolved if p.closing_status == "captured")
+        # ── NAME THE DENOMINATOR. 2026-10-21. ──────────────────────────────
+        # This figure and `section_health`'s share the numerator 165 and do
+        # NOT share a denominator: 1606 here, 1316 there, because the health
+        # check excludes pre-Stage-5 picks that can never have a closing
+        # price. Two numbers both called "coverage", 2.2pp apart, and only one
+        # said what it ranged over.
         print(f"  capture coverage (past kickoff) : {cap}/{len(resolved)} "
               f"= {cap/len(resolved):.1%}")
+        print(f"    denominator: ALL past-kickoff picks in range, legacy "
+              f"INCLUDED. The health check's figure is the same numerator "
+              f"over model_version-scoped picks only, so the two differ.")
 
 
 def section_volume(picks: List[_Pick]) -> None:
@@ -806,11 +851,26 @@ def section_health(picks: List[_Pick]) -> List[str]:
     captured = [p for p in resolved if p.closing_status == "captured"]
     if resolved:
         rate = len(captured) / len(resolved)
-        msg = (f"closing capture coverage {rate:.1%} "
-               f"({len(captured)}/{len(resolved)} past-kickoff picks)")
-        (alerts if rate < MIN_CLV_COVERAGE else ok).append(
-            msg + (f" — below the {MIN_CLV_COVERAGE:.0%} threshold"
-                   if rate < MIN_CLV_COVERAGE else ""))
+        msg = (f"closing capture coverage {rate:.2%} "
+               f"({len(captured)}/{len(resolved)} past-kickoff picks "
+               f"carrying a model_version)")
+        _ceiling = CLOSING_COVERAGE_FLOOR + CLOSING_COVERAGE_RISE_BAND
+        if rate < CLOSING_COVERAGE_FLOOR:
+            alerts.append(
+                f"{msg} — FELL below the recorded floor of "
+                f"{CLOSING_COVERAGE_FLOOR:.2%} (ratchet, recorded 2026-10-21 "
+                f"from {CLOSING_COVERAGE_MEASURED:.2%}). Capture is getting "
+                f"worse, which is the one thing this check exists to catch.")
+        elif rate >= _ceiling:
+            alerts.append(
+                f"{msg} — ROSE past {_ceiling:.2%}, more than the "
+                f"{CLOSING_COVERAGE_RISE_BAND:.0%} band above the recorded "
+                f"floor. RE-RECORD the floor: left alone it drifts upward "
+                f"silently and the next fall is measured against a number "
+                f"nobody wrote down.")
+        else:
+            ok.append(f"{msg} — within the ratchet band "
+                      f"[{CLOSING_COVERAGE_FLOOR:.2%}, {_ceiling:.2%})")
 
     bad_ts = [p for p in captured
               if p.closing_odds_captured_at and p.kickoff

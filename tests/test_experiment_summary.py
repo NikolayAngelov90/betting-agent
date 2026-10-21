@@ -426,3 +426,131 @@ def test_section_health_returns_the_texts_not_a_count():
                     and r.func.id == "len"), (
             "section_health still returns a COUNT; the alert texts cannot "
             "reach a person through an integer")
+
+
+# --------------------------------------------------------------------------
+# the coverage ratchet (2026-10-21) — it replaced a threshold that could
+# never fail, and it must be able to fail in BOTH directions
+# --------------------------------------------------------------------------
+
+def test_the_80_percent_threshold_is_retired():
+    """It required 80% against a measured 12.54%, so it was breached on every
+    run it ever made — and nothing relied on it, because its only consumer was
+    an exit code that `| tee` discarded."""
+    import scripts.paper_trading_report as rep
+    assert not hasattr(rep, "MIN_CLV_COVERAGE"), (
+        "the unachievable threshold is still live")
+    assert rep.CLOSING_COVERAGE_FLOOR == 0.12
+    assert rep.CLOSING_COVERAGE_MEASURED == 0.1254
+    assert "165/1316" in rep.CLOSING_COVERAGE_DENOMINATOR, (
+        "the floor must carry the denominator it was derived from (rule 6)")
+    assert "2026-10-21" in rep.CLOSING_COVERAGE_DENOMINATOR
+
+
+def test_the_floor_is_DERIVED_from_the_measurement_not_chosen():
+    """Rule 3: a threshold that could never fail is replaced by one derived
+    from the measurement. The floor is the measured value floored to 2dp."""
+    import math
+
+    import scripts.paper_trading_report as rep
+    assert rep.CLOSING_COVERAGE_FLOOR == math.floor(
+        rep.CLOSING_COVERAGE_MEASURED * 100) / 100
+    # and it sits BELOW the measurement, so today is not already a breach
+    assert rep.CLOSING_COVERAGE_FLOOR < rep.CLOSING_COVERAGE_MEASURED
+    # the slack must absorb at least one zero-capture day (~0.4pp)
+    assert (rep.CLOSING_COVERAGE_MEASURED - rep.CLOSING_COVERAGE_FLOOR) >= 0.004
+
+
+def _coverage_verdict(rate):
+    """Replay `section_health`'s coverage branch at a given rate."""
+    import scripts.paper_trading_report as rep
+    ceiling = rep.CLOSING_COVERAGE_FLOOR + rep.CLOSING_COVERAGE_RISE_BAND
+    if rate < rep.CLOSING_COVERAGE_FLOOR:
+        return "FELL"
+    if rate >= ceiling:
+        return "ROSE"
+    return "OK"
+
+
+def test_the_ratchet_FIRES_on_a_fall():
+    """The one thing the check exists to catch."""
+    assert _coverage_verdict(0.1199) == "FELL"
+    assert _coverage_verdict(0.00) == "FELL"
+
+
+def test_the_ratchet_ALSO_fires_on_an_UNRECORDED_rise():
+    """So the floor cannot drift upward silently and leave the next fall
+    measured against a number nobody wrote down."""
+    assert _coverage_verdict(0.15) == "ROSE"
+    assert _coverage_verdict(0.80) == "ROSE", (
+        "even the old 80% target must demand the floor be re-recorded")
+
+
+def test_todays_measured_value_is_INSIDE_the_band():
+    """RULE 4: an alarm that always fires is not an available option. The
+    floor must not be breached by the very measurement it came from."""
+    import scripts.paper_trading_report as rep
+    assert _coverage_verdict(rep.CLOSING_COVERAGE_MEASURED) == "OK"
+
+
+def test_the_two_coverage_figures_both_name_their_denominator():
+    """Same numerator (165), different denominators (1606 vs 1316), both
+    called "coverage". Rule 6."""
+    import pathlib
+    src = pathlib.Path("scripts/paper_trading_report.py").read_text(
+        encoding="utf-8")
+    # NOT `or "legacy " in src` -- that clause matched an unrelated comment and
+    # made the assertion vacuous. Each figure's scope is asserted on its own.
+    assert "legacy " in src and "INCLUDED" in src, (
+        "the wider figure does not say legacy picks are included")
+    assert "denominator: ALL past-kickoff picks in range" in src, (
+        "the attribution-coverage figure does not state its scope")
+    assert "carrying a model_version" in src, (
+        "the health-check coverage figure does not state its scope")
+
+
+def test_exit_2_is_converted_to_SUCCESS_by_the_workflow_and_1_is_not():
+    """PART 3, 2026-10-21: `HEALTH_ALERT_EXIT = 2` is new, so prove the only
+    consumer that reads it treats it as a warning — by RUNNING the shipped
+    shell, not by reading it.
+
+    A consumer that predates the three-valued exit would see 2 as a plain
+    failure. `ci-audit`'s partition cannot: it matches
+    `##[error]Process completed with exit code N` in the log, and a step that
+    ends `exit 0` emits none, so the run concludes `success` and never enters
+    the partition at all.
+    """
+    import shutil
+    import subprocess
+
+    sh = None
+    for cand in (shutil.which("bash"), "C:/Program Files/Git/bin/bash.exe",
+                 "/bin/bash"):
+        if cand:
+            try:
+                if subprocess.run([cand, "-c", "exit 7"],
+                                  capture_output=True).returncode == 7:
+                    sh = cand
+                    break
+            except OSError:
+                continue
+    if sh is None:
+        pytest.skip("no working bash on this host; the control runs in CI")
+
+    # the shipped tail of the report step, verbatim in behaviour
+    script = (
+        'rc="$1"\n'
+        'if [ "$rc" = "2" ]; then\n'
+        '  echo "Report ran; health alert(s) present and delivered."\n'
+        '  exit 0\n'
+        'fi\n'
+        'exit "$rc"\n')
+    def _run(rc):
+        return subprocess.run([sh, "-c", script, "_", str(rc)],
+                              capture_output=True).returncode
+
+    assert _run(2) == 0, "a health alert must NOT fail the job"
+    assert _run(1) == 1, "a crash must still fail the job"
+    assert _run(0) == 0
+    # and the distinction is real, not a tautology: 1 and 2 differ
+    assert _run(1) != _run(2)

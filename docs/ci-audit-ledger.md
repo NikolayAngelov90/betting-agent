@@ -30707,3 +30707,274 @@ change. One cron moved, deliberately, to end a collision.
 *Recorded 2026-10-21. `src/reporting/experiment_summary.py`,
 `tests/test_experiment_summary.py`, `scripts/paper_trading_report.py`,
 `.github/workflows/paper-trading-report.yml`.*
+
+---
+
+## The red was mine, not the unmasking — 2026-10-21
+
+### PART 0 — CARD STATUS: RECOVERABLE, AND RECOVERED
+
+**Nothing irreversible had happened.** `daily-picks` run 39532208006
+(`schedule`, 02:17:41Z, headSha b8d91c1) failed at **`Run tests`** — the gate,
+before discovery, pricing or saving.
+
+```
+fixtures in DB for 2026-10-21 : 0      (yesterday 34)
+odds rows for today's fixtures: 0
+picks saved pick_date=today   : 0      (yesterday 33)
+first irreversible capture    : NOT REACHED
+```
+
+So nothing was unrecoverable and everything was not-yet-done.
+
+**THE CARD, from the external reference** (football-data.org, `TIER_ONE`,
+`echo_matches_request=True`, measured 2026-10-21): state `OK`, earliest
+covered kickoff **16:45 UTC** (`min=1005`, europe/champions-league), covering
+**2 of 9** configured leagues — laliga and champions-league present, seven
+absent.
+
+**THE RUNWAY.** The conservative floor is the world-anchored weekday minimum,
+**09:30 UTC**; today's own evidence says 16:45.
+
+| | last safe dispatch |
+|---|---|
+| vs 09:30 floor, measured max 64.3 min (n=3) | **08:25 UTC / 11:25 Sofia** |
+| vs 09:30 floor, registered bound 88.1 min (n=4) | 08:01 UTC / 11:01 Sofia |
+| vs 16:45 today, registered bound 88.1 min | **15:16 UTC / 18:16 Sofia** |
+
+Sofia was **EEST (UTC+3)** on this date; DST ends 2026-10-25.
+
+**COST OF RECOVERY: api-football 0/100 used today** (a 33-fixture day measured
+83). `--picks` does not draw on TheOddsAPI. Plus **~10 minutes of triage**,
+because the dispatch runs the same gate and would have failed identically.
+
+**I COULD NOT SIZE THE UNCOVERED LEAGUES' RISK AND SAY SO.** Raw `match_date`
+over 206 historical Wednesdays returns `00:00` percentiles — the phantom
+ingestion-stamp rows. `discovered_deadline`, which filters them, leaves **n=2**
+Wednesdays with a card in 400 days. Neither is a basis, so the 09:30 floor
+stood as the operative deadline rather than a figure derived from this data.
+
+**Decision taken by Niki: triage, then dispatch.** Dispatched 08:29:09Z as run
+39569612160 on 465146a; the gate passed and `--update` proceeded.
+
+### PART 1 — UNMASKED OR BROKEN: **NEITHER. BOTH WERE MINE, AND ONE DAY OLD.**
+
+**THE UNMASKING HYPOTHESIS IS TESTABLE AND IT IS FALSE HERE.** From the diff,
+`06e54c6` touched **exactly one file**, `.github/workflows/paper-trading-report.yml`
+(+66/−15), and `pipefail` exists in **exactly one step in the whole repository**:
+
+```
+$ grep -rn pipefail .github/workflows/
+paper-trading-report.yml:147:          set -o pipefail
+```
+
+`daily-picks.yml`, `ci-audit.yml` and `closing-lines.yml` gained **nothing**.
+And both of today's failing runs are at headSha **b8d91c1, which precedes
+06e54c6** — so they could not have been affected regardless. The workflow that
+did gain `pipefail` has **not run today**: its cron moved to `23 10` UTC in the
+same commit.
+
+**AND IT WAS NOT "EVERYTHING".** Three runs exist today, not a sweep:
+
+| run | workflow | trigger | conclusion |
+|---|---|---|---|
+| 39532208006 | daily-picks | schedule | **failure** |
+| 39535760768 | ci-audit | `workflow_run` | **failure** (triggered BY the above) |
+| 39569612160 | daily-picks | `workflow_dispatch` | the recovery |
+
+`closing-lines` succeeded at 23:50Z and was not due again;
+`paper-trading-report` had not yet fired. **One root cause, one consequence.**
+One has been the answer every time it was counted this month.
+
+#### The two conditions, with their ages
+
+**Both pass locally and fail only in CI. Neither file carried a marker. Both
+assertions were added in the previous 24 hours, so today was their FIRST CI
+EXPOSURE — age 1 day, and neither could have been failing silently for weeks
+because neither existed.**
+
+**1. `test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED`**
+(added 2026-10-20 in `269aea9`)
+
+```
+the weekday series shrank to n=0; the +40m figure was measured at n=8
+```
+
+It calls `collect_lag_series_by_daytype()`, which **queries the GitHub API**.
+The gate runs `-m "not calendar and not live"` and that step gets no GH
+credentials, so the series came back empty. **The guard was right** — n=0 is
+not a measurement and refusing to compute a margin from an empty series is
+correct. What was wrong is **where it ran**.
+
+**2. `test_the_COUNTS_and_the_MEDIAN_with_its_caveat`** (added 2026-10-20 in
+`f0ac3bb`)
+
+```
+7 findings still live, expected 8
+```
+
+Finding 13's predicate is `not Path("data/models/feature_list.json").exists()`
+— a **working-tree read**. `actions/cache` restores `data/models/` before the
+tests run, so in CI the finding is not live; on a dev box the file is absent so
+it is. **And that disagreement is finding 13's own point, measured: the pickles
+exist in CI only because a cache restored them.**
+
+> **Verdicts on pre-existing conditions, or new breakage?** Neither category
+> fits cleanly, and the distinction the directive draws is the right one: these
+> are **verdicts, triaged**, not breakage reverted. The guards were kept; what
+> moved is where they run and what they pin.
+
+#### THE SAME SHAPE, A THIRD TIME
+
+`RESOLVED_RUNS` already holds a **six-day outage** (2026-10-13…18, resolved by
+`7514a50`) whose partition is **identical to today's** —
+`exit=2 self=1 foreign=0 unexplained_nonzero_exit=1 tracebacks=0
+steps_failed=[]` — and whose cause was the same class: a live-state test inside
+the capture gate. It cost **six cards**. The remedy was the `live` marker.
+**Three days later I put a new live-state test into the same gate.** The
+warning is in `daily-picks.yml` four lines above its own pytest command.
+
+So the remedy this time is not only the marker. `tests/test_no_live_state_in_the_capture_gate.py`
+**fails when a test in the gating selection calls a reader with no injection
+seam**, read from the AST. It is deliberately narrow: `reference_earliest(fetch=…)`
+and `current_crons_by_daytype(sha=…)` are excluded because both have a
+documented seam and the tests using them pass stubs — flagging them produced
+**20 false positives** on the first draft, and a guard that cries wolf gets
+deleted along with the real one. A test that stubs the transport (`_sh`, or
+`current_crons_by_daytype`, which short-circuits `missing_scheduled_runs`
+before its `_sh` call — verified against the source, not assumed) is hermetic
+and passes. Its **discrimination control plants an offender, asserts the guard
+fires, then adds `@pytest.mark.live` and asserts it goes quiet** — so the
+marker is proven to be what clears it, which is the remedy the failure prints.
+
+### PART 2 — COVERAGE THRESHOLD SET: **12% FLOOR, RATCHETED BOTH WAYS**
+
+**WHAT IT WAS FOR, AND WHETHER ANYTHING RELIED ON IT.** `MIN_CLV_COVERAGE =
+0.80` was Phase 20's alert threshold. **Nothing ever relied on it, and that is
+measured rather than argued:** its only consumer was this module's exit code,
+and the workflow piped the process to `tee`, which discarded it. It has never
+changed an observable.
+
+**THE DENOMINATOR, stated.** Picks carrying a `model_version` (legacy picks
+pre-date closing capture and `section_health` excludes them on purpose), whose
+**match kickoff is strictly before today**, inside the report's `--days`
+window. At the CI invocation `--days 120`, measured 2026-10-21:
+
+```
+resolved 1316   captured 165   = 0.1254
+late 634 (48.2%) | missing 517 (39.3%) | captured 165 (12.5%)
+```
+
+**Nearly half are `late`** — captured after kickoff, which `validate_pair`
+refuses. Weekly coverage over the last twelve weeks runs **0.0% – 36.4%**, with
+two consecutive zero weeks (2026-09-14, 09-21).
+
+**THE THREE OPTIONS, AND THE CHOICE.**
+
+| option | cost |
+|---|---|
+| keep 80% | **NOT AVAILABLE.** An alarm that always fires carries no information, and this project has paid for that six times. |
+| remove it | loses the only signal that capture is *getting worse*, which is the one thing worth catching while coverage is low |
+| **ratchet at the measurement** | **chosen** |
+
+```python
+CLOSING_COVERAGE_MEASURED = 0.1254     # 165/1316, 2026-10-21, --days 120
+CLOSING_COVERAGE_FLOOR    = 0.12       # the measurement FLOORED to 2dp
+CLOSING_COVERAGE_RISE_BAND = 0.03
+```
+
+The floor is **derived**: a day adds roughly 10–45 resolved picks to a 1316
+denominator, so a zero-capture day moves the rolling figure about **−0.4pp**,
+and 0.54pp of slack absorbs one such day without tripping.
+
+**AND IT FAILS ON A RISE TOO.** Above `floor + 3pp` the check alarms and says
+to **re-record the floor** — otherwise the floor drifts upward silently and the
+next fall is measured against a number nobody wrote down. 3pp is about a week
+of sustained improvement at the movement rate above.
+
+Guarded by six tests: the fall fires, the unrecorded rise fires, today's
+measured value is **inside** the band (so the replacement is not another
+always-on alarm), and the floor is asserted to equal
+`floor(measured × 100)/100` so it cannot be quietly re-chosen.
+
+**Coverage was NOT raised in this stage.** That is different work and it did
+not ride in behind an incident.
+
+**A RULE-6 VIOLATION FOUND IN THE SAME REPORT.** It prints **two figures both
+called "coverage", sharing the numerator 165 and not sharing a denominator** —
+`165/1606 = 10.3%` (legacy included) and `165/1316 = 12.54%`
+(`model_version`-scoped) — and only one said what it ranged over. Both now
+name their scope.
+
+### PART 3 — THE REMAINDER
+
+**The partition, from the audit's own `extract()`:**
+
+| run | workflow | trigger | concl | exit | self | foreign | unexplained | tracebacks | steps_failed |
+|---|---|---|---|---|---|---|---|---|---|
+| 39532208006 | daily-picks | schedule | failure | 2 | 1 | 0 | **1** | 0 | `[]` |
+| 39535760768 | ci-audit | `workflow_run` | failure | 2 | 2 | 0 | **0** | 0 | `[]` |
+
+The `unexplained 1` is **true, not a matcher defect**: `Run tests` exits
+non-zero and emits no registered annotation, while the critical-step alert
+emits `::error::Pick generation DID NOT RUN`, which explains the other exit.
+`steps_failed` is empty because that list is parsed from the workflow's own
+text, which names only core steps — the known parser gap.
+
+ci-audit is **fully explained**: exit 1 is a FINDING, and it carried two —
+`39532208006 daily-picks DID_NOT_RUN` and `prospective margin +37m for
+2026-10-22 < 60m`. The margin has moved **+40m → +37m** since yesterday, which
+is the n=8 series instability already on record.
+
+**EXIT 2 HAS HAD NO EXPOSURE YET, AND I WILL NOT CLAIM OTHERWISE.**
+`HEALTH_ALERT_EXIT = 2` shipped in `06e54c6`; the only workflow that can emit
+it has not run since (cron `23 10` UTC). So **none of the audit's surfaces has
+met a three-valued exit**, and today's runs contain no exit 2 to read.
+
+What *is* established:
+
+* **Its only consumer converts it.** The shipped shell tail is executed in a
+  test: `rc=2 → 0`, `rc=1 → 1`, and `_run(1) != _run(2)` so the distinction is
+  not a tautology.
+* **ci-audit cannot miscount it.** The partition matches
+  `##[error]Process completed with exit code N` in the log; a step ending
+  `exit 0` emits none, so the run concludes `success` and never enters the
+  partition. The `::warning::` annotation is not matched by any `##[error]`
+  pattern, so it cannot inflate `foreign_annotations` either.
+* **No consumer predates it.** `--health-only` has no caller anywhere, and the
+  grep for `paper_trading_report` outside the module finds one workflow line
+  and test imports only.
+
+**RESOLVED.** `39532208006 → 465146a`, recorded in `RESOLVED_RUNS` with the
+partition, both assertions, their ages, and the explicit note that it is **not**
+the pipefail change. A resolved run still appears with its verdict; what
+changes is only whether it enters `alarmed`.
+
+**THE REMAINDER AFTER RESOLUTION — one standing finding, unresolved and not
+resolvable here:** the prospective margin, **+37m against a pre-registered 60**
+for 2026-10-22. Its clearing action is unchanged and it is not a threshold
+question: the duration work established that 3.1 min is available timing-only
+and the remaining ~16.7 needs either the Claude-review parallelisation, the AF
+commit batching, or a variance cap.
+
+**AND ONE PIPE SWEEP, since the question was whether anything else swallows.**
+Every `run:` block in every workflow was checked for a shell pipe:
+`paper-trading-report` (fixed), `closing-lines`' key verification
+(`grep | awk` into `$(…)` for a header value — a value extraction whose failure
+mode is an empty variable that the step already defaults, not a discarded
+gate), and a false positive in `daily-picks` where the `|` is inside a Python
+f-string. **No other step discards a command's exit code.**
+
+### DISCIPLINE
+
+Gating selection `-m "not calendar and not live"`: **2,220 passed, 7
+deselected**. The excluded selection `-m "calendar or live"`: 6 passed, 1
+skipped. Invariants pass, count not cited. Fingerprint **UNCHANGED at
+s5.18 / 51fbcb**. No production write, no schema change, no model change, no
+cron moved in this stage.
+
+*Recorded 2026-10-21. `tests/test_cron_split_by_daytype.py`,
+`tests/test_finding_register.py`,
+`tests/test_no_live_state_in_the_capture_gate.py`,
+`scripts/paper_trading_report.py`, `scripts/ci_audit.py`,
+`tests/test_experiment_summary.py`.*
