@@ -32013,3 +32013,169 @@ s5.18 / 51fbcb**. No production write, no schema change, no model change.
 *Recorded 2026-10-21. `scripts/ci_audit.py`,
 `tests/test_patterns_self_tested.py`, `tests/test_two_margins.py`,
 `tests/test_alarm_surface.py`, `tests/test_silent_surfaces_can_fire.py`.*
+
+---
+
+## The definition changed; the marker is reserved — 2026-10-21
+
+### PART A — `DEFINITION CHANGED`
+
+**BOTH POPULATIONS NAMED, and the old one keeps its name in the record:**
+
+```
+PICKS_BOUND_OLD_POPULATION
+  MAX time-to-picks over FULL-CARD (>=40 fixture) weekday runs, SERIAL review
+  regime; n=4, measured 2026-10-01, range 67.4-88.1, mean 76.4, sd 10.2
+
+PICKS_BOUND_NEW_POPULATION
+  time-to-picks over ALL-CARD weekday runs, PARALLEL review regime
+  (REVIEW_CONCURRENCY=4, first in cccb0e6, 2026-10-21 21:29);
+  starts at n=0 because regimes are not pooled
+```
+
+**RECORDED AS A CHANGE OF DEFINITION, NOT A RE-MEASUREMENT.** Full-card
+weekdays arrive at **0.4/week** (6 of 73 days, measured 2026-10-21), so n=10
+of them is ~25 weeks; all-card weekdays arrive at **~5/week**, so n=10 is about
+two weeks. That trade would be a straight loss of conservatism under the
+serial regime — but **the parallelisation is exactly what removes the
+card-size dependence the full-card restriction existed to capture**: modelled
+over n=72, the picks step's sd falls **11.71 → 2.37** and its max **55.05 →
+13.76**. The common population now bounds the rare one far more tightly than
+it did, so the restriction has stopped earning its 25 weeks.
+
+**THE NEW SERIES STARTS EMPTY AND MEMBERSHIP IS BY COMMIT.** A run counts only
+if its own `headSha` contains `cccb0e6` — resolved by one `git rev-list`, so a
+run on a branch that predates the change cannot join on a later timestamp.
+The four serial full-card runs do not contribute.
+
+**REPORTED EVERY RUN**, so the clock is visible rather than remembered:
+
+```
+picks_bound[REGIME CHANGE IN PROGRESS]
+  since          : cccb0e6 (2026-10-21T21:29 UTC)
+  new population : n=0 -- the series is EMPTY, which is not a zero. No
+                   scheduled weekday run has yet carried cccb0e6
+  needed         : n>=10 -> ~2.0 weeks, about 2026-11-04
+                   (simulated from ~5 scheduled weekday runs/week)
+  margin uses    : the OLD constant, 88.1 min
+  so the margin is CONSERVATIVE: that figure is a full-card MAX from the
+  SERIAL regime, and the parallel review cut the picks step's sd 11.71 -> 2.37.
+  The true margin is very probably BETTER than reported.
+```
+
+**AND THE ALERT SAYS IT TOO** (rule 3), so the operator dispatching by hand
+knows what he is insuring against: the schedule-margin alarm now carries
+`CONSERVATIVE: computed from FULL_CARD_PICKS_MAX=88.1m, a full-card MAX from
+the RETIRED SERIAL review regime (n=4, 2026-10-01) … the replacement series is
+at n=0/10, ~2.0 weeks to go (about 2026-11-04)`.
+
+`MIN_N_TO_REDERIVE_PICKS_BOUND = 10` stays, with its reason beside it: the
+weekday lateness series moved mean+3sd **417.5 → 428.9 on a single new point**
+and the margin went **+40 → +37** overnight.
+
+**TWO DEFECTS IN MY OWN NEW CODE, both found by tests rather than by reading:**
+
+* **An unreadable `gh` raised instead of reporting.** `json.loads("")` took the
+  whole audit down, caught by `test_an_unreadable_gh_is_UNKNOWN_and_says_so`.
+  It now returns `state: UNEVALUATED` — and that matters more than usual here,
+  because `""` would otherwise have read as **n=0**, which is the state this
+  series is legitimately in today. The two would have been indistinguishable
+  exactly when it counts.
+* **It shelled out per run.** `git merge-base --is-ancestor` inside the loop
+  meant up to 120 subprocess spawns, **twice** per audit, which timed out a
+  test file. One `rev-list` plus a memo: **7.9 s → 0.0 s** on the second call.
+
+### PART B — `MARKER RESERVED`
+
+**MEASURED, same conditions, before and after:**
+
+| | marked lines | findings | ratio |
+|---|---|---|---|
+| **before** | **10** | 1 | **10:1** |
+| **after** | **1** | 1 | **1:1** |
+| **after, zero findings** | **0** | 0 | — |
+
+**THE RULE: a line carries `!!` iff its condition also appends to `alarmed`.**
+Nine emitter sites were demoted to `note:`; four keep it, and all four alarm.
+
+#### The twelve dispositions
+
+| line | disposition |
+|---|---|
+| `TRUNCATED LISTING: …` (two sites, 2 lines) | → `note:` |
+| `no ledger history for <wf>` (5 lines) | → `note:` |
+| `N run(s) listed above is a LOWER BOUND` | → `note:` |
+| `N workflow record(s) GitHub holds that this repo does not own` | → `note:` |
+| `N run(s) EXCLUDED because their headSha could not be read` | → `note:` |
+| `X is UNEVALUATED, not safe — no run has yet …` | → `note:` |
+| `workflow state UNKNOWN: gh workflow list could not be read` | → `note:` |
+| `daily-picks carries no single cron — the margin is UNEVALUATED` | → `note:` |
+| **pattern self-test failure** | **keeps `!!`** |
+| **ACTIONABLE MARGIN** | **keeps `!!`** |
+| **STRUCTURAL MARGIN deterioration** | **keeps `!!`** |
+| **SCHEDULE MARGIN** | **keeps `!!`** |
+
+Nothing was suppressed — every demoted line still prints, with its words. The
+quiet run shows **10 `note:` lines** carrying the information.
+
+#### THE DEMONSTRATION FOUND THE RULE'S OWN FIRST VIOLATION
+
+Driving the zero-finding state on real data (the standing breach acknowledged
+through the mechanism that exists for it) printed **1** mark, not 0 — because
+the schedule-margin `!!` was emitted **before**
+`margin_breach_is_acknowledged` was consulted. **An acknowledged breach, one
+that deliberately does not alarm, still wore the finding marker.** Fixed: the
+mark is gated on the absence of an acknowledgement, and the acknowledged path
+reports as a `note:` rather than going silent. Then: **0 marks, exit 0.**
+
+**AND AN INCIDENTAL CONFIRMATION WORTH KEEPING.** My first demo acknowledgement
+was recorded at **19.0** and refused, because the real binding is
+**18.89232917906861** and only *displays* as `+19`. A predicate reading the
+rounded display would have absorbed a breach it was never shown. Pinned as a
+test.
+
+#### THE RESIDUE, NAMED RATHER THAN QUIETLY DEMOTED
+
+**Three of the nine say "UNEVALUATED, not safe" or "UNKNOWN" and alarm on
+nothing** — the day-type with no series, an unreadable `gh workflow list`, and
+`daily-picks` carrying no single cron. Their words claim more than the alarm
+set delivers. Changing what alarms is a different decision from reserving the
+marker, so they are notes today and the mismatch is recorded in the source.
+
+#### The ratio belongs beside the firings figure
+
+```
+firings per change (surface census, 30 days) : 163 / 5  = 33 : 1
+marked lines per finding (output channel)    :  10 / 1  = 10 : 1  -> 1 : 1
+```
+
+They measure the same failure in two media — an alarm that repeats without
+producing a change, and a marker worn by output that is not a finding. Both
+train the reader to skip.
+
+### THREE PNC ENTRIES, RESOLVED THREE DIFFERENT WAYS
+
+The detector caught 33 → 35 and each was resolved on its merits, not in bulk:
+
+* **`_sh_code` DELETED.** I added it for the per-run ancestor check and then
+  replaced its only call with `rev-list`, leaving it dead. Mark-never-delete
+  applies to DATA, not to producers.
+* **`PARALLEL_REVIEW_SINCE_UTC` CONSUMED.** It is genuinely informative in the
+  status block, which is where a reader asks "since when?" — so it is printed
+  rather than kept as decoration.
+* **`MARKER_IS_FOR_FINDINGS_ONLY` DELETED.** A bool whose only purpose is to be
+  asserted `True` is near-vacuous; the rule's **text** is what the test should
+  pin, and it already does.
+
+### DISCIPLINE
+
+Gating selection **2,312 passed, 7 deselected**; non-gating 6 passed, 1
+skipped. Invariants pass, count not cited. Fingerprint **UNCHANGED at
+s5.18 / 51fbcb**. No production write, no schema change, no model change.
+
+**When n reaches 10 — projected 2026-11-04 — re-derive, report both constants
+side by side, and state whether the standing finding clears. That is a
+separate stage.**
+
+*Recorded 2026-10-21. `scripts/ci_audit.py`,
+`tests/test_marker_is_reserved.py`.*

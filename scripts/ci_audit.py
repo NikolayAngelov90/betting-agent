@@ -787,6 +787,27 @@ def format_pattern_selftest(r: dict) -> str:
     return chr(10).join(out)
 
 
+#: ── `!!` IS RESERVED FOR FINDINGS. 2026-10-21. ────────────────────────────
+#:
+#: MEASURED on a real audit run (39630251098's conditions, re-run locally):
+#: **10 marked lines, of which 1 was a finding.** The other nine were routine
+#: — two `TRUNCATED LISTING`, five `no ledger history`, one `LOWER BOUND`, one
+#: `workflow record(s) ... does not own` — and they print on every run. A
+#: reader who must filter the marker is doing the marker's job.
+#:
+#: THE RULE: a line carries `!!` **iff its condition also appends to
+#: `alarmed`.** Everything else is `note:` — the information is kept, the
+#: marker is not. Nine emitter sites were demoted; four keep it, and all four
+#: alarm: the pattern self-test, the actionable margin, the structural
+#: margin's deterioration, and the schedule margin.
+#:
+#: AND THE EXERCISE SURFACED A RESIDUE WORTH DECIDING LATER, recorded here
+#: rather than quietly demoted: THREE of the nine say "UNEVALUATED, not safe"
+#: or "UNKNOWN" and alarm on nothing — the day-type with no series, an
+#: unreadable `gh workflow list`, and `daily-picks` carrying no single cron.
+#: Their words claim more than the alarm set delivers. Changing what alarms is
+#: a different decision from reserving the marker, so they are notes today and
+#: the mismatch is named.
 #: Keys computed by their OWN block further down `extract()`, not by the
 #: generic counting loop. Listed by name so the loop skips them outright: a
 #: key with two owners is a key whose warning fires on the owner that did not
@@ -1505,6 +1526,187 @@ REDERIVE_PICKS_BOUND_PLAN = (
 FULL_CARD_PICKS_MAX = 88.1
 FULL_CARD_PICKS_3SD = 107.0
 
+# ══════════ A CHANGE OF DEFINITION, NOT A RE-MEASUREMENT ════════════════════
+#
+#     2026-10-21. Rule 1: recorded as a change of definition, with the
+#     population each version described.
+#
+# THE OLD DEFINITION KEEPS ITS NAME AND ITS LABEL. `FULL_CARD_PICKS_MAX` was
+# the MAX time-to-picks over FULL-CARD (>=40 fixture) runs in the SERIAL
+# review regime -- n=4, measured 2026-10-01, 67.4-88.1 min. That population is
+# retired, not wrong, and the constant is still what the margin uses until the
+# replacement has enough points.
+#
+# WHY THE DEFINITION CHANGES RATHER THAN THE MEASUREMENT BEING REPEATED.
+# Full-card weekdays arrive at 0.4/week (6 of 73 days, measured 2026-10-21),
+# so n=10 of them is ~25 weeks. All-card weekdays arrive at ~5/week, so n=10
+# is about TWO WEEKS. That trade would be a straight loss of conservatism
+# under the serial regime -- but the parallelisation is exactly what removes
+# the card-size dependence the full-card restriction existed to capture:
+# modelled over n=72 runs, the picks step's sd falls 11.71 -> 2.37 and its max
+# 55.05 -> 13.76. So the common population now bounds the rare one far more
+# tightly than it did before, and the restriction has stopped earning its 25
+# weeks.
+#
+# REGIMES ARE NOT POOLED, so the new series starts at n=0 and the four serial
+# full-card runs do not contribute to it. Membership is by `headSha`: a run
+# counts only if its own commit contains the parallel review.
+PICKS_BOUND_OLD_POPULATION = (
+    "MAX time-to-picks over FULL-CARD (>=40 fixture) weekday runs, SERIAL "
+    "review regime; n=4, measured 2026-10-01, range 67.4-88.1, mean 76.4, "
+    "sd 10.2")
+PICKS_BOUND_NEW_POPULATION = (
+    "time-to-picks over ALL-CARD weekday runs, PARALLEL review regime "
+    "(REVIEW_CONCURRENCY=4, first in cccb0e6, 2026-10-21 21:29); starts at "
+    "n=0 because regimes are not pooled")
+
+#: The commit that introduced the parallel review. A run belongs to the new
+#: population only if its own `headSha` is this commit or a descendant of it.
+PARALLEL_REVIEW_SINCE = "cccb0e6"
+PARALLEL_REVIEW_SINCE_UTC = "2026-10-21T21:29"
+
+
+_PICKS_SERIES_CACHE: Dict[int, dict] = {}
+
+
+def parallel_regime_picks_series(limit: int = 120):
+    """`{'n','mean','sd','mean_plus_3sd','max','to_ten','members'}`.
+
+    Time-to-picks for every scheduled weekday `daily-picks` run whose commit
+    CONTAINS `PARALLEL_REVIEW_SINCE`. `git merge-base --is-ancestor` decides
+    membership, so a run on a branch that predates the change cannot sneak in
+    on a later timestamp.
+
+    Returns `n=0` and `mean_plus_3sd=None` when the series is empty, which is
+    the honest state and NOT a zero.
+    """
+    import statistics
+
+    if limit in _PICKS_SERIES_CACHE:
+        return _PICKS_SERIES_CACHE[limit]
+
+    # AN UNREADABLE `gh` IS UNEVALUATED, NOT AN EMPTY SERIES. Found by
+    # `test_an_unreadable_gh_is_UNKNOWN_and_says_so`, which stubs the command
+    # unreadable: `json.loads("")` raised and took the whole audit down. And
+    # "" would otherwise have read as n=0, which is the state this series is
+    # legitimately in today -- so the two would have been indistinguishable
+    # exactly when it matters.
+    try:
+        rows = json.loads(_sh("gh", "run", "list", "--workflow",
+                              "daily-picks.yml", "--limit", str(limit),
+                              "--json",
+                              "databaseId,createdAt,event,headSha") or "[]")
+    except json.JSONDecodeError:
+        return {"n": None, "members": [], "state": "UNEVALUATED",
+                "regime": PICKS_BOUND_NEW_POPULATION,
+                "needed": MIN_N_TO_REDERIVE_PICKS_BOUND,
+                "mean": None, "sd": None, "mean_plus_3sd": None, "max": None,
+                "to_ten_weeks": None, "to_ten_date": "UNEVALUATED",
+                "reason": "`gh run list` could not be read, so whether any "
+                          "post-change run exists is UNKNOWN - distinct from "
+                          "knowing there is none"}
+    # ONE git CALL, NOT ONE PER RUN. The first draft shelled out to
+    # `git merge-base --is-ancestor` inside the loop -- up to 120 subprocess
+    # spawns, twice per audit (the clock and the margin alert both ask), which
+    # timed out a test file. The set of commits CONTAINING the change is one
+    # `rev-list`, and membership is then a lookup.
+    _descendants = {PARALLEL_REVIEW_SINCE[:7]} | {
+        c[:7] for c in _sh("git", "rev-list",
+                           f"{PARALLEL_REVIEW_SINCE}..HEAD").split()}
+    vals, members = [], []
+    for r in rows:
+        if r.get("event") != "schedule":
+            continue
+        sha = r.get("headSha") or ""
+        if not sha:
+            continue
+        if sha[:7] not in _descendants:
+            continue                         # the run predates the change
+        started = as_datetime(r.get("createdAt"))
+        if started is None or started.weekday() >= 5:
+            continue
+        ttp = _time_to_picks(str(r["databaseId"]), started)
+        if ttp is not None:
+            vals.append(ttp)
+            members.append(r["databaseId"])
+    n = len(vals)
+    out = {"n": n, "members": members,
+           "regime": PICKS_BOUND_NEW_POPULATION,
+           "needed": MIN_N_TO_REDERIVE_PICKS_BOUND}
+    if not vals:
+        out.update({"mean": None, "sd": None, "mean_plus_3sd": None,
+                    "max": None})
+    else:
+        m = statistics.mean(vals)
+        sd = statistics.pstdev(vals) if n > 1 else 0.0
+        out.update({"mean": m, "sd": sd, "mean_plus_3sd": m + 3 * sd,
+                    "max": max(vals)})
+    # PROJECTED DATE TO n=10, from the measured arrival rate of scheduled
+    # weekday runs: ~5 per week. Labelled `simulated`, because it assumes the
+    # schedule keeps firing and no run fails before its picks step.
+    missing = max(0, MIN_N_TO_REDERIVE_PICKS_BOUND - n)
+    out["to_ten_weeks"] = round(missing / 5.0, 1)
+    out["to_ten_date"] = (
+        (_dt.date.today() + _dt.timedelta(days=round(missing / 5.0 * 7)))
+        .isoformat() if missing else "reached")
+    _PICKS_SERIES_CACHE[limit] = out
+    return out
+
+
+def _time_to_picks(run_id: str, started):
+    """Minutes from run start to the picks step completing, or None."""
+    try:
+        jobs = json.loads(_sh("gh", "run", "view", run_id, "--json", "jobs")
+                          or "{}").get("jobs") or []
+    except json.JSONDecodeError:
+        return None
+    for j in jobs:
+        for st in j.get("steps") or []:
+            if st.get("name") == PICKS_STEP_NAME and st.get("completedAt"):
+                done = as_datetime(st["completedAt"])
+                if done is not None:
+                    return (done - started).total_seconds() / 60.0
+    return None
+
+
+#: The step whose completion ends "time to picks". Everything after it is
+#: yesterday's business and cannot affect today's kickoff.
+PICKS_STEP_NAME = "Generate, review, and send picks"
+
+
+def format_picks_bound_status(s: dict) -> str:
+    """One block, every run, so the clock is visible rather than remembered."""
+    if s.get("state") == "UNEVALUATED":
+        return chr(10).join([
+            "picks_bound[UNEVALUATED]",
+            f"  {s.get('reason', 'the series could not be read')}",
+            f"  margin uses    : the OLD constant, {FULL_CARD_PICKS_MAX} min",
+        ])
+    if s["n"] == 0:
+        body = (f"n=0 -- the series is EMPTY, which is not a zero. No "
+                f"scheduled weekday run has yet carried {PARALLEL_REVIEW_SINCE}")
+    else:
+        body = (f"n={s['n']} mean={s['mean']:.1f} sd={s['sd']:.1f} "
+                f"mean+3sd={s['mean_plus_3sd']:.1f} max={s['max']:.1f}")
+    return chr(10).join([
+        f"picks_bound[REGIME CHANGE IN PROGRESS]",
+        f"  since          : {PARALLEL_REVIEW_SINCE} "
+        f"({PARALLEL_REVIEW_SINCE_UTC} UTC)",
+        f"  new population : {body}",
+        f"                   {s['regime']}",
+        f"  needed         : n>={s['needed']} "
+        + (f"-> ~{s['to_ten_weeks']} weeks, about {s['to_ten_date']} "
+           f"(simulated from ~5 scheduled weekday runs/week)"
+           if s["to_ten_date"] != "reached" else "-> REACHED, re-derive now"),
+        f"  margin uses    : the OLD constant, {FULL_CARD_PICKS_MAX} min",
+        f"                   {PICKS_BOUND_OLD_POPULATION}",
+        f"  so the margin is CONSERVATIVE: that figure is a full-card MAX from "
+        f"the SERIAL regime, and the parallel review cut the picks step's sd "
+        f"11.71 -> 2.37. The true margin is very probably BETTER than reported.",
+    ])
+
+
+
 #: The trailing window the delay series is computed over. STATED, not fitted —
 #: 28 days is four weeks of crons, long enough to hold the weekly pattern and
 #: short enough to follow a drift rather than average it away.
@@ -1824,7 +2026,7 @@ def format_series_census(series_by_type: dict, crons: dict) -> str:
     bad = series_by_type.get(UNREADABLE_KEY) or []
     if bad:
         lines.append(
-            f"  !! {len(bad)} run(s) EXCLUDED because their headSha could not "
+            f"  note: {len(bad)} run(s) EXCLUDED because their headSha could not "
             f"be read, so their cron is unknown and their lag is not "
             f"attributable. This is a DEGRADED census, not a small one. "
             f"CLEARING ACTION: run the audit on a full clone "
@@ -1906,7 +2108,7 @@ def format_schedule_margins(margins: dict) -> str:
                  + ("  ** DECISION FIRES **" if margins.get("alarm") else ""))
     if unev:
         lines.append(
-            f"  !! {', '.join(unev)} is UNEVALUATED, not safe - no run has yet "
+            f"  note: {', '.join(unev)} is UNEVALUATED, not safe - no run has yet "
             f"fired under its cron, so its margin is UNKNOWN rather than clear")
     return chr(10).join(lines)
 
@@ -2753,7 +2955,7 @@ def main() -> int:
             runs = [r for r in runs if str(r["databaseId"]) not in done]
 
     if listing_warning:
-        print(f"!! {listing_warning}\n")
+        print(f"note: {listing_warning}\n")
 
     fail_on = {v.strip().upper() for v in (a.fail_on or "").split(",") if v.strip()}
     alarmed: List[str] = []
@@ -2771,6 +2973,9 @@ def main() -> int:
     _pst = selftest_patterns()
     print()
     print(format_pattern_selftest(_pst))
+    # THE REGIME CLOCK, every run, so it is visible rather than remembered.
+    print()
+    print(format_picks_bound_status(parallel_regime_picks_series()))
     if _pst["failed"]:
         alarmed.append(
             f"{len(_pst['failed'])} registered pattern(s) FAIL the self-test: "
@@ -2792,7 +2997,7 @@ def main() -> int:
     # also cannot be inferred from runs, which is the whole reason it is here.
     _states = workflow_states()
     if _states is None:
-        print("!! workflow state UNKNOWN: `gh workflow list` could not be read. "
+        print("note: workflow state UNKNOWN: `gh workflow list` could not be read. "
               "A disabled workflow is indistinguishable from a quiet one here.\n")
     else:
         # SCOPED TO `WORKFLOWS`, added 2026-10-13. `gh workflow list` returns
@@ -2820,7 +3025,7 @@ def main() -> int:
         _unowned = {n for n in _states
                     if n not in _owned and n.rsplit("/", 1)[-1] not in _owned}
         if _unowned:
-            print(f"!! {len(_unowned)} workflow record(s) GitHub holds that "
+            print(f"note: {len(_unowned)} workflow record(s) GitHub holds that "
                   f"this repository does not own, so their state is NOT "
                   f"checked: {', '.join(sorted(_unowned))}. A record outlives "
                   f"the branch that carried it; an alarm on one could not be "
@@ -2861,7 +3066,7 @@ def main() -> int:
         else:
             # NOT a pass. The per-source checks below will be skipped for this
             # workflow, and silence there would read as coverage.
-            print(f"!! no ledger history for {_wf}: per-source discovery checks "
+            print(f"note: no ledger history for {_wf}: per-source discovery checks "
                   f"are UNEVALUATED for it, not passed\n")
 
     print(f"{'run':<12} {'workflow':<14} {'started':<17} {'verdict':<10} findings")
@@ -3166,14 +3371,27 @@ def main() -> int:
                 f"(review {STRUCTURAL_ACK['review']}) has expired")
 
     if _cron is None:
-        print("!! daily-picks carries no single `m h * * *` cron — the margin is "
+        print("note: daily-picks carries no single `m h * * *` cron — the margin is "
               "UNEVALUATED, not safe")
     elif _margin.get("alarm"):
-        print(f"!! SCHEDULE MARGIN {_margin['binding']:+.0f} min is below the "
-              f"{MARGIN_ALARM_MIN}-minute threshold. Remedy on file: "
-              f"{MARGIN_REMEDY}")
+        # ── THE MARK FOLLOWS THE ALARM, NOT THE CONDITION. 2026-10-21. ───
+        #
+        # This printed `!!` BEFORE consulting the acknowledgement, so an
+        # ACKNOWLEDGED breach -- one that deliberately does not alarm -- still
+        # wore the finding marker. Found by demonstrating the quiet state:
+        # the acknowledgement was injected, the margin stopped alarming, and
+        # the mark stayed. The rule has to apply to its own first instance.
         _ack = margin_breach_is_acknowledged(
             _margins.get("worse") or "", _margin.get("binding") or 0.0)
+        if not _ack:
+            print(f"!! SCHEDULE MARGIN {_margin['binding']:+.0f} min is below "
+                  f"the {MARGIN_ALARM_MIN}-minute threshold. Remedy on file: "
+                  f"{MARGIN_REMEDY}")
+        else:
+            print(f"note: schedule margin {_margin['binding']:+.0f} min is "
+                  f"below the {MARGIN_ALARM_MIN}-minute threshold and is "
+                  f"ACKNOWLEDGED, so it reports and does not alarm. Remedy on "
+                  f"file: {MARGIN_REMEDY}")
         if _ack:
             print(f"  margin breach ACKNOWLEDGED since {_ack['since']}: "
                   f"{_ack['why'][:88]}")
@@ -3181,15 +3399,29 @@ def main() -> int:
                   f"{_ack['binding']:+.0f}m. CLEARING ACTION: {_ack['action']}"
                   f" (review {_ack['review']})")
         else:
-            alarmed.append(f"schedule margin {_margin['binding']:+.0f}m "
-                           f"< {MARGIN_ALARM_MIN}m")
+            # RULE 3: a margin computed from a RETIRED REGIME'S constant is
+            # labelled wherever it appears, the alert included. The operator
+            # dispatching by hand needs to know what he is insuring against.
+            _pb = parallel_regime_picks_series()
+            alarmed.append(
+                f"schedule margin {_margin['binding']:+.0f}m "
+                f"< {MARGIN_ALARM_MIN}m - CONSERVATIVE: computed from "
+                f"FULL_CARD_PICKS_MAX={FULL_CARD_PICKS_MAX}m, a full-card MAX "
+                f"from the RETIRED SERIAL review regime (n=4, 2026-10-01). "
+                f"The parallel review cut the picks step's sd 11.71 -> 2.37, "
+                f"so the true margin is very probably BETTER than this. The "
+                f"replacement series is at n={_pb['n']}/"
+                f"{MIN_N_TO_REDERIVE_PICKS_BOUND}"
+                + (f", ~{_pb['to_ten_weeks']} weeks to go (about "
+                   f"{_pb['to_ten_date']})" if _pb["to_ten_date"] != "reached"
+                   else ", READY TO RE-DERIVE"))
 
     if listing_warning:
         # Printed AGAIN under the table: the number a reader carries away is
         # the one at the bottom of a long listing, and that is the number the
         # truncation qualifies.
-        print(f"\n!! {listing_warning}")
-        print(f"!! {len(runs)} run(s) listed above is a LOWER BOUND.")
+        print(f"\nnote: {listing_warning}")
+        print(f"note: {len(runs)} run(s) listed above is a LOWER BOUND.")
     if alarmed:
         # `::error::` so a workflow annotates, and a non-zero exit so it can
         # go red — but only for the verdicts the caller named.
