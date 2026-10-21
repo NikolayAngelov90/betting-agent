@@ -31866,3 +31866,150 @@ comparisons rather than exempt them.
 *Recorded 2026-10-21. `src/reporting/match_briefing.py`,
 `tests/test_review_prerequisite.py`,
 `tests/test_review_parallel_identity.py`.*
+
+---
+
+## The constant cannot be re-derived; the patterns now test themselves — 2026-10-21
+
+### PART A — `CONSTANT NOT RE-DERIVED`. n = 0, AND THE FULL-CARD ROUTE IS INFEASIBLE
+
+**n = 0.** `cccb0e6` shipped at **21:29**; the newest `daily-picks` run is
+**08:29** the same day, at `465146a` — thirteen hours earlier. There is no
+post-change population to measure, so `FULL_CARD_PICKS_MAX = 88.1` still
+describes the **SERIAL** regime and **the standing finding does not clear.**
+
+**AND IT CANNOT BE RE-DERIVED FROM FULL-CARD RUNS ON ANY USEFUL HORIZON.**
+`measured` 2026-10-21 over 2026-07-01…2026-10-21:
+
+```
+weekday days with a card              73
+  of which >= 40 fixtures              6   (8%)
+full-card weekdays per week          0.4   median gap 6 days
+fixtures/day                      median 13, p75 26, max 120
+```
+
+So n=10 full-card runs is **~25 weeks** and n=20 is **~50**. Replacing an n=4
+constant with an n=5 one is not progress, and the required minimum is now
+**encoded**: `MIN_N_TO_REDERIVE_PICKS_BOUND = 10`, with the measured reason
+beside it — the weekday lateness series moved mean+3sd **417.5 → 428.9 on a
+single new point** (n=7→8, because that point lowered the mean and raised the
+sd, and 3sd dominates) and the margin went **+40 → +37** overnight. A 3sd
+bound on single digits is not a bound.
+
+**THE FEASIBLE ROUTE, recorded as `REDERIVE_PICKS_BOUND_PLAN`.** The full-card
+restriction exists because a full card was the worst case — and the
+parallelisation is precisely what removes most of the card-size dependence
+(modelled over n=72, the picks step's sd falls **11.71 → 2.37**). So the
+constant should become an **all-card** time-to-picks bound, for which n=79
+weekday runs are already measured (max 76.7, mean+3sd 85.6, SERIAL). Ordinary
+weekdays arrive at ~5/week rather than 0.4, so **n=10 is about two weeks**.
+
+**REGIMES ARE NOT POOLED.** The post-change series starts empty and is not
+seeded with the serial runs — the same rule that keeps the `37 9`, `0 3` and
+`0 0` cron series apart.
+
+Both constants are **consumed**, not decorative: the PNC detector caught them
+as producers with no consumer (33 → 35) and three tests now enforce the rule —
+the constant still reads 88.1/SERIAL, the minimum is ≥ 10 with its instability
+figures present, and the plan names the all-card population, forbids pooling,
+and requires **both** max and mean+3sd.
+
+### PART B — `MESSAGE DE-SATURATED`, AND THE CLASS IS 12
+
+`src_flashscore_matched` printed *"matched but produced no number … NOT
+COUNTED"* on `Flashscore: 12 fixtures updated` — **an ordinary line on every
+run that scrapes Flashscore** — because the key is owned by the per-source
+block while the generic loop also reached it and `int()` raised on a
+whole-match string.
+
+**THE DECISION: SUPPRESS AT THE SOURCE, not give it its own text.** Renaming
+would have left a message printing on every run; the generic loop has no
+business computing a key another block owns outright. `_OWNED_BY_A_DEDICATED_BRANCH`
+lists all six per-source keys and the loop skips them.
+
+**THIS WAS THE THIRD RECURRENCE IN ONE LIST.** `unpriced_check_dead` was added
+to the count-style keys after being silently dropped for two days;
+`src_apifootball_fixtures` after it *"printed NOT COUNTED exactly when
+API-Football WAS creating fixtures"*; and this is the third. Suppressing the
+family ends the pattern rather than patching its latest instance.
+
+**CONFIRMED AGAINST A QUIET BACKGROUND, read as a human would.** `extract()`
+on a realistic ordinary run now prints **0 messages** (it printed 1 before).
+Injecting `MODEL INTEGRITY FAILURE` still prints 0 from `extract()` and sets
+`facts[model_integrity_failures] = 1`, which reaches `alarmed` — so the rare
+case is visible through the channel that matters, against silence.
+
+**THE SIZE OF THE CLASS: 12.** On a real audit run whose only finding was the
+schedule margin, **13** problem-shaped lines printed and exactly **one** was
+the finding:
+
+```
+2  TRUNCATED LISTING / LOWER BOUND          (a --limit artifact, every run)
+5  no ledger history for <workflow>         (every run, five workflows)
+1  435 run(s) listed above is a LOWER BOUND
+1  1 workflow record(s) ... NOT OWNED
+1  UNEVALUATED, 0 untriaged
+1  UNEVALUATED  deadline --:--              (correct and informative)
+1  could not be cleared by any action here
+1  !! SCHEDULE MARGIN +19 min                <- THE ONLY REAL FINDING
+```
+
+So the `!!` marker — the thing that reads as "look here" — carries **12
+routine uses against 1 finding**. Counted, not fixed: that is a stage of its
+own, and the count is what sizes it.
+
+### PART C — `PATTERNS SELF-TESTED`
+
+```
+PATTERNS   35
+  pass     35
+  FAIL      0
+  no example 0
+```
+
+Every pattern now carries an **example line it must match**, stored beside it
+in `PATTERN_EXAMPLES`, and `selftest_patterns()` pushes that line through
+`extract()` and requires a usable value. **A pattern that matches but yields
+nothing fails on the next CI run, not on the day its condition first occurs.**
+
+**IT RUNS IN `main()`**, before the early return on "no runs to audit" — for
+the same reason the workflow-state check is there: a registration defect is
+not about any particular run, and placing it after the return would make it
+unreachable exactly when the audit has nothing else to do. A failure **alarms**
+and names its clearing action (give the pattern a numeric capture group, or add
+the key to the count-style list). It is the **twelfth** alarm surface, added to
+both the enumeration and the census.
+
+**COMPILATION IS CHECKED FIRST AND SHORT-CIRCUITS.** `extract()` applies every
+pattern, so one uncompilable regex makes it raise on *any* input — including on
+another key's example. That is why the compile check cannot be folded into the
+loop; found by writing the control and watching it raise from inside
+`extract()` rather than be caught.
+
+#### BOTH CONTROLS
+
+* **KNOWN-WRONG** — `model_integrity_failures` **as it was on 2026-10-12**: the
+  same regex, under a key that is *not* in the count-style list, with
+  `PATTERNS` patched so `extract()` really tries it. It **FAILS** with "this is
+  the model_integrity shape". Without the patch the key would have failed
+  merely for being unknown — a control passing for the wrong reason.
+* **POSITIVE** — the same regex under the real key **passes**, and the test
+  asserts the pattern itself was not edited, so the control compares two
+  *registrations* rather than two regexes. An example that rots (pattern edited,
+  example left behind) **fails** with "does NOT match its own example"; an
+  uncompilable regex **fails** rather than raising; and a missing example is its
+  own third state, neither pass nor fail.
+
+> A diagnostic that only prints when the condition fires cannot report that the
+> detector is incapable of firing. The patterns are now checked at
+> registration, including the ones not yet written.
+
+### DISCIPLINE
+
+Gating selection **2,302 passed, 7 deselected**; non-gating 6 passed, 1
+skipped. Invariants pass, count not cited. Fingerprint **UNCHANGED at
+s5.18 / 51fbcb**. No production write, no schema change, no model change.
+
+*Recorded 2026-10-21. `scripts/ci_audit.py`,
+`tests/test_patterns_self_tested.py`, `tests/test_two_margins.py`,
+`tests/test_alarm_surface.py`, `tests/test_silent_surfaces_can_fire.py`.*

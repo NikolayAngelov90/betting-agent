@@ -224,9 +224,15 @@ def test_the_FULL_alarm_surface_is_enumerated_here():
     #
     # The census of all eleven -- firings, distinct findings, and firings that
     # produced a change -- is in `tests/test_silent_surfaces_can_fire.py`.
-    assert len(appends) == 11, (
+    # 11 -> 12 on 2026-10-21. THE TWELFTH IS THE PATTERN SELF-TEST: a
+    # registered pattern that matches its own example and still yields no
+    # value is a detector that CANNOT FIRE, and two of them sat dead for ten
+    # days because the only diagnostic was gated on their condition. It
+    # alarms at REGISTRATION, before the early return on "no runs to audit".
+    assert len(appends) == 12, (
         f"the alarm surface changed: {len(appends)} append sites, expected "
-        f"11 (workflow state, red UNCLASSIFIABLE, run verdict, model "
+        f"12 (pattern self-test, workflow state, red UNCLASSIFIABLE, run "
+        f"verdict, model "
         f"integrity failure, model signature missing, scheduled run never "
         f"existed, UNTRIAGED DIAGNOSED FINDING, unparseable workflow on "
         f"main, actionable margin for tomorrow, structural margin "

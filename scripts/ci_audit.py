@@ -650,6 +650,153 @@ def fetch_log(run_id: str) -> str:
 
 # ───────────────────────────────────────────────────────────── counted facts
 
+# ══════════ EVERY PATTERN IS TESTED AT REGISTRATION ══════════════════════════
+#
+#     2026-10-21. A detector's health must be observable in its QUIET state.
+#
+# WHY THIS EXISTS. `model_integrity_failures` and `model_unsigned_loads` were
+# registered on 2026-10-12, matched their log lines, and COULD NOT FIRE: the
+# patterns have no numeric capture group, `int()` raised, the key never reached
+# `facts`, and `facts.get(...)` was always falsy. TEN DAYS.
+#
+# The fallback printed "matched but produced no number ... NOT COUNTED" the
+# whole time -- but ONLY WHEN THE PATTERN MATCHED, which needs a real integrity
+# failure to happen first. A diagnostic gated on the condition cannot report
+# that the detector is incapable of firing.
+#
+# So every pattern now carries an EXAMPLE LINE it must match, and the self-test
+# pushes that line through `extract()` and requires a usable value. A pattern
+# that matches but yields nothing fails HERE, on the next CI run, and not on
+# the day its condition first occurs.
+#
+# THE EXAMPLE IS THE THIRD FIELD OF THE REGISTRATION, beside the pattern and
+# (for the self-emitted annotations) the emitter. It cannot rot relative to the
+# pattern, because the self-test asserts the match in both directions.
+PATTERN_EXAMPLES = {
+    "picks_saved": "PAPER TRADING: saving 7 pick(s) for 2026-10-21",
+    "picks_saved_live": "Saved 7 new picks to the database",
+    "observations": "pick_observations: 14 written for today",
+    "af_requests": "API-Football update complete (51 requests used)",
+    "injuries_saved": "Injury update: saved 86 injuries from 30 fixtures",
+    "odds_rows": "TheOddsAPI update complete: 240 odds rows",
+    "credits": "theoddsapi used = 334 credits this month",
+    "clv_pairs": "12 valid CLV pairs captured",
+    "fixtures_created": "API-Football: creating new fixture A vs B",
+    "reviews": "Briefing decision [KEEP] for Team A vs Team B",
+    "settled": "Settled 11 picks",
+    "credits_claimed": "credits claimed  : 8",
+    "captured": "captured         : 16",
+    "capture_missing": "9 captured, 3 missing",
+    "no_rows": "result=no_rows league=france/ligue-1",
+    "decisions_discarded": "Could not apply briefing decision for 53181",
+    "unpriced_fixtures": "UNPRICED FIXTURES: 4 rows with no price",
+    "unpriced_check_dead": "UNPRICED FIXTURE CHECK DID NOT RUN",
+    "implausible_rows": "IMPLAUSIBLE ATTRIBUTIONS: 2 team rows",
+    "implausible_check_dead": "IMPLAUSIBLE ATTRIBUTION CHECK DID NOT RUN",
+    "report_sent": "Performance report sent to Telegram",
+    "duplicate_fixture_refusals": "cause=duplicate_rows_one_fixture match=53181",
+    "picks_run_guard_declined": "PICKS-RUN GUARD: DECLINING to save picks",
+    "model_integrity_failures":
+        "MODEL INTEGRITY FAILURE path=data/models/ml_models.pkl action=investigate",
+    "model_unsigned_loads":
+        "MODEL SIGNATURE MISSING path=data/models/elo.pkl action=run --train",
+    "experiment_record_built": "EXPERIMENT RECORD: n=1250 settled",
+    "fixtures_zero_active":
+        "returned 0 fixtures for france/ligue-1 - the page yielded NO ROWS AT "
+        "ALL, expected >1 for active season",
+    "no_fixtures_at_all": "No fixtures found for 2026-10-21",
+    "fixtures_scraped": "Scraped 30 fixtures from france/ligue-1",
+    "src_flashscore_fixtures": "Scraped 30 fixtures from france/ligue-1",
+    "src_footballdataorg_fixtures":
+        "football-data.org: 4 scores updated, 6 new fixtures added",
+    "src_apifootball_fixtures": "API-Football: creating new fixture A vs B",
+    "src_apifootball_matched":
+        "API-Football fixtures 2026-10-21: 0 created, 33 updated",
+    "src_flashscore_matched": "Flashscore: 12 fixtures updated",
+    "src_footballdataorg_matched": "football-data.org: 4 scores updated",
+}
+
+#: Padding, so `extract()` does not refuse the synthetic log as unauditable.
+_SELFTEST_PAD = "selftest" * 40
+
+
+def selftest_patterns(patterns: dict = None, examples: dict = None) -> dict:
+    """Apply every registered pattern to its example and require a value.
+
+    Returns `{"passed": [...], "failed": [(key, why)], "no_example": [...]}`.
+
+    THE TWO WAYS A PATTERN CAN BE BROKEN ARE BOTH CHECKED:
+      * it does not match its own example -- the example rotted, or the
+        pattern was edited and the example was not;
+      * it matches and `extract()` still yields nothing -- the
+        model-integrity shape, which is the one that cost ten days.
+    """
+    import io
+    from contextlib import redirect_stdout
+
+    patterns = PATTERNS if patterns is None else patterns
+    examples = PATTERN_EXAMPLES if examples is None else examples
+    passed, failed, missing = [], [], []
+
+    # ── COMPILATION FIRST, AND IT SHORT-CIRCUITS. ──────────────────────────
+    # `extract()` applies EVERY pattern, so one uncompilable regex makes it
+    # raise on any input at all -- including on another key's example. So the
+    # compile check cannot be folded into the loop below: it has to run first,
+    # and when it finds anything the extract phase is not attempted, because
+    # there is nothing it could report that is not downstream of this.
+    uncompilable = []
+    for key, pat in patterns.items():
+        try:
+            re.compile(pat)
+        except re.error as e:
+            uncompilable.append((key, f"the pattern is not a valid regex: {e}"
+                                      f" - extract() cannot run at all while "
+                                      f"it is registered"))
+    if uncompilable:
+        return {"passed": [], "failed": uncompilable,
+                "no_example": sorted(set(patterns) - set(examples))}
+
+    for key, pat in patterns.items():
+        ex = examples.get(key)
+        if ex is None:
+            missing.append(key)
+            continue
+        if not re.search(pat, ex):
+            failed.append((key, "the pattern does NOT match its own example"))
+            continue
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            facts = extract(ex + chr(10) + _SELFTEST_PAD)
+        if facts.get(key) in (None, 0):
+            failed.append((key, f"matched its example and yielded "
+                                f"{facts.get(key)!r} - this is the "
+                                f"model_integrity shape"))
+            continue
+        passed.append(key)
+    return {"passed": passed, "failed": failed, "no_example": missing}
+
+
+def format_pattern_selftest(r: dict) -> str:
+    out = [f"pattern_selftest[{len(r['passed'])} pass, "
+           f"{len(r['failed'])} FAIL, {len(r['no_example'])} no example]"]
+    for key, why in r["failed"]:
+        out.append(f"  !! {key}: {why}")
+    for key in r["no_example"]:
+        out.append(f"  .. {key}: no example registered, so its health is "
+                   f"UNEVALUATED rather than proven")
+    return chr(10).join(out)
+
+
+#: Keys computed by their OWN block further down `extract()`, not by the
+#: generic counting loop. Listed by name so the loop skips them outright: a
+#: key with two owners is a key whose warning fires on the owner that did not
+#: get there first. See the comment at the skip.
+_OWNED_BY_A_DEDICATED_BRANCH = frozenset({
+    "src_flashscore_fixtures", "src_footballdataorg_fixtures",
+    "src_apifootball_fixtures", "src_apifootball_matched",
+    "src_flashscore_matched", "src_footballdataorg_matched",
+})
+
 PATTERNS = {
     "picks_saved": r"PAPER TRADING: saving (\d+) pick",
     "picks_saved_live": r"Saved (\d+) new pick",
@@ -773,6 +920,23 @@ def extract(log: str) -> Dict[str, object]:
         # because the generic loop reached it first and `int()` raised on a
         # whole-match string. It was an inverted indicator: it printed
         # NOT COUNTED exactly when API-Football WAS creating fixtures.
+        # ── KEYS A DEDICATED BRANCH OWNS ARE SKIPPED HERE. 2026-10-21. ──────
+        #
+        # THIRD RECURRENCE IN THIS ONE LIST. `unpriced_check_dead` was added
+        # after it was silently dropped for two days;
+        # `src_apifootball_fixtures` after it printed NOT COUNTED exactly when
+        # API-Football WAS creating fixtures; and `src_flashscore_matched`
+        # does it today, on `Flashscore: 12 fixtures updated` -- an ORDINARY
+        # line on every run that scrapes Flashscore.
+        #
+        # THAT NOISE IS NOT COSMETIC. The same message is how a dead detector
+        # reports itself, and the model-integrity alarms sat dead for TEN DAYS
+        # behind it. A benign routine case must not share a message with a
+        # rare real one, so the family is suppressed AT THE SOURCE rather than
+        # relabelled: the generic loop has no business computing a key that
+        # the per-source block below owns outright.
+        if key in _OWNED_BY_A_DEDICATED_BRANCH:
+            continue
         if key in ("fixtures_created", "reviews", "no_rows",
                    "src_apifootball_fixtures",
                    "decisions_discarded", "fixtures_zero_active",
@@ -1297,6 +1461,47 @@ MARGIN_RUN_DURATIONS_FULL_BY_DAYTYPE = {
 
 #: Time from run start to picks complete on a FULL card (>=40 fixtures).
 #: MEASURED 2026-10-01, n=4: 67.4-88.1 min, mean 76.4, sd 10.2.
+#:
+#: ── NOT RE-DERIVED 2026-10-21, AND THE REASON IS MEASURED ─────────────────
+#:
+#: The review was parallelised in `cccb0e6` at 21:29 on 2026-10-21, and the
+#: newest `daily-picks` run is 08:29 the same day. **n = 0 post-change runs.**
+#: So this constant still describes the SERIAL regime, and the standing
+#: `schedule margin` finding does not clear.
+#:
+#: AND IT CANNOT BE RE-DERIVED FROM FULL-CARD RUNS ON ANY USEFUL HORIZON.
+#: `measured` 2026-10-21 over 2026-07-01..2026-10-21: 73 weekday days carried
+#: a card and only **6 of them (8%) had >=40 fixtures** -- 0.4 full-card
+#: weekdays per week, median gap 6 days. Reaching n=10 takes ~25 weeks and
+#: n=20 ~50. Replacing an n=4 constant with an n=5 one is not progress.
+#:
+#: WHY A SMALL n IS REFUSED RATHER THAN NOTED: this project measured its own
+#: instability. The weekday LATENESS series moved mean+3sd 417.5 -> 428.9 on a
+#: SINGLE new point (n=7 -> 8) because that point lowered the mean and raised
+#: the sd, and 3sd dominates; the margin went +40 -> +37 overnight. A 3sd
+#: bound on single digits is not a bound.
+MIN_N_TO_REDERIVE_PICKS_BOUND = 10
+
+#: THE FEASIBLE ROUTE, recorded so the next attempt does not repeat the
+#: infeasible one. The full-card restriction exists because a full card was
+#: the worst case -- and the parallelisation is precisely what removes most of
+#: the card-size dependence: modelled over n=72 runs, the picks step's sd
+#: falls 11.71 -> 2.37. So the constant should become a time-to-picks bound
+#: over ALL cards, for which n=79 weekday runs are already measured
+#: (max 76.7, mean+3sd 85.6, `measured` 2026-10-21, SERIAL regime).
+#:
+#: THAT STILL NEEDS POST-CHANGE RUNS, because the sd collapse is a MODEL until
+#: production confirms it -- but ordinary weekdays arrive at ~5/week rather
+#: than 0.4, so n=10 is about two weeks rather than twenty-five.
+#:
+#: REGIMES ARE NOT POOLED. Serial and parallel runs are different populations
+#: under the same rule that keeps the `37 9`, `0 3` and `0 0` cron series
+#: apart, so the post-change series starts empty and is not seeded with these.
+REDERIVE_PICKS_BOUND_PLAN = (
+    "re-point FULL_CARD_PICKS_MAX at ALL-CARD time-to-picks once n >= "
+    "MIN_N_TO_REDERIVE_PICKS_BOUND post-cccb0e6 weekday runs exist; do NOT "
+    "pool them with the serial runs, and report max and mean+3sd together "
+    "with the regime named")
 FULL_CARD_PICKS_MAX = 88.1
 FULL_CARD_PICKS_3SD = 107.0
 
@@ -2552,6 +2757,28 @@ def main() -> int:
 
     fail_on = {v.strip().upper() for v in (a.fail_on or "").split(",") if v.strip()}
     alarmed: List[str] = []
+
+    # ── THE PATTERN SELF-TEST, AT REGISTRATION AND BEFORE ANY RUN ─────────
+    #
+    # Placed here, before the early return on "no runs to audit", for the same
+    # reason the workflow-state check below is: a registration defect is not
+    # about any particular run, and putting it after the return would make it
+    # unreachable exactly when the audit has nothing else to do.
+    #
+    # It is a FINDING, not machinery: a pattern that cannot count is a
+    # detector that cannot fire, which is what the model-integrity alarms were
+    # for ten days.
+    _pst = selftest_patterns()
+    print()
+    print(format_pattern_selftest(_pst))
+    if _pst["failed"]:
+        alarmed.append(
+            f"{len(_pst['failed'])} registered pattern(s) FAIL the self-test: "
+            + ", ".join(k for k, _ in _pst["failed"])
+            + " - each matches its own example and still yields no value, so "
+              "the detector cannot fire. CLEARING ACTION: give the pattern a "
+              "numeric capture group, or add the key to the count-style list "
+              "in extract().")
 
     # WORKFLOW STATE, CHECKED BEFORE THE EARLY RETURN.
     #

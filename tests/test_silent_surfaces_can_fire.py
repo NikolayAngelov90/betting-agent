@@ -190,6 +190,10 @@ SURFACE_CENSUS = {
     "9  actionable margin":              (8, 2, 2),
     "10 structural deterioration":       (0, 0, 0),
     "11 schedule margin":               (52, 2, 1),
+    # ADDED 2026-10-21 with the surface itself. Zero firings because the
+    # self-test did not exist in the window -- and its positive control is the
+    # 2026-10-12 model-integrity registration, which FAILS it.
+    "12 pattern self-test":              (0, 0, 0),
 }
 
 
@@ -200,7 +204,7 @@ def test_the_CENSUS_is_recorded_with_its_window_and_arithmetic():
     assert firings == 163
     assert findings == 6
     assert changes == 5
-    assert len(SURFACE_CENSUS) == 11, (
+    assert len(SURFACE_CENSUS) == 12, (
         f"{len(SURFACE_CENSUS)} surfaces recorded; the audit has "
         f"{len(SURFACE_CENSUS)} append sites and the two must agree")
     # the ratio is the finding: 163 firings bought 5 changes

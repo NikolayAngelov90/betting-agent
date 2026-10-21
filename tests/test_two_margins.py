@@ -312,3 +312,57 @@ def test_the_AUDIT_consults_the_predicate_rather_than_printing_unconditionally()
         "still holds, so a deteriorated margin would report 'does NOT alarm'")
     assert "NO LONGER" in src and "DETERIORATED" in src, (
         "there is no branch for an acknowledgement that stopped covering")
+
+
+# ═════ THE PICKS BOUND: NOT RE-DERIVED, AND THE RULE IS ENFORCED ══════════
+#
+#     2026-10-21. Rules 1 and 2: regimes are not pooled, and a constant
+#     carries its n and its regime with a small n stated as small.
+
+
+def test_the_PICKS_BOUND_still_describes_the_SERIAL_regime():
+    """The review was parallelised in `cccb0e6` at 21:29 on 2026-10-21 and the
+    newest daily-picks run is 08:29 the same day: **n = 0 post-change runs.**
+    So this constant has NOT been re-derived and still describes the serial
+    regime. If it moves, the mover must state the new n and the regime.
+    """
+    assert _ci.FULL_CARD_PICKS_MAX == 88.1, (
+        f"FULL_CARD_PICKS_MAX moved to {_ci.FULL_CARD_PICKS_MAX}. State the "
+        f"new n and the REGIME it was measured in, and confirm it is not "
+        f"pooled with the serial runs")
+    assert _ci.FULL_CARD_PICKS_3SD == 107.0
+    src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
+    assert "n = 0 post-change runs" in src, (
+        "the reason the constant was not re-derived is no longer recorded")
+
+
+def test_a_RE_DERIVATION_on_a_SMALL_n_is_refused_by_a_STATED_MINIMUM():
+    """Replacing an n=4 constant with an n=5 one is not progress, and this
+    project measured why: the weekday lateness series moved mean+3sd
+    417.5 -> 428.9 on a SINGLE new point, and the margin went +40 -> +37.
+    """
+    assert _ci.MIN_N_TO_REDERIVE_PICKS_BOUND >= 10, (
+        f"the minimum n fell to {_ci.MIN_N_TO_REDERIVE_PICKS_BOUND}; a 3sd "
+        f"bound on single digits is not a bound")
+    src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
+    assert "417.5 -> 428.9" in src, (
+        "the measured instability that justifies the minimum is no longer "
+        "recorded beside it")
+
+
+def test_the_FEASIBLE_ROUTE_is_recorded_and_says_NOT_TO_POOL():
+    """Full-card weekdays arrive at 0.4/week (6 of 73 days, measured
+    2026-10-21), so n=10 full-card runs is ~25 weeks. The route that works is
+    all-card time-to-picks, which arrives at ~5/week."""
+    plan = _ci.REDERIVE_PICKS_BOUND_PLAN
+    assert "ALL-CARD" in plan, "the plan does not name the feasible population"
+    assert "do NOT" in plan and "pool" in plan, (
+        "the plan does not forbid pooling the serial and parallel regimes")
+    assert "max and mean+3sd" in plan, (
+        "the plan does not require BOTH figures to be reported")
+    assert "MIN_N_TO_REDERIVE_PICKS_BOUND" in plan, (
+        "the plan does not reference the minimum it has to clear")
+    src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
+    assert "0.4" in src and "25 weeks" in src, (
+        "the measured full-card rate that makes the full-card route "
+        "infeasible is no longer recorded")
