@@ -18,6 +18,7 @@ runs fully automated inside CI with no scraping of news sites required.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -202,6 +203,23 @@ class MatchBriefingService:
         # doesn't reset mid-run, so after the first "session limit" every further
         # `claude -p` spawn is doomed — skip straight to the API fallback.
         self._claude_code_exhausted = False
+        # ── THE MARKER'S LOCK. 2026-10-21, BEFORE ANY CONCURRENCY. ─────────
+        #
+        # `_mark_sent` is a read-modify-write of ONE JSON file: it loads the
+        # whole day's key list, appends, and rewrites. Two reviewers running
+        # concurrently both read `{today: [a]}`, one writes `[a, b]` and the
+        # other writes `[a, c]` -- and the later write DROPS the earlier key.
+        # A LOST UPDATE, and a silent one: nothing compares the marker set to
+        # the database, so the only symptom is a later `--picks` run finding
+        # no `final:<match_id>` freeze and regenerating picks behind a ruling
+        # Claude already made.
+        #
+        # One `asyncio.Lock` is sufficient and is the right scope: the
+        # concurrency being introduced is asyncio tasks inside ONE process.
+        # Across processes the DATABASE is the authority -- `review_action` on
+        # today's pick is the durable record that a review happened, and the
+        # file is a cache in front of it.
+        self._sent_lock = asyncio.Lock()
 
     # ---- public entry points -------------------------------------------------
 
@@ -280,6 +298,29 @@ class MatchBriefingService:
             if getattr(p, "match_id", None):
                 by_match.setdefault(p.match_id, []).append(p)
         reviewed = 0
+        # ── A PARTIAL BATCH MUST BE VISIBLE, NOT INFERRED. 2026-10-21. ─────
+        #
+        # The loop already caught per-match exceptions and logged a warning,
+        # then reported `reviewed N/M` — so a failed unit was arithmetically
+        # implied and never named. Serial code stops on an error; concurrent
+        # code does not, and a partial result that looks complete is this
+        # project's most frequent defect. The failures are TALLIED and NAMED.
+        #
+        # THE PER-PICK STATE STAYS NULL, deliberately. A failed unit's
+        # `review_action` is NULL, which every consumer already keeps distinct
+        # from `KEEP` — audited 2026-10-21: `betting_agent` filters
+        # `== "CHANGE"`, the report buckets `review_action or "none"`
+        # separately, and `section_claude` excludes NULL from "reviewed". No
+        # consumer defaults NULL to KEEP.
+        #
+        # A `FAILED` token was considered and NOT taken. "Never attempted" and
+        # "attempted and failed" are the same fact for every MEASUREMENT here
+        # — neither is evidence about the review's quality — and they differ
+        # only in whether THE RUN completed, which is a run-level fact. So it
+        # is reported at the run level instead of encoded per pick, where it
+        # would have needed both report sites changed to avoid a new value
+        # being silently dropped from their fixed bucket lists.
+        failed: list = []
         for match_id, recs in by_match.items():
             try:
                 if await self._briefing_for(match_id, lineup_aware=False,
@@ -290,9 +331,19 @@ class MatchBriefingService:
                 # reflect it.
                 self._sync_recs_from_db(match_id, recs)
             except Exception as e:
+                failed.append(match_id)
                 logger.warning(f"Pick review failed for match {match_id}: {e}")
-        logger.info(
-            f"Claude reviewed {reviewed}/{len(by_match)} match(es); no briefings posted")
+        self._last_review_failures = list(failed)
+        if failed:
+            logger.warning(
+                f"Claude reviewed {reviewed}/{len(by_match)} match(es); "
+                f"{len(failed)} FAILED and carry review_action=NULL with no "
+                f"freeze marker: {failed}. This is a PARTIAL review — their "
+                f"picks stand as the model wrote them.")
+        else:
+            logger.info(
+                f"Claude reviewed {reviewed}/{len(by_match)} match(es), "
+                f"0 failed; no briefings posted")
         return reviewed
 
     def _sync_recs_from_db(self, match_id: int, recs: list) -> None:
@@ -336,16 +387,43 @@ class MatchBriefingService:
         return f"{kind}:{match_id}" in self._load_sent().get(today, [])
 
     def _mark_sent(self, kind: str, match_id: int) -> None:
+        """Record one marker. SAFE UNDER CONCURRENCY, three ways.
+
+        1. THE READ AND THE WRITE ARE ONE STEP. The state is re-loaded here,
+           immediately before the write, and the new key is MERGED into
+           whatever is on disk at that moment. The previous version loaded
+           once and rewrote the whole list, so a second writer's key was
+           dropped.
+        2. THE WRITE IS ATOMIC. A temp file in the same directory plus
+           `os.replace`, so a crash mid-write cannot leave torn JSON that
+           `_load_sent`'s bare `except` would silently read as "nothing sent
+           today" -- which would un-freeze every match on the next run.
+        3. IT IS IDEMPOTENT, as it was: marking the same key twice is a
+           no-op, so a retried unit cannot duplicate an entry.
+
+        The caller holds `self._sent_lock` for the in-process ordering; this
+        function is safe to call without it, just not free of lost updates
+        from a DIFFERENT process. Nothing else writes this file.
+        """
         today = date.today().isoformat()
-        state = self._load_sent()
         key = f"{kind}:{match_id}"
-        if key not in state[today]:
-            state[today].append(key)
         try:
             _SENT_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _SENT_PATH.write_text(json.dumps(state, indent=2))
+            # re-read HERE, so the merge is against the current file
+            state = self._load_sent()
+            if key in state[today]:
+                return
+            state[today].append(key)
+            tmp = _SENT_PATH.with_suffix(_SENT_PATH.suffix + ".tmp")
+            tmp.write_text(json.dumps(state, indent=2))
+            os.replace(tmp, _SENT_PATH)
         except Exception as e:
             logger.debug(f"Could not persist briefing-sent marker: {e}")
+
+    async def _mark_sent_locked(self, kind: str, match_id: int) -> None:
+        """`_mark_sent` under the lock, for use from concurrent tasks."""
+        async with self._sent_lock:
+            self._mark_sent(kind, match_id)
 
     # ---- internals -----------------------------------------------------------
 
@@ -590,11 +668,16 @@ class MatchBriefingService:
                 # freezing would block the pick from ever being created today
                 # (USA vs Paraguay, 2026-06-12).
                 if bound:
-                    self._mark_sent("final", match_id)
+                    # THE FREEZE MARKER IS WRITTEN ONLY WHEN THE DECISION
+                    # BOUND TO A REAL PICK, and only after it is persisted.
+                    # A unit that raised before this point leaves NO marker
+                    # and NO `review_action` -- partial is distinguishable
+                    # from complete.
+                    await self._mark_sent_locked("final", match_id)
             except Exception as e:
                 logger.warning(f"Could not apply briefing decision for {match_id}: {e}")
 
-        self._mark_sent(kind, match_id)
+        await self._mark_sent_locked(kind, match_id)
         if not post_to_telegram:
             logger.info(f"Pick reviewed (no briefing posted): {analysis.match_name}")
             return True
