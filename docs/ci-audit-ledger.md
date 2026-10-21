@@ -31661,3 +31661,208 @@ schema change, no model change, no cron moved.
 `tests/test_silent_surfaces_can_fire.py`, `tests/test_two_margins.py`,
 `tests/test_alarm_surface.py`, `tests/test_model_integrity_observable.py`,
 `tests/test_saturation_and_resolution.py`.*
+
+---
+
+## The review is parallel; the detector that reports dead detectors cries wolf — 2026-10-21
+
+### PREREQUISITE MET — shipped separately in `ac2ca74`, before any concurrency
+
+#### A1. The `_mark_sent` race
+
+**What it guards:** two kinds of key in `data/briefings_sent.json`.
+`review:<match_id>` makes a re-run skip a match already reviewed today;
+**`final:<match_id>` is the day freeze** that stops a later `--picks` run
+regenerating picks behind a ruling Claude already made.
+
+**What it wrote:** a read-modify-write of the whole file — load the day's key
+list, append in memory, rewrite all of it.
+
+**What two concurrent reviewers did to it:** both read `{today: [a]}`; one
+writes `[a, b]`, the other `[a, c]`. **The later write drops the earlier key.**
+
+**Idempotent?** Per key, yes (`if key not in`). That is the wrong axis — the
+file was unsafe under concurrency regardless.
+
+**Detectable after the fact? NO, and that is why it mattered.** Nothing
+compares the marker set to the database, so a missing key is
+indistinguishable from one never written. Both halves are now tests.
+
+**The fix, three ways:** the read and the write are **one step** (re-load
+immediately before writing and merge into what is on disk); the write is
+**atomic** (temp file + `os.replace`, because a torn file is read by
+`_load_sent`'s bare `except` as "nothing sent today", which would **unfreeze
+every match** on the next run — the unsafe direction, now its own test); and an
+`asyncio.Lock`, taken at both call sites.
+
+**The ordering, stated:** the decision is persisted **first**
+(`_apply_decision` commits), then the freeze marker, and only `if bound`. A
+crash between them leaves the **decision** in the database and no freeze — so
+the exposure is a duplicate review, never a lost decision. That is why the
+order is not reversed.
+
+#### A2. Partial failure, and the NULL/KEEP audit
+
+| consumer | treatment of NULL |
+|---|---|
+| `betting_agent.py:2804` | `review_action == "CHANGE"` — excluded |
+| report `_section_by_review_action` | `review_action or "none"` — own bucket |
+| report `section_claude` | `if p.review_action` — excluded from "reviewed" |
+
+**No consumer defaults NULL to KEEP** — the shape that has cost this project
+most often — and neither `review_action or "KEEP"` spelling appears anywhere.
+
+**A third state was considered and NOT taken.** "Never attempted" and
+"attempted and failed" are the same fact for every *measurement* here —
+neither is evidence about the review's quality — and they differ only in
+whether **the run** completed, which is a run-level fact. So it is reported at
+the run level rather than encoded per pick, where a new value would have needed
+both report sites changed to avoid being dropped from their fixed bucket lists.
+
+**What changed instead:** failures are tallied and **named**.
+`_last_review_failures` is retained and the log says *"N FAILED and carry
+review_action=NULL with no freeze marker: [ids]. This is a PARTIAL review —
+their picks stand as the model wrote them."*
+
+**KNOWN-WRONG CONTROL:** the middle unit of three forced to raise — the batch
+continues, 2 is reported, the failure is tallied as `[2]`, and the failed unit
+gets **no freeze marker**. Plus the control in the other direction: the pre-fix
+write pattern, reproduced, **must** lose a key, or the fix proves nothing.
+
+### REVIEW PARALLELISED
+
+`REVIEW_CONCURRENCY = 4`, with the reason recorded at the constant.
+
+**The bound is not the Anthropic rate limit** — 1,000 RPM at Start tier against
+a 65-per-**run** peak, roughly 15× under, with no documented concurrency
+ceiling. CI uses the Claude Code CLI on a Pro subscription, whose limit is a
+**shared usage pool**; parallelism does not spend *more* of it, it spends the
+same total **faster**.
+
+**On a day when the pool is low:** serially, the first unit to hit the limit
+sets `_claude_code_exhausted` and every later unit skips straight to the API,
+wasting one doomed spawn. With N in flight, up to **N−1** spawns are already
+running when the flag is set. So the cost of a low pool is bounded by this
+number — which is why it is 4 and not 65.
+
+**Exhaustion is distinguishable from a decline**, which matters more than the
+waste: exhaustion is a **non-zero** exit with `session limit`/`usage limit` in
+the output, setting the flag and routing to the API; a decline exits **zero**
+and returns no parseable decision, leaving the model's pick unchanged.
+Different codes, different log lines, different outcomes.
+
+#### The identity proof, and its discrimination control
+
+* **IDENTITY** — the same card under bound 1 and bound 4, same deterministic
+  reviewer: identical decision maps. Order-independence is asserted separately
+  by reversing completion order and comparing again.
+* **DISCRIMINATION CONTROL** — a different card gives a **different** decision
+  map, and the same card under a different reviewer also differs. Without
+  these, "identical" is indistinguishable from a comparison returning a
+  constant.
+* **the bound is driven**, not asserted: the peak in-flight count is measured
+  at `<= 4` **and `> 1`**, so a bound that silently serialised would fail.
+* **partial failure under concurrency**: two units raised inside `gather`; the
+  other eleven still got decisions, both failures were tallied, and neither
+  reached `_decisions`.
+
+**THE ONE HONEST QUALIFICATION.** `_claude_code_exhausted` is the only state
+shared across units. On the normal path it stays `False` for every unit and
+the two orderings are identical. On a day the pool runs out mid-batch,
+**which** units fall back to the API differs between serial and parallel — both
+produce valid decisions, neither is wrong, but they are not bit-identical.
+Recorded at the bound, and asserted to be recorded.
+
+#### Measured against the phase table
+
+```
+weekday n=72, bound 4                mean    sd   m+3sd    margin
+0 serial (as measured, time-to-picks) 31.6  18.4    86.8    +51.3  short 8.7
+A review at bound 4                   25.6  11.3    59.5    +78.7  CLEARS
+A at bound 4 + pacing already shipped 22.8  10.9    55.3    +82.8  CLEARS
+A idealised (the earlier floor model) 23.8  10.8    56.3    +81.9
+
+PICKS STEP  mean 9.27 -> 3.23   sd 11.71 -> 2.37   max 55.05 -> 13.76
+```
+
+The real bound-4 implementation lands at **+78.7** against the idealised
+**+81.9** — so the earlier estimate was optimistic by 3.2 minutes, and the
+change still clears 60 with **18.7 to spare**. The structural deficit goes
+from **−8.7 to +18.7**, so the structural acknowledgement becomes unnecessary
+once CI runs confirm it.
+
+**FINGERPRINT UNCHANGED at s5.18 / 51fbcb.** Rule 4 would have stopped this.
+
+#### Does the standing finding clear? NOT YET, AND THAT IS NOT A HEDGE
+
+`schedule margin +19m < 30m` is `deadline − (cron + observed lateness +
+FULL_CARD_PICKS_MAX)`, and `FULL_CARD_PICKS_MAX = 88.1` is an **independently
+measured n=4 constant from 2026-10-01**, pinned by its own test. The review
+change cannot move it until fresh full-card runs are measured after this ships.
+So the finding clears **when that constant is re-measured**, not today, and
+re-deriving it now would be a second change in the same stage.
+
+### THE TWO DEAD ALARMS, AND THE QUIET-STATE RULE
+
+Both `model_integrity_failures` and `model_unsigned_loads` now fire, each with
+a positive control **and** a control in the other direction
+(`tests/test_silent_surfaces_can_fire.py`).
+
+**Then the general check, because the defect was in the plumbing and not in
+either alarm.** A matching line was synthesised for **every** pattern in
+`PATTERNS` and pushed through `extract()`:
+
+```
+PATTERNS total            35
+  produce a usable value  32
+  MATCH BUT CANNOT COUNT   1
+  no line synthesisable    2   (this script's limit; both hand-verified fine)
+```
+
+So **is each surface's health observable while it is quiet?** After the
+previous stage, all eleven have a positive control that runs on every CI run,
+so each detector can be shown capable of firing **without waiting for its
+condition**. The pattern layer beneath them is now 32 of 35 clean, with the
+other 2 hand-checked on real log lines (`no fixtures found for …` → 1,
+`API-Football fixtures …: 0 created, 33 updated` → 33).
+
+#### THE NEXT INSTANCE OF THIS CLASS — LISTED, NOT FIXED
+
+1. **`src_flashscore_matched` fires the `NOT COUNTED` diagnostic on an
+   ordinary line.** `Flashscore: 12 fixtures updated` yields a value of 1
+   **and** prints *"pattern matched but produced no number … NOT COUNTED"* —
+   because the key is served by the per-source branch while the generic
+   fallback also runs. So that message appears on **every daily-picks run that
+   scrapes Flashscore**, and *that is the mechanism by which the real
+   model-integrity instance of the same message went unread for ten days.* A
+   diagnostic that cries wolf is the mirror of one that cannot fire. One-line
+   fix (the count-style list, or a capture group); **not done here.**
+2. **The fallback diagnostic is still condition-gated.** It prints only when a
+   pattern matches, so a newly added pattern with no numeric group stays
+   undetectable until its condition occurs — the exact property that let the
+   model-integrity alarms sit dead. The remedy is a **self-test over all
+   patterns at startup or in the suite**, which is what the script above is;
+   **not wired here.**
+3. **Two patterns my synthesiser could not build a line for** —
+   `no_fixtures_at_all` and `src_apifootball_matched`. Both hand-verified, but
+   the automated check has a hole and the hole is stated rather than counted as
+   a pass.
+
+> A diagnostic that only prints when the condition fires cannot report that the
+> detector is incapable of firing — and one that prints when nothing is wrong
+> guarantees nobody reads it when something is.
+
+### DISCIPLINE
+
+Gating selection **2,290 passed, 7 deselected**; non-gating 6 passed, 1
+skipped. Invariants pass, count not cited. Fingerprint **UNCHANGED at
+s5.18 / 51fbcb**. No production write, no schema change, no model change.
+
+One of my own new tests carried a vacuous `assert X in src or True`, and one
+batch of them was refused by the gating-test guard I built two stages ago for
+comparing `date.today()` against a fixed literal — I took the clock out of the
+comparisons rather than exempt them.
+
+*Recorded 2026-10-21. `src/reporting/match_briefing.py`,
+`tests/test_review_prerequisite.py`,
+`tests/test_review_parallel_identity.py`.*

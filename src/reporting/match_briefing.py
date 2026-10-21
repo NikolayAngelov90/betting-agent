@@ -84,6 +84,48 @@ def _sanitize_telegram_html(text: str) -> str:
 # across CI runs via actions/cache (see prematch-briefings.yml).
 _SENT_PATH = Path("data/briefings_sent.json")
 
+#: ── HOW MANY REVIEWS RUN AT ONCE. 2026-10-21. ─────────────────────────────
+#:
+#: The review was `for match_id: await self._briefing_for(...)` at ~9 s per
+#: fixture, 2.0 min on a 13-fixture card and 9.5 on a 65-fixture one. That
+#: scaling IS the duration spread, and the deadline binds on `mean+3sd`:
+#: measured 2026-10-21 over n=72 runs, collapsing the picks step cuts the
+#: time-to-picks sd from 18.4 to 10.8 and buys +30.5 minutes of margin, four
+#: times what its mean reduction alone would give.
+#:
+#: THE BOUND IS NOT THE ANTHROPIC RATE LIMIT. That is 1,000 RPM at Start tier
+#: against a 65-per-RUN peak — roughly 15x under, and the docs give no
+#: concurrency ceiling separate from RPM. What CI actually uses is the Claude
+#: Code CLI on a Pro subscription, whose limit is a SHARED USAGE POOL (a
+#: five-hour window and a weekly one, shared with all other Claude usage on
+#: the account). Parallelism does not spend MORE of that pool — the same
+#: number of reviews happen — it spends the same total FASTER.
+#:
+#: WHAT THAT MEANS ON A DAY WHEN THE POOL IS LOW. Serially, the first unit to
+#: hit the limit sets `_claude_code_exhausted` and every later unit skips
+#: straight to the API fallback, wasting one doomed spawn. With N in flight,
+#: up to N-1 spawns are already running when the flag is set and each wastes
+#: one too. So the cost of a low pool is bounded by this number, which is why
+#: it is 4 and not 65.
+#:
+#: AND EXHAUSTION IS DISTINGUISHABLE FROM A DECLINE, which matters more than
+#: the waste: exhaustion is a NON-ZERO exit with "session limit"/"usage limit"
+#: in the output, which sets the flag and routes to the API; a review that
+#: declined exits ZERO and simply returns no parseable decision, which leaves
+#: the model's pick unchanged. Different codes, different log lines, different
+#: outcomes.
+#:
+#: 4 collapses the 65-fixture worst case from ~9.5 min to ~2.6 while keeping
+#: at most four subprocesses on a 2-vCPU runner, where each unit is dominated
+#: by waiting on web search rather than by local CPU.
+#:
+#: THE ONE PIECE OF SHARED STATE IS `_claude_code_exhausted`. On the normal
+#: path it stays False for every unit and serial and parallel are identical.
+#: On a day the pool runs out mid-batch, WHICH units fall back to the API
+#: differs between the two -- both produce valid decisions, neither is wrong,
+#: but they are not bit-identical, and that is recorded rather than hidden.
+REVIEW_CONCURRENCY = 4
+
 
 def _update_final_observation(session, pick_id: int, *, market: str,
                               selection: str, taken_odds: float) -> None:
@@ -321,18 +363,31 @@ class MatchBriefingService:
         # would have needed both report sites changed to avoid a new value
         # being silently dropped from their fixed bucket lists.
         failed: list = []
-        for match_id, recs in by_match.items():
-            try:
-                if await self._briefing_for(match_id, lineup_aware=False,
-                                            post_to_telegram=False):
-                    reviewed += 1
-                # Sync even when the match was already reviewed today (returns
-                # False) — the DB holds the final pick and the fresh rec must
-                # reflect it.
-                self._sync_recs_from_db(match_id, recs)
-            except Exception as e:
+
+        async def _one(match_id, recs):
+            """One unit. NEVER raises: a concurrent batch must not lose the
+            other units to one failure, and the caller needs the outcome of
+            every unit, not the first exception."""
+            async with sem:
+                try:
+                    ok = await self._briefing_for(match_id, lineup_aware=False,
+                                                  post_to_telegram=False)
+                    # Sync even when the match was already reviewed today
+                    # (returns False) — the DB holds the final pick and the
+                    # fresh rec must reflect it.
+                    self._sync_recs_from_db(match_id, recs)
+                    return (match_id, bool(ok), None)
+                except Exception as e:                      # noqa: BLE001
+                    return (match_id, False, e)
+
+        sem = asyncio.Semaphore(REVIEW_CONCURRENCY)
+        for match_id, ok, err in await asyncio.gather(
+                *(_one(m, r) for m, r in by_match.items())):
+            if err is not None:
                 failed.append(match_id)
-                logger.warning(f"Pick review failed for match {match_id}: {e}")
+                logger.warning(f"Pick review failed for match {match_id}: {err}")
+            elif ok:
+                reviewed += 1
         self._last_review_failures = list(failed)
         if failed:
             logger.warning(
