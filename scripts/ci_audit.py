@@ -1126,7 +1126,62 @@ MARGIN_RUN_DURATIONS = [72.3, 53.3, 29.0, 41.8, 47.5, 37.0, 40.8,
 #:
 #:   weekday  n=78  max 100.8  mean 42.5  sd 19.5  mean+3sd 100.9
 #:   weekend  n=34  max 129.2  mean 54.8  sd 31.3  mean+3sd 148.8
+#: ── IT WAS MEASURING THE WRONG QUANTITY. CORRECTED 2026-10-21. ───────────
+#:
+#: The series below was `run start -> run END`, and the margin asks a
+#: different question: will the CARD BE SAVED AND SENT before the earliest
+#: kickoff? Everything after the picks step is YESTERDAY's business --
+#: `Save briefings-sent guard`, the Flashscore results scrape, `Settle late
+#: results`, the alerts and the cache saves -- and none of it can affect
+#: whether today's card beats today's kickoff. Verified against the workflow's
+#: own step order, not assumed.
+#:
+#: THE POST-PICKS TAIL IS NOT SMALL: `measured` 2026-10-21 over n=111
+#: scheduled runs, mean 12.8 min, sd 8.7, min 1.7, max 49.6.
+#:
+#:   weekday (n=79)     mean    sd     max   mean+3sd    binding margin
+#:   full run           43.0  19.1   100.8     100.2       +38.0
+#:   TIME-TO-PICKS      29.7  18.6    76.7      85.6       +52.6
+#:                                            -> +14.6 recovered, of which
+#:                                               LEVEL +13.3, SPREAD +1.3
+#:
+#: FOURTEEN OF THE NINETEEN-POINT-EIGHT MINUTES WERE AN INSTRUMENTATION
+#: ERROR, NOT A DURATION PROBLEM. No step got faster; the margin stopped
+#: charging the card for work done after it was delivered. The registered
+#: 60-minute minimum is untouched, and so is the deadline.
+#:
+#: THE OLD SERIES IS KEPT BELOW AT `MARGIN_RUN_DURATIONS_FULL_BY_DAYTYPE`.
+#: A correction that deletes what it corrected cannot be checked, and the
+#: full-run figure is still the right one for any question about runner cost.
+#:
+#: `measured` 2026-10-21 from every scheduled `daily-picks` run GitHub still
+#: lists (--limit 120), as
+#:     (completion of "Generate, review, and send picks") - (run start),
+#: split by the day of week the run STARTED on, pooled across cron regimes for
+#: the same reason as before: a run's duration does not depend on when it was
+#: triggered, and pooling is better powered and more conservative.
 MARGIN_RUN_DURATIONS_BY_DAYTYPE = {
+    "weekday": [
+        4.1, 4.4, 5.1, 5.1, 5.3, 5.6, 6.1, 6.7, 7.0, 8.0, 8.1, 9.6, 9.9,
+        10.3, 10.6, 11.0, 11.3, 11.6, 12.4, 12.6, 13.5, 18.5, 18.5, 18.8,
+        19.4, 19.7, 19.9, 20.2, 20.5, 20.6, 20.9, 22.6, 24.0, 24.3, 24.7,
+        24.8, 25.6, 25.9, 26.2, 26.6, 27.9, 27.9, 28.5, 28.9, 29.4, 29.6,
+        31.4, 31.7, 32.8, 34.1, 34.2, 34.5, 36.7, 36.9, 37.3, 37.5, 38.8,
+        39.9, 40.6, 41.1, 41.4, 41.9, 42.4, 42.6, 44.9, 45.8, 46.1, 48.7,
+        54.0, 58.4, 59.8, 60.8, 61.5, 61.8, 64.7, 67.4, 71.4, 75.8, 76.7,
+    ],
+    "weekend": [
+        4.5, 5.2, 5.9, 7.0, 7.3, 8.3, 9.5, 10.1, 24.8, 27.8, 28.5, 31.0,
+        31.8, 33.8, 34.1, 36.2, 39.2, 41.2, 49.1, 58.0, 59.6, 64.1, 66.1,
+        68.3, 70.3, 79.5, 81.6, 81.8, 83.0, 88.1, 90.4, 114.8,
+    ],
+}
+
+#: THE SUPERSEDED SERIES, run start to run END, retained so the correction
+#: above can be checked rather than taken on trust. `measured` 2026-10-19.
+#: Use it for runner-cost questions; it is the WRONG quantity for the margin.
+MARGIN_RUN_DURATIONS_FULL_BY_DAYTYPE = {
+
     "weekday": [
         9.4, 9.8, 13.6, 13.9, 14.9, 15.5, 15.6, 17.3, 18.6, 19.9, 21.9, 22.4,
         24.7, 25.4, 26.1, 27.3, 27.7, 27.8, 28.1, 29.0, 30.2, 30.3, 30.9, 31.1,

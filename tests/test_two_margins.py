@@ -144,3 +144,74 @@ def test_the_EXPOSURE_term_is_still_printed_at_ZERO():
     assert sd.EFFECTIVE_MIN_MARGIN == {"weekday": 60, "weekend": 60}
     assert sd.REFERENCE_RESIDUAL["p99"] != sd.COVERAGE_EXPOSURE["weekday"]["p99"], (
         "the two residuals have been conflated; they measure different things")
+
+
+# ══════════ THE DURATION TERM MEASURES TIME-TO-PICKS ══════════════════════
+#
+#     2026-10-21. Rule 7: a figure measures what it claims to.
+
+import pathlib
+import statistics
+
+import scripts.ci_audit as _ci
+
+
+def test_the_duration_term_is_TIME_TO_PICKS_not_the_FULL_RUN():
+    """The margin asks whether the CARD is saved before the earliest kickoff.
+
+    Everything after the picks step is yesterday's business -- the Flashscore
+    results scrape, the late settle, the alerts, the cache saves -- and none
+    of it can affect whether today's card beats today's kickoff. The term used
+    to charge the card for all of it.
+    """
+    ttp = _ci.MARGIN_RUN_DURATIONS_BY_DAYTYPE
+    full = _ci.MARGIN_RUN_DURATIONS_FULL_BY_DAYTYPE
+    for dtype in ("weekday", "weekend"):
+        a, b = ttp[dtype], full[dtype]
+        m3 = lambda v: statistics.mean(v) + 3 * statistics.pstdev(v)
+        assert m3(a) < m3(b), (
+            f"{dtype}: the margin's series is no longer tighter than the "
+            f"full-run series, so it is measuring the full run again")
+        assert max(a) < max(b), f"{dtype}: the maxima no longer differ"
+    # the weekday correction, pinned with its figures
+    assert abs(m3_ := (statistics.mean(ttp["weekday"])
+                       + 3 * statistics.pstdev(ttp["weekday"]))) > 0
+    assert 84.0 < m3_ < 87.0, (
+        f"the weekday time-to-picks bound moved to {m3_:.1f}; re-measure and "
+        f"re-state the structural acknowledgement's figure with it")
+
+
+def test_the_SUPERSEDED_series_is_RETAINED():
+    """A correction that deletes what it corrected cannot be checked."""
+    full = _ci.MARGIN_RUN_DURATIONS_FULL_BY_DAYTYPE
+    assert len(full["weekday"]) >= 70 and len(full["weekend"]) >= 30
+    src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
+    assert "WRONG quantity for the margin" in src, (
+        "the retained series does not say it is the wrong one for this use, "
+        "so the next reader may take it for the current figure")
+
+
+def test_the_ACKNOWLEDGEMENT_carries_the_RE_MEASURED_figure():
+    """A figure in an acknowledgement is the one thing a reader trusts
+    without checking, so it must not be allowed to drift."""
+    ack = sd.STRUCTURAL_ACK
+    assert ack["binding"] == pytest.approx(-7.0), (
+        f"the acknowledgement still claims {ack['binding']}; it was -19.8 "
+        f"against a duration term that measured the wrong quantity")
+    assert "INSTRUMENTATION ERROR" in ack["why"], (
+        "the acknowledgement does not record that most of the original "
+        "shortfall was a measurement error rather than slow code")
+    # and the action must name the SPREAD, because that is what decides order
+    assert "SPREAD" in ack["action"] and "mean+3sd" in ack["action"], (
+        "the action does not say that the spread is what the bound is made "
+        "of, so the next person will optimise the mean first")
+
+
+def test_VARIANCE_BEFORE_MEAN_is_recorded_with_its_arithmetic():
+    """Rule 4. The ordering claim is a measurement, not a preference:
+    parallelising the review cuts the sd 18.4 -> 10.8 and buys +30.5 min,
+    against +3.5 for the retrain move whose mean reduction is comparable."""
+    act = sd.STRUCTURAL_ACK["action"]
+    for fig in ("+30.5", "18.4", "10.8", "+3.5", "+4.0"):
+        assert fig in act, f"{fig} is not recorded in the clearing action"
+    assert "n=72" in act, "the model's sample size is not stated"

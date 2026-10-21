@@ -946,16 +946,26 @@ REFERENCE_RESIDUAL = {
 #: stays its own term at zero rather than being folded in.
 STRUCTURAL_ACK = {
     "since": "2026-10-21",
-    "binding": -19.8,
+    # RE-MEASURED the same day. It read -19.8 against a duration term that
+    # charged the card for work done AFTER it was delivered; the term now
+    # measures time-to-picks and the shortfall is -7.0. A figure in an
+    # acknowledgement is the one thing a reader trusts without checking, so
+    # it is re-stated rather than left to drift -- the stale-literal defect.
+    "binding": -7.0,
     "why": ("the structural margin is the DURATION problem, not a deadline "
             "choice: the floor IS the observed earliest kickoff, so no "
-            "anchoring clears it. Sized 2026-10-21 at 16.7 minutes remaining "
-            "after the 3.1 recovered by the request-pacing change"),
-    "action": ("close the remaining ~16.7 min of time-to-picks (parallelise "
-               "the Claude review behind an atomic marker, batch the AF "
-               "per-fixture commits, or cap per-run work to cut the variance "
-               "- the last needs a cohort bump), or dispatch manually that "
-               "morning"),
+            "anchoring clears it. 14.6 of the original 19.8 minutes were an "
+            "INSTRUMENTATION ERROR (the term measured run start to run END, "
+            "including the post-picks results scrape: mean 12.8m, max 49.6m, "
+            "n=111) and are gone without any step getting faster. 7.0 "
+            "remain, and they are real"),
+    "action": ("~7.0 min of time-to-picks remain. MEASURED 2026-10-21 over "
+               "n=72 runs: parallelising the Claude review behind an atomic "
+               "marker buys +30.5m by itself (it cuts the SPREAD, sd 18.4 -> "
+               "10.8, and the bound is mean+3sd); moving the ML retrain off "
+               "the picks path buys +3.5m; the shipped request-pacing change "
+               "buys +4.0m once it reaches the series. Retrain + pacing alone "
+               "leaves 1.3m. Or dispatch manually that morning"),
     "review": "2026-11-21",
 }
 

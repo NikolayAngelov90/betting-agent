@@ -31215,3 +31215,223 @@ change, no cron moved.
 `tests/test_calendar_marker_enforced.py`, `tests/test_two_margins.py`,
 `tests/test_cron_split_by_daytype.py`, and the four re-pointed pins.
 `tests/test_no_live_state_in_the_capture_gate.py` DELETED.*
+
+---
+
+## One meaning per run; 14.6 of the 16.7 minutes were never real — 2026-10-21
+
+### PART A — ONE MEANING PER RUN
+
+`daily-picks` concluded `failure` while **all five critical steps succeeded**,
+because a self-expiring guard reached its date. One conclusion carried two
+independent facts — *did capture work* and *is a reminder due* — and a human
+reading red cannot separate them. That inability is what cost six cards on
+2026-10-13..18, where a red run was triaged as a pipeline failure after
+capture had in fact succeeded. The reverse is worse: a red that means "a
+decision is due" trains people to ignore red.
+
+Stage 28 moved those tests out of the **gating path**, which stopped them
+losing cards. It did not stop them **reddening the run**: the critical-step
+alert read `steps.calendar.outcome` and `sys.exit(1)` on it. This moves them
+out of the conclusion.
+
+**`.github/workflows/reminders.yml`**, with the properties the directive
+required:
+
+* **`workflow_run` on daily-picks `completed`** — by dependency, never by a
+  clock. A nominal gap cannot order two jobs that are both late, and that has
+  been paid for twice: H1 ran through the 10-13…10-17 outage reporting
+  `RUNNING_AND_FINE`, and `closing-lines` captures nothing when picks are
+  late. The `0 13` cron exists only as a **declared** backstop.
+* **`types: [completed]`, not `[success]`** — a reminder is due on its own date
+  whatever the pipeline did, and the day the pipeline breaks is the day a
+  pending decision is most likely to matter.
+* it **prints** the upstream conclusion and reports `UNEVALUATED` on a
+  non-`workflow_run` trigger, because the fixture-horizon probe's whole
+  lifetime was lost to a dependency that looked fine.
+* **registered in the audit's `WORKFLOWS` in the same commit that created it.**
+  `ci-audit.yml` was created 2026-09-25 and registered a month later; eight of
+  its red runs survived unrecorded in that gap.
+
+**AND THE CREDENTIALS ARE GIVEN DELIBERATELY.** The 2026-10-21 reminder
+reported *"the weekday series shrank to n=0"* from a step with no GH token — a
+finding about football from the absence of a credential. The test now reports
+`UNEVALUATED` (rule 3), **but a reminder that can only ever say `UNEVALUATED`
+is not a reminder**, so `GH_TOKEN`, `FOOTBALL_DATA_ORG_KEY` and `DATABASE_URL`
+are supplied rather than left out and worked around. Both halves are asserted:
+the credential is present **and** the test still refuses to invent a verdict
+without it. Either alone is a defect.
+
+**Two messages that must not look alike.** They arrive in the same chat, so
+the reminder names its workflow, says `A DECISION IS DUE`, says `NOT A PIPELINE
+FAILURE`, and names where capture lives. Tests assert neither message has
+acquired the other's language.
+
+**KNOWN-WRONG CONTROL**, drawn from the morning: the failing reminder, planted
+and run under **both** selections. The capture gate **deselects** it
+(`daily-picks` green, nothing failed); the reminder selection **collects** it
+(that workflow can go red). Asserted by running pytest, because the claim is
+about which selection picks it up — a fact about pytest, not the YAML.
+
+**CONSOLIDATION, because I nearly committed the rule-1 violation I had just
+been told to avoid.** These assertions first went into a new
+`tests/test_one_meaning_per_run.py` while `tests/test_calendar_separation.py`
+already owned the "where do calendar assertions live" contract. The new file
+is **deleted** and its unique assertions folded into the incumbent.
+
+**ELEVEN PINS, re-pointed rather than loosened.** Six move from step level to
+workflow level, which is **strictly stronger**: a separate workflow can neither
+gate capture nor redden it, whereas `continue-on-error` only prevented the
+first. The positive control **inverted** with the move — it asserted that a
+calendar failure with capture green produced an alert and exit 1; now that same
+state must produce **nothing** and exit 0, which is the content of the split,
+and the reminder's own alert is asserted in its own test.
+`test_BOTH_failing_reports_BOTH` lost its premise ("both failing" was a state
+of one run) and became "a capture failure is reported on its own terms". The
+alert harness now **refuses** a calendar outcome, so no test can exercise a
+variable the shipped script no longer reads.
+
+**Two of the eleven were real defects in my new workflow, not stale pins:**
+`test_config_identity` requires the config copy to precede the test run and
+locates that run by the **first** occurrence of the runner's name — which
+appeared in my pip line *and* in a comment of mine; fixed by reordering the
+workflow and rewording the comment, not by weakening the guard. And
+`test_every_workflow_on_disk_is_AUDITED_or_EXCLUDED` caught `reminders.yml`
+outside the audit's scope.
+
+**The comment-blind text scan again, twice, in my own new tests.** One asserted
+`"steps.calendar" not in src` and failed on its own comment explaining the
+reference had been removed; a `_code_of()` helper now strips comment lines.
+Sixth and seventh instances in this project — the first inside tests written to
+be careful about it.
+
+### PART B — DURATION: 14.6 OF THE 16.7 MINUTES WERE AN INSTRUMENTATION ERROR
+
+#### The candidates restated, after the corrections
+
+| candidate | measured | class |
+|---|---|---|
+| AF upsert loop | **~4 seconds**, not 10 minutes — 0 created / 46 updated, and the league filter is the loop's first statement | nothing to take |
+| injury **requests** | provider-bound at 10/min; `cap=2` recorded as causing 429s on every run | **BY NECESSITY** |
+| injury **pacing** | the unconditional `sleep(6)` → a deadline. **3.1 min, shipped** | timing-only |
+
+#### And then the term itself was wrong
+
+The margin asks whether **the card is saved and sent** before the earliest
+kickoff. Its duration term measured **run start to run END**. Everything after
+the picks step is yesterday's business — `Save briefings-sent guard`, the
+Flashscore results scrape, `Settle late results`, the alerts, the cache saves —
+verified against the workflow's own step order.
+
+```
+POST-PICKS TAIL  measured 2026-10-21, n=111 scheduled runs
+                 mean 12.8 min, sd 8.7, min 1.7, max 49.6
+
+weekday n=79        mean    sd     max   mean+3sd   binding margin
+full run            43.0  19.1   100.8     100.2      +38.0
+TIME-TO-PICKS       29.7  18.6    76.7      85.6      +52.6
+                                         -> +14.6 recovered
+                                            LEVEL +13.3, SPREAD +1.3
+```
+
+**No step got faster.** The margin stopped charging the card for work done
+after it was delivered. The registered 60 is untouched and so is the deadline.
+The superseded series is **retained** as
+`MARGIN_RUN_DURATIONS_FULL_BY_DAYTYPE`, labelled the wrong quantity for this
+use — a correction that deletes what it corrected cannot be checked.
+
+**The structural margin is now +53m, short 7.0**, and the acknowledgement's
+figure was re-stated from −19.8 to −7.0 rather than left to drift.
+
+#### VARIANCE BEFORE MEAN, demonstrated rather than asserted
+
+Per-step decomposition of time-to-picks, `measured` 2026-10-21, weekday n=79:
+
+```
+deps     mean  0.90  sd 0.10
+tests    mean  1.52  sd 0.64
+update   mean 13.81  sd 9.37   max 41.72
+retrain  mean  2.16  sd 2.42   max  7.53   ran >1min on 37 of 79
+picks    mean  8.64  sd 11.37  max 55.05   <- LARGEST SPREAD CONTRIBUTOR
+```
+
+Each candidate applied to the real per-run series, n=72 (the runs present in
+both datasets):
+
+| candidate | mean | sd | mean+3sd | margin | |
+|---|---|---|---|---|---|
+| baseline (time-to-picks) | 31.6 | 18.4 | 86.8 | **+51.3** | short 8.7 |
+| **A** parallelise the Claude review | 23.8 | **10.8** | 56.3 | **+81.9** | **CLEARS** (+30.5) |
+| **B** ML retrain off the picks path | 29.7 | 17.9 | 83.4 | +54.8 | short 5.2 (+3.5) |
+| **C** request pacing (shipped, not yet in the series) | 28.8 | 18.0 | 82.8 | +55.3 | short 4.7 (+4.0) |
+| A+B | 21.9 | 10.1 | 52.3 | +85.8 | CLEARS |
+| **B+C** | 26.9 | 17.5 | 79.4 | **+58.7** | **short 1.3** (+7.4) |
+| A+B+C | 19.1 | 9.7 | 48.2 | +90.0 | CLEARS |
+
+**Rule 4 is proven here, not assumed.** A reduces the mean by 7.8 minutes and
+buys **+30.5** — four times as much — because it cuts the **spread** (sd
+18.4 → 10.8) and the bound is `mean+3sd`. B and C reduce mostly level and buy
+roughly their own size. **So the order is A, then B, then C** — and A is the
+one that scales with card size, which is where the spread comes from.
+
+#### THE ANTHROPIC CONCURRENCY LIMIT — NO LONGER `UNEVALUATED`
+
+It is **not a concurrency limit at all**, on either backend:
+
+* **API backend**: rate limits are RPM/ITPM/OTPM, enforced with a token bucket.
+  **1,000 RPM at Start tier** for current models. Our peak is **65 reviews in a
+  run**, about 1/min sustained — roughly **15× under** the limit. The docs give
+  no concurrency ceiling separate from RPM.
+* **CLI backend, which is what CI uses** (`CLAUDE_CODE_OAUTH_TOKEN` is a repo
+  secret and `briefings.backend` defaults to `claude_code`): a **shared usage
+  pool** — a five-hour session limit and a weekly limit, shared with all other
+  Claude usage on the account. Parallel work "consumes rate limits
+  proportionately", i.e. **the same total, faster**. No documented ceiling on
+  simultaneous `-p` sessions.
+
+**So the provider is not the gate.** What remains is (i) the `_mark_sent`
+marker race, a correctness prerequisite, (ii) the 2-vCPU runner — and a review
+is ~9 s of mostly waiting on web search, so it is I/O-bound rather than
+CPU-bound, and (iii) partial-failure semantics. `assumed`, not measured: the
+CPU claim rests on the 9 s figure, and the only way to measure contention is to
+run N concurrent subprocesses in CI.
+
+#### PARTIAL RESULTS, for when A is taken
+
+Rule 6. Parallelising the review must distinguish a partial result from a
+complete one, and today's loop cannot: it catches per-match exceptions and
+logs them, then the summary says `Claude reviewed N/M`. With N units in flight
+the required behaviour is that **a failed unit leaves its pick at the model's
+original selection with `review_action` NULL** — which is distinguishable from
+`KEEP` — rather than silently inheriting a neighbour's decision, and that the
+day-freeze marker is written **only** for units that completed. The marker
+file's unlocked read-modify-write is exactly what makes that unsafe today, so
+the prerequisite and the failure semantics are the same piece of work.
+
+#### IS 7.0 REACHABLE WITHOUT A BUMP? YES — AND THE ARITHMETIC
+
+**B + C = +7.4, leaving 1.3 short; A alone = +30.5, which clears outright.**
+None of A, B or C needs a cohort bump: A is decision-identical once the marker
+is atomic, B is decision-identical **provided the retrain is ordered before
+picks** (a `workflow_run` dependency, not a clock — otherwise picks run on
+yesterday's model, which *is* value-affecting), and C is shipped. **The
+variance cap, which would need a bump, is not required.**
+
+**Taken this stage: the instrumentation correction only** — one change,
+measured, and it alters no behaviour at all. A and B are named with their
+costs and their prerequisites rather than bundled in behind an incident.
+
+### DISCIPLINE
+
+Gating selection **2,240 passed, 7 deselected**; non-gating 6 passed, 1
+skipped. Invariants pass, count not cited. Fingerprint **UNCHANGED at
+s5.18 / 51fbcb** — correcting what a term measures changed no prediction and no
+selection, which is what rule 5 requires of anything claimed timing-only. No
+production write, no schema change, no model change; one cron added as a
+declared backstop.
+
+*Recorded 2026-10-21. `.github/workflows/reminders.yml`,
+`.github/workflows/daily-picks.yml`, `scripts/ci_audit.py`,
+`scripts/schedule_deadline.py`, `tests/test_calendar_separation.py`,
+`tests/test_two_margins.py`, `docs/workflow-inventory.md`, and the pins.
+`tests/test_one_meaning_per_run.py` created and deleted in the same stage.*
