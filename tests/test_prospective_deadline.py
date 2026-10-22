@@ -33,7 +33,6 @@ from scripts.schedule_deadline import (
     CLEARING_ACTION,
     DEADLINE_PERCENTILES,
     MIN_ACCEPTABLE_MARGIN_MIN,
-    OBSERVED_EARLIEST_MIN,
     day_type,
     format_prospective,
     projected_ready,
@@ -135,10 +134,26 @@ def test_the_check_is_SILENT_on_an_ordinary_weekday():
 def test_an_ordinary_WEEKEND_is_silent_too():
     """The weekend cron has three hours of slack, so even its observed minimum
     clears. That is why the weekend percentile costs nothing."""
-    m = prospective_margin(OBSERVED_EARLIEST_MIN["weekend"], WEEKEND_CRON,
-                           DELAYS, DURATIONS, serves=dt.date(2026, 10, 11))
+    # ── THE ANCHOR IS ASKED FOR THE DAY THIS SERVES. 2026-10-22. ────────
+    #
+    # It read `OBSERVED_EARLIEST_MIN["weekend"]`, which resolves for TOMORROW,
+    # while `serves=` named 2026-10-11 -- two different days, and after the
+    # localisation two different UTC minutes whenever they straddle a
+    # transition. The anchor is now asked for the day under test.
+    serves = dt.date(2026, 10, 11)
+    from scripts.schedule_deadline import observed_earliest_min
+    m = prospective_margin(observed_earliest_min("weekend", serves),
+                           WEEKEND_CRON, DELAYS, DURATIONS, serves=serves)
     assert m["verdict"] == "CLEAR", m
-    assert m["binding"] > 150, m
+    # 182 -> 137 ON 2026-10-22, and it is a CORRECTION, not a regression. The
+    # weekend anchor localised from 09:45 UTC (a summer-subset minimum) to
+    # 12:00 local, which in summer is 09:00 UTC -- 45 minutes EARLIER. The
+    # margin is asserted against the REGISTERED minimum rather than against
+    # the old reading, because the old reading was the thing that was wrong.
+    assert m["binding"] > MIN_ACCEPTABLE_MARGIN_MIN, m
+    assert m["binding"] == pytest.approx(137.3, abs=1.0), (
+        f"the weekend binding moved from the measured 137.3; re-derive "
+        f"(got {m['binding']:.1f})")
 
 
 # ═════════════════ UNKNOWN is a third state, not a safe one ═════════════════
@@ -217,10 +232,16 @@ def test_the_constants_are_labelled_PERCENTILES_with_which_one():
     for dtp, (minutes, pct, prov) in DEADLINE_PERCENTILES.items():
         assert pct.startswith("~"), (dtp, pct)
         assert "measured" in prov and "2026-10-10" in prov, (dtp, prov)
-        assert minutes > OBSERVED_EARLIEST_MIN[dtp], (
-            f"the {dtp} constant {minutes} is not later than the observed "
-            f"minimum {OBSERVED_EARLIEST_MIN[dtp]} - then it is a bound after "
-            f"all and this label is wrong")
+        # BOTH SIDES. The anchor is LOCAL since 2026-10-22, so the retired
+        # percentile must be later than its conversion in EITHER season --
+        # the binding comparison is against the WINTER one, which is later.
+        from scripts.schedule_deadline import observed_earliest_min
+        for _day in (dt.date(2026, 10, 24), dt.date(2026, 10, 26)):
+            _obs = observed_earliest_min(dtp, _day)
+            assert minutes > _obs, (
+                f"on {_day} the {dtp} constant {minutes} is not later than "
+                f"the observed minimum {_obs} - then it is a bound after all "
+                f"and this label is wrong")
     # The weekday fallback must be the figure the cron was SIZED against, never
     # the laxer 14:30 - a fallback that loosens what justified the schedule is
     # worse than no fallback.

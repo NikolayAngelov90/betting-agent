@@ -82,11 +82,65 @@ DEADLINE_PERCENTILES = {
 #: onward: a minimum is a function of its window, and a longer window can only
 #: lower it. The earlier values are kept beside each one so the movement is
 #: visible rather than silent.
-OBSERVED_EARLIEST_MIN = {
-    "weekday": 9 * 60 + 30,     # 2023-10-26 Thu, bulgaria/efbet-league
-                                # (was 09:59, 2026-06-18, over 148 days)
-    "weekend": 9 * 60 + 45,     # 2024-10-19 Sat, bulgaria/efbet-league
-                                # (was 10:00, over 2026-02-01..2026-10-10)
+#: ── THE ANCHOR IS A LOCAL TIME. LOCALISED 2026-10-22. ────────────────────
+#:
+#: A kickoff is scheduled by a human in a local clock, so its UTC minute moves
+#: twice a year and a UTC anchor measured in one season is wrong in the other.
+#: `measured` 2026-10-22 as the minimum **LOCAL** kickoff over the whole
+#: record, Europe/Sofia, the 30 configured leagues, phantoms excluded:
+#:
+#:   weekday  12:30 local  n=718 days   set 2023-10-26 Thu, bulgaria/efbet-league
+#:   weekend  12:00 local  n=375 days   set 2024-11-02 Sat, bulgaria/efbet-league
+#:
+#: THE WEEKDAY ANCHOR IS THE SAME EVENT AS BEFORE; THE WEEKEND ANCHOR IS NOT.
+#: The retired weekend constant (09:45 UTC, 2024-10-19) was the minimum of the
+#: SUMMER subset only. The true local minimum is 12:00, and it comes from a
+#: WINTER day -- four of the five earliest local kickoffs are winter dates. So
+#: localising the weekend floor makes it **45 minutes TIGHTER in summer**, not
+#: looser. A correction is not a gift, and this one runs both ways.
+#:
+#: WHAT EACH ANCHOR PRODUCES, both sides of 2026-10-25:
+#:
+#:   day type   local    2026-10-24 (UTC+3)   2026-10-26 (UTC+2)   vs retired
+#:   weekday    12:30    09:30 UTC            10:30 UTC            0 / +60
+#:   weekend    12:00    09:00 UTC            10:00 UTC          -45 / +15
+OBSERVED_EARLIEST_LOCAL_MIN = {
+    "weekday": 12 * 60 + 30,    # 2023-10-26 Thu, bulgaria/efbet-league
+    "weekend": 12 * 60 + 0,     # 2024-11-02 Sat, bulgaria/efbet-league
+}
+
+#: The clock those anchors are expressed in. Named, never assumed, and the
+#: offset is read from the zone database per day -- see `operator_offset_min`.
+OPERATOR_TZ = "Europe/Sofia"
+
+
+def operator_offset_min(day) -> int:
+    """The operator's UTC offset in MINUTES on `day`, DERIVED per day.
+
+    Measured at 12:00 local so the transition hour itself can never straddle,
+    and it RAISES rather than guessing when the zone database is unavailable:
+    a deadline computed from an assumed offset is a deadline that is an hour
+    wrong for half the year, and silently.
+    """
+    from zoneinfo import ZoneInfo
+    return int(_dt.datetime.combine(
+        day, _dt.time(12), tzinfo=ZoneInfo(OPERATOR_TZ))
+        .utcoffset().total_seconds() // 60)
+
+
+def observed_earliest_min(day_type: str, day) -> int:
+    """The anchor as a UTC minute ON `day`. The only correct way to ask."""
+    return OBSERVED_EARLIEST_LOCAL_MIN[day_type] - operator_offset_min(day)
+
+
+
+
+#: RETIRED 2026-10-22, KEPT FOR THE RECORD. The stored UTC pair, both of them
+#: summer figures, which is the defect. Nothing computes from this.
+RETIRED_OBSERVED_EARLIEST_UTC_MIN = {
+    "weekday": 9 * 60 + 30,     # 2023-10-26, three days before that year's
+                                # DST transition (2023-10-29)
+    "weekend": 9 * 60 + 45,     # 2024-10-19, eight days before 2024-10-27
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -240,19 +294,78 @@ OBSERVED_EARLIEST_MIN = {
 # minimum, so `max(0, deadline - true_earliest)` is 0 for every day in the
 # measured window -- the coverage-exposure term is satisfied rather than
 # traded, and it is still printed.
-DEADLINE_FLOOR = {
-    # day type: (minutes, what it is, provenance)
+#: Provenance, per day type. The MINUTE is no longer stored here -- it is a
+#: function of the day, so storing it is the defect that was just fixed.
+DEADLINE_FLOOR_PROVENANCE = {
     "weekday": (
-        OBSERVED_EARLIEST_MIN["weekday"], "observed earliest kickoff",
-        "09:30 on 2023-10-26, bulgaria/efbet-league; measured 2026-10-20 over "
-        "n=715 weekday days, the 30 configured leagues, phantoms excluded. A "
+        "observed earliest LOCAL kickoff",
+        "12:30 local on 2023-10-26, bulgaria/efbet-league; measured "
+        "2026-10-22 over n=718 weekday days, the 30 configured leagues, "
+        "phantoms excluded. Converted to UTC per day from Europe/Sofia. A "
         "bound for the measured window and nothing more -- re-measure as the "
         "record grows, and a longer window can only lower it"),
     "weekend": (
-        OBSERVED_EARLIEST_MIN["weekend"], "observed earliest kickoff",
-        "09:45 on 2024-10-19, bulgaria/efbet-league; measured 2026-10-20 over "
-        "n=375 weekend days, same population and exclusions"),
+        "observed earliest LOCAL kickoff",
+        "12:00 local on 2024-11-02, bulgaria/efbet-league; measured "
+        "2026-10-22 over n=375 weekend days, same population and exclusions. "
+        "NOT the same event as the retired 09:45 UTC constant, which was the "
+        "minimum of the SUMMER subset only -- four of the five earliest local "
+        "kickoffs are winter dates, and localising this floor TIGHTENS it by "
+        "45 minutes in summer"),
 }
+
+
+def deadline_floor_for(day_type: str, day):
+    """`(utc_minutes, what, provenance)` for `day_type` ON `day`.
+
+    THE DAY IS REQUIRED. The retired `DEADLINE_FLOOR` dict held a UTC minute
+    with no day attached, so it answered with a summer figure all winter.
+    """
+    what, prov = DEADLINE_FLOOR_PROVENANCE[day_type]
+    return (observed_earliest_min(day_type, day), what, prov)
+
+
+class _DeadlineFloorForToday(dict):
+    """`DEADLINE_FLOOR[dtype]` kept working, resolved for TOMORROW.
+
+    WHY THE SHAPE SURVIVES. Fourteen call sites and four test files subscript
+    this name, and most of them are asking about the margin for TOMORROW --
+    which is the day every schedule question in this project concerns. So the
+    mapping still exists and still yields `(minutes, what, provenance)`, but
+    the minutes are DERIVED on each lookup from tomorrow's offset rather than
+    stored.
+
+    ANY CALLER THAT KNOWS ITS DAY SHOULD USE `deadline_floor_for` INSTEAD, and
+    the two functions in this module that serve a specific day now do.
+    """
+
+    def __getitem__(self, day_type):
+        tomorrow = _dt.date.today() + _dt.timedelta(days=1)
+        return deadline_floor_for(day_type, tomorrow)
+
+    def get(self, day_type, default=None):
+        try:
+            return self[day_type]
+        except KeyError:
+            return default
+
+    def keys(self):
+        return DEADLINE_FLOOR_PROVENANCE.keys()
+
+    def items(self):
+        return ((k, self[k]) for k in self.keys())
+
+    def values(self):
+        return (self[k] for k in self.keys())
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def __len__(self):
+        return len(DEADLINE_FLOOR_PROVENANCE)
+
+
+DEADLINE_FLOOR = _DeadlineFloorForToday()
 
 #: RETAINED for the record: what the self-anchored derivation produced, and
 #: what it cost. Nothing computes from this -- it is here so the next reader
@@ -804,8 +917,11 @@ def combined_deadline(day: _dt.date, ref: dict) -> dict:
 
     dtype = day_type(day)
     # THE FLOOR, not the percentile record. Repointed 2026-10-19 when the
-    # fallback stopped being a percentile and became a derived value.
-    const_min, const_what, const_prov = DEADLINE_FLOOR[dtype]
+    # fallback stopped being a percentile and became a derived value, and
+    # again 2026-10-22 when it stopped being a UTC CONSTANT: this function
+    # serves a specific `day`, so it asks for that day's conversion rather
+    # than taking tomorrow's from the mapping.
+    const_min, const_what, const_prov = deadline_floor_for(dtype, day)
     nc, nt = REFERENCE_COVERAGE_MEASURED
     out = {
         "serves": day.isoformat(),
@@ -1029,7 +1145,8 @@ def two_margins(day, ref: dict, cron_minutes,
         REFERENCE_COVERAGE_MEASURED
 
     dtype = day_type(day)
-    floor_min, floor_what, floor_prov = DEADLINE_FLOOR[dtype]
+    # Per-day conversion, as above: this function also serves one named day.
+    floor_min, floor_what, floor_prov = deadline_floor_for(dtype, day)
     nc, nt = REFERENCE_COVERAGE_MEASURED
     coverage_all = f"ALL {nt} configured leagues (the observed minimum)"
     coverage_ref = f"{nc} of {nt} configured leagues"

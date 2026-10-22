@@ -1008,16 +1008,26 @@ def test_the_probe_still_cannot_emit_a_deadline_FOR_A_STATED_REASON():
     #: `measured` 2026-10-18 over n=1,131 rows written since 2026-09-01.
     MAX_OBSERVED_FIXTURE_LEAD_H = 23.62
     #: Tomorrow's earliest kickoff, from the measured percentiles.
+    # THE ANCHOR IS A LOCAL TIME SINCE 2026-10-22, so it is asked for a DAY.
+    # The WINTER conversion is used here because it is the LATER of the two
+    # (10:30 vs 09:30 UTC) and therefore the most favourable to the probe --
+    # if the probe cannot reach even that, it cannot reach either.
+    import datetime as _d
+
     from scripts.schedule_deadline import (DEADLINE_PERCENTILES,
-                                           OBSERVED_EARLIEST_MIN)
+                                           observed_earliest_min)
 
     # A probe running at the EARLIEST plausible moment on day D - right after
     # the weekend scrape completes, ~06:16 - is the most favourable case.
     probe_at_h = 6 + 16 / 60
     for label, ko_min in (("weekend 5th pct",
                            DEADLINE_PERCENTILES["weekend"][0]),
-                          ("weekday observed min",
-                           OBSERVED_EARLIEST_MIN["weekday"])):
+                          ("weekday observed min (winter, the laxer side)",
+                           observed_earliest_min(
+                               "weekday", _d.date(2026, 10, 26))),
+                          ("weekday observed min (summer)",
+                           observed_earliest_min(
+                               "weekday", _d.date(2026, 10, 24)))):
         required_h = 24 + ko_min / 60 - probe_at_h
         assert required_h > MAX_OBSERVED_FIXTURE_LEAD_H, (
             f"{label}: the probe would need a fixture known {required_h:.2f}h "

@@ -68,7 +68,9 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 from scripts.schedule_deadline import (
     CLEARING_ACTION,
     DEADLINE_FLOOR as _DEADLINE_FLOOR,
+    DEADLINE_FLOOR_PROVENANCE as _DEADLINE_FLOOR_PROVENANCE,
     DEADLINE_PERCENTILES as _DEADLINE_PERCENTILES,
+    deadline_floor_for as _deadline_floor_for,
     combined_deadline,
     day_type,
     format_prospective,
@@ -1431,18 +1433,64 @@ _LEAGUE_IN_FINDING = re.compile(r"^discovery: ([a-z0-9/-]+) found 0 fixtures")
 # `ceil_15(ready_binding + 60 registered)` per day type, from each day type's
 # OWN series -- 09:45 weekday, 09:15 weekend. The percentile record is kept
 # under its own name because it is still the right label for what it holds.
-DEADLINE_MIN_BY_DAYTYPE = {
-    k: v[0] for k, v in _DEADLINE_FLOOR.items()
-}
+#: ── DERIVED PER LOOKUP, FOR TOMORROW. LOCALISED 2026-10-22. ──────────────
+#:
+#: The anchor is a LOCAL time now and the UTC minute is a function of the day,
+#: so this mapping resolves `_DEADLINE_FLOOR` on every lookup rather than
+#: snapshotting it at import. `_DEADLINE_FLOOR` itself answers for TOMORROW,
+#: which is the day every schedule question here concerns.
+#:
+#: On 2026-10-22 it reads weekday 09:30 / weekend 09:00 UTC; from 2026-10-25
+#: it reads 10:30 / 10:00. `schedule_margins_by_daytype` does NOT use it --
+#: it asks `deadline_floor_for` with the day it is serving, so the margin
+#: cannot be computed from an import-time value on a day that straddles the
+#: transition.
+class _DeadlineMinForTomorrow(dict):
+    def __getitem__(self, day_type):
+        return _DEADLINE_FLOOR[day_type][0]
+
+    def get(self, day_type, default=None):
+        try:
+            return self[day_type]
+        except KeyError:
+            return default
+
+    def keys(self):
+        return _DEADLINE_FLOOR.keys()
+
+    def items(self):
+        return ((k, self[k]) for k in self.keys())
+
+    def values(self):
+        return (self[k] for k in self.keys())
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def __len__(self):
+        return len(list(self.keys()))
+
+
+DEADLINE_MIN_BY_DAYTYPE = _DeadlineMinForTomorrow()
 
 #: Which percentile each one is, for the report line.
 DEADLINE_BASIS_BY_DAYTYPE = {
-    k: f"{v[1]} ({v[2]})" for k, v in _DEADLINE_FLOOR.items()
+    k: f"{v[0]} ({v[1]})" for k, v in _DEADLINE_FLOOR_PROVENANCE.items()
 }
 
 #: The WORSE of the two, kept under its old name so a single-cron regime and
 #: every existing caller still reads one conservative number.
-SCHEDULE_DEADLINE_MIN = min(DEADLINE_MIN_BY_DAYTYPE.values())
+#: THE WORSE OF THE TWO, derived on access for the same reason as above. It
+#: is a property-like callable's value, not a frozen int, so a process that
+#: outlives a DST transition cannot keep serving the old season's figure.
+def schedule_deadline_min() -> int:
+    return min(DEADLINE_MIN_BY_DAYTYPE.values())
+
+
+#: Kept under its old name for the fourteen call sites that read one
+#: conservative number. Resolved at import; every margin path that knows its
+#: day uses `deadline_floor_for` instead.
+SCHEDULE_DEADLINE_MIN = schedule_deadline_min()
 
 #: MEASURED 2026-10-10, scheduled daily-picks runs, regime `0 0 * * *`,
 #: n=10: wall-clock minutes from run start to run end.
@@ -2047,21 +2095,32 @@ def current_crons_by_daytype(sha: str = None,
     return (out, exprs) if want_exprs else out
 
 
-def schedule_margins_by_daytype(series_by_type: dict, crons: dict) -> dict:
+def schedule_margins_by_daytype(series_by_type: dict, crons: dict,
+                                day=None) -> dict:
     """One margin per day type, and the TRIGGER FIRES ON THE WORSE.
+
+    `day` IS THE DAY THE MARGIN SERVES and defaults to TOMORROW, because the
+    deadline is a LOCAL fact converted per day (localised 2026-10-22). On
+    2026-10-24 tomorrow is a UTC+2 day while today is still UTC+3, and a
+    stored UTC constant cannot tell those apart.
 
     A weekday series and a weekend series are DISTINCT POPULATIONS under the
     same change: they have different crons, different deadlines and different
     n. They are reported apart and never pooled — the same rule that keeps the
     `37 9`, `0 3` and `0 0` series separate.
     """
+    _day = day or (_dt.date.today() + _dt.timedelta(days=1))
     out = {}
     for day_type, cron_minutes in crons.items():
         if cron_minutes is None:
             continue
+        # THE DAY IS PASSED, NOT ASSUMED. `day` defaults to tomorrow, which
+        # is what this margin is about; on 2026-10-24 that is a UTC+2 day
+        # while today is still UTC+3, and a stored constant cannot tell the
+        # difference.
         out[day_type] = schedule_margin(
             series_by_type.get(day_type, []), cron_minutes,
-            deadline_min=DEADLINE_MIN_BY_DAYTYPE[day_type],
+            deadline_min=_deadline_floor_for(day_type, _day)[0],
             day_type=day_type)
     # A DAY TYPE WITH NO SERIES IS UNEVALUATED, NOT SAFE. The weekday series
     # starts EMPTY the moment the split lands, because membership requires the
@@ -3546,7 +3605,12 @@ def main() -> int:
     # fit with R^2=0.451 and must never stand alone as a date; this is the
     # measured number beside it.
     _by_type, _crons = collect_lag_series_by_daytype()
-    _margins = schedule_margins_by_daytype(_by_type, _crons)
+    # TOMORROW, NAMED HERE AND PASSED. The deadline is a LOCAL fact converted
+    # per day (localised 2026-10-22), and `_tomorrow` further down is the same
+    # day -- it is hoisted so the margin and the alarm cannot disagree about
+    # which day they are talking about across a DST transition.
+    _tomorrow = _dt.date.today() + _dt.timedelta(days=1)
+    _margins = schedule_margins_by_daytype(_by_type, _crons, day=_tomorrow)
     print()
     # PNC-1, FOUND 2026-10-11. `format_series_census` carried the attribution
     # rule and the per-series n, and NOTHING CALLED IT — it was exercised only
@@ -3647,7 +3711,8 @@ def main() -> int:
     # the 30 configured leagues, so its minimum errs LATE. It is combined with
     # the day-type constant by `min`, which can only tighten; the basis names
     # which side bound the answer and the coverage is printed every run.
-    _tomorrow = _dt.date.today() + _dt.timedelta(days=1)
+    # `_tomorrow` is HOISTED above, beside the margin, so these two cannot
+    # end up describing different days across a transition.
     _ref = reference_earliest(_tomorrow)
     _ahead = combined_deadline(_tomorrow, _ref)
     print()

@@ -32824,3 +32824,264 @@ new step and its reason.
 `scripts/ci_audit.py`, `.github/workflows/daily-picks.yml`,
 `tests/test_dst_transition.py`, `tests/test_model_freshness.py`,
 `tests/test_quantile_successor.py`.*
+
+---
+
+## The deadline is localised; the cron move is BLOCKED on an invariant — 2026-10-22
+
+### PART A — `DEADLINE LOCALISED`
+
+A kickoff is scheduled by a human in a local clock, so its UTC minute moves
+twice a year and a UTC anchor measured in one season is wrong in the other.
+Both anchors were re-derived as the minimum **LOCAL** kickoff over the whole
+record — Europe/Sofia, the 30 configured leagues, phantoms excluded
+(`microsecond == 0`, `hour >= 6`):
+
+| day type | anchor | n | set on | which was |
+|---|---|---|---|---|
+| weekday | **12:30 local** | 718 days | 2023-10-26 Thu, `bulgaria/efbet-league` | 09:30 UTC at UTC+3 |
+| weekend | **12:00 local** | 375 days | 2024-11-02 Sat, `bulgaria/efbet-league` | 10:00 UTC at UTC+2 |
+
+#### THE WEEKEND ANCHOR IS NOT THE SAME EVENT, AND THE CORRECTION RUNS BOTH WAYS
+
+The retired weekend constant (09:45 UTC, 2024-10-19) was the minimum of the
+**summer subset only**. The true local minimum is 12:00 and it comes from a
+**winter** day — four of the five earliest local kickoffs are winter dates. So:
+
+| day type | retired | 2026-10-24 (UTC+3) | 2026-10-26 (UTC+2) |
+|---|---|---|---|
+| weekday | 09:30 UTC | 09:30 UTC (**0**) | 10:30 UTC (**+60**) |
+| weekend | 09:45 UTC | **09:00 UTC (−45)** | 10:00 UTC (+15) |
+
+**Localising TIGHTENS the weekend floor by 45 minutes in summer.** The brief
+called this part "free and worth 60 minutes"; it is worth 60 on the weekday in
+winter and costs 45 on the weekend in summer. **A correction, not an
+improvement, and not a gift.**
+
+#### The margin before and after, labelled as a correction
+
+| day | day type | deadline before → after | margin before → after | delta |
+|---|---|---|---|---|
+| 2026-10-24 | weekday | 09:30 → 09:30 | +20.7 → +20.7 | **0** |
+| 2026-10-24 | weekend | 09:45 → 09:00 | +135.7 → +90.7 | **−45** |
+| 2026-10-26 | weekday | 09:30 → 10:30 | +20.7 → **+80.7** | **+60** |
+| 2026-10-26 | weekend | 09:45 → 10:00 | +135.7 → +150.7 | +15 |
+
+**The standing weekday breach self-clears at the transition**: +20.7 (below
+the 30 alarm, acknowledged to 2026-11-04) becomes **+80.7** on 2026-10-26,
+from the correction alone and with no cron change.
+
+#### AND THE ORDERING INVERTED
+
+12:00 local < 12:30 local, so the **weekend** is the earlier floor — on both
+sides, permanently rather than seasonally. The retired pair said the opposite
+(09:30 < 09:45), which was an artefact of two summer figures measured on
+different days. `SCHEDULE_DEADLINE_MIN` moved 570 → 540 and
+`test_the_deadline_is_the_WEEKEND_kickoff_and_says_so` became true for the
+first time since it was named.
+
+*Which deadline is earlier and which margin is tighter are different
+questions: the margin still fires on the weekday, because the weekday delay is
+worse.*
+
+#### What changed in the code
+
+* `OBSERVED_EARLIEST_LOCAL_MIN` (local minutes) + `operator_offset_min(day)`,
+  which reads the zone database per day and **raises rather than guessing** —
+  a deadline from an assumed offset is an hour wrong for half the year,
+  silently.
+* `deadline_floor_for(day_type, day)` and `observed_earliest_min(day_type,
+  day)`: **the day is required**.
+* `RETIRED_OBSERVED_EARLIEST_UTC_MIN` kept — a localisation that deletes what
+  it localised cannot be audited, and both figures being summer ones *is* the
+  defect.
+* `DEADLINE_FLOOR` / `DEADLINE_MIN_BY_DAYTYPE` survive as mappings that
+  **resolve on each lookup** for tomorrow, so fourteen call sites keep working
+  without snapshotting a season at import. `schedule_margins_by_daytype` takes
+  a `day` and asks per day, and `_tomorrow` is hoisted so the margin and the
+  alarm cannot describe different days across a transition.
+* The two functions that serve a named day now pass it.
+
+#### The sweep, and one site that is NOT a localisation
+
+Every UTC constant of human-scheduling origin is now derived:
+`OBSERVED_EARLIEST_MIN`, `DEADLINE_FLOOR`, `DEADLINE_MIN_BY_DAYTYPE`,
+`SCHEDULE_DEADLINE_MIN`, and the last-safe-dispatch figure — which was already
+computed from the discovered kickoff per day and so follows automatically.
+
+**`theodds_scraper._PICKS_CRON_MINUTE_OF_DAY = 3 * 60` is NOT one of these.**
+It is OUR cron, in UTC, and does not move with DST — but it is **stale by
+three hours**: the cron has been `0 0` since 2026-10-18. Inside that window
+the guard reserves credits for a pending picks run, so a window opening too
+late leaves the run unprotected at the start of its own schedule. It belongs
+to the cron move and is held with Part B.
+
+#### Both-sided tests
+
+`tests/test_dst_transition.py` is now **16 tests**, every one driven at
+**2026-10-24 and 2026-10-26**, and the both-sided discipline was propagated to
+the five other files that asserted a UTC deadline value. The transition date
+and direction are checked from tzdata **first**, so if the zone database ever
+disagrees the expectations are void rather than quietly wrong. One new test
+pins that `operator_offset_min` raises with no zone database.
+
+#### Three self-inflicted defects, all caught by tests
+
+* **The ninth comment-blind scan, twice in one file of mine.** The quoted old
+  code lives in a **docstring**, so stripping `#` lines does not reach it;
+  `conftest.code_of` tokenises and does.
+* **`hours=3` matched `timedelta(hours=30)`** — the unrelated 30-hour World Cup
+  window. Anchored on the closing paren.
+* **A width is not an order, twice more.** A `[-1400:]` window and a
+  `split(...)[1]` scan both broke on inserted comments; both are now
+  order/presence assertions, one of them via `code_of`. That test's own
+  comments already recorded being bitten twice.
+
+**And one guard caught me correctly:** `date.today()` in a gating test made
+the capture gate refuse the whole selection. The property held for any day, so
+two named days prove it.
+
+**PNC:** the `OBSERVED_EARLIEST_MIN` compatibility shim was flagged as a new
+orphan (consumed only from tests) and **deleted** rather than declared — four
+test modules now ask the function. Mark-never-delete applies to data, not to
+shims.
+
+### PART B — `CRON MOVED` **NOT DECLARED. BLOCKED, AND HELD OUT OF THE COMMIT.**
+
+The derivation completed and the change was built, then **hard rule 8 fired**:
+
+```
+tests/test_experiment_invariants.py::test_invariant_6b_stage8_bumped_the_revision
+    assert CODE_REVISION == CODE_REVISION_PIN
+    AssertionError: assert 's5.19' == 's5.18'
+```
+
+**Rule 7 requires Part B to bump the cohort; rule 8 says an invariant failure
+means STOP, do not fix, report.** Invariant 6b pins `CODE_REVISION` to a
+literal `s5.18`, so **every legitimate bump trips it** — its own docstring says
+that is the point ("a future selection change that forgets to bump has to
+argue with a test"). Updating the pin is the natural counterpart of a bump and
+it is also exactly the "fix" rule 8 forbids. **That collision is Niki's to
+resolve, not mine.**
+
+So Part A is committed alone (fingerprint **unchanged at `s5.18 / 51fbcb`**, as
+rule 7 requires) and Part B is held as a patch.
+
+#### What Part B had arrived at, for the record
+
+**The slow cluster governs.** `measured` 2026-10-22, one unchanged cron
+throughout:
+
+```
+weekday SLOW  n=6  mean 276.3  sd 18.8  max 304.9  mean+3sd 332.6
+weekday fast  n=4  mean 135.6  sd  6.9  max 144.1  mean+3sd 156.2
+weekend       n=6  mean 253.2  sd 29.7  max 293.7  mean+3sd 342.3
+  largest-gap / median-gap: weekday 17.33, weekend 2.61 -> only the
+  weekday splits, at a threshold of 8.0 (PROVISIONAL and labelled so:
+  a ratio derived from two series is near-circular, and the p95
+  successor needs no split at all)
+```
+
+**The crons, each the latest 15-minute boundary clearing the registered 60 on
+BOTH pairings the margin takes the worse of, at the summer floor (summer binds
+— one UTC cron serves both seasons and summer's floor is the earlier one):**
+
+```
+weekday  cap(max 304.9, picks  88.1) = 117.0
+         cap(3sd 332.6, picks 107.0) =  70.4  binds  ->  `0 1`  = 01:00 UTC
+weekend  cap(max 293.7, picks  88.1) =  98.2
+         cap(3sd 342.3, picks 107.0) =  30.7  binds  ->  `30 0` = 00:30 UTC
+```
+
+**A DEVIATION FROM THE BRIEF, STATED.** The brief derives the cron from the
+**parallel** picks bound (55.1, `simulated` n=72; the measured parallel series
+is **n=1** at 35.1). That gives `0 2` / `15 1` and a 10:33 Sofia slow-case
+start — but leaves the margin at **+10.4** under the picks constants this
+project still retains, i.e. a breach by its own instrument, and those
+constants are retained *because* the parallel bound is n=1. Rule 4 says the
+pessimistic reading governs a safety choice, so the pessimistic **picks** term
+governs too.
+
+**Resulting margin, every pairing, both seasons:**
+
+```
+summer  weekday +117.0 / +70.4 -> binding +70.4
+        weekend +128.2 / +60.7 -> binding +60.7
+winter  weekday +177.0 / +130.4           +130.4
+        weekend +188.2 / +120.7           +120.7
+```
+
+All clear 60, which the retired weekday `0 0` did **not** (+20.7).
+
+**What the cron produces, per cluster, both clocks (Sofia):**
+
+| day type | reading | old | new summer | new winter |
+|---|---|---|---|---|
+| weekday | SLOW mean+3sd | 08:33 | **09:33** | 08:33 |
+| weekday | SLOW mean | 07:36 | 08:36 | 07:36 |
+| weekday | fast mean | **05:16** | **06:16** | 05:16 |
+| weekend | mean+3sd | 08:42 | **09:12** | 08:12 |
+| weekend | mean | 07:13 | 07:43 | 06:43 |
+
+**So the answer to "11:00" is +1h on the weekday and +30m on the weekend.** A
+single UTC cron cannot deliver a fixed local start while the delay is bimodal,
+and averaging the clusters would describe neither.
+
+**Also found while building it:** the lag series **resets to n=0** on a cron
+move (membership keys on the run's own `headSha` carrying the cron in force),
+so the margin reports NOT COMPUTED until the new crons fire — the state Part D
+reworded yesterday, arriving for real.
+
+**And a second thing to decide:** moving `_PICKS_CRON_MINUTE_OF_DAY` to the
+earlier cron (00:30) makes `test_the_overnight_slots_NEVER_decline[1][2]` fail
+at 01:17 and 02:17. That is **correct for the new cron** — a scheduled run is
+pending then — but it widens the declining window at the early edge, and
+over-declining is the failure that once stopped captures for a full day. The
+test's premise was the 03:00 cron that no longer exists.
+
+The other eleven failures are mechanical: four more `CODE_REVISION` /
+`model_version` pins of the same class as 6b, the PNC backlog (the new
+splitter), two of my own quantile tests (`binding` now comes from the slow
+cluster — a change of POPULATION, not of statistic), and the cron-value pin.
+
+**Recoverable at** `C:\Users\nikit\AppData\Local\Temp\claude\c--Users-nikit-Desktop-betting-agent\2f0f6291-e3f3-4ee7-bb04-6376b7bc91a9\scratchpad\partB_only.patch`
+and the six full files beside it.
+
+### PART C — the 11-04 decision, written before the data
+
+Recorded with Part B and not yet committed. **The falsifiable condition, set
+down now:**
+
+> An 11:00 Sofia start requires the fast cluster to BE a regime. On
+> **2026-11-04**, when the parallel time-to-picks series reaches n=10, the
+> weekday delay series must satisfy **all** of:
+>
+> 1. **n ≥ 10 under the new cron**, by `headSha` membership — not pooled with
+>    the `0 0` runs.
+> 2. **No point above 200 minutes.** The slow cluster's minimum was 255.9 and
+>    the fast cluster's maximum 144.1; 200 sits between them with ~56 minutes
+>    of clearance on each side.
+> 3. **Largest-gap / median-gap below 8.0**, i.e. the series no longer splits.
+>    A still-bimodal series means the slow cluster is live and the condition
+>    fails whatever the mean is.
+> 4. **mean + 3sd ≤ 156.2**, the fast cluster's own bound measured 2026-10-22.
+>    A wider spread at the same level is not the same regime.
+>
+> If all four hold, the cron may move to `0 2` / `15 1` for a 10:33 / 09:57
+> Sofia slow-case start. **If any fails, the slow cluster is still the
+> governing population and the cron does not move.** The trade curve stands as
+> measured: **0.7 fixtures/year** at the simulated parallel bound, **25** at
+> the measured serial bound — and the spread between those two is the n=1
+> problem, not a range.
+
+### DISCIPLINE
+
+Gating selection **2,439 passed, 7 deselected**; non-gating 6 passed, 1
+skipped. **Invariants: 25 passed, 1 FAILED — reported, not fixed** (see Part
+B); the failure is the revision pin and it is the reason Part B is not here.
+Fingerprint **UNCHANGED at `s5.18 / 51fbcb`** — Part A must not bump, and does
+not. No production write, no schema change, no model change.
+
+*Recorded 2026-10-22. `scripts/schedule_deadline.py`, `scripts/ci_audit.py`,
+`scripts/pnc_scan.py`, `tests/test_dst_transition.py` and five further test
+modules.*

@@ -166,14 +166,23 @@ def test_the_deadline_is_the_WEEKEND_kickoff_and_says_so():
     required: they are why the weekend figure is not 10:04.
     """
     # RE-ANCHORED 2026-10-20: the deadline is the OBSERVED EARLIEST KICKOFF (weekday 09:30, weekend 09:45), not ceil_15(ready+60). The self-anchored floor was a TAUTOLOGY -- it made margin>=60 true by construction -- and freezing it against a live series breached 60 within a day when mean+3sd drifted +11.4m on one new observation.
-    # SCHEDULE_DEADLINE_MIN is the min across day types, which is now the
-    # WEEKDAY 09:30 rather than the weekend figure.
-    assert ci.SCHEDULE_DEADLINE_MIN == 9 * 60 + 30
+    # 570 -> 540 ON 2026-10-22, AND THE TEST'S OWN NAME BECAME TRUE. The
+    # deadline anchors were localised, and the weekend's is 12:00 local
+    # against the weekday's 12:30 — so the WEEKEND is the earlier floor on
+    # both sides of a DST transition. The retired UTC pair said the opposite
+    # (weekday 09:30 < weekend 09:45), which was an artefact of two figures
+    # measured in the same season on different days.
+    assert ci.SCHEDULE_DEADLINE_MIN == 9 * 60 + 0
+    # THE `[-1400:]` WINDOW IS GONE TOO, for the reason this file already
+    # records one test below: a width is not an order. The localisation added
+    # two small classes above the constant on 2026-10-22 and pushed both
+    # provenance notes out of the window, failing a property that still held.
+    # What is under test is that the deadline's provenance is RECORDED, so
+    # the scan is over the module.
     src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
-    block = src.split("SCHEDULE_DEADLINE_MIN", 1)[0][-1400:]
-    assert "sub-second" in block, (
+    assert "sub-second" in src, (
         "the deadline no longer records that 10:04 came from phantom rows")
-    assert "openfootball" in block, (
+    assert "openfootball" in src, (
         "the deadline cites no INDEPENDENT source — verifying a figure against "
         "the data that produced it is not verification")
 
@@ -228,6 +237,15 @@ def test_the_margin_line_is_printed_UNCONDITIONALLY():
     # "alarm" past 1400 characters and the test failed with
     # `ValueError: substring not found` — a FALSE RED on a property that
     # still held. An ordering assertion needs an order, not a width.
+    #
+    # AND NOW IT IS COMMENT-BLIND, which ends the class rather than paying
+    # for it a third time. On 2026-10-22 a comment inserted between the
+    # anchor and the print contained the word "alarm" — so the test reported
+    # that the margin only prints when it alarms, on the strength of a
+    # sentence saying the opposite. The PROPERTY is about code; the scan now
+    # reads only code.
+    from tests.conftest import code_of
+    src = code_of(src)
     body = src.split("_by_type, _crons = collect_lag_series_by_daytype()",
                      1)[1]
     assert "print(format_schedule_margins(_margins))" in body

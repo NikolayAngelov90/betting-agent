@@ -127,11 +127,17 @@ DECLARED_INTENTIONAL: Dict[str, str] = {
         "states, deliberately: H1 spent three days reporting `nothing to do` "
         "for three different causes, and naming the states is what separated "
         "NO_CARD from NO_FIXTURE_IN_BAND from UNEVALUATED.",
-    "scripts/schedule_deadline.py:OBSERVED_EARLIEST_MIN":
-        "a MEASURED constant kept beside DEADLINE_PERCENTILES so a fallback "
+    "scripts/schedule_deadline.py:OBSERVED_EARLIEST_LOCAL_MIN":
+        "a MEASURED anchor kept beside DEADLINE_PERCENTILES so a fallback "
         "can never drift laxer than the figure that justified the cron. Its "
         "consumer is the test that ties the two together - which is the "
-        "point, because a drift is what the test exists to catch.",
+        "point, because a drift is what the test exists to catch. LOCALISED "
+        "2026-10-22: it is a LOCAL minute now, converted per day, because a "
+        "stored UTC minute answers with a summer figure all winter.",
+    "scripts/schedule_deadline.py:RETIRED_OBSERVED_EARLIEST_UTC_MIN":
+        "the retired UTC pair, kept so the correction can be checked. A "
+        "localisation that deletes what it localised cannot be audited, and "
+        "both of these were summer figures - which IS the defect.",
     "scripts/ci_audit.py:UNAUDITED_WORKFLOWS":
         "an intentionally EMPTY registry with a successor contract: a "
         "workflow added to WORKFLOWS with no ledger rows is recorded here "

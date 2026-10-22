@@ -217,11 +217,18 @@ def test_the_CRONS_DO_NOT_MOVE_but_their_LOCAL_MEANING_SHIFTS_an_hour():
 #:   weekend    UTC+3    211   09:45     12:45
 #:   weekend    UTC+2    164   10:00     12:00
 #:
-#: The weekday minimum is **12:30 local on both sides**. So
-#: `OBSERVED_EARLIEST_MIN["weekday"] = 09:30` is a SUMMER figure: its anchor
-#: is 2023-10-26, five days before that year's transition. From 2026-10-25 the
-#: weekday earliest kickoff is 10:30 UTC and the constant is **60 minutes
-#: pessimistic**; the weekend one is 15 minutes pessimistic.
+#: The weekday minimum is **12:30 local on both sides**, so the retired
+#: `09:30 UTC` was a SUMMER figure -- its anchor is 2023-10-26, three days
+#: before that year's transition -- and from 2026-10-25 the weekday earliest
+#: kickoff is 10:30 UTC.
+#:
+#: THE WEEKEND ROWS ARE PER-OFFSET SUBSET MINIMA AND THE ANCHOR IS NOT.
+#: Corrected 2026-10-22: the localised anchor is the minimum over the WHOLE
+#: record, which for the weekend is **12:00 local** (2024-11-02, a winter
+#: day) -- not the 12:45 the UTC+3 subset shows. So the retired weekend
+#: constant was 45 minutes too LATE in summer, and localising it TIGHTENS the
+#: summer floor while loosening the winter one by 15. A correction, both ways.
+#: See `test_the_DEADLINE_FLOOR_IS_NOW_LOCALISED_and_the_RETIRED_PAIR_is_kept`.
 EARLIEST_KICKOFF_BY_OFFSET = {
     ("weekday", 3): (570, 421), ("weekday", 2): (630, 297),
     ("weekend", 3): (585, 211), ("weekend", 2): (600, 164),
@@ -236,21 +243,84 @@ def test_the_WEEKDAY_MINIMUM_is_the_SAME_LOCAL_TIME_on_both_sides():
     assert summer == winter == 12 * 60 + 30, (summer, winter)
 
 
-def test_the_DEADLINE_FLOOR_still_holds_the_SUMMER_figure_and_its_ANCHOR():
-    """Pinned, NOT changed. Moving the deadline is a Part C decision with a
-    cohort bump behind it; this records that the constant is conservative by a
-    measured hour so the next reader does not re-derive it from scratch."""
+def test_the_DEADLINE_FLOOR_IS_NOW_LOCALISED_and_the_RETIRED_PAIR_is_kept():
+    """REPOINTED 2026-10-22, the day after it was written.
+
+    It asserted that the floor "still holds the SUMMER figure", pinned rather
+    than changed because moving a deadline needed its own stage. That stage
+    happened: the anchors are LOCAL minutes converted per day, and the retired
+    UTC pair is kept beside them so the correction stays checkable.
+    """
     import scripts.schedule_deadline as sd
 
-    assert sd.OBSERVED_EARLIEST_MIN["weekday"] == 570      # 09:30 UTC
-    assert sd.OBSERVED_EARLIEST_MIN["weekend"] == 585      # 09:45 UTC
-    floor_min, _what, prov = sd.DEADLINE_FLOOR["weekday"]
-    assert floor_min == 570
-    assert "2023-10-26" in prov, (
-        "the weekday floor's anchor date is no longer recorded; it is five "
-        "days before that year's DST transition, which is why the figure is "
-        "a summer one")
-    winter_min = EARLIEST_KICKOFF_BY_OFFSET[("weekday", 2)][0]
-    assert winter_min - floor_min == 60, (
-        f"the measured winter minimum is {winter_min} against a floor of "
-        f"{floor_min}; the 60-minute statement in the ledger is stale")
+    # the anchors are LOCAL now
+    assert sd.OBSERVED_EARLIEST_LOCAL_MIN["weekday"] == 12 * 60 + 30
+    assert sd.OBSERVED_EARLIEST_LOCAL_MIN["weekend"] == 12 * 60 + 0
+    # and the retired pair survives, BOTH of them summer figures -- which IS
+    # the defect, so deleting them would delete the evidence
+    assert sd.RETIRED_OBSERVED_EARLIEST_UTC_MIN == {"weekday": 570,
+                                                    "weekend": 585}
+
+    # BOTH SIDES, through the shipped function
+    for day, wd, we in ((BEFORE, 9 * 60 + 30, 9 * 60 + 0),
+                        (AFTER, 10 * 60 + 30, 10 * 60 + 0)):
+        assert sd.observed_earliest_min("weekday", day) == wd, day
+        assert sd.observed_earliest_min("weekend", day) == we, day
+        fl, _what, prov = sd.deadline_floor_for("weekday", day)
+        assert fl == wd
+        assert "2023-10-26" in prov, (
+            "the weekday anchor's date is no longer recorded; it is three "
+            "days before that year's DST transition, which is why the "
+            "retired UTC figure was a summer one")
+
+    # THE WEEKDAY CORRECTION IS +60 IN WINTER AND ZERO IN SUMMER
+    retired_wd = sd.RETIRED_OBSERVED_EARLIEST_UTC_MIN["weekday"]
+    assert sd.observed_earliest_min("weekday", BEFORE) - retired_wd == 0
+    assert sd.observed_earliest_min("weekday", AFTER) - retired_wd == 60
+
+    # AND THE WEEKEND CORRECTION RUNS THE OTHER WAY IN SUMMER: -45. The
+    # retired 09:45 was the minimum of the SUMMER SUBSET only; the true local
+    # minimum is 12:00 and it comes from a winter day (2024-11-02). A
+    # localisation is a correction, not a gift, and this half of it TIGHTENS.
+    retired_we = sd.RETIRED_OBSERVED_EARLIEST_UTC_MIN["weekend"]
+    assert sd.observed_earliest_min("weekend", BEFORE) - retired_we == -45
+    assert sd.observed_earliest_min("weekend", AFTER) - retired_we == 15
+    assert "TIGHTENS it by" in pathlib.Path(
+        "scripts/schedule_deadline.py").read_text(encoding="utf-8"), (
+        "the tightening is no longer recorded where the floor is defined")
+
+
+def test_the_WEEKEND_floor_is_now_the_EARLIER_one_on_BOTH_sides():
+    """The ordering inverted, and permanently rather than seasonally.
+
+    The retired UTC pair had weekday 09:30 < weekend 09:45. In LOCAL time the
+    weekend minimum is 12:00 against the weekday's 12:30, so the weekend binds
+    whichever season it is. The old ordering was an artefact of two summer
+    figures measured on different days.
+
+    The MARGIN still fires on the weekday, because the weekday DELAY is worse.
+    Which deadline is earlier and which margin is tighter are different
+    questions.
+    """
+    import scripts.schedule_deadline as sd
+
+    for day in (BEFORE, AFTER):
+        assert sd.observed_earliest_min("weekend", day) < \
+            sd.observed_earliest_min("weekday", day), day
+
+
+def test_the_OFFSET_HELPER_RAISES_rather_than_guessing(monkeypatch):
+    """A deadline computed from an assumed offset is an hour wrong for half
+    the year, silently. `operator_offset_min` has no fallback on purpose."""
+    import scripts.schedule_deadline as sd
+
+    real_import = __import__
+
+    def _no_zoneinfo(name, *a, **k):
+        if name == "zoneinfo":
+            raise ImportError("simulated: no tzdata")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr("builtins.__import__", _no_zoneinfo)
+    with pytest.raises(ImportError):
+        sd.operator_offset_min(AFTER)

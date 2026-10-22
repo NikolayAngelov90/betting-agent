@@ -248,16 +248,36 @@ def test_the_two_deadlines_are_distinct_and_the_WORSE_is_the_single_value():
     # `ceil_15(ready_binding + 60 registered)` from each day type's OWN
     # series: 09:45 weekday, 09:15 weekend.
     # RE-ANCHORED 2026-10-20: the deadline is the OBSERVED EARLIEST KICKOFF (weekday 09:30, weekend 09:45), not ceil_15(ready+60). The self-anchored floor was a TAUTOLOGY -- it made margin>=60 true by construction -- and freezing it against a live series breached 60 within a day when mean+3sd drifted +11.4m on one new observation.
-    assert DEADLINE_MIN_BY_DAYTYPE["weekday"] == 9 * 60 + 30
-    assert DEADLINE_MIN_BY_DAYTYPE["weekend"] == 9 * 60 + 45
+    # ── LOCALISED 2026-10-22, SO THE VALUES ARE A FUNCTION OF THE DAY. ───
+    #
+    # The anchors are LOCAL times (weekday 12:30, weekend 12:00) converted
+    # per day, so there is no single UTC pair to assert. BOTH SIDES, as the
+    # DST work established: a one-sided assertion cannot tell a derived value
+    # from a literal that happens to match today.
+    import datetime as _d
+
+    from scripts.schedule_deadline import observed_earliest_min
+    for day, wd, we in ((_d.date(2026, 10, 24), 9 * 60 + 30, 9 * 60 + 0),
+                        (_d.date(2026, 10, 26), 10 * 60 + 30, 10 * 60 + 0)):
+        assert observed_earliest_min("weekday", day) == wd, day
+        assert observed_earliest_min("weekend", day) == we, day
     assert SCHEDULE_DEADLINE_MIN == min(DEADLINE_MIN_BY_DAYTYPE.values())
-    # THE WEEKDAY IS NOW THE EARLIER ONE, and that is a measurement: the
-    # weekday minimum is 09:30 (2023-10-26, an ordinary Thursday) against
-    # the weekend's 09:45. Under the retired percentiles the weekend bound
-    # first; anchoring to the world reversed it.
-    assert DEADLINE_MIN_BY_DAYTYPE["weekday"] < DEADLINE_MIN_BY_DAYTYPE["weekend"], (
-        "the weekday deadline is no longer the earlier one — re-derive "
-        "which day type binds before trusting the single value")
+    # ── AND THE ORDERING INVERTED, WHICH IS WHAT THIS TEST ASKED FOR. ────
+    #
+    # Its old message said "re-derive which day type binds before trusting
+    # the single value", and localising did exactly that. In LOCAL time the
+    # weekend minimum is 12:00 against the weekday's 12:30, so the WEEKEND
+    # is the earlier floor -- on both sides, permanently, not seasonally.
+    # The retired UTC pair said the opposite (09:30 < 09:45) because both
+    # figures were measured in SUMMER on days that happened to differ.
+    #
+    # The MARGIN still fires on the weekday, because the weekday DELAY is
+    # worse. Which deadline is earlier and which margin is tighter are two
+    # different questions, and conflating them is what the old ordering did.
+    for day in (_d.date(2026, 10, 24), _d.date(2026, 10, 26)):
+        assert observed_earliest_min("weekend", day) <             observed_earliest_min("weekday", day), (
+            f"on {day} the weekend deadline is no longer the earlier one — "
+            f"re-derive which day type binds before trusting the single value")
 
 
 def test_a_day_type_with_no_series_is_NOT_COMPUTED_and_says_it_does_not_alarm():
@@ -324,13 +344,15 @@ def test_schedule_margin_defaults_to_the_CONSERVATIVE_deadline():
     """An un-dayed caller must not silently get the laxer number."""
     m = schedule_margin([(None, 271.0)] * 3, 0)
     assert m["deadline_min"] == SCHEDULE_DEADLINE_MIN
-    # THE CONSERVATIVE DEFAULT IS THE WEEKDAY NOW. Re-anchoring the deadline
-    # to the observed earliest kickoff reversed which day type binds: the
-    # weekday minimum is 09:30 (2023-10-26, an ordinary Thursday) against the
-    # weekend's 09:45. Under the retired 12:00/10:15 percentiles the weekend
-    # was the earlier one. The DEFAULT is still `min(...)`, so it is correct
-    # by construction; what moved is which stratum that picks out.
-    assert m["deadline_min"] == DEADLINE_MIN_BY_DAYTYPE["weekday"]
+    # THE CONSERVATIVE DEFAULT IS THE WEEKEND AGAIN, as of the 2026-10-22
+    # localisation. It has now moved twice: the retired percentiles made the
+    # weekend bind, re-anchoring to the observed earliest kickoff made the
+    # weekday bind, and localising the anchors moved it back -- because in
+    # LOCAL time the weekend minimum (12:00) is earlier than the weekday's
+    # (12:30), on both sides of a transition. The DEFAULT is still `min(...)`,
+    # so it is correct by construction; what keeps moving is which stratum
+    # that picks out, which is why this asserts the relation and not a value.
+    assert m["deadline_min"] == DEADLINE_MIN_BY_DAYTYPE["weekend"]
     assert m["deadline_min"] == min(DEADLINE_MIN_BY_DAYTYPE.values())
 
 
@@ -469,15 +491,31 @@ def test_the_1430_figure_is_a_PERCENTILE_not_a_minimum():
     # deadline is not a real bound -- still holds, but only against the
     # current measurement, and the 15-minute gap is the residual exposure
     # recorded in `COVERAGE_EXPOSURE`.
-    from scripts.schedule_deadline import OBSERVED_EARLIEST_MIN
+    # BOTH SIDES. The anchor is 12:30 LOCAL since 2026-10-22, so its UTC
+    # minute is 09:30 in summer and 10:30 in winter; asserting one of them
+    # pins the season, not the anchor.
+    import datetime as _d
 
-    assert OBSERVED_EARLIEST_MIN["weekday"] == 9 * 60 + 30, (
+    from scripts.schedule_deadline import (OBSERVED_EARLIEST_LOCAL_MIN,
+                                           observed_earliest_min)
+    assert OBSERVED_EARLIEST_LOCAL_MIN["weekday"] == 12 * 60 + 30, (
         "the re-measured weekday minimum moved; re-derive the floor, which is "
         "computed from the ready time and checked against this value")
+    assert observed_earliest_min("weekday", _d.date(2026, 10, 24)) == 9 * 60 + 30
+    assert observed_earliest_min("weekday", _d.date(2026, 10, 26)) == 10 * 60 + 30
     # IT IS NOW EXACTLY THE BOUND, by construction: the deadline IS the
     # observed minimum, so the coverage exposure is zero and the margin
-    # carries the whole trade. That is the point of the re-anchoring.
-    assert OBSERVED_EARLIEST_MIN["weekday"] == DEADLINE_MIN_BY_DAYTYPE["weekday"]
+    # carries the whole trade. That is the point of the re-anchoring, and it
+    # holds per day rather than per constant since the localisation.
+    #
+    # ON FIXED DAYS, NOT `date.today()`. The first version of this line read
+    # the clock, and the capture gate refused the whole gating selection for
+    # it -- correctly: a clock-reading test in that path has cost this
+    # project seven cards. The property is "the floor IS the observed
+    # minimum", which holds for any day, so two named days prove it.
+    from scripts.schedule_deadline import deadline_floor_for
+    for _day in (_d.date(2026, 10, 24), _d.date(2026, 10, 26)):
+        assert observed_earliest_min("weekday", _day) ==             deadline_floor_for("weekday", _day)[0]
     assert WEEKDAY_EARLIEST_OBSERVED > DEADLINE_MIN_BY_DAYTYPE["weekday"], (
         "the 2026-02-01-onward figure of 09:59 is no longer later than the "
         "deadline; the full-record minimum is 09:30")

@@ -164,9 +164,14 @@ def test_NEGATIVE_2_ordinary_weekend_stays_clear_and_is_IMPROVED():
                        ("PL", "2026-05-17T13:00:00Z"))
     assert c["day_type"] == "weekend"
     assert ref["min"] == 10 * 60
-    # The weekend floor 09:15 is below the reference's 10:00 AND below the
-    # measured truth of 10:00, so the exposure is zero with 45m to spare.
-    assert c["deadline_min"] == 9 * 60 + 45 and c["bound_by"] == "CONSTANT"
+    # The weekend floor is below the reference's 10:00 AND below the measured
+    # truth of 10:00, so the exposure is zero with an hour to spare.
+    #
+    # 09:45 -> 09:00 ON 2026-10-22: the weekend anchor localised to 12:00
+    # local, and 2026-05-17 is a SUMMER date (UTC+3), so it converts to
+    # 09:00 UTC. The retired 09:45 was the minimum of the summer subset only,
+    # which is why localising TIGHTENS this floor rather than loosening it.
+    assert c["deadline_min"] == 9 * 60 + 0 and c["bound_by"] == "CONSTANT"
     assert max(0, c["deadline_min"] - 10 * 60) == 0
 
 
