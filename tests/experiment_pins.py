@@ -150,13 +150,75 @@ History:
                     different calendar date.
                     RULE 8 EXEMPTS INVARIANT 6b here because rule 7 orders the
                     bump; the argument is this entry and the test is NOT relaxed.
+
+    s5.19 2026-10-22  THE DEADLINE IS LOCALISED AND BOTH CRONS MOVE.
+                    weekday `0 0` -> `0 1`, weekend `0 0` -> `30 0`.
+                    Selection-affecting by the s5.2/s5.15/s5.17 precedent: the
+                    cron decides WHEN prices are taken. The deadline
+                    localisation alone is NOT selection-affecting and shipped
+                    separately at s5.18 with the fingerprint unchanged.
+                    THE DEADLINE WAS A UTC CONSTANT MEASURED IN SUMMER. A
+                    kickoff is scheduled in a LOCAL clock, so its UTC minute
+                    moves twice a year. Re-derived as the minimum LOCAL
+                    kickoff over the record (30 configured leagues, phantoms
+                    excluded): weekday 12:30 local n=718, weekend 12:00 local
+                    n=375. The retired weekend 09:45 UTC was the minimum of
+                    the SUMMER SUBSET only, so localising TIGHTENS that floor
+                    45 min in summer and loosens it 15 in winter; the weekday
+                    gains 60 in winter and nothing in summer.
+                    THE LAG SERIES IS BIMODAL UNDER ONE UNCHANGED CRON, and
+                    that bimodality IS the early start Niki reported: weekday
+                    SLOW n=6 mean 276.3 max 304.9 mean+3sd 332.6, fast n=4
+                    mean 135.6 max 144.1 mean+3sd 156.2 (largest-gap /
+                    median-gap 17.33; the weekend's is 2.61 and does not
+                    split, so its whole n=6 series governs).
+                    THE SLOW CLUSTER GOVERNS. Each cron is the latest
+                    15-minute boundary clearing the registered 60 on BOTH
+                    pairings the margin takes the worse of, at the SUMMER
+                    floor: weekday cap(max 304.9, picks 88.1)=117.0 and
+                    cap(3sd 332.6, 107.0)=70.4 -> `0 1`; weekend cap(max
+                    293.7, 88.1)=98.2 and cap(3sd 342.3, 107.0)=30.7 ->
+                    `30 0`.
+                    `0 2` WAS REJECTED. The parallel picks bound (55.1,
+                    simulated n=72; MEASURED n=1 at 35.1) allows it and a
+                    10:33 Sofia slow-case start, but it leaves the margin at
+                    +10.4 under the picks constants this project still
+                    retains - a breach by its own instrument - and those
+                    constants are retained BECAUSE the parallel bound is n=1.
+                    A configuration the instrument calls a breach is not
+                    shipped.
+                    LEAD TIME, per day type and per CLUSTER because an average
+                    across a bimodal series describes neither (Sofia): weekday
+                    SLOW 3sd 08:33 -> 09:33, SLOW mean 07:36 -> 08:36, fast
+                    mean 05:16 -> 06:16 (+60 min); weekend 3sd 08:42 ->
+                    09:12, mean 07:13 -> 07:43 (+30 min).
+                    DISCOVERED-FIXTURE POPULATION DOES NOT MOVE. `max_days_
+                    ahead` is a rolling `now + 1 day`, so the cutoff moves
+                    LATER with the run; the binding site is a FRIDAY run whose
+                    D+1 Saturday earliest kickoff is 10:30 UTC, and all six
+                    date-derived sites were re-enumerated against both new
+                    crons with the Friday->Saturday clearance still above the
+                    registered hour. Zero D+1 fixtures admitted under either
+                    cron.
+                    AND THE LAG SERIES RESETS TO n=0, which is a COST of this
+                    move: membership keys on the run's own headSha carrying
+                    the cron in force, so the margin reports NOT COMPUTED
+                    until the new crons fire and the 11-04 condition's input
+                    starts again from empty.
+                    RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS
+                    here because rule 7 orders the bump; the argument is this
+                    entry and no test is relaxed.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
-CODE_REVISION_PIN = "s5.18"
+#:
+#: MOVED s5.18 -> s5.19 on 2026-10-22, with the argument in the history above.
+#: Invariant 6b pins this to a literal precisely so a bump has to argue; the
+#: argument is the s5.19 entry and the test is unchanged.
+CODE_REVISION_PIN = "s5.19"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.51fbcb"
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.cdec29"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 #: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16

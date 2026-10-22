@@ -145,8 +145,54 @@ def _persist_credits(remaining: int) -> None:
 #: "have today's picks run" via a `date.today()` marker, which stayed false at
 #: 23:17 and 01:00 and declined every overnight slot. Captures stopped for a
 #: full day and H5's sample rate fell to zero.
-_PICKS_CRON_MINUTE_OF_DAY = 3 * 60
-_PICKS_EXPOSURE_WINDOW_MINUTES = 13 * 60          # 03:00 -> 16:00 UTC
+#: ── RE-POINTED 2026-10-22, AND IT WAS ALREADY STALE BEFORE THAT. ─────────
+#:
+#: This read `3 * 60` while `daily-picks.yml` had carried `0 0` since
+#: 2026-10-18 — so the window opened at 03:00 while runs were starting from
+#: 02:08 (the fast lag cluster, measured 2026-10-19..22). Inside the window
+#: the guard RESERVES credits for a pending picks run; outside it does not.
+#: A window that opens too LATE therefore leaves the picks run unprotected
+#: for the first part of its own schedule, which is the unsafe direction.
+#:
+#: It is now the EARLIEST cron of the two, because one window serves both day
+#: types: weekend `30 0` = 00:30 UTC, weekday `0 1` = 01:00 UTC.
+#:
+#: THE 13-HOUR WIDTH IS KEPT AND IS NOW GENEROUS RATHER THAN TIGHT. The
+#: latest a run can still be pending is cron + max observed delay + p90 run
+#: duration = 60 + 342.3 + 106 = 508 min (08:28 UTC), well inside 13:30. The
+#: width is left alone because narrowing it is the unsafe direction and buys
+#: nothing.
+#:
+#: ── AND THE MOVE IMPROVES THE GUARD, WHICH IS THE OPPOSITE OF THE WORRY. ──
+#:
+#: Over-declining once took captures to zero for a day, so widening the
+#: window at the early edge looked like a cost. `measured` 2026-10-22 against
+#: the eight real `closing-lines` slots (`47 10` and `17 11,13,15,17,19,21,23`):
+#:
+#:   slot    in OLD [03:00,16:00]   in NEW [00:30,13:30]
+#:   10:47   yes                    yes
+#:   11:17   yes                    yes
+#:   13:17   yes                    yes
+#:   15:17   yes                    NO   <- now ALWAYS PROCEEDS
+#:   17:17 .. 23:17   no            no
+#:
+#:   slots that can decline: 4/8 -> 3/8
+#:   captures newly EXPOSED per week:   0
+#:   captures newly PROTECTED per week: 7
+#:
+#: THE EARLY EDGE GAINS NOTHING BECAUSE THE FIRST SLOT IS 10:47 -- there is no
+#: capture between 00:30 and 03:00 to expose. The late edge loses one. And the
+#: three remaining exposed slots decline only on a day that produced no picks:
+#: on every reading picks are done by 08:08-09:01 UTC, before 10:47, and the
+#: guard stands down the moment any pick exists for the day.
+#:
+#: DERIVED, NOT RESTATED. `3 * 60` was stale by three hours because nothing
+#: tied it to the cron. It is still a literal here -- a scraper must not parse
+#: workflow YAML at runtime -- but `test_picks_run_guard` now asserts it
+#: equals the EARLIER of the two `daily-picks` crons, so it cannot diverge
+#: again without a test failing.
+_PICKS_CRON_MINUTE_OF_DAY = 30                    # 00:30 UTC, the earlier cron
+_PICKS_EXPOSURE_WINDOW_MINUTES = 13 * 60          # 00:30 -> 13:30 UTC
 
 
 def _picks_run_may_be_pending(now) -> bool:

@@ -140,7 +140,85 @@ on:
     # weekday start from ~04:31 to ~08:31 — four hours, far more than the 1h30
     # requested — and leaves the weekend, which carries the bigger card and the
     # earlier deadline, untouched.
-    - cron: '0 0 * * 6,0'   # Sat/Sun 00:00 UTC (03:00 Sofia) - UNCHANGED
+    # ══════════════════════════════════════════════════════════════════════
+    # MOVED 2026-10-22. weekend `0 0` -> `30 0`, weekday `0 0` -> `0 1`.
+    #
+    # WHY, AND IT IS NOT "LATER IS BETTER". Niki asked for a ~11:00 Sofia
+    # start. The early start he is complaining about IS the bimodality of the
+    # scheduler delay: the cron was sized for a SLOW cluster and a FAST one
+    # has been running since 2026-10-19.
+    #
+    #   weekday lag, `measured` 2026-10-22, ONE unchanged cron throughout:
+    #     SLOW  n=6  mean 276.3  sd 18.8  max 304.9  mean+3sd 332.6
+    #     fast  n=4  mean 135.6  sd  6.9  max 144.1  mean+3sd 156.2
+    #   weekend lag, n=6, mean 253.2, sd 29.7, max 293.7, mean+3sd 342.3
+    #     -- NOT split: its largest-gap/median-gap ratio is 2.61 against the
+    #        weekday's 17.33, so the whole series governs.
+    #
+    # THE SLOW CLUSTER GOVERNS, because nothing explains the gap and nothing
+    # licenses assuming the fast one persists.
+    #
+    # THE CRON IS THE LATEST THAT CLEARS THE REGISTERED 60 MINUTES ON BOTH
+    # PAIRINGS the margin takes the worse of, at the localised floor:
+    #
+    #   weekday  floor 09:30 UTC (summer)
+    #     cap from (slow max 304.9, picks  88.1) = 117.0
+    #     cap from (slow 3sd  332.6, picks 107.0) =  70.4  <- binds
+    #     -> floor15 -> `0 1`  = 01:00 UTC
+    #   weekend  floor 09:00 UTC (summer)
+    #     cap from (max 293.7, picks  88.1) =  98.2
+    #     cap from (3sd 342.3, picks 107.0) =  30.7  <- binds
+    #     -> floor15 -> `30 0` = 00:30 UTC
+    #
+    # A DEVIATION FROM THE BRIEF, STATED. The brief derived the cron from the
+    # PARALLEL picks bound (55.1, `simulated` n=72; the MEASURED parallel
+    # series is n=1 at 35.1). That gives `0 2` / `15 1` and a 10:33 Sofia
+    # slow-case start -- but it leaves the margin at **+10.4** under the picks
+    # constants this project still retains (107.0), i.e. a breach by its own
+    # instrument, and those constants are retained precisely because the
+    # parallel bound is n=1. Rule 4 says the pessimistic reading governs a
+    # safety choice, so the pessimistic PICKS term governs too. `0 2` is
+    # recorded as what the fast-cluster/parallel-bound world allows and is
+    # gated on 2026-11-04.
+    #
+    # SUMMER BINDS. One UTC cron serves both seasons and the localised floor
+    # is an hour earlier in summer, so summer sets the cron and winter
+    # inherits an extra hour.
+    #
+    # THE RESULTING MARGIN, both pairings, both seasons:
+    #   summer  weekday +117.0 / +70.4 -> binding +70.4
+    #           weekend +128.2 / +60.7 -> binding +60.7
+    #   winter  weekday +177.0 / +130.4            +130.4
+    #           weekend +188.2 / +120.7            +120.7
+    #
+    # AND THIS IS A TRADE, NOT A REPAIR. Corrected while writing the tests:
+    # the old weekday margin read +20.7, but that is the POOLED figure, and
+    # the pooled mean+3sd of a bimodal series measures between-cluster
+    # distance. UNDER THE SLOW CLUSTER the old cron had **+130.4** -- it
+    # cleared the registered 60 with seventy minutes to spare. So the move
+    # SPENDS 60 minutes of real margin to buy an hour of start time. That is
+    # a legitimate choice and it is Niki's; it is written down as a trade
+    # because a change sold as a fix does not get re-examined.
+    #
+    # WHAT THIS CRON ACTUALLY PRODUCES (Sofia), old -> new:
+    #   weekday  SLOW mean+3sd  08:33 -> 09:33 summer / 08:33 winter
+    #            SLOW mean      07:36 -> 08:36 / 07:36
+    #            fast mean      05:16 -> 06:16 / 05:16
+    #   weekend  mean+3sd       08:42 -> 09:12 summer / 08:12 winter
+    #            mean           07:13 -> 07:43 / 06:43
+    #
+    # SO THE ANSWER TO "11:00" IS +1h on the weekday and +30m on the weekend,
+    # not four hours. A single UTC cron cannot deliver a fixed local start
+    # while the delay is bimodal, and averaging the clusters would describe
+    # neither. 11:00 needs the fast cluster to BE a regime -- registered for
+    # 2026-11-04 with its falsifiable condition in the ledger entry.
+    #
+    # THE LAG SERIES RESETS TO n=0. Membership keys on the run's own headSha
+    # carrying the cron in force, so the margin reports NOT COMPUTED until
+    # runs fire under these crons. That is the honest state and it does not
+    # alarm; the conservative reading until then is the slow cluster above.
+    # ══════════════════════════════════════════════════════════════════════
+    - cron: '30 0 * * 6,0'  # Sat/Sun 00:30 UTC = 03:30 Sofia summer, 02:30 winter
     # REVERTED TO 00:00 on 2026-10-18. MEASURED over the weekday series'
     # own n=5 under `0 4`: delays 283/288/316/443/458 min, mean 357.5,
     # sd 85.6, max 458 (7h38m). Against the 12:00 weekday deadline that
@@ -164,7 +242,7 @@ on:
     # attribution stays exercised, and either day type can be moved
     # again without touching the other. The two series are separate
     # populations because they are keyed by DAY TYPE, not by cron.
-    - cron: '0 0 * * 1-5'   # Mon-Fri 00:00 UTC (03:00 Sofia) - starts ~05:57
+    - cron: '0 1 * * 1-5'   # Mon-Fri 01:00 UTC = 04:00 Sofia summer, 03:00 winter
   workflow_dispatch: # Allow manual trigger
 
 # Serialize runs so a manual dispatch can never write to the DB at the same

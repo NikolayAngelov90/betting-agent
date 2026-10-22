@@ -33085,3 +33085,238 @@ not. No production write, no schema change, no model change.
 *Recorded 2026-10-22. `scripts/schedule_deadline.py`, `scripts/ci_audit.py`,
 `scripts/pnc_scan.py`, `tests/test_dst_transition.py` and five further test
 modules.*
+
+---
+
+## `CRON MOVED` — weekday `0 1`, weekend `30 0`, `s5.19` — 2026-10-22
+
+### THE HEADLINE, AND IT IS NOT WHAT THE DERIVATION SET OUT TO SAY
+
+**This is a trade, not a repair.** Corrected while writing the tests for it.
+
+The retired weekday margin read **+20.7**, below even the 30-minute alarm, and
+the first draft of both the workflow comment and the cohort entry called the
+move a repair on that basis. **+20.7 is the POOLED figure**, and a pooled
+`mean+3sd` over a bimodal series measures between-cluster distance. Under the
+**slow cluster** — the population that governs — the old cron had **+130.4**:
+it cleared the registered 60 with seventy minutes to spare.
+
+```
+weekday, summer floor 09:30 UTC, slow cluster
+  old cron `0 0`   binding +130.4      <- cleared
+  new cron `0 1`   binding  +70.4      <- clears
+  cost of the move          -60.0 minutes of real margin
+```
+
+So the move **spends 60 minutes of genuine margin to buy an hour of start
+time**. That is legitimate and it is Niki's call. It is written down as a trade
+because a change sold as a fix does not get re-examined and a change sold as a
+trade does.
+
+### PART A — the cron, as derived
+
+```
+weekday lag, measured 2026-10-22, ONE unchanged cron throughout
+  SLOW  n=6  mean 276.3  sd 18.8  max 304.9  mean+3sd 332.6
+  fast  n=4  mean 135.6  sd  6.9  max 144.1  mean+3sd 156.2
+weekend lag  n=6  mean 253.2  sd 29.7  max 293.7  mean+3sd 342.3
+  largest-gap / median-gap: weekday 17.33, weekend 2.61 -> only the
+  weekday splits (threshold 8.0, PROVISIONAL and labelled so)
+```
+
+Each cron is the **latest 15-minute boundary clearing the registered 60 on
+BOTH pairings** the margin takes the worse of, at the **summer** floor (summer
+binds: one UTC cron serves both seasons and summer's floor is the earlier one):
+
+```
+weekday  cap(max 304.9, picks  88.1) = 117.0
+         cap(3sd 332.6, picks 107.0) =  70.4  binds  ->  `0 1`  = 01:00 UTC
+weekend  cap(max 293.7, picks  88.1) =  98.2
+         cap(3sd 342.3, picks 107.0) =  30.7  binds  ->  `30 0` = 00:30 UTC
+```
+
+#### The start times, per cluster, in both clocks
+
+| day type | cluster | reading | UTC | Sofia summer | Sofia winter |
+|---|---|---|---|---|---|
+| weekday | SLOW | mean+3sd | 06:33 | **09:33** | 08:33 |
+| weekday | SLOW | mean | 05:36 | 08:36 | 07:36 |
+| weekday | fast | mean+3sd | 03:36 | 06:36 | 05:36 |
+| weekday | fast | mean | 03:16 | **06:16** | 05:16 |
+| weekend | — | mean+3sd | 06:12 | **09:12** | 08:12 |
+| weekend | — | mean | 04:43 | 07:43 | 06:43 |
+
+**So the answer to "11:00" is +1h on the weekday and +30m on the weekend.** A
+single UTC cron cannot deliver a fixed local start while the delay is bimodal,
+and averaging the clusters would describe neither. *(The first start table in
+this stage was computed at the rejected `0 2` and was an hour and a quarter
+early in UTC; caught by its own test.)*
+
+#### The margins, at both floors
+
+| | weekday | weekend |
+|---|---|---|
+| **summer** (09:30 / 09:00) | +117.0 / **+70.4** | +128.2 / **+60.7** |
+| **winter** (10:30 / 10:00) | +177.0 / **+130.4** | +188.2 / **+120.7** |
+
+Every pairing clears 60. The next 15-minute boundary later fails, so these are
+the latest.
+
+#### `0 2` REJECTED, and why that refusal is the rule
+
+It is not a strawman: at the **parallel** picks bound (55.1, `simulated` n=72;
+the **measured** parallel series is **n=1** at 35.1) `0 2` clears 60 and puts
+the slow case at **10:33 Sofia** — nearer what was asked.
+
+**It leaves the margin at `+10.4` under the picks constants this project still
+retains** (`FULL_CARD_PICKS_3SD = 107.0`) — under the 30-minute alarm, never
+mind the 60-minute minimum. Those constants are retained *because* the
+parallel bound is n=1.
+
+> **A configuration the project's own instrument calls a breach is not
+> shipped.**
+
+Both halves are pinned: that `0 2` would clear at the parallel bound, and that
+it breaches at the retained one. If either premise moves the decision re-opens
+rather than staying refused.
+
+#### The per-cluster report, which the move made necessary
+
+Without it the audit would have alarmed every day after the move. At `0 1` the
+weekday line now reads:
+
+```
+schedule_margin[n=10 ... | POOLED margin max=+117m 3sd=-39m pooled_binding=-39m]
+  BIMODAL (gap ratio >= 8.0): the pooled mean+3sd measures BETWEEN-CLUSTER
+    distance, not tail risk
+  split rule: largest consecutive gap / median consecutive gap; measured
+    2026-10-22 as 17.33 (weekday, n=10) and 2.61 (weekend, n=6) ...
+  slow[n=6 ... binding=+70m] GOVERNS
+  fast[n=4 ... binding=+247m] reported, NOT relied on
+  BINDING +70m from slow cluster, threshold 30m
+```
+
+**The pooled reading at the new cron is −39m.** It is kept, labelled, because
+every earlier ledger entry quotes it — and it is exactly the artefact the
+per-cluster report exists to stop binding on.
+
+#### Lead time and the discovered-fixture population
+
+Lead time per day type and per **cluster**, because an average across a
+bimodal series describes neither — the table above. Shift: **+60 min weekday,
++30 min weekend.**
+
+**The discovered-fixture population does not move,** measured not assumed.
+`max_days_ahead` is a rolling `now + 1 day`, so the cutoff moves *later* with
+the run; the binding site is a Friday run reaching into Saturday, whose
+earliest kickoff is 10:30 UTC. **All six date-derived sites were re-enumerated
+against both new crons and all pass,** with the Friday→Saturday clearance
+still above the registered hour. Zero D+1 fixtures admitted under either cron.
+
+**Cohort: `s5.18 / 51fbcb` → `s5.19 / cdec29`, 0 picks stamped.** The pin and
+the four revision pins moved in this commit with the argument beside each, as
+authorised; **no test was relaxed.**
+
+### PART B — the overnight-slot guard, and the worry reverses
+
+**`_PICKS_CRON_MINUTE_OF_DAY = 3 * 60` was stale by three hours** — the cron
+had been `0 0` since 2026-10-18 and nothing tied the two. Inside that window
+the guard *reserves* credits for a pending picks run, so a window opening
+**after** the cron leaves the run unprotected at the start of its own
+schedule.
+
+**Every slot enumerated** against `closing-lines`' own crons (`47 10` and
+`17 11,13,15,17,19,21,23`):
+
+| slot | in OLD [03:00,16:00] | in NEW [00:30,13:30] | change |
+|---|---|---|---|
+| 10:47 | yes | yes | |
+| 11:17 | yes | yes | |
+| 13:17 | yes | yes | |
+| **15:17** | yes | **no** | **now always proceeds** |
+| 17:17 … 23:17 | no | no | |
+
+```
+slots that can decline:              4/8  ->  3/8
+captures newly EXPOSED per week:     0
+captures newly PROTECTED per week:   7
+```
+
+**The move IMPROVES the guard.** The early edge gains nothing because **the
+first capture slot is 10:47** — there is no slot between 00:30 and 03:00 to
+expose — and the late edge loses one. And the three remaining exposed slots
+decline only on a day that produced no picks: on every reading picks are done
+by **08:08–09:01 UTC**, before 10:47, and the guard stands down the moment any
+pick exists for the day.
+
+**The 01:17 / 02:17 failures were about hours at which no capture runs.** The
+test's parametrisation was `[21, 23, 1, 2]`; 21:17 and 23:17 are real slots
+and 01:17 and 02:17 are not.
+
+**Both controls, and the 2026-09 incident reproduced:** the five protected
+slots must **not** decline with the database seeded in exactly the state that
+caused the incident (a league holding an unpicked fixture, no pick written for
+the day — the condition the reverted date-marker guard turned on); the three
+exposed slots **must** decline. And the window start is now **tied to the
+cron** by a test, so it cannot diverge again.
+
+### PART C — the series reset, as a cost of this move
+
+Membership keys on the run's own `headSha` carrying the cron in force, so the
+move **empties the lag series**. The margin reports NOT COMPUTED until the new
+crons fire, and `test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED`
+now **SKIPS** — the honest state, visible rather than a false pass.
+
+**The second step slips: 2026-11-04 → 2026-11-06.** `simulated` 2026-10-22
+from ~5 scheduled weekday runs/week: n≥10 under the new cron takes ~2.0 weeks
+from the first run on 2026-10-23. **Attributed to this move rather than
+discovered later.**
+
+**Both series are retained and labelled by cron, never pooled** — the
+`390a4be` rule. Pooling `0 0` with `0 1` would reproduce the error that chose
+`0 4` from another cron's spread.
+
+**The condition is unchanged**, only its date moved: n≥10 by `headSha`, no
+point above 200m, gap ratio below 8.0, mean+3sd ≤ 156.2. Both controls driven:
+the slow cluster **fails** it, a pure fast series **passes** every clause. And
+the reminder that reports it now fires when the condition becomes
+**evaluable** (n=10), not on the first run under the new cron.
+
+### PART D — two things the correction changed that outlive it
+
+**1. The weekend is the earlier floor on both sides, permanently.** 12:00 local
+against 12:30. `SCHEDULE_DEADLINE_MIN` 570 → 540. Swept for places assuming
+the weekday bound: the hits are all about the weekday **margin**, which
+correctly still binds because the weekday **delay** is worse. *Which deadline
+is earlier and which margin is tighter are different questions* — and this
+analysis conflated them for weeks. The weekend cron moved as a direct result;
+the previous entry had left it untouched on the reasoning that it had least to
+gain, which was true only while the floors were stored UTC constants.
+
+**2. The standing weekday breach cleared by a measurement correction, not by
+the pipeline.** +20.7 → **+80.7** on 2026-10-26, from the localisation alone —
+the floor moved 09:30 → 10:30 UTC because the anchor is a local time and the
+clocks went back. **Nothing got faster.** Recorded so nobody later reads it as
+the parallelisation's doing.
+
+### DISCIPLINE
+
+Gating selection **2,471 passed, 9 deselected**; non-gating 7 passed, 2
+skipped (both skips are UNEVALUATED states, not passes). **Invariants 26
+passed** — rule 8's exemption applied to 6b and the four revision pins, with
+the argument in `tests/experiment_pins.py` and no test relaxed. Every workflow
+YAML parses. Fingerprint **`s5.19 / cdec29`**, as rule 7 ordered.
+
+PNC: one new entry, `LAG_CLUSTER_PROVENANCE`, **consumed** rather than
+declared — it is printed on the BIMODAL line, which is where a reader asks why
+the series splits and why at 8.0.
+
+**Carried forward:** the second step on **2026-11-06**, with its four-clause
+condition; the picks-bound re-derivation when the parallel series reaches
+n=10; and `0 2` re-opens if either premise of its rejection moves.
+
+*Recorded 2026-10-22. `.github/workflows/daily-picks.yml`,
+`src/models/model_version.py`, `src/scrapers/theodds_scraper.py`,
+`scripts/ci_audit.py`, `scripts/pipeline_loss_alert.py`,
+`tests/experiment_pins.py`, `tests/test_cron_moved.py`,
+`tests/test_picks_run_guard.py`.*

@@ -81,13 +81,70 @@ def test_there_are_exactly_two_crons_and_they_PARTITION_the_week():
         f"have no cron, so those days produce no card at all")
 
 
-def test_the_weekend_cron_is_UNCHANGED():
-    """The weekend carries the bigger card AND the earlier deadline, so it is
-    the day type with least to gain and most to lose."""
+def test_BOTH_crons_are_the_LATEST_that_CLEAR_the_registered_60():
+    """MOVED 2026-10-22, and the weekend moved too.
+
+    It used to assert the weekend cron was UNCHANGED at 00:00, on the
+    reasoning that the weekend carries the bigger card and the earlier
+    deadline so it had least to gain. That reasoning was right while the two
+    deadlines were stored UTC constants. Localising them inverted which floor
+    is earlier -- the weekend's is 12:00 local against the weekday's 12:30 --
+    and once each day type is sized against its OWN floor and its OWN spread,
+    the weekend has 30 minutes to give and the weekday 60.
+
+    THE DERIVATION, and it is re-run here rather than quoted: each cron is the
+    latest that clears `MIN_ACCEPTABLE_MARGIN_MIN` on BOTH pairings the margin
+    takes the worse of, at the SUMMER floor (which binds, because one UTC cron
+    serves both seasons and summer's floor is the earlier one).
+    """
+    import datetime as _d
+    import math
+
+    import scripts.ci_audit as _ci
+    from scripts.schedule_deadline import (MIN_ACCEPTABLE_MARGIN_MIN,
+                                           observed_earliest_min)
+
+    #: The SLOW cluster per day type, `measured` 2026-10-22 under the retired
+    #: `0 0` cron. Recorded here because moving the cron empties the live
+    #: series: membership keys on the run's own headSha carrying the cron in
+    #: force, so this derivation cannot be re-run from live data until the new
+    #: crons have fired.
+    SLOW = {"weekday": {"max": 304.9, "p3sd": 332.6},
+            "weekend": {"max": 293.7, "p3sd": 342.3}}
+    summer = _d.date(2026, 10, 24)
+
     crons = current_crons_by_daytype()
-    assert crons["weekend"] == 0, (
-        f"the weekend cron moved to {crons['weekend']} minutes — it was left at "
-        f"00:00 deliberately")
+    for dtype, expect in (("weekday", 60), ("weekend", 30)):
+        floor = observed_earliest_min(dtype, summer)
+        cap = min(
+            floor - MIN_ACCEPTABLE_MARGIN_MIN - SLOW[dtype]["max"]
+            - _ci.FULL_CARD_PICKS_MAX,
+            floor - MIN_ACCEPTABLE_MARGIN_MIN - SLOW[dtype]["p3sd"]
+            - _ci.FULL_CARD_PICKS_3SD)
+        latest15 = int(math.floor(cap / 15) * 15)
+        assert crons[dtype] == expect, (
+            f"the {dtype} cron is {crons[dtype]}, expected {expect}")
+        assert crons[dtype] == latest15, (
+            f"the {dtype} cron {crons[dtype]} is no longer the latest "
+            f"15-minute boundary that clears {MIN_ACCEPTABLE_MARGIN_MIN}m "
+            f"(cap {cap:.1f} -> {latest15}). Either an input moved or the "
+            f"cron was set by hand; re-derive before trusting it.")
+        # and it must actually clear, not merely be the latest candidate
+        for delay, picks in ((SLOW[dtype]["max"], _ci.FULL_CARD_PICKS_MAX),
+                             (SLOW[dtype]["p3sd"], _ci.FULL_CARD_PICKS_3SD)):
+            assert floor - (crons[dtype] + delay + picks) >= \
+                MIN_ACCEPTABLE_MARGIN_MIN, (dtype, delay, picks)
+
+
+def test_the_WEEKEND_cron_is_EARLIER_than_the_weekday_one():
+    """Because its floor is earlier. The relation, not the values, is what
+    carries the reason -- and it is the inverse of what the retired UTC
+    constants implied."""
+    crons = current_crons_by_daytype()
+    assert crons["weekend"] < crons["weekday"], (
+        f"weekend {crons['weekend']} is no longer earlier than weekday "
+        f"{crons['weekday']}; the weekend floor is the earlier one (12:00 "
+        f"local against 12:30), so its cron must be too")
 
 
 @pytest.mark.live
@@ -133,12 +190,27 @@ def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
     which can only be checked after it runs — so the selection stops being an
     optimisation and becomes a measurement with a revert path.
     """
+    # ── MOVED AGAIN 2026-10-22 (`s5.19`), AND THIS TEST'S OWN MESSAGE SAID
+    #    WHAT TO DO: "the series for the NEW cron must be measured before this
+    #    number is trusted". It cannot be yet.
+    #
+    # Membership keys on the run's own headSha carrying the cron in force, so
+    # the move EMPTIED the series. That is the reset recorded as a cost of the
+    # move in `test_cron_moved.py`, and the requirement this test exists to
+    # enforce -- that the shipped cron clears the margin against the series IT
+    # ACTUALLY PRODUCES -- is therefore UNEVALUATED until the new cron runs.
+    #
+    # So the assertion becomes: the cron is where the derivation put it, and
+    # the series is EMPTY, which is a state and not a pass. Once runs
+    # accumulate this branch stops being taken and the margin below is checked
+    # against real data -- the same shape as the `0 4` revert's requirement,
+    # applied to its successor.
     crons = current_crons_by_daytype()
-    assert crons["weekday"] == 0, (
-        f"the weekday cron is at {crons['weekday']} minutes. It was reverted "
-        f"to 00:00 on 2026-10-18 because `0 4` measured -241m. If it has moved "
-        f"again, the series for the NEW cron must be measured before this "
-        f"number is trusted.")
+    assert crons["weekday"] == 60, (
+        f"the weekday cron is at {crons['weekday']} minutes, expected 60 "
+        f"(`0 1`, derived 2026-10-22 from the SLOW cluster against the "
+        f"localised floor). If it has moved again, the series for the NEW "
+        f"cron must be measured before any margin is trusted.")
 
     deadline = DEADLINE_MIN_BY_DAYTYPE["weekday"]
 

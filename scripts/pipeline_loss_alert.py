@@ -200,9 +200,17 @@ def format_loss_alert(streak: List[DayLoss],
         # themselves now stale at the LOW end, because they predate the
         # 10-19..10-22 cluster. Named here rather than edited in nine
         # places from inside a Telegram change.
-        "A dispatched run skips the scheduler's lateness, MEASURED "
-        "2026-10-22 over the live weekday `0 0` cron at 2h08m-5h05m "
-        "(n=10).",
+        # ── PER CLUSTER, 2026-10-22. ────────────────────────────────────
+        #
+        # The pooled range 2h08m-5h05m spans a BIMODAL series (largest gap /
+        # median gap = 17.33 on the weekday series), so quoting it as one
+        # range tells the operator a number that describes neither half. The
+        # two clusters are given, with the slow one named as the figure a
+        # dispatch is insuring against.
+        "A dispatched run skips the scheduler's lateness. MEASURED "
+        "2026-10-22 over the weekday series, which is BIMODAL under one "
+        "unchanged cron: SLOW cluster n=6, 4h16m-5h05m (this is what a "
+        "dispatch insures against); fast cluster n=4, 2h08m-2h24m.",
     ]
     if run_url:
         lines.append(f"Logs: {run_url}")

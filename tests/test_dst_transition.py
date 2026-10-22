@@ -181,28 +181,46 @@ def test_the_IN_TZ_helpers_were_ALREADY_DERIVING_and_still_are(module):
 
 # ── what the crons MEAN to Niki changes, though they do not move ─────────
 
-#: `measured` 2026-10-22 from `.github/workflows/daily-picks.yml`.
-CRONS_UTC = {"weekend": 0, "weekday": 0}
+#: `measured` 2026-10-22 from `.github/workflows/daily-picks.yml`, AFTER the
+#: `s5.19` move. They were both 0 when this test was written that morning.
+CRONS_UTC = {"weekend": 30, "weekday": 60}
 
 
 def test_the_CRONS_DO_NOT_MOVE_but_their_LOCAL_MEANING_SHIFTS_an_hour():
     """The crons are UTC and GitHub does not reinterpret them. What changes is
-    what they mean to a person: a 00:00 UTC start is 03:00 local on 10-24 and
-    02:00 local on 10-26. Nothing to fix — stated so the hour is not later
-    mistaken for a regression in the scheduler."""
+    what they mean to a person. Nothing to fix — stated so the hour is not
+    later mistaken for a regression in the scheduler.
+
+    RE-POINTED 2026-10-22 when the crons moved; the PROPERTY is unchanged and
+    is now checked per day type, since the two no longer share a minute.
+    """
     wf = pathlib.Path(".github/workflows/daily-picks.yml").read_text(
         encoding="utf-8")
-    found = sorted(set(re.findall(r"- cron: '(\d+) (\d+) \* \* ([^']+)'", wf)))
-    assert found, "daily-picks carries no parseable cron"
-    for minute, hour, _dow in found:
-        utc_min = int(hour) * 60 + int(minute)
-        assert utc_min == CRONS_UTC["weekday"], (
-            f"the cron moved to {hour}:{minute} UTC; re-derive the local "
-            f"meanings below before trusting them")
-    for day, expect in ((BEFORE, "03:00"), (AFTER, "02:00")):
-        local = dt.datetime.combine(
-            day, dt.time(0, 0), tzinfo=dt.timezone.utc).astimezone(TZ)
-        assert local.strftime("%H:%M") == expect, (day, local)
+    found = {}
+    for minute, hour, dow in re.findall(
+            r"- cron: '(\d+) (\d+) \* \* ([^']+)'", wf):
+        key = "weekend" if ("6" in dow or "0" in dow.split(",")) else "weekday"
+        found[key] = int(hour) * 60 + int(minute)
+    assert found == CRONS_UTC, (
+        f"the crons are {found}; re-derive the local meanings below before "
+        f"trusting them")
+    #: What each cron MEANS locally, either side of the transition. Derived
+    #: from ZoneInfo, not written down twice.
+    for key, utc_min in CRONS_UTC.items():
+        summer = dt.datetime.combine(
+            BEFORE, dt.time(utc_min // 60, utc_min % 60),
+            tzinfo=dt.timezone.utc).astimezone(TZ)
+        winter = dt.datetime.combine(
+            AFTER, dt.time(utc_min // 60, utc_min % 60),
+            tzinfo=dt.timezone.utc).astimezone(TZ)
+        assert (winter.hour * 60 + winter.minute) ==             (summer.hour * 60 + summer.minute) - 60, (
+            f"{key}: the local meaning did not shift by exactly an hour "
+            f"({summer:%H:%M} -> {winter:%H:%M})")
+    # and the concrete pair, so the shift is legible rather than only asserted
+    assert dt.datetime.combine(BEFORE, dt.time(1, 0),
+                               tzinfo=dt.timezone.utc)        .astimezone(TZ).strftime("%H:%M") == "04:00"
+    assert dt.datetime.combine(AFTER, dt.time(1, 0),
+                               tzinfo=dt.timezone.utc)        .astimezone(TZ).strftime("%H:%M") == "03:00"
 
 
 # ── THE DEADLINE CONSTANTS ARE SUMMER FIGURES, AND THAT IS MEASURED ──────

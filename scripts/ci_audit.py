@@ -1942,6 +1942,55 @@ QUANTILE_SUCCESSOR = {
 }
 
 
+#: ── THE BIMODALITY TEST. 2026-10-22. ─────────────────────────────────────
+#:
+#: A bimodal series must not be summarised by a statistic that assumes it is
+#: not, so the margin is computed PER CLUSTER and the pessimistic one governs.
+#: The split is at the largest gap between consecutive sorted values, and the
+#: series counts as bimodal only when that gap dwarfs the typical one.
+#:
+#: `measured` 2026-10-22, the two live series:
+#:
+#:   weekday  n=10  sorted 128.4 .. 304.9   max gap 111.8  median 6.4  = 17.33
+#:   weekend  n=6   sorted 219.3 .. 293.7   max gap  32.7  median 12.5 =  2.61
+#:
+#: 8.0 sits between them with a wide margin on both sides. IT IS PROVISIONAL
+#: AND SAYS SO: a ratio threshold derived from the only two series available is
+#: close to circular, and the honest fix is the empirical quantile, which needs
+#: no split at all -- see `QUANTILE_SUCCESSOR`, usable at n>=100.
+LAG_CLUSTER_GAP_RATIO = 8.0
+LAG_CLUSTER_PROVENANCE = (
+    "largest consecutive gap / median consecutive gap; measured 2026-10-22 as "
+    "17.33 (weekday, n=10) and 2.61 (weekend, n=6), so 8.0 separates them. "
+    "PROVISIONAL: a threshold derived from two series is near-circular, and "
+    "the p95 successor removes the need for any split at n>=100")
+
+
+def split_lag_clusters(lags):
+    """`(slow, fast)` when the series is bimodal, else `(sorted(lags), None)`.
+
+    SLOW FIRST, because the slow cluster is the one that governs a safety
+    choice and returning it first makes a caller that ignores the second
+    element conservative rather than optimistic.
+    """
+    import statistics
+    vals = sorted(float(v) for v in lags)
+    if len(vals) < 4:
+        return vals, None
+    gaps = [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
+    med = statistics.median(gaps)
+    widest = max(gaps)
+    if med <= 0 or widest / med < LAG_CLUSTER_GAP_RATIO:
+        return vals, None
+    i = gaps.index(widest)
+    fast, slow = vals[:i + 1], vals[i + 1:]
+    # Each side must hold enough points to have a spread at all; otherwise
+    # the "cluster" is one outlier and the split is noise.
+    if len(fast) < 2 or len(slow) < 2:
+        return vals, None
+    return slow, fast
+
+
 def empirical_quantile(values, p: float):
     """The `p`-quantile by nearest-rank, or `None` when undefined.
 
@@ -1997,7 +2046,45 @@ def schedule_margin(series, cron_minutes: int,
                               ("margin_3sd", mean + 3 * sd, FULL_CARD_PICKS_3SD)):
         out[key] = deadline_min - (cron_minutes + delay + picks)
     # FAIL CLOSED on the worse of the two.
-    out["binding"] = min(out["margin_max"], out["margin_3sd"])
+    out["pooled_binding"] = min(out["margin_max"], out["margin_3sd"])
+
+    # ── PER CLUSTER, AND THE PESSIMISTIC ONE GOVERNS. 2026-10-22. ─────────
+    #
+    # The pooled figures above stay, labelled, because they are what every
+    # earlier entry in the ledger quotes. But on a BIMODAL series `mean+3sd`
+    # measures the distance between the clusters: for the weekday series it
+    # reads 442.3 against an observed maximum of 304.9, so the pooled margin
+    # is 137.5 minutes of headroom against an event never seen -- and no cron
+    # can clear 60 minutes against it. Deriving a cron from that figure is
+    # fitting the schedule to an artefact.
+    #
+    # So when the series splits, the margin is computed on EACH cluster and
+    # `binding` comes from the SLOW one. The fast cluster is reported and
+    # never relied on: nothing explains the gap, so nothing licenses assuming
+    # it persists.
+    _slow, _fast = split_lag_clusters(lags)
+    out["bimodal"] = _fast is not None
+    out["clusters"] = {}
+    for _name, _vals in (("slow", _slow), ("fast", _fast)):
+        if not _vals:
+            continue
+        _m = sum(_vals) / len(_vals)
+        _sd = (sum((x - _m) ** 2 for x in _vals) / (len(_vals) - 1)) ** 0.5 \
+            if len(_vals) > 1 else 0.0
+        _c = {"n": len(_vals), "mean": _m, "sd": _sd, "max": max(_vals),
+              "mean_plus_3sd": _m + 3 * _sd}
+        _c["margin_max"] = deadline_min - (
+            cron_minutes + _c["max"] + FULL_CARD_PICKS_MAX)
+        _c["margin_3sd"] = deadline_min - (
+            cron_minutes + _c["mean_plus_3sd"] + FULL_CARD_PICKS_3SD)
+        _c["binding"] = min(_c["margin_max"], _c["margin_3sd"])
+        out["clusters"][_name] = _c
+    if out["bimodal"]:
+        out["binding"] = out["clusters"]["slow"]["binding"]
+        out["binding_from"] = "slow cluster"
+    else:
+        out["binding"] = out["pooled_binding"]
+        out["binding_from"] = "the whole series (not bimodal)"
     out["alarm"] = out["binding"] < MARGIN_ALARM_MIN
     out["deadline_min"] = deadline_min
     out["day_type"] = day_type
@@ -2380,15 +2467,49 @@ def format_schedule_margin(m) -> str:
              if _q is None else hm(_q))
     _verdict = ("BINDS" if m.get("quantile_usable")
                 else f"not usable until n>={QUANTILE_SUCCESSOR['min_n']}")
-    return (f"schedule_margin[n={m['n']} window={MARGIN_TRAILING_DAYS}d "
-            f"delay max={hm(m['max'])} mean+3sd={hm(m['mean_plus_3sd'])} "
-            f"| margin max={m['margin_max']:+.0f}m 3sd={m['margin_3sd']:+.0f}m "
-            f"binding={m['binding']:+.0f}m threshold={MARGIN_ALARM_MIN}m"
-            + ("  ** DECISION FIRES **]" if m["alarm"] else "]")
-            + chr(10) + f"{'':10s}  successor[p95 delay={_qtxt} "
-            f"({_verdict}); mean+3sd BINDS today and is "
-            f"{'ABOVE' if m['mean_plus_3sd'] > m['max'] else 'within'} the "
-            f"observed max {hm(m['max'])}]")
+    _lines = [
+        f"schedule_margin[n={m['n']} window={MARGIN_TRAILING_DAYS}d "
+        f"delay max={hm(m['max'])} mean+3sd={hm(m['mean_plus_3sd'])} "
+        f"| POOLED margin max={m['margin_max']:+.0f}m "
+        f"3sd={m['margin_3sd']:+.0f}m pooled_binding="
+        f"{m.get('pooled_binding', m['binding']):+.0f}m]",
+    ]
+    # ── PER CLUSTER, AND WHICH ONE BINDS. 2026-10-22. ────────────────────
+    #
+    # The pooled line above is kept because every earlier ledger entry quotes
+    # it, but on a bimodal series it is an artefact: `mean+3sd` measures the
+    # distance BETWEEN clusters. So each cluster is printed with its own n,
+    # and the line says which one `binding` came from. The fast cluster is
+    # reported and never relied on.
+    if m.get("bimodal"):
+        _lines.append(f"{'':10s}  BIMODAL (gap ratio >= "
+                      f"{LAG_CLUSTER_GAP_RATIO}): the pooled mean+3sd "
+                      f"measures BETWEEN-CLUSTER distance, not tail risk")
+        # PNC-1: the threshold's provenance existed as a constant and nothing
+        # printed it. This is where a reader asks "why does it split, and why
+        # at 8.0?", so it is answered here rather than left in the source.
+        _lines.append(f"{'':10s}  split rule: {LAG_CLUSTER_PROVENANCE}")
+    for _name in ("slow", "fast"):
+        _c = (m.get("clusters") or {}).get(_name)
+        if not _c:
+            continue
+        _gov = "GOVERNS" if _name == "slow" and m.get("bimodal") else \
+            ("binds" if _name == "slow" else "reported, NOT relied on")
+        _lines.append(
+            f"{'':10s}  {_name:4s}[n={_c['n']} mean={hm(_c['mean'])} "
+            f"max={hm(_c['max'])} mean+3sd={hm(_c['mean_plus_3sd'])} "
+            f"| margin max={_c['margin_max']:+.0f}m "
+            f"3sd={_c['margin_3sd']:+.0f}m binding={_c['binding']:+.0f}m] "
+            f"{_gov}")
+    _lines.append(
+        f"{'':10s}  BINDING {m['binding']:+.0f}m from {m['binding_from']}, "
+        f"threshold {MARGIN_ALARM_MIN}m"
+        + ("  ** DECISION FIRES **" if m["alarm"] else ""))
+    _lines.append(
+        f"{'':10s}  successor[p95 delay={_qtxt} ({_verdict}); mean+3sd is "
+        f"{'ABOVE' if m['mean_plus_3sd'] > m['max'] else 'within'} the "
+        f"observed max {hm(m['max'])}]")
+    return chr(10).join(_lines)
 
 
 # ───────────────────── A RUN THAT NEVER FIRED, AND A FILE GITHUB REFUSED

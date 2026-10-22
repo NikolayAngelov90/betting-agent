@@ -33,6 +33,8 @@ the refresh window to 360 minutes, which widens the blast radius of an overlap.
 
 from datetime import datetime, timedelta
 
+import pathlib
+
 import pytest
 
 import src.data.database as db_mod
@@ -82,21 +84,126 @@ def _seed(mgr, *, leagues_with_unpicked=(), leagues_all_picked=(), picks_today=0
 
 # ── THE REGRESSION THAT CAUSED THE REVERT ─────────────────────────────────
 
-@pytest.mark.parametrize("hour", [21, 23, 1, 2])
-def test_the_overnight_slots_NEVER_decline(tmp_path, hour):
-    """23:17 and 01:00 declined every night and stopped captures for a day.
+#: EVERY REAL `closing-lines` SLOT, `measured` 2026-10-22 from its own crons
+#: (`47 10` and `17 11,13,15,17,19,21,23`). Enumerated rather than sampled,
+#: because the question "which slots can this guard decline" has an answer and
+#: the previous version of this test asked it about 01:17 and 02:17 -- hours at
+#: which NO CAPTURE RUNS AT ALL.
+CAPTURE_SLOTS = [(10, 47), (11, 17), (13, 17), (15, 17),
+                 (17, 17), (19, 17), (21, 17), (23, 17)]
 
-    The conditions the database reports are IRRELEVANT here — the time bound
-    is checked first, precisely so no database state can reproduce this.
+#: The slots INSIDE the window under the new crons (weekend `30 0`, weekday
+#: `0 1` -> window [00:30, 13:30]), and those outside it.
+SLOTS_EXPOSED = [(10, 47), (11, 17), (13, 17)]
+SLOTS_PROTECTED = [(15, 17), (17, 17), (19, 17), (21, 17), (23, 17)]
+
+
+def test_the_SLOT_ENUMERATION_matches_the_closing_lines_crons():
+    """The enumeration is checked against the workflow, so it cannot drift
+    into describing a schedule that no longer exists -- which is exactly what
+    happened to this file's `[21, 23, 1, 2]` parametrisation."""
+    import re
+    wf = pathlib.Path(".github/workflows/closing-lines.yml").read_text(
+        encoding="utf-8")
+    found = sorted(
+        (int(h), int(mins))
+        for mins, hours in re.findall(r"- cron: '(\d+) ([0-9,]+) \* \* \*'", wf)
+        for h in hours.split(","))
+    assert found == sorted(CAPTURE_SLOTS), found
+    assert sorted(SLOTS_EXPOSED + SLOTS_PROTECTED) == sorted(CAPTURE_SLOTS)
+
+
+@pytest.mark.parametrize("hour,minute", SLOTS_PROTECTED)
+def test_CONTROL_a_slot_OUTSIDE_the_window_NEVER_declines(tmp_path, hour, minute):
+    """THE 2026-09 INCIDENT, REPRODUCED AND REFUSED.
+
+    The reverted guard asked "have today's picks run" through a
+    `date.today()` marker, which stayed false all evening and all night, so it
+    declined EVERY overnight slot and took captures to zero for a full day.
+    The database here is seeded in exactly that state -- a league holding an
+    unpicked fixture and no pick written for the day -- so the marker
+    condition the incident turned on is TRUE at each of these times.
+
+    The time bound is checked FIRST, so no database state can reproduce it.
+
+    RE-POINTED 2026-10-22: the slots were `[21, 23, 1, 2]` at :17, and 01:17
+    and 02:17 are hours at which no capture runs. Under the new crons the
+    window is [00:30, 13:30], so the protected set is the five slots from
+    15:17 -- one MORE than under the stale [03:00, 16:00] window, which left
+    15:17 exposed.
     """
     mgr = _mgr(tmp_path)
     _seed(mgr, leagues_with_unpicked=("england/premier-league",))
     got = _scraper(mgr)._leagues_a_pending_run_could_price(
-        ["england/premier-league"], DAY.replace(hour=hour, minute=17))
+        ["england/premier-league"], DAY.replace(hour=hour, minute=minute))
     assert got == {}, (
-        f"declined at {hour:02d}:17 — no picks run can be pending outside the "
-        f"window after the 03:00 cron, and this is the failure that stopped "
-        f"captures for a full day")
+        f"declined at {hour:02d}:{minute:02d} — that slot is OUTSIDE the "
+        f"pending-run window, so no picks run can be waiting on it. This is "
+        f"the failure that stopped captures for a full day in 2026-09, and "
+        f"the DB is seeded in the state that caused it.")
+
+
+@pytest.mark.parametrize("hour,minute", SLOTS_EXPOSED)
+def test_CONTROL_a_slot_INSIDE_the_window_DOES_decline(tmp_path, hour, minute):
+    """The other half. A guard that never declines is not a guard, and these
+    three slots are the ones a pending run can still be racing."""
+    mgr = _mgr(tmp_path)
+    _seed(mgr, leagues_with_unpicked=("england/premier-league",))
+    got = _scraper(mgr)._leagues_a_pending_run_could_price(
+        ["england/premier-league"], DAY.replace(hour=hour, minute=minute))
+    assert set(got) == {"england/premier-league"}, (
+        f"{hour:02d}:{minute:02d} is inside the window with a pending run and "
+        f"an unpicked fixture, and the guard stood down")
+
+
+def test_the_MOVE_PROTECTS_MORE_SLOTS_THAN_IT_EXPOSES():
+    """The cost of the cron move, measured rather than feared.
+
+    `measured` 2026-10-22: 4 of the 8 slots could decline under the stale
+    [03:00, 16:00] window and 3 can under [00:30, 13:30]. The early edge
+    gains nothing because the FIRST capture slot is 10:47 -- there is no slot
+    between 00:30 and 03:00 to expose -- and the late edge loses 15:17.
+    """
+    import src.scrapers.theodds_scraper as ts
+    width = ts._PICKS_EXPOSURE_WINDOW_MINUTES
+    old_start, new_start = 3 * 60, ts._PICKS_CRON_MINUTE_OF_DAY
+
+    def inside(start, hm):
+        m = hm[0] * 60 + hm[1]
+        return start <= m <= start + width
+
+    old = [s for s in CAPTURE_SLOTS if inside(old_start, s)]
+    new = [s for s in CAPTURE_SLOTS if inside(new_start, s)]
+    assert len(old) == 4 and len(new) == 3, (old, new)
+    newly_exposed = [s for s in new if s not in old]
+    newly_protected = [s for s in old if s not in new]
+    assert newly_exposed == [], (
+        f"the move exposed {newly_exposed}; over-declining is the failure "
+        f"that took captures to zero in 2026-09")
+    assert newly_protected == [(15, 17)], newly_protected
+    assert sorted(new) == sorted(SLOTS_EXPOSED)
+
+
+def test_the_WINDOW_START_is_TIED_to_the_CRON_and_cannot_diverge():
+    """`3 * 60` was stale by three hours: the cron had been `0 0` since
+    2026-10-18 and nothing connected the two. A scraper must not parse
+    workflow YAML at runtime, so the literal stays and THIS ties it."""
+    import src.scrapers.theodds_scraper as ts
+    from scripts.ci_audit import current_crons_by_daytype
+
+    crons = [v for v in current_crons_by_daytype().values() if v is not None]
+    assert crons, "no cron could be read from daily-picks.yml"
+    assert ts._PICKS_CRON_MINUTE_OF_DAY == min(crons), (
+        f"_PICKS_CRON_MINUTE_OF_DAY is {ts._PICKS_CRON_MINUTE_OF_DAY} but the "
+        f"earliest daily-picks cron is {min(crons)}. Inside this window the "
+        f"guard reserves credits for a pending picks run, so a window that "
+        f"opens AFTER the cron leaves the run unprotected at the start of "
+        f"its own schedule.")
+    # and the width must still cover the latest a run can be pending:
+    # cron + max observed delay + p90 duration
+    assert ts._PICKS_EXPOSURE_WINDOW_MINUTES >= 342.3 + 106, (
+        "the window no longer reaches the latest a picks run can be pending "
+        "(max observed delay 342.3 + p90 duration 106)")
 
 
 def test_inside_the_window_with_a_pending_run_it_DOES_decline(tmp_path):

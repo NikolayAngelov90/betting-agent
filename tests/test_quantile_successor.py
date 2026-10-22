@@ -176,22 +176,45 @@ def test_BOTH_are_PRINTED_SIDE_BY_SIDE_and_the_BINDING_one_is_named():
     out = ci.format_schedule_margin(m)
     assert "mean+3sd=" in out, "the binding statistic stopped printing"
     assert "successor[p95" in out, "the successor is not printed beside it"
-    assert "mean+3sd BINDS today" in out, (
-        "the line does not say WHICH statistic binds, so a reader cannot "
-        "tell the printed pair apart")
     assert "not usable until n>=100" in out
     assert "ABOVE" in out and "observed max" in out, (
         "the line no longer says the bound is outside the data, which is the "
         "reason the successor exists")
+    # ── AND IT NOW NAMES THE POPULATION TOO. 2026-10-22. ────────────────
+    #
+    # The line used to say "mean+3sd BINDS today", which named the STATISTIC.
+    # Since the per-cluster report it must also name WHICH POPULATION the
+    # binding figure came from, or a reader sees three margins and cannot
+    # tell which one the alarm used.
+    assert "BIMODAL" in out, "the line no longer says the series splits"
+    assert "GOVERNS" in out, "the slow cluster is not marked as governing"
+    assert "reported, NOT relied on" in out, (
+        "the fast cluster is printed without saying it is not relied on")
+    assert f"BINDING {m['binding']:+.0f}m from slow cluster" in out, (
+        "the line does not say which POPULATION binds")
 
 
 def test_the_SWITCH_HAS_NOT_HAPPENED_and_mean_3sd_still_binds():
-    """The decision this stage deliberately does NOT take. `binding` must
-    still come from mean+3sd, or the comparison has silently become a
-    replacement."""
+    """The decision this stage deliberately does NOT take.
+
+    TWO AXES, AND ONLY ONE MOVED. On 2026-10-22 `binding` started coming from
+    the SLOW CLUSTER rather than the whole series -- a change of POPULATION.
+    The STATISTIC is still `mean+3sd`: the p95 quantile binds on nothing and
+    will not until n>=100. Conflating those two would make this test read as
+    if the successor had shipped.
+    """
     m = ci.schedule_margin([(None, v) for v in WEEKDAY], 0,
                            deadline_min=570, day_type="weekday")
-    assert m["binding"] == min(m["margin_max"], m["margin_3sd"])
+    # the POPULATION moved: this series is bimodal, so the slow cluster binds
+    assert m["bimodal"] is True
+    assert m["binding_from"] == "slow cluster"
+    assert m["binding"] == m["clusters"]["slow"]["binding"]
+    # and the pooled figure is kept, labelled, because the ledger quotes it
+    assert m["pooled_binding"] == min(m["margin_max"], m["margin_3sd"])
+    # the STATISTIC did not move
+    assert m["clusters"]["slow"]["binding"] == min(
+        m["clusters"]["slow"]["margin_max"],
+        m["clusters"]["slow"]["margin_3sd"])
     assert m["quantile_usable"] is False
     assert m["p95"] is None, "n=10 cannot define a p95"
 

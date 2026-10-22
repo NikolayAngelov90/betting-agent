@@ -72,7 +72,11 @@ def test_the_cron_is_SPLIT_BY_DAY_OF_WEEK():
     12:00 UTC, from an independent reference). The NAME changes with the
     shape so a reader cannot mistake this for the single-cron guard.
     """
-    assert _crons(_wf()) == ["0 0 * * 6,0", "0 0 * * 1-5"], (
+    # MOVED AGAIN 2026-10-22 (`s5.19`): the bump happened and BOTH margins
+    # were re-derived, against localised per-day floors and per-CLUSTER
+    # spreads. The weekend moved too, which the previous entry had left
+    # untouched -- localising the anchors inverted which floor is earlier.
+    assert _crons(_wf()) == ["30 0 * * 6,0", "0 1 * * 1-5"], (
         "the daily-picks crons moved. That changes when prices are taken, "
         "which is selection-affecting by the s5.2 precedent - bump "
         "CODE_REVISION and re-derive BOTH margins before changing this")

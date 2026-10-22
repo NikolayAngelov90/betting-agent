@@ -1146,7 +1146,89 @@ TRACKED_KEYS: List[str] = [
 #:       contradicts it. The two are left disagreeing; the registered trial in
 #:       docs/scheduler-hour-hypothesis.md settles it, and the revert is what
 #:       starts that trial running prospectively.
-CODE_REVISION = "s5.18"
+#: s5.19 — 2026-10-22. THE DEADLINE IS LOCALISED AND BOTH CRONS MOVE:
+#:       weekday `0 0` -> `0 1`, weekend `0 0` -> `30 0`.
+#:
+#:       TWO CHANGES, AND THE FIRST IS WHAT MAKES THE SECOND POSSIBLE.
+#:
+#:       (1) THE DEADLINE WAS A UTC CONSTANT MEASURED IN SUMMER. A kickoff is
+#:       scheduled in a LOCAL clock, so its UTC minute moves twice a year.
+#:       Re-derived as the minimum LOCAL kickoff over the record (the 30
+#:       configured leagues, phantoms excluded):
+#:
+#:           weekday  12:30 local  n=718  2023-10-26, bulgaria/efbet-league
+#:           weekend  12:00 local  n=375  2024-11-02, bulgaria/efbet-league
+#:
+#:       The weekday anchor is the same event as the retired 09:30 UTC. THE
+#:       WEEKEND ANCHOR IS NOT: the retired 09:45 was the minimum of the
+#:       SUMMER SUBSET only, and four of the five earliest local kickoffs are
+#:       winter dates. So localising TIGHTENS the weekend floor by 45 minutes
+#:       in summer and loosens it by 15 in winter, while the weekday gains
+#:       60 in winter and nothing in summer. A correction, both ways.
+#:
+#:       It also INVERTED which floor is earlier: 12:00 < 12:30, so the
+#:       WEEKEND binds now, permanently rather than seasonally. The retired
+#:       ordering (09:30 < 09:45) was an artefact of two summer figures
+#:       measured on different days.
+#:
+#:       (2) THE LAG SERIES IS BIMODAL UNDER ONE UNCHANGED CRON, and that
+#:       bimodality IS the early start. `measured` 2026-10-22:
+#:
+#:           weekday SLOW  n=6  mean 276.3  sd 18.8  max 304.9  3sd 332.6
+#:           weekday fast  n=4  mean 135.6  sd  6.9  max 144.1  3sd 156.2
+#:           weekend       n=6  mean 253.2  sd 29.7  max 293.7  3sd 342.3
+#:             (largest-gap/median-gap 17.33 weekday, 2.61 weekend, so only
+#:              the weekday splits)
+#:
+#:       THE SLOW CLUSTER GOVERNS. Each cron is the latest 15-minute boundary
+#:       that clears the registered 60 on BOTH pairings the margin takes the
+#:       worse of, at the SUMMER floor (summer binds: one UTC cron serves both
+#:       seasons and summer's floor is the earlier one):
+#:
+#:           weekday  cap(max 304.9, picks  88.1) = 117.0
+#:                    cap(3sd 332.6, picks 107.0) =  70.4  binds -> `0 1`
+#:           weekend  cap(max 293.7, picks  88.1) =  98.2
+#:                    cap(3sd 342.3, picks 107.0) =  30.7  binds -> `30 0`
+#:
+#:       AFTER: margin summer weekday +70.4, weekend +60.7; winter +130.4 and
+#:       +120.7. Every pairing clears 60.
+#:
+#:       AND IT IS A TRADE, NOT A REPAIR -- corrected while writing the tests
+#:       for it. The retired weekday `0 0` read +20.7, which is the POOLED
+#:       figure, and a pooled mean+3sd over a bimodal series measures
+#:       between-cluster distance. UNDER THE SLOW CLUSTER, the population that
+#:       governs, the old cron had **+130.4**: it cleared the registered 60
+#:       with seventy minutes to spare. The move therefore SPENDS 60 minutes
+#:       of real margin to buy an hour of start time. Legitimate, and Niki's
+#:       to make -- recorded as a trade so it stays open to re-examination
+#:       rather than closed as a fix.
+#:
+#:       LEAD-TIME CHANGE, per day type, Sofia, and per CLUSTER because an
+#:       average across a bimodal series describes neither:
+#:           weekday  SLOW 3sd  08:33 -> 09:33   +60 min later
+#:           weekday  SLOW mean 07:36 -> 08:36   +60
+#:           weekday  fast mean 05:16 -> 06:16   +60
+#:           weekend  3sd       08:42 -> 09:12   +30
+#:           weekend  mean      07:13 -> 07:43   +30
+#:
+#:       EFFECT ON THE DISCOVERED-FIXTURE POPULATION: NONE, measured not
+#:       assumed. `max_days_ahead` is a rolling `now + 1 day`, so the cutoff
+#:       moves LATER with the run. The binding site is a Friday run reaching
+#:       into Saturday, whose earliest kickoff is 10:30 UTC; the six
+#:       date-derived sites were re-enumerated against both new crons and all
+#:       pass, with the Friday->Saturday clearance still above the registered
+#:       hour. Zero D+1 fixtures are admitted under either cron.
+#:
+#:       THE LAG SERIES RESETS TO n=0. Membership keys on the run's own
+#:       headSha carrying the cron in force, so the margin reports NOT
+#:       COMPUTED until runs fire under `0 1` / `30 0`.
+#:
+#:       WHAT THIS IS NOT: an 11:00 Sofia start. That needs the FAST cluster
+#:       to be a regime, and the brief's own parallel-bound derivation (`0 2`,
+#:       10:33 Sofia) leaves the margin at +10.4 under the picks constants
+#:       this project still retains — a breach by its own instrument. It is
+#:       registered for 2026-11-04 with a falsifiable condition.
+CODE_REVISION = "s5.19"
 
 
 def _stable(value: Any) -> Any:

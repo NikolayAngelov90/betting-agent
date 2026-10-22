@@ -350,12 +350,15 @@ def test_current_cron_minutes_refuses_a_MULTI_cron_workflow():
     # on which the two crons do NOT compete, because the week is
     # partitioned and no run can have both as its nearest predecessor.
     by_type = ci.current_crons_by_daytype()
-    # BOTH AT 0 from 2026-10-18. The weekday cron was reverted because `0 4`
-    # measured a -241m binding margin. The split SURVIVES as two entries
-    # because the day types keep different DEADLINES (10:15 vs 12:00) and the
-    # two series remain separate populations - they are keyed by day type, not
-    # by cron minute, so equal minutes do not pool them.
-    assert by_type == {"weekend": 0, "weekday": 0}, by_type
+    # THEY DIVERGE AGAIN FROM 2026-10-22 (`s5.19`): weekend 00:30, weekday
+    # 01:00. They were both 0 from 2026-10-18 after `0 4` measured a -241m
+    # binding margin, and the split survived as two entries even while the
+    # minutes were equal -- because the series are keyed by DAY TYPE, not by
+    # cron minute, so equal minutes never pooled them. Now each is the latest
+    # 15-minute boundary clearing the registered 60 against its OWN localised
+    # floor and its OWN slow-cluster spread, and the weekend's is the earlier
+    # one because its floor is (12:00 local against 12:30).
+    assert by_type == {"weekend": 30, "weekday": 60}, by_type
     assert ci.current_cron_minutes() is None, (
         "the single-cron reader resolved a value even though BOTH crons sit "
         "at minute 0 - equal minutes are still two crons, and the reader must "
