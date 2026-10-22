@@ -255,10 +255,22 @@ def test_continue_on_error_is_still_set_on_every_core_step():
     # separate workflow cannot do either. The flag now lives on the reminder
     # step there, for its own reason (the log must still upload), and
     # `test_calendar_separation` asserts it.
-    assert len(guarded) == 10, (
-        f"{len(guarded)} steps carry continue-on-error, expected 10 — if a step "
+    # 10 -> 11 on 2026-10-22, AND IT IS AN ADDITION, NAMED AS THIS GUARD
+    # REQUIRES. `Check the MODEL, not the retrain step` gained the flag for
+    # the same reason as the loss report: it is a DETECTOR, and a detector
+    # that reddens the run would put a stale model on the same axis as a lost
+    # card. DEL-2 reserves this workflow's red for "the day produced no
+    # picks", and a stale model still produced picks -- from Poisson + Elo,
+    # which is precisely why it needs reporting rather than a colour. It also
+    # reads and writes files under `data/models`, so it can fail on its own
+    # without that meaning anything about the pipeline.
+    assert len(guarded) == 11, (
+        f"{len(guarded)} steps carry continue-on-error, expected 11 — if a step "
         "lost it, the job now HALTS there instead of merely reporting red; if "
         "one gained it, name it here and say why")
+    assert "Check the MODEL, not the retrain step" in guarded, (
+        "the model-freshness detector lost continue-on-error, so a stale "
+        "model now reddens a run that produced a full card")
     assert not any("calendar" in n for n in guarded), (
         "a calendar step is back inside the capture workflow; the separation "
         "is across WORKFLOWS now, not across steps")

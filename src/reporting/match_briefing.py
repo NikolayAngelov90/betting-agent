@@ -190,16 +190,46 @@ _HTML_RULES = (
 )
 
 
-def _kyiv(dt: datetime) -> str:
-    """Format a naive-UTC datetime as Bulgarian local HH:MM (Europe/Sofia)."""
+#: The operator's clock for BRIEFINGS. Named as a constant so the two places
+#: that format a local time cannot drift apart, and so it is greppable
+#: alongside the identical constants in `scripts/pipeline_loss_alert.py` and
+#: `scripts/fixture_horizon_probe.py`.
+#:
+#: NOT THE SAME DECLARED ZONE AS `telegram_bot.py`, WHICH USES `Europe/Kiev`.
+#: Both are EET/EEST and both switch on the EU date, so they have never
+#: DIFFERED by a minute — but they are two different stated intents and only
+#: one of them can be what Niki means. Named here rather than silently
+#: unified, because picking one is a product decision, not a DST fix.
+OPERATOR_TZ = "Europe/Sofia"
+
+
+def _operator_local(dt: datetime, with_zone: bool = False) -> str:
+    """A naive-UTC datetime as operator-local `HH:MM`, optionally with its
+    clock's own abbreviation.
+
+    THE OFFSET IS DERIVED, NEVER ASSUMED. This read
+    `timezone(timedelta(hours=3))  # EEST fallback` — a literal +3 that is
+    correct for exactly half the year and silently an hour wrong for the
+    other half. **Europe/Sofia goes UTC+3 -> UTC+2 on 2026-10-25.**
+
+    AND THE FALLBACK NO LONGER GUESSES. If the zone database is unavailable it
+    returns the UTC time SAYING SO, rather than a local-looking time that is
+    not local. A wrong clock that looks right is worse than a right clock that
+    looks foreign.
+
+    `with_zone` appends the abbreviation `%Z` resolves to — `EEST` before
+    2026-10-25, `EET` after — which is what replaced the hard-coded "EEST" in
+    the prompt header.
+    """
     if dt is None:
         return "TBD"
+    aware = dt.replace(tzinfo=timezone.utc)
     try:
         from zoneinfo import ZoneInfo
-        tz = ZoneInfo("Europe/Sofia")
+        local = aware.astimezone(ZoneInfo(OPERATOR_TZ))
     except Exception:
-        tz = timezone(timedelta(hours=3))  # EEST fallback
-    return dt.replace(tzinfo=timezone.utc).astimezone(tz).strftime("%H:%M")
+        return aware.strftime("%H:%M") + f" UTC ({OPERATOR_TZ} unavailable)"
+    return local.strftime("%H:%M %Z" if with_zone else "%H:%M")
 
 
 # Bulgarian style guide injected into the prompt when briefings.language is
@@ -995,7 +1025,7 @@ class MatchBriefingService:
         return "\n\n" + "\n".join(lines)
 
     def _header(self, analysis, round_name: str, lineups: dict) -> str:
-        ko = _kyiv(analysis.match_date)
+        ko = _operator_local(analysis.match_date)
         tag = "🟢 СЪСТАВИТЕ СА ОБЯВЕНИ" if lineups else "📋 ПРЕВЮ"
         rnd = f" · {self._round_bg(round_name)}" if round_name else ""
         return (
@@ -1144,7 +1174,11 @@ class MatchBriefingService:
         lines = [f"MATCH: {analysis.match_name}"]
         if round_name:
             lines.append(f"STAGE: {round_name}")
-        lines.append(f"KICKOFF (Bulgarian time, EEST): {_kyiv(analysis.match_date)}")
+        # THE ZONE ABBREVIATION IS DERIVED, NOT WRITTEN DOWN. This read
+        # "(Bulgarian time, EEST)" — and from 2026-10-25 Bulgaria is on
+        # EET, so the prompt would have asserted a clock that no longer
+        # applied while printing times from the one that did.
+        lines.append(f"KICKOFF ({OPERATOR_TZ} local): {_operator_local(analysis.match_date, with_zone=True)}")
 
         # Model prediction
         lines.append("")

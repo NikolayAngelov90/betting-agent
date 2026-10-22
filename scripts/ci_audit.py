@@ -1140,13 +1140,30 @@ def extract(log: str) -> Dict[str, object]:
     # — matches a naive pattern and reports every run BROKEN. Found by running
     # this script against the window the manual pass had already audited: it
     # called two DEGRADED runs BROKEN. A definition is not an occurrence.
-    # EITHER DASH, added 2026-10-22. The pattern required an em dash and the
-    # workflow's text was its only source, so normalising that one character
-    # while editing the step for an unrelated reason emptied this list and
-    # `steps_not_run` with it -- two detectors silently gone and no test
-    # failing, because a regex that stops matching reports nothing rather
-    # than erroring. The workflow keeps the em dash; this no longer depends
-    # on it.
+    # ══ A COSMETIC NORMALISATION OF TEXT A DETECTOR MATCHES IS A CHANGE TO
+    #    THE DETECTOR. Recorded 2026-10-22, from a near-miss. ══════════════
+    #
+    # Removing an unrelated Telegram send from `daily-picks.yml`, the em dash
+    # in `step(s) FAILED —` was normalised to a hyphen. The pattern below
+    # required the em dash and the workflow's text was its ONLY source, so
+    # that one character would have emptied `steps_failed` and
+    # `steps_not_run` **permanently** -- two detectors gone, and NO TEST
+    # WOULD HAVE FAILED, because a regex that stops matching reports nothing
+    # rather than erroring. It was caught by a test asserting the audit can
+    # still read the line, not by reading the diff.
+    #
+    # THE RULE, in the same family as pinning markers to `##[error]` rather
+    # than to the producer's `::error::`:
+    #
+    #   * pin to WHAT THE CONSUMER OBSERVES, not to what the producer writes;
+    #   * treat every edit to matched text as an edit to the MECHANISM, and
+    #     test the mechanism in the same change;
+    #   * where the text is outside this file's control, accept both forms,
+    #     so the detector does not depend on a character nobody knows is
+    #     load-bearing.
+    #
+    # The workflow keeps the em dash and says there that it is load-bearing;
+    # this pattern no longer depends on which one arrives.
     f["steps_failed"] = re.findall(
         r"step\(s\) FAILED [—-] ([A-Za-z][^\n]{0,120})", log)
     # SKIPPED IS THE THIRD STATE, and it is the one that occurred. Run
@@ -1820,6 +1837,84 @@ MARGIN_REMEDY = (
     "review closes it outright")
 
 
+#: ── `mean+3sd` IS CONSERVATIVE BY ACCIDENT. 2026-10-22. ───────────────────
+#:
+#: Every margin in this file is computed from `mean + 3sd` of a lag series,
+#: and on 2026-10-22 the weekday series was found to be **BIMODAL UNDER ONE
+#: UNCHANGED CRON** (`0 0 * * 1-5` throughout): 255.9-304.9 through 10-09,
+#: a ten-day gap, then 128.4-144.1. `measured` the same day:
+#:
+#:     weekday n=10   mean 220.0   sd 74.1   mean+3sd 442.3   MAX 304.9
+#:
+#: (sd is the SAMPLE sd, n-1, which is what `schedule_margin` uses; the
+#: population sd gives 70.3 / 430.9. Two figures for one quantity is how a
+#: record stops being checkable, so the one that BINDS is the one quoted.)
+#:
+#: **THE BOUND EXCEEDS THE OBSERVED MAXIMUM BY 137.5 MINUTES.** Three sd of a
+#: two-cluster series is mostly the DISTANCE BETWEEN THE CLUSTERS, not tail
+#: risk, so the margin is buying two hours of headroom against an event never
+#: observed.
+#:
+#: THE DIRECTION OF THAT ACCIDENT IS NOT GUARANTEED. It is conservative while
+#: the clusters straddle the mean. Let the lower cluster accumulate until it
+#: dominates and the mean falls toward it while the sd stays wide; let a third
+#: cluster appear ABOVE both and the bound understates the tail instead.
+#: Nothing in `mean+3sd` knows which of those is happening, and the one case
+#: already observed moved the bound 417.5 -> 428.9 **on a single new point**.
+#:
+#: THE SUCCESSOR IS AN EMPIRICAL QUANTILE. It needs no segmentation decision,
+#: it cannot be dragged by between-cluster distance, and it is never outside
+#: the data. p95 is named rather than p99 because p99 is unreachable for this
+#: series -- see `QUANTILE_SUCCESSOR`.
+#:
+#: AND IT IS NOT SWITCHED TO YET, because at n=10 **neither statistic is
+#: supported**: `mean+3sd` extrapolates past every observation, and the p95
+#: quantile is simply the maximum. Saying so is the honest state. Both are
+#: printed side by side, each labelled, so the switch is a comparison rather
+#: than a replacement.
+QUANTILE_SUCCESSOR = {
+    "statistic": "p95",
+    #: USABLE WHEN AT LEAST FIVE OBSERVATIONS SIT STRICTLY ABOVE IT, i.e.
+    #: n >= 5/(1-p). FIVE, derived rather than chosen: one new point moved
+    #: `mean+3sd` by 11.4 minutes at n=9 -> n=10 (`measured` 2026-10-20/21),
+    #: and a statistic that five points support cannot be moved that far by a
+    #: single arrival.
+    "min_n": 100,
+    "min_n_rule": "n >= 5/(1-p); p95 -> 100, p99 -> 500",
+    #: p99 would need n >= 500. At the measured ~5 scheduled weekday runs per
+    #: week that is ~100 weeks, so it is named as out of reach rather than
+    #: offered as an option with no date.
+    "p99_min_n": 500,
+    "arrival_per_week": 5,
+    "projected_usable": "2027-03-11",      # simulated: (100-10)/5 weeks
+    "why_not_now": ("at n=10 NEITHER statistic is supported: mean+3sd "
+                    "extrapolates 137.5 minutes past the observed maximum, "
+                    "and "
+                    "the p95 quantile is just that maximum"),
+}
+
+
+def empirical_quantile(values, p: float):
+    """The `p`-quantile by nearest-rank, or `None` when undefined.
+
+    NEAREST-RANK, NOT INTERPOLATED, and `None` below n = 1/(1-p): an
+    interpolated p95 of nine points is a number with no observation above it,
+    which is the same extrapolation `mean+3sd` is being retired for. Returning
+    `None` makes "not enough data" a state rather than a plausible figure.
+    """
+    vals = sorted(v for v in values if v is not None)
+    n = len(vals)
+    if n == 0 or n < 1 / (1 - p):
+        return None
+    import math
+    return vals[min(n - 1, int(math.ceil(p * n)) - 1)]
+
+
+def quantile_is_usable(n: int, p: float = 0.95) -> bool:
+    """Whether `n` supports the quantile well enough to BIND on it."""
+    return n >= 5 / (1 - p)
+
+
 def schedule_margin(series, cron_minutes: int,
                     deadline_min: int = SCHEDULE_DEADLINE_MIN,
                     day_type: str = None):
@@ -1845,6 +1940,11 @@ def schedule_margin(series, cron_minutes: int,
     sd = (sum((x - mean) ** 2 for x in lags) / (n - 1)) ** 0.5 if n > 1 else 0.0
     out = {"n": n, "min": min(lags), "max": max(lags), "mean": mean, "sd": sd,
            "mean_plus_3sd": mean + 3 * sd, "cron": cron_minutes}
+    # THE SUCCESSOR STATISTIC, COMPUTED AND PRINTED BUT NOT USED. See
+    # `QUANTILE_SUCCESSOR` for why it is not switched to yet.
+    out["p95"] = empirical_quantile(lags, 0.95)
+    out["p99"] = empirical_quantile(lags, 0.99)
+    out["quantile_usable"] = quantile_is_usable(n, 0.95)
     for key, delay, picks in (("margin_max", max(lags), FULL_CARD_PICKS_MAX),
                               ("margin_3sd", mean + 3 * sd, FULL_CARD_PICKS_3SD)):
         out[key] = deadline_min - (cron_minutes + delay + picks)
@@ -2207,11 +2307,29 @@ def format_schedule_margin(m) -> str:
         s = "-" if v < 0 else ""
         v = abs(v)
         return f"{s}{int(v)//60}h{int(v)%60:02d}m"
+    # ── BOTH STATISTICS, SIDE BY SIDE, EACH LABELLED. 2026-10-22. ─────────
+    #
+    # `mean+3sd` BINDS; the p95 quantile is printed beside it and binds on
+    # nothing. The weekday series is bimodal under one unchanged cron, so
+    # `mean+3sd` is measuring between-cluster distance and currently exceeds
+    # the observed maximum by 137.5 minutes -- conservative BY ACCIDENT, in a
+    # direction nothing guarantees. The switch is a comparison rather than a
+    # replacement, and it does not happen before n reaches
+    # QUANTILE_SUCCESSOR["min_n"].
+    _q = m.get("p95")
+    _qtxt = ("UNDEFINED (n too small for any point to sit above it)"
+             if _q is None else hm(_q))
+    _verdict = ("BINDS" if m.get("quantile_usable")
+                else f"not usable until n>={QUANTILE_SUCCESSOR['min_n']}")
     return (f"schedule_margin[n={m['n']} window={MARGIN_TRAILING_DAYS}d "
             f"delay max={hm(m['max'])} mean+3sd={hm(m['mean_plus_3sd'])} "
             f"| margin max={m['margin_max']:+.0f}m 3sd={m['margin_3sd']:+.0f}m "
             f"binding={m['binding']:+.0f}m threshold={MARGIN_ALARM_MIN}m"
-            + ("  ** DECISION FIRES **]" if m["alarm"] else "]"))
+            + ("  ** DECISION FIRES **]" if m["alarm"] else "]")
+            + chr(10) + f"{'':10s}  successor[p95 delay={_qtxt} "
+            f"({_verdict}); mean+3sd BINDS today and is "
+            f"{'ABOVE' if m['mean_plus_3sd'] > m['max'] else 'within'} the "
+            f"observed max {hm(m['max'])}]")
 
 
 # ───────────────────── A RUN THAT NEVER FIRED, AND A FILE GITHUB REFUSED

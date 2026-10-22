@@ -89,4 +89,7 @@ data/models/model_accuracies.json
 data/models/ml_zero_count.json
 data/models/feature_list.json
 data/models/cold_streak_alerted_date.txt
+data/models/retrain_provenance.json
+# ^ scripts/model_freshness.py's record of which RUN first observed
+#   each model `trained_at`. Generated, cache-carried, never a source.
 data/briefings_sent.json

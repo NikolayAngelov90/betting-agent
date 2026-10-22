@@ -394,11 +394,13 @@ jobs:
       #     `_ml_models_stale(max_age_days=models.ml_retrain_days, default 3)`
       #     is asked at the top of every `daily_update()`, so the next run
       #     retrains. One failed retrain repairs itself.
-      #   * A PERSISTENTLY failing retrain is carried by NOTHING. Staleness is
-      #     `logger.info`-only; no workflow, report or audit surface alarms on
-      #     the models' age. That is a real gap and it is stated rather than
-      #     covered over -- it belongs in the diagnosed-finding register, not
-      #     in a sender that fires on a step outcome.
+      #   * A PERSISTENTLY failing retrain was carried by NOTHING. Staleness
+      #     was `logger.info`-only and no workflow, report or audit surface
+      #     alarmed on the models' age. THAT GAP IS NOW CLOSED by the step
+      #     below, which checks the OUTCOME instead of the step: whether an
+      #     artefact exists, what timestamp it carries, and which run wrote
+      #     it. A step that exits zero while writing nothing is the shape the
+      #     removed alert could never have caught.
       #
       # MEASURED over 2026-09-22..10-22: `skipped` in 36 of 36 runs. This
       # sender had never once fired, so no observation is being lost today.
@@ -406,6 +408,25 @@ jobs:
       # The condition it carried is kept here because it was itself a fix: it
       # was `!= 'success'` until 2026-09-20, which delivered "killed by CI
       # timeout" for a step that had been SKIPPED and never started.
+
+      - name: Check the MODEL, not the retrain step
+        # `always()` and NO condition on `steps.retrain_ml`, deliberately.
+        # Keying this on the retrain step's outcome would rebuild the thing it
+        # replaces: the question is how old the newest model IS, which has an
+        # answer whether or not a retrain was attempted today.
+        if: always()
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          # EXIT 1 IS A FINDING AND IT DOES NOT REDDEN THE RUN
+          # (`continue-on-error`), because DEL-2 reserves this workflow's red
+          # for "the day produced no picks". A stale model still produced
+          # picks -- from Poisson + Elo -- so it is CONTENT, carried to
+          # Telegram by the script itself, not a colour.
+          python -m scripts.model_freshness
 
       - name: Check DB health
         run: |

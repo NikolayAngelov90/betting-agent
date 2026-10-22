@@ -32518,3 +32518,309 @@ n=10, **2026-11-04**; the H1 deletion stage, **2026-11-01**.
 six workflows, `tests/test_telegram_carries_content_not_status.py`,
 `tests/test_margin_acknowledged.py`, `tests/test_reminders_are_evaluated.py`,
 `tests/test_picks_bound_series.py`.*
+
+---
+
+## DST handled, the trade curve measured, and the retrain gap closed — 2026-10-22
+
+### PART A — `DST HANDLED`
+
+**Europe/Sofia goes UTC+3 → UTC+2 at 01:00 UTC on Sunday 2026-10-25** (the EU
+rule: last Sunday of October). Verified from the zone database rather than
+assumed, and the abbreviation moves with it: `EEST` → `EET`.
+
+#### Every site that computes, displays or compares a local time
+
+| site | derives or assumes | verdict |
+|---|---|---|
+| `pipeline_loss_alert._in_tz` | **derives**, prints `%Z%z`, returns `(None, reason)` when the zone is unavailable | already correct |
+| `fixture_horizon_probe._in_tz` | **derives**, identically | already correct |
+| `match_briefing._kyiv` | ZoneInfo, but falling back to `timezone(timedelta(hours=3))  # EEST fallback` | **assumed +3** |
+| `match_briefing` prompt header | `f"KICKOFF (Bulgarian time, EEST): ..."` | **literal label** |
+| `telegram_bot` picks card | ZoneInfo, falling back to `timezone(timedelta(hours=2))` | **assumed +2** |
+| `OBSERVED_EARLIEST_MIN` / `DEADLINE_FLOOR` | UTC minutes, anchored on **summer** kickoffs | see below |
+| the crons | UTC, do not move | meaning shifts, nothing to fix |
+
+**TWO FALLBACKS WITH OPPOSITE LITERALS, and nothing compared them.** The
+briefing assumed `+3` and the card assumed `+2`; each is correct for roughly
+half the year. Driven against `git HEAD`:
+
+```
+OLD _kyiv fallback (the literal +3), the same 09:30 UTC instant
+  2026-10-24 -> 12:30   (correct, by luck of the season)
+  2026-10-26 -> 12:30   <-- WRONG by an hour, and indistinguishable
+                            from a real local time
+```
+
+**AND THE LABEL WAS UNCONDITIONALLY WRONG FROM 10-25.** `KICKOFF (Bulgarian
+time, EEST)` asserts EEST while `_kyiv` prints 11:30, which is EET. That line
+goes into the Claude prompt for every briefing.
+
+#### What changed
+
+* `_kyiv` → **`_operator_local(dt, with_zone=False)`** on a named
+  `OPERATOR_TZ = "Europe/Sofia"`. The offset is derived; `with_zone=True`
+  appends whatever `%Z` resolves to, which is what replaced the literal.
+* **THE FALLBACK NO LONGER GUESSES.** With no zone database it returns
+  `"09:30 UTC (Europe/Sofia unavailable)"`. *A wrong clock that looks right is
+  worse than a right clock that looks foreign.*
+* the card derives its offset, spells `Europe/Kyiv` (keeping the deprecated
+  `Europe/Kiev` as a fallback) and prints `%H:%M %Z`.
+* **NOT UNIFIED, and named instead:** briefings declare `Europe/Sofia`, the
+  card declares `Europe/Kyiv`. Both are EET/EEST on the EU date so they have
+  never differed by a minute — but they are two stated intents and only one
+  can be what Niki means. Picking is a product decision, not a DST fix.
+
+#### The two-sided test
+
+`tests/test_dst_transition.py`, **14 tests, every one driven at 2026-10-24 and
+2026-10-26** — a one-sided test cannot tell a derived offset from a literal
+that happens to match today. It pins the transition date and direction from
+tzdata first, so that if the zone database ever disagrees the expectations are
+void rather than quietly wrong.
+
+#### The crons do not move; their meaning does
+
+`0 0 * * 1-5` and `0 0 * * 6,0` are UTC and GitHub does not reinterpret them.
+A 00:00 UTC start is **03:00 local on 10-24 and 02:00 local on 10-26**.
+Pinned, so the hour is not later mistaken for a scheduler regression.
+
+#### THE FINDING THIS PART TURNED UP: the deadline floors are summer figures
+
+`measured` 2026-10-22 over production `matches`, the 30 configured leagues,
+phantoms excluded:
+
+| day type | offset | n | min UTC | **min LOCAL** |
+|---|---|---|---|---|
+| weekday | UTC+3 | 421 | 09:30 | **12:30** |
+| weekday | UTC+2 | 297 | **10:30** | **12:30** |
+| weekend | UTC+3 | 211 | 09:45 | 12:45 |
+| weekend | UTC+2 | 164 | **10:00** | 12:00 |
+
+**The weekday minimum is the same local time on both sides.** The kickoff is
+fixed locally and its UTC minute moves with the clocks. Both anchors of
+`OBSERVED_EARLIEST_MIN` were set during summer time — weekday 2023-10-26
+(three days before that year's transition), weekend 2024-10-19 — so from
+2026-10-25 the weekday floor is **60 minutes pessimistic** and the weekend
+one 15. Pinned, **not changed**: moving a deadline is a Part C decision.
+
+*(The wider all-non-`world/*` population has far earlier minima — weekday
+08:00 UTC, weekend 09:00 — carried by `other/world`, `other/romania`,
+`other/andorra`. The configured-league deadline ignores those rows. Stated as
+a limitation of the constant, not altered here.)*
+
+### PART B — `TRADE CURVE`
+
+#### The cron is not the start, and the delay series is not one population
+
+```
+weekday lag  n=10  mean 220.0  sd 74.1  mean+3sd 442.3  max 304.9
+  old cluster     n=6  mean 276.3  sd 17.1  mean+3sd 327.7  max 304.9
+  recent cluster  n=4  mean 135.6  sd  5.9  mean+3sd 153.4  max 144.1
+weekend lag  n=6   mean 253.2  sd 27.1  mean+3sd 334.5  max 293.7
+```
+
+The directive's `~4h36 mean / ~5h32 mean+3sd` are the **old cluster** (276.3 /
+327.7). The pooled series gives **220.0 / 442.3**, and the recent four days
+average **135.6**.
+
+**THE CRON EACH START NEEDS, and this is the blocker:**
+
+| start UTC | local post-DST | cron @ pooled | cron @ old cluster | cron @ recent cluster |
+|---|---|---|---|---|
+| 07:30 "latest safe" | 09:30 | **00:08** | 02:02 | 04:56 |
+| 08:15 intermediate | 10:15 | 01:04 | 02:47 | 05:41 |
+| 09:00 (11:00 local) | 11:00 | 01:49 | 03:32 | 06:26 |
+
+**Under the pooled reading the current `0 0` is already within eight minutes
+of the latest safe cron. Under the recent cluster there are four and a half
+hours of headroom.** Same data, same unchanged cron — the answer to "how late
+may it run" differs by 4h48m depending on which cluster is believed. That, not
+the fixture cost, is what Part C turns on.
+
+#### Time-to-picks: three bounds, because the regime changed at n=1
+
+```
+serial   mean+3sd  85.6 min   `measured` 2026-10-21, weekday n=79
+parallel mean+3sd  55.1 min   `simulated` 2026-10-21 over n=72 (sd 18.4 -> 10.8, +30.5m)
+parallel           35.1 min   `measured` 2026-10-22, n=1 -- sd UNDEFINED
+```
+
+#### THE CURVE — cards partly lost and fixtures lost per year
+
+Configured leagues, phantoms excluded, `ready = start + bound`, annualised
+with the ZoneInfo-derived year split (UTC+2 155 days, UTC+3 210).
+
+| start UTC | local | @ parallel 55.1 | @ serial 85.6 |
+|---|---|---|---|
+| **07:30** latest safe | 09:30 | **0.0 cards / 0.0 fixtures** | **0.0 / 0.0** |
+| **08:15** intermediate | 10:15 | **0.0 / 0.0** | **0.4 / 0.4** |
+| **09:00** Niki's 11:00 | 11:00 | **0.7 / 0.7** | **18.3 / 24.9** |
+
+Baseline `0 0` is 0.0/0.0 on every bound (its pooled mean+3sd start is 07:22).
+At the single measured parallel observation (35.1) every candidate is 0.0/0.0.
+
+**THE WHOLE TRADE IS THE PARALLEL REVIEW'S SIMULATED BOUND.** At 55.1 minutes
+an 11:00 local start costs **0.7 fixtures a year**. At the measured serial
+85.6 it costs **25**, and the weekend carries 24 of them.
+
+**WHICH LEAGUES, measured:**
+
+* at 55.1 — `bulgaria/efbet-league` ×2, and nothing else.
+* at 85.6 — `netherlands/eredivisie` ×60, `poland/ekstraklasa` ×12,
+  `bulgaria/efbet-league` ×9, `italy/serie-a` ×5,
+  `finland/veikkausliiga` ×1. Dutch Saturday 12:30/12:45 local kickoffs are
+  the binding population.
+
+**AND THE DST EFFECT IS VISIBLE IN THE COST.** At a 09:00 start on the serial
+bound, the weekend loses **54 of 211 summer days (25.6%)** but only **7 of 164
+winter days (4.3%)** — the same start, the same leagues, one hour of UTC
+shift. An 11:00 local start is materially cheaper in the regime that begins in
+three days than in the one it is being measured from.
+
+**No choice is made.** Part C waits on Niki's point.
+
+### ADDENDUM A — the retrain gap, closed on the OUTCOME
+
+**MEASURED 2026-10-22, and the two answers differ, which is the point:**
+
+```
+CI (the cache production uses)   trained_at 2026-10-21T09:07  ->    1 day
+this working copy                trained_at 2026-03-31T07:35  ->  205 days
+```
+
+CI is healthy, so `scripts/model_freshness.py` ships as a **guard, not a
+repair** — and the 205-day local copy is what it was driven against.
+
+**IT CHECKS THE ARTEFACT, NOT THE STEP.** Does a model exist, what timestamp
+does it carry, and which run first produced that timestamp. `if: always()`
+with **no** condition on `steps.retrain_ml`: keying on the step would rebuild
+the sender it replaces, and a step that exits zero while writing nothing is
+exactly what the old alert could never catch.
+
+**THE THRESHOLD IS DERIVED.** A retrain is attempted on the first run after
+the model passes `ml_retrain_days`, so healthy maximum age is that plus one
+scheduling gap. `measured` 2026-10-22 over **n=183** gaps between consecutive
+scheduled daily-picks runs: p50 0.97, p95 1.04, p99 1.95, **max 9.18** (the
+2026-06-01 outage).
+
+```
+threshold = ceil(ml_retrain_days + p99 gap) = ceil(3 + 1.95) = 5 days
+```
+
+p95 and p99 **both ceil to 5**, so the figure does not turn on the quantile
+choice — worth saying, given the addendum's own Part B. The 9.18-day gap is an
+outage, not a cadence, and during one `pipeline_loss_alert` already fires.
+
+**IT IS CONTENT, so it goes to Telegram** under the rule set earlier today:
+"the model has not been retrained since X" is a fact about the system that no
+run's conclusion reports. It carries the **age**, which rises every day it
+stays broken, so consecutive messages differ by construction — the defect
+`pipeline_loss_alert` exists to prevent.
+
+**BOTH CONTROLS DRIVEN:** a model within the threshold is silent and exits 0
+(and at 0.1/1/3/4.9 days); a failed retrain (an old stamp surviving) and a
+skipped one (**no artefact at all**) each alarm. `ABSENT` is `UNKNOWN`, not age
+zero. A partial write — one artefact fresh, one 90 days old — is caught, and no
+step outcome could see it.
+
+**"BY WHICH RUN", without touching the signed pickle.** Adding a key would
+change the signed bytes for a reporting nicety, so the run is recorded
+*beside* the artefact in `retrain_provenance.json`. The check runs in the same
+job as `--train`, so "first observed" is the writing run whenever the stamp
+moved — driven: a later run observing an unchanged model does **not** take
+credit.
+
+**TWO DEFECTS IN MY OWN NEW CODE, both found by its tests:**
+
+* **A default argument cannot be monkeypatched.** `models_dir =
+  MODELS_DIR` in the signature binds at *definition* time, so three tests
+  pointed `mf.MODELS_DIR` at a temp directory and the function went on reading
+  the real one — reporting the 205-day working copy from inside every fixture.
+  Resolved at call time. *A default that cannot be substituted makes a
+  function untestable, and silently ignores reassignment in production too.*
+* **It opened with an emoji** and `print(body)` raised `UnicodeEncodeError` on
+  a cp1251 console. *A detector that dies on its own output is worse than no
+  detector.* Plain ASCII, as `pipeline_loss_alert` already was.
+
+### ADDENDUM B — `mean+3sd` is conservative BY ACCIDENT; the successor is named
+
+```
+weekday n=10   mean 220.0   sd 74.1   mean+3sd 442.3   MAX 304.9
+```
+
+**The bound exceeds every observation by 137.5 minutes.** Three sd of a
+two-cluster series is mostly the distance *between* the clusters, so the
+margin buys over two hours of headroom against an event never seen.
+*(Sample sd, which is what `schedule_margin` uses; population sd gives
+70.3 / 430.9. One quantity, one quoted figure — the one that binds.)*
+
+**AND THE DIRECTION IS NOT GUARANTEED.** Driven, both ways:
+
+* let the lower cluster dominate and the excess over the max collapses — the
+  headroom was a function of the mixture, not of risk;
+* let a **rare** extreme appear and `mean+3sd` falls **below** the observed
+  maximum, so it understates the tail with nothing in the statistic to say so.
+  *(A first attempt got this wrong: three points at ~900 among ten left the
+  bound at 1300, still above the max, because a cluster big enough to move the
+  max also inflates the sd. The understating case needs the extreme to be
+  RARE — and that is the real shape of this project's own gap series: p50 0.97
+  days with one at 9.18.)*
+
+**THE SUCCESSOR: the empirical p95.** No segmentation decision, cannot be
+dragged by between-cluster distance, never outside the data. Nearest-rank and
+**`None` below n = 1/(1−p)** — an interpolated p95 of nine points is a number
+with no observation above it, the same extrapolation being retired.
+
+**USABLE AT n ≥ 100**, from `n ≥ 5/(1−p)`: five observations strictly above it,
+because one new point moved `mean+3sd` by **11.4 minutes** at n=9→10. p99 needs
+n ≥ 500 — ~100 weeks at ~5 scheduled weekday runs a week — so it is named **out
+of reach** rather than offered without a date. p95 projects to **2027-03-11**.
+
+**AND IT IS NOT SWITCHED TO, because at n=10 NEITHER statistic is supported:**
+`mean+3sd` extrapolates 137.5 minutes past the data and the p95 quantile would
+simply be the maximum. Saying so is the honest state. Both print, labelled,
+every run:
+
+```
+weekday  deadline 09:30  schedule_margin[n=10 … mean+3sd=7h22m …
+                           binding=+21m threshold=30m  ** DECISION FIRES **]
+            successor[p95 delay=UNDEFINED (n too small for any point to sit
+            above it) (not usable until n>=100); mean+3sd BINDS today and is
+            ABOVE the observed max 5h04m]
+```
+
+A positive control drives n=100 and checks the verdict flips to `(BINDS)` —
+while `binding` still comes from `mean+3sd`, so the comparison cannot become a
+replacement by accident.
+
+### ADDENDUM C — the normalisation near-miss, recorded as a rule
+
+> **A cosmetic normalisation of text a detector matches is a change to the
+> detector.** Pin to what the consumer observes, treat every edit to matched
+> text as an edit to the mechanism, and where the text is outside this file's
+> control accept both forms.
+
+Recorded at `extract()`, beside the patterns it governs. The regexes now take
+either dash, driven on both; the workflow carries a "THE EM DASHES ARE
+LOAD-BEARING" comment; and the anchor still rejects the workflow's own echoed
+source, which is why it required a letter after the dash in the first place.
+
+### DISCIPLINE
+
+Gating selection **2,437 passed, 7 deselected** (was 2,379; +58). Non-gating 6
+passed, 1 skipped. Invariants pass, count not cited. Every workflow YAML
+parses. Fingerprint **UNCHANGED at `s5.18 / 51fbcb`** — Parts A and B and the
+addendum touch no prediction or selection path, and **Part C is the bump**.
+
+One guard fired as designed and was answered rather than relaxed:
+`continue_on_error_is_still_set_on_every_core_step` went 10 → 11 and names the
+new step and its reason.
+
+**Awaiting Niki's point on the curve before Part C.**
+
+*Recorded 2026-10-22. `src/reporting/match_briefing.py`,
+`src/reporting/telegram_bot.py`, `scripts/model_freshness.py`,
+`scripts/ci_audit.py`, `.github/workflows/daily-picks.yml`,
+`tests/test_dst_transition.py`, `tests/test_model_freshness.py`,
+`tests/test_quantile_successor.py`.*

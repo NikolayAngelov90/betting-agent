@@ -56,6 +56,11 @@ KEPT = {
     "pipeline_loss_alert": (
         "content: a day with a card and ZERO PICKS is a loss, not a status. "
         "1 firing in the window"),
+    "model_freshness": (
+        "content: 'the model has not been retrained since X' is a fact about "
+        "the system that no run's conclusion reports. ADDED 2026-10-22 to "
+        "close the gap the removed ML-retrain alert left -- it checks the "
+        "ARTEFACT, not the step"),
     # ── action ────────────────────────────────────────────────────────────
     "ci_audit actionable alarms": (
         "action: the margin, the pattern self-test, model integrity, an "
@@ -77,10 +82,10 @@ REMOVED = {
         "the step STAYS and still decides the run's colour; the log line "
         "keeps the step names; GitHub's notification. 9 firings"),
     "daily-picks: Alert on ML training timeout or failure": (
-        "NOTHING, and the step is continue-on-error so GitHub does not "
-        "notify either. One failed retrain self-corrects via "
-        "_ml_models_stale(3); a PERSISTENT failure has no detector and that "
-        "is a named gap. 0 firings in the window"),
+        "scripts/model_freshness.py, which checks the MODEL instead of the "
+        "step -- added 2026-10-22, closing the gap this removal named. NOT "
+        "GitHub's notification: the step is continue-on-error, so a failed "
+        "retrain never reddens the run. 0 firings in the window"),
     "closing-lines: Alert if the capture job failed": (
         "GitHub's notification; the coverage ratchet, which measures the GAP "
         "rather than the exit code. 2 firings"),
@@ -102,7 +107,7 @@ REMOVED = {
 
 def test_every_sender_is_CLASSIFIED_and_the_classes_do_not_overlap():
     assert not (set(KEPT) & set(REMOVED))
-    assert len(KEPT) == 10 and len(REMOVED) == 9
+    assert len(KEPT) == 11 and len(REMOVED) == 9
 
 
 def test_a_REMOVED_sender_SAYS_WHAT_CARRIES_IT_NOW():
@@ -276,6 +281,11 @@ ALERT_MESSAGES_PER_DAY = {
         # the collection error is fixed AND a non-verdict exit no longer
         # sends, so this is 0 until a guard actually reaches its date
         "reminders": 0.00,
+        # `simulated`: 0.00/day in steady state. `measured` 2026-10-22, the
+        # CI model's trained_at is 2026-10-21T09:07 -- 1 day against a
+        # 5-day threshold. It fires only when the retrain stops working,
+        # which is the whole point, and then daily with a rising age.
+        "model freshness": 0.00,
     },
 }
 
@@ -294,7 +304,7 @@ def test_every_AFTER_sender_is_CONTENT_or_ACTION():
     """Nothing in the surviving set may be run status."""
     assert set(ALERT_MESSAGES_PER_DAY["after"]) <= {
         "ci-audit", "daily-picks loss report", "fixture-horizon-probe",
-        "reminders"}
+        "reminders", "model freshness"}
     for name in ALERT_MESSAGES_PER_DAY["after"]:
         assert any(name.split()[0] in k or k.startswith(name.split()[0])
                    or name.split("-")[0] in k for k in KEPT), name

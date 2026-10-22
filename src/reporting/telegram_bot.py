@@ -227,16 +227,45 @@ class TelegramNotifier:
                     risk_emoji = {"low": "🟢", "medium": "🟡", "high": "🔴"}.get(pick.risk_level, "⚪")
                     agreement_icon = _agreement_icon(pick.model_agreement)
 
-                    # Kickoff time in Kyiv local time (UTC+2 winter / UTC+3 summer)
+                    # ── THE OFFSET IS DERIVED AND THE CLOCK IS NAMED. ──────
+                    #
+                    # This fell back to `timezone(timedelta(hours=2))` — a
+                    # literal that is correct in winter and an hour wrong all
+                    # summer. `match_briefing.py` had the SAME shape with the
+                    # OPPOSITE literal (+3), so the two fallbacks disagreed by
+                    # an hour and each was right for half the year.
+                    # **Europe/Kyiv goes UTC+3 -> UTC+2 on 2026-10-25.**
+                    #
+                    # The card now carries the abbreviation `%Z` resolves to
+                    # (EEST, then EET), because a bare `⏰ 12:30` on a card
+                    # read in two countries is the "establish the clock"
+                    # defect in its original form.
+                    #
+                    # `Europe/Kiev` is the deprecated alias; `Europe/Kyiv` is
+                    # the current name and both resolve. Spelled correctly
+                    # here, with the alias kept as the fallback so an old
+                    # tzdata still answers.
                     kickoff_str = ""
                     if pick.match_date:
+                        local_dt = None
                         try:
                             from zoneinfo import ZoneInfo
-                            local_tz = ZoneInfo("Europe/Kiev")
+                            try:
+                                _tz = ZoneInfo("Europe/Kyiv")
+                            except Exception:
+                                _tz = ZoneInfo("Europe/Kiev")
+                            local_dt = pick.match_date.replace(
+                                tzinfo=timezone.utc).astimezone(_tz)
                         except Exception:
-                            local_tz = timezone(timedelta(hours=2))
-                        local_dt = pick.match_date.replace(tzinfo=timezone.utc).astimezone(local_tz)
-                        kickoff_str = f" ⏰ {local_dt.strftime('%H:%M')}"
+                            local_dt = None
+                        if local_dt is not None:
+                            kickoff_str = f" ⏰ {local_dt.strftime('%H:%M %Z')}"
+                        else:
+                            # NEVER A GUESSED OFFSET. UTC, said out loud.
+                            kickoff_str = (
+                                " ⏰ "
+                                + pick.match_date.strftime('%H:%M')
+                                + " UTC")
 
                     # Pick header: number + match name + kickoff
                     line = f"\n  {risk_emoji} <b>Pick #{pick_num}: {safe_match}</b>{kickoff_str}"
