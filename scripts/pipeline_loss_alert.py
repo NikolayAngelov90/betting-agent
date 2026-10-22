@@ -120,9 +120,14 @@ def format_loss_alert(streak: List[DayLoss],
         head = (f"!!! DAY {n} OF ZERO PICKS - THIS ALERT IS NOT BEING SEEN. "
                 f"{fixtures} fixtures lost so far.")
     elif n >= ESCALATE_NOT_SELF_CORRECTING:
+        # "produced no picks either", NOT "did not fix it". 2026-10-22: this
+        # is the one clause in the whole body that spoke about a RUN rather
+        # than about the loss, and the distinction is the point of the file --
+        # whether the next run succeeded or failed is not what escalates this,
+        # a SECOND DAY WITH NO PICKS is.
         head = (f"!! DAY {n} OF ZERO PICKS - NOT SELF-CORRECTING. The next "
-                f"scheduled run did not fix it. {fixtures} fixtures lost so "
-                f"far.")
+                f"scheduled run produced no picks either. {fixtures} "
+                f"fixtures lost so far.")
     else:
         head = f"NO PICKS PRODUCED for {today}."
 
@@ -157,9 +162,15 @@ def format_loss_alert(streak: List[DayLoss],
             f"LAST SAFE DISPATCH {l_hhmm} UTC"
             + (f" / {l_local} {l_label}" if l_local else "")
             + (" (THE DAY BEFORE)" if day_before else ""),
+            # RULE 3: a figure from a RETIRED REGIME is labelled WHEREVER it
+            # appears, this message included. `ci_audit` already says so for
+            # the same constant; this said only "n=4", which reads as a small
+            # sample rather than as a different world.
             f"  = kickoff - {PICKS_UPPER_BOUND_MIN:.0f}m time-to-picks "
-            f"(MEASURED upper bound, n=4, 67.4-88.1, NOT the mean) "
-            f"- {DISPATCH_SAFETY_MARGIN_MIN}m safety margin",
+            f"(MEASURED upper bound, n=4, 67.4-88.1, NOT the mean - and from "
+            f"the RETIRED SERIAL review regime, so this deadline is EARLY "
+            f"rather than late: the parallel review's first observation is "
+            f"35.1m) - {DISPATCH_SAFETY_MARGIN_MIN}m safety margin",
             f"TIME REMAINING     {remaining:+.0f} min"
             + ("  <-- ALREADY PAST" if remaining < 0 else ""),
         ]
@@ -173,7 +184,25 @@ def format_loss_alert(streak: List[DayLoss],
         "ACTION, and it is the OPERATOR'S - there is no automated "
         "alternative today:",
         "    gh workflow run daily-picks.yml",
-        "A dispatched run skips the measured 3h58m-7h38m scheduler lateness.",
+        # ── A STALE LITERAL, CORRECTED 2026-10-22. ───────────────────────
+        #
+        # It read "3h58m-7h38m". `7h38m` is 458 minutes: the MAX under the
+        # weekday `0 4` cron, measured 2026-10-18 (n=5, mean 357.5). THAT
+        # CRON WAS REVERTED THE SAME DAY and this repository has run
+        # `0 0 * * 1-5` ever since, so the only Telegram message a reader
+        # acts on was quoting the worst case of a schedule that no longer
+        # exists. Nine other sites in the repository say `3h58m-5h04m`;
+        # this one said something else and nothing compared them.
+        #
+        # RE-MEASURED 2026-10-22 over the live weekday `0 0` series, n=10:
+        # 128.4 to 304.9 minutes. The range below is that, not the
+        # 2026-10-18 figure -- and the nine `3h58m-5h04m` sites are
+        # themselves now stale at the LOW end, because they predate the
+        # 10-19..10-22 cluster. Named here rather than edited in nine
+        # places from inside a Telegram change.
+        "A dispatched run skips the scheduler's lateness, MEASURED "
+        "2026-10-22 over the live weekday `0 0` cron at 2h08m-5h05m "
+        "(n=10).",
     ]
     if run_url:
         lines.append(f"Logs: {run_url}")

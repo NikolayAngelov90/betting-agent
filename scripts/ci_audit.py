@@ -240,6 +240,26 @@ DELIBERATE_RED_MARKERS = {
         "so, and price capture is reported separately by daily-picks"),
 }
 
+# ── THE MARKER CERTIFIED A LIE, ONCE, AND IT IS WORTH THE PARAGRAPH ─────────
+#
+# `reminders.yml` had exactly one run before this was found: 39714443709,
+# 2026-10-22 03:00 UTC. It carried `##[error]REMINDER DUE` and a non-zero
+# exit, so `classify_red` returned VERDICT -- correctly, by its own rules.
+#
+# NO REMINDER WAS DUE. pytest had exited 2 on 17 collection errors, six
+# reminders were SELECTED AND NONE RAN, and the classifier downstream read
+# `steps.reminders.outcome == 'failure'` as "a reminder is due" and printed
+# the marker itself. The same selection locally was `6 passed, 1 skipped`.
+#
+# A REGISTERED MARKER IS ONLY AS HONEST AS THE PREDICATE THAT PRINTS IT. This
+# table cannot check that; it can only check that the marker is present. So
+# the fix is in the emitter -- it now branches on pytest's EXIT CODE, where 1
+# is a verdict and 2/3/4/5 are "not evaluated" with a different marker that is
+# deliberately NOT registered here, because that red is a failure.
+#
+# The audit needed no change to classify it correctly afterwards: a red
+# without this marker already returns FAILURE.
+
 #: Where `UNCLASSIFIABLE` goes, stated rather than left to the reader: INSIDE
 #: `alarmed`. "The marker could not be read" is not "there was no marker" --
 #: the third-state rule -- and a workflow whose red cannot be classified is
@@ -797,17 +817,31 @@ def format_pattern_selftest(r: dict) -> str:
 #:
 #: THE RULE: a line carries `!!` **iff its condition also appends to
 #: `alarmed`.** Everything else is `note:` — the information is kept, the
-#: marker is not. Nine emitter sites were demoted; four keep it, and all four
-#: alarm: the pattern self-test, the actionable margin, the structural
-#: margin's deterioration, and the schedule margin.
+#: marker is not. Nine emitter sites were demoted 2026-10-21; **six** now keep
+#: the marker and all six alarm: the pattern self-test, the actionable margin,
+#: the structural margin's deterioration, the schedule margin, and — added
+#: 2026-10-22 — an unevaluated workflow state and a missing cron for
+#: tomorrow's day type.
 #:
-#: AND THE EXERCISE SURFACED A RESIDUE WORTH DECIDING LATER, recorded here
-#: rather than quietly demoted: THREE of the nine say "UNEVALUATED, not safe"
-#: or "UNKNOWN" and alarm on nothing — the day-type with no series, an
-#: unreadable `gh workflow list`, and `daily-picks` carrying no single cron.
-#: Their words claim more than the alarm set delivers. Changing what alarms is
-#: a different decision from reserving the marker, so they are notes today and
-#: the mismatch is named.
+#: THE RESIDUE OF 2026-10-21 IS RESOLVED, LINE BY LINE. Three of the nine
+#: demoted lines said "UNEVALUATED, not safe" or "UNKNOWN" and alarmed on
+#: nothing, so their words claimed more than the alarm set delivered. Decided
+#: 2026-10-22 on this project's own test for an alarm — rare, actionable, AND
+#: CLEARED BY AN ACTION — and the third condition is what separated them:
+#:
+#:   * A DAY TYPE WITH NO LATENESS SERIES → **REWORDED.** It ends when the
+#:     next scheduled run fires, with nobody doing anything, so an alarm here
+#:     would be cleared by TIME and CLR-2 exists because that teaches
+#:     waiting. The line now says "margin NOT COMPUTED … neither clear nor
+#:     breached" and states why it does not alarm.
+#:   * `gh workflow list` UNREADABLE → **ALARMS.** It is the only line with
+#:     no alternative carrier: a disabled workflow produces no runs and
+#:     nothing else here can detect one, so "could not look" leaves a
+#:     specific detector blind. Cleared by restoring GH_TOKEN, which is an
+#:     action. Zero occurrences to date, so it costs nothing in volume.
+#:   * NO PARSEABLE CRON FOR TOMORROW'S DAY TYPE → **ALARMS.** Read as a
+#:     condition rather than as a margin, it says `daily-picks` is not
+#:     scheduled to run tomorrow. Cleared by editing the workflow.
 #: Keys computed by their OWN block further down `extract()`, not by the
 #: generic counting loop. Listed by name so the loop skips them outright: a
 #: key with two owners is a key whose warning fires on the owner that did not
@@ -1106,8 +1140,15 @@ def extract(log: str) -> Dict[str, object]:
     # — matches a naive pattern and reports every run BROKEN. Found by running
     # this script against the window the manual pass had already audited: it
     # called two DEGRADED runs BROKEN. A definition is not an occurrence.
+    # EITHER DASH, added 2026-10-22. The pattern required an em dash and the
+    # workflow's text was its only source, so normalising that one character
+    # while editing the step for an unrelated reason emptied this list and
+    # `steps_not_run` with it -- two detectors silently gone and no test
+    # failing, because a regex that stops matching reports nothing rather
+    # than erroring. The workflow keeps the em dash; this no longer depends
+    # on it.
     f["steps_failed"] = re.findall(
-        r"step\(s\) FAILED — ([A-Za-z][^\n]{0,120})", log)
+        r"step\(s\) FAILED [—-] ([A-Za-z][^\n]{0,120})", log)
     # SKIPPED IS THE THIRD STATE, and it is the one that occurred. Run
     # 35498465743 (2026-09-20) halted at `Run tests` — the only core step with
     # no continue-on-error — so update, settle and picks were SKIPPED, the
@@ -1120,7 +1161,7 @@ def extract(log: str) -> Dict[str, object]:
     #   old  All critical steps OK: {'picks (incl. review)': 'skipped', ...}
     #   new  step(s) DID NOT RUN — picks (incl. review), update
     f["steps_not_run"] = re.findall(
-        r"step\(s\) DID NOT RUN — ([A-Za-z][^\n]{0,120})", log)
+        r"step\(s\) DID NOT RUN [—-] ([A-Za-z][^\n]{0,120})", log)
     if not f["steps_not_run"]:
         for blob in re.findall(r"All critical steps OK: (\{[^\n}]{0,400}\})", log):
             named = [n for n, o in re.findall(r"'([^']+)':\s*'([^']+)'", blob)
@@ -1566,6 +1607,24 @@ PARALLEL_REVIEW_SINCE = "cccb0e6"
 PARALLEL_REVIEW_SINCE_UTC = "2026-10-21T21:29"
 
 
+def _as_datetime(s):
+    """A GitHub ISO-8601 timestamp as an aware `datetime`, or `None`.
+
+    `None` RATHER THAN A RAISE, and that is the whole point. This is called on
+    fields GitHub may omit -- `completedAt` is absent on a step that never
+    finished -- and on 2026-10-21 the call site named a function that did not
+    exist at all, so every audit run on `c2eef6d` died with a `NameError` and
+    NOTHING was audited for three runs. The caller reads `None` as "this run
+    does not contribute", never as a zero.
+    """
+    if not s:
+        return None
+    try:
+        return _dt.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 _PICKS_SERIES_CACHE: Dict[int, dict] = {}
 
 
@@ -1585,26 +1644,34 @@ def parallel_regime_picks_series(limit: int = 120):
     if limit in _PICKS_SERIES_CACHE:
         return _PICKS_SERIES_CACHE[limit]
 
-    # AN UNREADABLE `gh` IS UNEVALUATED, NOT AN EMPTY SERIES. Found by
-    # `test_an_unreadable_gh_is_UNKNOWN_and_says_so`, which stubs the command
-    # unreadable: `json.loads("")` raised and took the whole audit down. And
-    # "" would otherwise have read as n=0, which is the state this series is
-    # legitimately in today -- so the two would have been indistinguishable
-    # exactly when it matters.
-    try:
-        rows = json.loads(_sh("gh", "run", "list", "--workflow",
-                              "daily-picks.yml", "--limit", str(limit),
-                              "--json",
-                              "databaseId,createdAt,event,headSha") or "[]")
-    except json.JSONDecodeError:
+    # AN UNREADABLE `gh` IS UNEVALUATED, NOT AN EMPTY SERIES -- AND IT TOOK
+    # TWO GOES. The first version wrote `json.loads(_sh(...) or "[]")`, which
+    # looks like a safe default and is the opposite: NO OUTPUT AT ALL became
+    # `[]`, so the except clause only ever caught malformed non-empty JSON and
+    # an unreadable `gh` reported n=0. That is precisely the confusion this
+    # guard was added to prevent, because n=0 is the state the series is
+    # legitimately in today -- the two would have been indistinguishable
+    # exactly when it matters. Caught by
+    # `test_an_EMPTY_series_is_n0_and_an_UNREADABLE_gh_is_UNEVALUATED`.
+    def _unevaluated(reason):
         return {"n": None, "members": [], "state": "UNEVALUATED",
                 "regime": PICKS_BOUND_NEW_POPULATION,
                 "needed": MIN_N_TO_REDERIVE_PICKS_BOUND,
                 "mean": None, "sd": None, "mean_plus_3sd": None, "max": None,
                 "to_ten_weeks": None, "to_ten_date": "UNEVALUATED",
-                "reason": "`gh run list` could not be read, so whether any "
-                          "post-change run exists is UNKNOWN - distinct from "
-                          "knowing there is none"}
+                "reason": reason + " - so whether any post-change run exists "
+                                   "is UNKNOWN, which is distinct from "
+                                   "knowing there is none"}
+
+    raw = _sh("gh", "run", "list", "--workflow", "daily-picks.yml",
+              "--limit", str(limit), "--json",
+              "databaseId,createdAt,event,headSha")
+    if not (raw or "").strip():
+        return _unevaluated("`gh run list` produced NO OUTPUT")
+    try:
+        rows = json.loads(raw)
+    except json.JSONDecodeError:
+        return _unevaluated("`gh run list` produced output that is not JSON")
     # ONE git CALL, NOT ONE PER RUN. The first draft shelled out to
     # `git merge-base --is-ancestor` inside the loop -- up to 120 subprocess
     # spawns, twice per audit (the clock and the margin alert both ask), which
@@ -1622,7 +1689,7 @@ def parallel_regime_picks_series(limit: int = 120):
             continue
         if sha[:7] not in _descendants:
             continue                         # the run predates the change
-        started = as_datetime(r.get("createdAt"))
+        started = _as_datetime(r.get("createdAt"))
         if started is None or started.weekday() >= 5:
             continue
         ttp = _time_to_picks(str(r["databaseId"]), started)
@@ -1663,7 +1730,7 @@ def _time_to_picks(run_id: str, started):
     for j in jobs:
         for st in j.get("steps") or []:
             if st.get("name") == PICKS_STEP_NAME and st.get("completedAt"):
-                done = as_datetime(st["completedAt"])
+                done = _as_datetime(st["completedAt"])
                 if done is not None:
                     return (done - started).total_seconds() / 60.0
     return None
@@ -2107,9 +2174,28 @@ def format_schedule_margins(margins: dict) -> str:
     lines.append(f"  TRIGGER fires on the WORSE day type: {worse}"
                  + ("  ** DECISION FIRES **" if margins.get("alarm") else ""))
     if unev:
+        # ── REWORDED 2026-10-22, AND NOT MADE TO ALARM. ───────────────────
+        #
+        # It said "is UNEVALUATED, not safe". "Not safe" asserts a safety
+        # property, and this line cannot evaluate one -- it is reporting that
+        # there is nothing to evaluate. Words that claim more than the alarm
+        # set delivers are what the marker reservation of 2026-10-21 left
+        # behind, named rather than fixed; this is the fix.
+        #
+        # WHY REWORD RATHER THAN ALARM, which was the other option: an alarm
+        # here would be CLEARED BY TIME. The state ends when the next
+        # scheduled run fires under that cron, with nobody doing anything,
+        # and CLR-2 exists because an alarm cleared by waiting teaches
+        # waiting. The two siblings below -- an unreadable `gh workflow list`
+        # and a missing cron -- are cleared by an EDIT, so they do alarm.
         lines.append(
-            f"  note: {', '.join(unev)} is UNEVALUATED, not safe - no run has yet "
-            f"fired under its cron, so its margin is UNKNOWN rather than clear")
+            f"  note: {', '.join(unev)}: margin NOT COMPUTED - no run has yet "
+            f"fired under its cron, so there is no lateness series. This is "
+            f"neither clear nor breached, and it ends on its own when a run "
+            f"fires, so it does not alarm. Until then the conservative "
+            f"reading is the one the margin would give at this cron's worst "
+            f"observed lateness, and the action available is a manual "
+            f"dispatch on that day type.")
     return chr(10).join(lines)
 
 
@@ -2868,7 +2954,83 @@ def verdict(facts: Dict[str, object], hits: List[str],
 # correct state for "nothing is deferred", and keeping the function means the
 # next deferral is a data entry rather than a code change. It now also refuses
 # an entry whose review date has passed, so this cannot recur.
-ACKNOWLEDGED_MARGIN_BREACH: dict = {}
+#: ── THE STANDING WEEKDAY BREACH, ACKNOWLEDGED 2026-10-22 ──────────────────
+#:
+#: THE FIGURE. `measured` 2026-10-22: the weekday binding is
+#: **20.665799601890512**, against `MARGIN_ALARM_MIN` of 30. It DISPLAYS as
+#: `+21`, and the display is not what is stored -- on 2026-10-21 an
+#: acknowledgement recorded at the rounded `19.0` correctly REFUSED a real
+#: binding of 18.89232917906861, and that refusal is the reason this entry
+#: carries full precision in `measured_at` and a deliberate FLOOR in
+#: `binding`.
+#:
+#: WHY IT CANNOT CLEAR. The deadline is the OBSERVED EARLIEST KICKOFF (weekday
+#: 09:30) and the ready time is ours; no choice of deadline moves a kickoff.
+#: `schedule-deadline-is-data-not-a-constant` already drove exposure to zero
+#: days over 60m and the reference bound on 0 of 834 days, so the remaining
+#: deficit is cron-and-duration, not deadline. It is true on essentially every
+#: weekday -- MEASURED over a 30-run sample of alarming `ci-audit` runs, this
+#: alarm appeared in 30 of 30 -- and no action available to the operator
+#: clears it on the day. That is CLR-2's definition of a thing that must
+#: report rather than alarm.
+#:
+#: AND THE READING IS CONSERVATIVE, TWICE OVER, which is why acknowledging it
+#: is not merely tolerating it:
+#:
+#:   1. THE PICKS TERM IS FROM A RETIRED REGIME. It uses
+#:      `FULL_CARD_PICKS_MAX = 88.1`, a full-card MAX from the SERIAL review
+#:      (n=4, 2026-10-01). The replacement series under the parallel review
+#:      stands at n=1 and its one observation is 35.1 minutes.
+#:   2. THE LATENESS TERM IS BIMODAL, and `mean+3sd` over a bimodal series
+#:      measures BETWEEN-CLUSTER SPREAD, not tail risk. `measured` 2026-10-22,
+#:      weekday n=10: 2026-10-02..10-09 give 255.9-304.9 minutes, then a
+#:      ten-day gap, then 2026-10-19..10-22 give 128.4-144.1. The cron did NOT
+#:      change across that gap -- it is `0 0 * * 1-5` throughout -- so this is
+#:      the environment, not a regime of ours, and splitting the series on an
+#:      eyeballed gap at n=4 is the error
+#:      `settled-pick-segments-are-noise` records. Pooled, the spread does the
+#:      work: adding the first low point moved the binding -97.91 minutes in
+#:      one step while the LEVEL improved.
+#:
+#: THE CLEARING ACTION, and it is an action with a date rather than a wait:
+#: the parallel-regime series reaching n=10 and `FULL_CARD_PICKS_MAX` being
+#: re-derived from it. Until then the operator dispatches `daily-picks` by
+#: hand on the morning, which skips the measured 3h58m-5h04m scheduler
+#: lateness outright.
+#:
+#: THE FLOOR, AND WHY IT IS NOT THE READING. `binding` below is the figure the
+#: acknowledgement covers DOWN TO, not the figure measured. It sits
+#: `JITTER` minutes under the reading because the binding moves on its own as
+#: ordinary points arrive: `measured` 2026-10-22 by recomputing it over
+#: growing prefixes of the weekday series, the single-point moves were +5.53,
+#: +2.79, -11.32, -2.24 and +1.77 minutes (excluding -97.91, which is the
+#: cluster boundary entering the series). The largest ordinary move is 11.32,
+#: so a floor at `reading - 11.32` alarms on a real deterioration and not on
+#: the next scheduled run. An acknowledgement pinned to the reading itself
+#: would re-alarm within a day or two and the daily red would be back.
+ACKNOWLEDGED_MARGIN_BREACH_JITTER = 11.32
+ACKNOWLEDGED_MARGIN_BREACH: dict = {
+    "weekday": {
+        "since": "2026-10-22",
+        "measured_at": 20.665799601890512,
+        "binding": 20.665799601890512 - ACKNOWLEDGED_MARGIN_BREACH_JITTER,
+        "jitter": ACKNOWLEDGED_MARGIN_BREACH_JITTER,
+        "why": ("the deadline is the observed earliest kickoff and the ready "
+                "time is ours, so no deadline choice clears it; and the "
+                "reading is CONSERVATIVE on both terms - the picks bound is a "
+                "full-card MAX from the retired SERIAL regime (88.1m, n=4) "
+                "while the parallel series' one observation is 35.1m, and the "
+                "lateness series is BIMODAL (n=10: 255.9-304.9 then "
+                "128.4-144.1, same cron) so mean+3sd is measuring "
+                "between-cluster spread rather than tail risk"),
+        "action": ("dispatch daily-picks by hand on the morning (it skips the "
+                   "measured 3h58m-5h04m scheduler lateness); the durable "
+                   "clearing action is the parallel-regime picks series "
+                   "reaching n=10 and FULL_CARD_PICKS_MAX being re-derived "
+                   "from it"),
+        "review": "2026-11-04",
+    },
+}
 
 
 def margin_breach_is_acknowledged(day_type: str, binding: float) -> dict:
@@ -2903,12 +3065,41 @@ def _write_alarm_body(alarmed: List[str]) -> None:
     path = _os.environ.get("AUDIT_ALERT_BODY")
     if not path:
         return
+    # AN EMPTY LIST WRITES AN EMPTY FILE, and that is load-bearing. The
+    # workflow sends the alert only `if [ -s "$BODY_FILE" ]`, so this is how
+    # "every alarm this run raised was run status" becomes "no Telegram
+    # message". Writing the bare heading would have left a 17-byte file and
+    # pushed a message with no reasons in it.
+    body = ("CI audit alarmed:" + chr(10)
+            + chr(10).join(f"  - {a}" for a in alarmed)) if alarmed else ""
     try:
-        pathlib.Path(path).write_text(
-            "CI audit alarmed:" + chr(10)
-            + chr(10).join(f"  - {a}" for a in alarmed), encoding="utf-8")
+        pathlib.Path(path).write_text(body, encoding="utf-8")
     except OSError as exc:                      # pragma: no cover
         print(f"could not write the alarm body: {exc}")
+
+
+def _emit_alarms(alarmed: List[str], alarmed_status: List[str]) -> int:
+    """Print every alarm, push only the actionable ones, return the exit code.
+
+    THE EXIT CODE COVERS BOTH LISTS, deliberately. A status alarm is not sent
+    to Telegram, and the thing that carries it instead is THIS RUN'S RED --
+    which only exists if a status alarm still exits non-zero. Stop reddening
+    and the information has nowhere left to go, which would turn a removal
+    into a deletion.
+    """
+    both = alarmed + alarmed_status
+    if not both:
+        return 0
+    print(chr(10) + "::error::audit alarm — " + "; ".join(both))
+    if alarmed_status:
+        # SAID OUT LOUD, every time, so the absence of a Telegram message is
+        # a recorded decision rather than something to rediscover.
+        print(f"note: {len(alarmed_status)} of {len(both)} alarm(s) above "
+              f"RESTATE a run's own conclusion, so they are NOT sent to "
+              f"Telegram - GitHub's notification on that red run carries "
+              f"them, and this run's red carries the rest.")
+    _write_alarm_body(alarmed)
+    return 1
 
 
 def main() -> int:
@@ -2959,6 +3150,18 @@ def main() -> int:
 
     fail_on = {v.strip().upper() for v in (a.fail_on or "").split(",") if v.strip()}
     alarmed: List[str] = []
+    # ── TELEGRAM CARRIES CONTENT AND ACTIONS, NEVER RUN STATUS. 2026-10-22 ──
+    #
+    # TWO LISTS, NOT ONE, and the split is made where the alarm is RAISED
+    # rather than by matching its wording later -- pattern-matching a message
+    # to recover its class is how two alarms spent nine days registered and
+    # incapable of firing.
+    #
+    # `alarmed_status` holds alarms that only RESTATE a run's own conclusion.
+    # They still print, still set the exit code and still redden this
+    # workflow, so GitHub's notification carries them. They are not pushed to
+    # a phone, because a phone cannot act on them.
+    alarmed_status: List[str] = []
 
     # ── THE PATTERN SELF-TEST, AT REGISTRATION AND BEFORE ANY RUN ─────────
     #
@@ -2997,8 +3200,29 @@ def main() -> int:
     # also cannot be inferred from runs, which is the whole reason it is here.
     _states = workflow_states()
     if _states is None:
-        print("note: workflow state UNKNOWN: `gh workflow list` could not be read. "
-              "A disabled workflow is indistinguishable from a quiet one here.\n")
+        # ── MADE TO ALARM 2026-10-22. ─────────────────────────────────────
+        #
+        # It was a `note:` that said "UNKNOWN" and alarmed on nothing. Of the
+        # three lines in that shape this is the one with NO ALTERNATIVE
+        # CARRIER: the comment above says it, and it is true -- a disabled
+        # workflow produces no runs, so nothing else in this audit can detect
+        # one. When this check cannot look, that detector is blind and no
+        # other line goes quiet to tell you.
+        #
+        # AND IT IS CLEARED BY AN ACTION, which is what separates it from the
+        # day-type line above: restoring `gh` auth or the token clears it, so
+        # it does not teach waiting. MEASURED: zero occurrences to date, so
+        # alarming costs nothing in volume.
+        print("!! WORKFLOW STATE UNEVALUATED: `gh workflow list` could not be "
+              "read, so this run did NOT check whether any workflow is "
+              "disabled. A disabled workflow produces no runs and cannot be "
+              "detected any other way, so this is a BLIND DETECTOR, not a "
+              "quiet one. CLEARING ACTION: restore `gh` auth (GH_TOKEN in "
+              "the job env) and re-run.\n")
+        alarmed.append(
+            "workflow state UNEVALUATED - `gh workflow list` unreadable, so "
+            "the ONLY detector for a disabled workflow did not run. CLEARING "
+            "ACTION: restore GH_TOKEN in the audit job and re-run")
     else:
         # SCOPED TO `WORKFLOWS`, added 2026-10-13. `gh workflow list` returns
         # every record GitHub HOLDS, not every file this repository has: a
@@ -3048,11 +3272,7 @@ def main() -> int:
                  "query, not an empty window.)" if listing_warning else ""))
         # A state alarm must survive the early return: a disabled workflow
         # produces no runs, so this is the branch it arrives on.
-        if alarmed:
-            print("\n::error::audit alarm — " + "; ".join(alarmed))
-            _write_alarm_body(alarmed)
-            return 1
-        return 0
+        return _emit_alarms(alarmed, alarmed_status)
 
     # HISTORY IS WHAT IS KNOWN, NOT WHAT IS IN THIS PASS. Seeded from the
     # ledger before the loop, so recording a finding no longer erases the
@@ -3126,7 +3346,10 @@ def main() -> int:
             _red_state, _red_why = classify_red(r["workflow"], log, facts)
             print(f"  red classified: {_red_state} - {_red_why}")
         if _red_state == "UNCLASSIFIABLE" and UNCLASSIFIABLE_ALARMS:
-            alarmed.append(
+            # STATUS: it is a statement ABOUT A RED CONCLUSION, which GitHub
+            # has already notified on. What this adds is the classification,
+            # and that is a thing to read in the log, not to be woken by.
+            alarmed_status.append(
                 f"{rid} {r['workflow']} red UNCLASSIFIABLE - {_red_why}")
         # Read IMMEDIATELY ABOVE the predicate it gates. It used to sit at the
         # top of this block, and the red-classification inserted between them
@@ -3136,7 +3359,26 @@ def main() -> int:
         _resolved = RESOLVED_RUNS.get(str(rid))
         if v in fail_on and r["workflow"] not in NEVER_ALARM_WORKFLOWS \
                 and not _resolved and _red_state != "VERDICT":
-            alarmed.append(f"{rid} {r['workflow']} {v}")
+            # ── STATUS OR FINDING, DECIDED BY WHETHER GITHUB ALREADY SAID IT ─
+            #
+            # `DID_NOT_RUN`, and `BROKEN` on a run that CONCLUDED FAILURE,
+            # restate the run's own red: GitHub's notification carries them
+            # and a second copy on a phone adds nothing actionable.
+            #
+            # `BROKEN` on a run that CONCLUDED SUCCESS is the opposite case
+            # and it is why this is not a blanket removal. MEASURED today:
+            # run 39710051629, `daily-picks`, scheduled, conclusion SUCCESS,
+            # scored BROKEN on a traceback in its log. GitHub notified NOBODY
+            # about that run. Drop it from Telegram too and the only carrier
+            # left would be a line in an audit log.
+            _restates_the_red = (
+                v == "DID_NOT_RUN"
+                or str(r.get("conclusion") or "").lower() == "failure")
+            (alarmed_status if _restates_the_red else alarmed).append(
+                f"{rid} {r['workflow']} {v}"
+                + ("" if _restates_the_red else
+                   " - ON A RUN THAT CONCLUDED SUCCESS, so no GitHub "
+                   "notification was sent for it"))
 
         # ── THE FOURTH ALARM SITE, added 2026-10-12 and written down ────────
         #
@@ -3371,8 +3613,29 @@ def main() -> int:
                 f"(review {STRUCTURAL_ACK['review']}) has expired")
 
     if _cron is None:
-        print("note: daily-picks carries no single `m h * * *` cron — the margin is "
-              "UNEVALUATED, not safe")
+        # ── MADE TO ALARM 2026-10-22. ─────────────────────────────────────
+        #
+        # It was a `note:` ending "UNEVALUATED, not safe" and alarming on
+        # nothing. Read what the condition actually is: the day type the
+        # trigger fires on -- TOMORROW's -- has NO PARSEABLE CRON in
+        # `daily-picks.yml`. That is not an unknown margin, it is a workflow
+        # that will not run tomorrow, and the margin being uncomputable is
+        # the least of it.
+        #
+        # CLEARED BY AN EDIT: add or repair the cron. So, unlike the day-type
+        # line in `format_series_census`, an alarm here names an action
+        # someone performs rather than a wait.
+        print(f"!! NO CRON FOR TOMORROW'S DAY TYPE "
+              f"({_margins.get('worse') or 'unknown'}): `daily-picks.yml` "
+              f"carries no parseable `m h * * *` entry for it, so the "
+              f"workflow is NOT SCHEDULED to run and the margin cannot be "
+              f"computed. CLEARING ACTION: add or repair that cron in "
+              f"`.github/workflows/daily-picks.yml`.")
+        alarmed.append(
+            f"no parseable cron for tomorrow's day type "
+            f"({_margins.get('worse') or 'unknown'}) in daily-picks.yml - the "
+            f"workflow is NOT SCHEDULED for it and the margin is uncomputable. "
+            f"CLEARING ACTION: add or repair the cron entry")
     elif _margin.get("alarm"):
         # ── THE MARK FOLLOWS THE ALARM, NOT THE CONDITION. 2026-10-21. ───
         #
@@ -3393,11 +3656,34 @@ def main() -> int:
                   f"ACKNOWLEDGED, so it reports and does not alarm. Remedy on "
                   f"file: {MARGIN_REMEDY}")
         if _ack:
-            print(f"  margin breach ACKNOWLEDGED since {_ack['since']}: "
-                  f"{_ack['why'][:88]}")
-            print(f"  it reports and does NOT alarm until it gets worse than "
-                  f"{_ack['binding']:+.0f}m. CLEARING ACTION: {_ack['action']}"
-                  f" (review {_ack['review']})")
+            # ── THE ACKNOWLEDGED PATH SAYS EVERYTHING THE ALARM SAID. ──────
+            #
+            # Three things it used not to. The `why` was truncated at 88
+            # characters, which cut the conservatism statement off entirely;
+            # the floor was printed as if it were the reading; and the
+            # reading itself did not appear, so a reader could not tell how
+            # much headroom the acknowledgement had left.
+            #
+            # An acknowledgement that reports LESS than the alarm it replaces
+            # is a silencer.
+            _pb_ack = parallel_regime_picks_series()
+            print(f"  ACKNOWLEDGED since {_ack['since']}, review "
+                  f"{_ack['review']}.")
+            print(f"  reading now {_margin['binding']:+.2f}m; acknowledged "
+                  f"DOWN TO a FLOOR of {_ack['binding']:+.2f}m "
+                  f"(= the {_ack['measured_at']:+.2f}m measured on "
+                  f"{_ack['since']} less {_ack['jitter']}m of measured "
+                  f"single-point jitter). It alarms on DETERIORATION past "
+                  f"that floor, not on the level.")
+            print(f"  WHY IT CANNOT CLEAR, and why the reading is "
+                  f"CONSERVATIVE: {_ack['why']}")
+            print(f"  CLEARING ACTION: {_ack['action']}")
+            print(f"  the replacement series is at n={_pb_ack['n']}/"
+                  f"{MIN_N_TO_REDERIVE_PICKS_BOUND}"
+                  + (f", about {_pb_ack['to_ten_date']}"
+                     if _pb_ack["to_ten_date"] not in ("reached",
+                                                       "UNEVALUATED")
+                     else f" ({_pb_ack['to_ten_date']})"))
         else:
             # RULE 3: a margin computed from a RETIRED REGIME'S constant is
             # labelled wherever it appears, the alert included. The operator
@@ -3422,13 +3708,7 @@ def main() -> int:
         # truncation qualifies.
         print(f"\nnote: {listing_warning}")
         print(f"note: {len(runs)} run(s) listed above is a LOWER BOUND.")
-    if alarmed:
-        # `::error::` so a workflow annotates, and a non-zero exit so it can
-        # go red — but only for the verdicts the caller named.
-        print("\n::error::audit alarm — " + "; ".join(alarmed))
-        _write_alarm_body(alarmed)
-        return 1
-    return 0
+    return _emit_alarms(alarmed, alarmed_status)
 
 
 #: Exit codes, so a red run says WHICH KIND it is.

@@ -36,27 +36,39 @@ def _code_lines():
 # ── the rule, statically ───────────────────────────────────────────────────
 
 def test_EVERY_marked_site_also_ALARMS():
-    """The rule itself. Four sites keep the marker and all four alarm."""
+    """The rule itself. Every site that keeps the marker also alarms.
+
+    FOUR BECAME SIX on 2026-10-22. Two of the three demoted lines that said
+    "UNEVALUATED, not safe" and alarmed on nothing were given the alarm their
+    words already claimed -- an unreadable `gh workflow list`, and no
+    parseable cron for tomorrow's day type. Both are cleared by an action, so
+    neither teaches waiting. See
+    `test_the_RESIDUE_was_RESOLVED_line_by_line`.
+    """
     marked = [l.strip() for l in _code_lines() if "!!" in l]
-    assert len(marked) == 4, (
-        f"{len(marked)} sites emit the marker, expected 4 (pattern "
+    assert len(marked) == 6, (
+        f"{len(marked)} sites emit the marker, expected 6 (pattern "
         f"self-test, actionable margin, structural margin deterioration, "
-        f"schedule margin): {marked}")
+        f"schedule margin, workflow state UNEVALUATED, no cron for "
+        f"tomorrow): {marked}")
     for frag in ("{key}: {why}", "ACTIONABLE MARGIN", "STRUCTURAL MARGIN",
-                 "SCHEDULE MARGIN"):
+                 "SCHEDULE MARGIN", "WORKFLOW STATE UNEVALUATED",
+                 "NO CRON FOR TOMORROW"):
         assert any(frag in m for m in marked), f"{frag} lost its marker"
 
 
-def test_the_NINE_ROUTINE_lines_KEPT_THEIR_INFORMATION():
-    """Demoted, not deleted. Each still prints, as a note."""
+def test_the_ROUTINE_lines_KEPT_THEIR_INFORMATION():
+    """Demoted, not deleted. Each still prints, as a note.
+
+    Two names changed on 2026-10-22 when their lines were promoted to alarms;
+    the remaining seven are unchanged.
+    """
     for frag in (
             "run(s) EXCLUDED because their headSha could not",
-            "is UNEVALUATED, not safe - no run has yet",
+            "margin NOT COMPUTED - no run has yet",
             "{listing_warning}",
-            "workflow state UNKNOWN: `gh workflow list` could not be read",
             "workflow record(s) GitHub holds that",
             "no ledger history for {_wf}",
-            "carries no single `m h * * *` cron",
             "run(s) listed above is a LOWER BOUND",
     ):
         assert frag in SRC, f"the information was deleted, not demoted: {frag}"
@@ -65,13 +77,46 @@ def test_the_NINE_ROUTINE_lines_KEPT_THEIR_INFORMATION():
         assert "!!" not in owner, f"still marked: {owner.strip()}"
 
 
-def test_the_RESIDUE_is_NAMED_rather_than_quietly_demoted():
-    """Three of the nine say "not safe"/"UNKNOWN" and alarm on nothing. Their
-    words claim more than the alarm set delivers. Changing what alarms is a
-    different decision from reserving the marker, so it is recorded."""
-    assert "THREE of the nine" in SRC, (
-        "the mismatch between 'not safe' and 'does not alarm' is no longer "
-        "recorded, so it will be forgotten rather than decided")
+def test_the_RESIDUE_was_RESOLVED_line_by_line():
+    """THE THREE "UNEVALUATED, not safe"/"UNKNOWN" lines, each decided on the
+    project's own test for an alarm: rare, actionable, AND CLEARED BY AN
+    ACTION. The third condition is what split them.
+
+    | line                              | clears by | decision |
+    |-----------------------------------|-----------|----------|
+    | a day type with no lateness series| the next scheduled run (TIME) | REWORDED |
+    | `gh workflow list` unreadable     | restoring GH_TOKEN (an EDIT)  | ALARMS   |
+    | no cron for tomorrow's day type   | editing the workflow (an EDIT)| ALARMS   |
+    """
+    # 1. REWORDED: the safety claim is gone and the reason it does not alarm
+    #    is in the line itself.
+    assert "is UNEVALUATED, not safe - no run has yet" not in SRC, (
+        "the day-type line still asserts a safety property it cannot "
+        "evaluate")
+    assert "neither clear nor breached" in SRC
+    # TWO FRAGMENTS, because the sentence is split across source lines by the
+    # f-string -- asserting the whole phrase matched nothing while the line
+    # was perfectly correct, which is the same trap as scanning for text that
+    # a comment wraps.
+    assert "it ends on its own when a run " in SRC, (
+        "the line no longer says WHY it does not alarm, so the next reader "
+        "has to re-derive it")
+    assert "so it does not alarm" in SRC
+
+    # 2 and 3. PROMOTED: each alarms, and each names an action.
+    assert "workflow state UNKNOWN: `gh workflow list` could not be read" \
+        not in SRC, "the old non-alarming wording is back"
+    assert "carries no single `m h * * *` cron" not in SRC
+    for frag, action in (
+            ("workflow state UNEVALUATED - `gh workflow list` unreadable",
+             "restore GH_TOKEN"),
+            ("no parseable cron for tomorrow's day type",
+             "add or repair the cron")):
+        owner = next((l for l in _code_lines() if frag in l), None)
+        assert owner is not None, f"{frag} no longer appends to `alarmed`"
+        i = SRC.index(frag)
+        assert action in SRC[i:i + 400], (
+            f"{frag} alarms without naming its clearing action")
 
 
 # ── the quiet state ────────────────────────────────────────────────────────
@@ -193,6 +238,12 @@ def test_the_ACKNOWLEDGEMENT_compares_the_REAL_figure_not_the_DISPLAY():
     correctly REFUSES to cover it. A predicate reading the rounded display
     would have absorbed a breach it was never shown."""
     real, displayed = 18.89232917906861, 19.0
+    # RESTORE WHAT WAS THERE, not `{}`. This used to reset to an empty dict,
+    # which was harmless only while the real table WAS empty. A standing
+    # acknowledgement was recorded on 2026-10-22, so the old `finally` would
+    # have deleted it for every test that ran after this one in the same
+    # session -- a test that silently disables the thing it is testing around.
+    _saved = ci.ACKNOWLEDGED_MARGIN_BREACH
     ci.ACKNOWLEDGED_MARGIN_BREACH = {
         "weekday": {"since": "2026-10-21", "binding": displayed,
                     "why": "x" * 40, "action": "y", "review": "2026-12-31"}}
@@ -203,4 +254,4 @@ def test_the_ACKNOWLEDGEMENT_compares_the_REAL_figure_not_the_DISPLAY():
         assert ci.margin_breach_is_acknowledged("weekday", displayed), (
             "the same figure is not covered, so the comparison is not >=")
     finally:
-        ci.ACKNOWLEDGED_MARGIN_BREACH = {}
+        ci.ACKNOWLEDGED_MARGIN_BREACH = _saved

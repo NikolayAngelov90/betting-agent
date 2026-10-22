@@ -260,12 +260,20 @@ def test_the_two_deadlines_are_distinct_and_the_WORSE_is_the_single_value():
         "which day type binds before trusting the single value")
 
 
-def test_a_day_type_with_no_series_is_UNEVALUATED_not_safe():
+def test_a_day_type_with_no_series_is_NOT_COMPUTED_and_says_it_does_not_alarm():
     """The weekday series is EMPTY the day the split lands.
 
     Membership requires the run's own headSha to carry the cron in force, and
     no weekday run has fired under `0 4` yet. Reporting that as a passing
     margin is exactly "absent instrumentation is not a zero".
+
+    RENAMED 2026-10-22. The old name ended in `UNEVALUATED_not_safe` and the
+    line it pinned said "not safe" while alarming on nothing -- a safety
+    claim from a line that cannot evaluate safety. It was reworded rather
+    than promoted to an alarm, because this state is cleared by the next
+    scheduled run firing, and an alarm cleared by waiting teaches waiting.
+    Its two siblings (an unreadable `gh workflow list`, a missing cron) are
+    cleared by an EDIT and do now alarm.
     """
     out = schedule_margins_by_daytype(
         {"weekend": [(None, 271.0)] * 3, "weekday": []},
@@ -276,7 +284,10 @@ def test_a_day_type_with_no_series_is_UNEVALUATED_not_safe():
         "an UNEVALUATED day type was chosen as the worse — a missing series "
         "must not win a comparison it did not enter")
     text = format_schedule_margins(out)
-    assert "UNEVALUATED" in text and "not safe" in text, text
+    assert "margin NOT COMPUTED" in text, text
+    assert "neither clear nor breached" in text, text
+    assert "not safe" not in text, (
+        "the safety claim is back in a line that alarms on nothing")
 
 
 def test_the_trigger_fires_on_the_WORSE_of_the_two():

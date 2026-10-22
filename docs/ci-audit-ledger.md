@@ -32179,3 +32179,342 @@ separate stage.**
 
 *Recorded 2026-10-21. `scripts/ci_audit.py`,
 `tests/test_marker_is_reserved.py`.*
+
+---
+
+## Telegram carries content and actions; the daily red was two lies and a crash — 2026-10-22
+
+### FOUND FIRST, BEFORE ANY OF THE FOUR PARTS: THE AUDIT HAD BEEN DEAD FOR THREE RUNS
+
+Running the audit to measure its Telegram volume crashed it:
+
+```
+File "scripts/ci_audit.py", line 1625, in parallel_regime_picks_series
+    started = as_datetime(r.get("createdAt"))
+NameError: name 'as_datetime' is not defined
+```
+
+**`as_datetime` never existed.** It shipped in `c2eef6d` yesterday and every
+`ci-audit` run since has exited 2 with `CI AUDIT CRASHED — NOTHING was
+audited` (runs `39671834491`, `39696939013`, `39714443682`). The crash banner
+was correct and nobody read it.
+
+**Why 2,312 tests passed over it.** `parallel_regime_picks_series` had **no
+test at all**. The one test that reached `main()` stubs `_sh` to return `""`,
+so the function took its UNEVALUATED early return and the loop below it was
+never executed by anything. *A test that drives only the error branch
+certifies the error branch.* `tests/test_picks_bound_series.py` now drives the
+real path: a scheduled weekday run on the new commit IS counted, and five
+shapes are NOT, each for its own stated reason.
+
+**And the new test immediately caught a second defect in the same function.**
+The unreadable-`gh` guard did not work:
+
+```python
+rows = json.loads(_sh("gh", "run", "list", ...) or "[]")
+```
+
+`or "[]"` turns **no output at all** into an empty list, so the `except
+json.JSONDecodeError` only ever caught malformed *non-empty* JSON and an
+unreadable `gh` reported **n=0** — the exact confusion the guard was added to
+prevent, and n=0 is the state this series is legitimately in. Now: no output
+and not-JSON are two separate `UNEVALUATED` returns with different reasons.
+
+With the fix the series is live: **n=1, 35.1 minutes**, against the retired
+serial constant of 88.1.
+
+### PART A — `TELEGRAM SPLIT`
+
+**THE RULE:** run status → **remove**; content → keep; action → keep.
+
+#### Every sender, classified
+
+**KEPT — content:** `send_daily_picks`, `send_settlement_report`,
+`send_performance_report`, `send_welcome_message`,
+`paper_trading_report --telegram`, **`pipeline_loss_alert`**.
+**KEPT — action:** the audit's actionable alarms, `reminders` `REMINDER DUE`,
+the probe's FINDING/REFUSAL. **Transport:** `ci_alert` / `alert_delivery`.
+
+**REMOVED — nine, each with its carrier named:**
+
+| removed | what carries it now | fired |
+|---|---|---|
+| daily-picks `❌ workflow FAILED` | GitHub's notification; the LOSS report for the consequence; ci-audit | **11** |
+| daily-picks critical-step send | the step STAYS and decides the colour; the log line keeps the step names | **9** |
+| daily-picks ML-retrain alert | **NOTHING** — see below | 0 |
+| closing-lines capture-failed | GitHub's notification; the coverage ratchet, which measures the GAP | 2 |
+| paper-trading report-failed | GitHub's notification; and the report's own ABSENCE | 0 |
+| h1-collect job-failed | GitHub's notification; ci-audit | 0 |
+| ci-audit empty-body MACHINERY | the `::error::CI AUDIT CRASHED` annotation; GitHub's notification | — |
+| ci-audit per-run BROKEN/DID_NOT_RUN relay | that run's own red — **except when it concluded SUCCESS** | — |
+| reminders UNEVALUATED send | the `::error::REMINDERS NOT EVALUATED` annotation; ci-audit | 0 |
+
+**THE ONE "NOTHING", SAID OUT LOUD.** The ML-retrain alert is removed and
+nothing replaces it: the retrain step is `continue-on-error`, so GitHub does
+not notify either. One failed retrain self-corrects via
+`_ml_models_stale(3)`; **a persistently failing retrain has no detector at
+all** — staleness is `logger.info`-only. Stated at the site of the removal and
+left for the finding register rather than papered over.
+
+**THE SPLIT IS MADE WHERE THE ALARM IS RAISED, NOT BY MATCHING ITS WORDING.**
+`main()` now has two lists. `alarmed_status` still prints, still sets the exit
+code and still reddens the run — *that red is the carrier GitHub notifies on,
+so stopping the redden would turn a removal into a deletion* — and
+`_write_alarm_body` writes only `alarmed`. An empty list writes an **empty
+file**, which is load-bearing: the workflow sends only `if [ -s "$BODY_FILE" ]`.
+
+**THE EXCEPTION THAT STOPS THIS BEING A BLANKET REMOVAL.** `BROKEN` on a run
+that **concluded SUCCESS** is kept, because GitHub notified nobody about it.
+Measured today: run `39710051629`, `daily-picks`, scheduled, **conclusion
+success, scored BROKEN** on a traceback in its log. It is the one alarm left in
+today's Telegram body.
+
+#### Measured, before and after
+
+Alert-path messages per day, 2026-09-22..10-22 (the content path is untouched):
+
+```
+before  ci-audit 3.00 | dp FAILED 0.37 | dp critical 0.30 | loss 0.03
+        | ML 0.00 | closing-lines 0.07 | paper 0.00 | h1 0.00
+        | probe 0.27 | reminders 1.00 (simulated, daily trigger)   = 5.04
+after   ci-audit 0.90 | loss 0.03 | probe 0.27 | reminders 0.00    = 1.20
+```
+
+**`5.04 → 1.20 per day, a 4.2x reduction.`** And the composition changed:
+**20 status messages had bought 1 report of an actual loss.**
+
+**THE SPLIT ALONE SAVES NOTHING, AND THE MEASUREMENT SAYS SO.** Sampling 30
+real alarming `ci-audit` runs: withholding status alarms silences **0 of 30**,
+because the always-present schedule-margin alarm is actionable. With Part B's
+acknowledgement, **21 of 30 send nothing** and what remains is the prospective
+margin. The reduction is Part B's; Part A decides what a message may contain.
+
+#### The loss report, kept and sharpened
+
+Escalation at N=2/N=3 confirmed (owned by `test_loss_alert_escalates.py`,
+10 passing). Three changes:
+
+* **"The next scheduled run did not fix it" → "produced no picks either."**
+  The one clause in the whole body that spoke about a RUN. A second day with
+  no picks is what escalates it, not how the next run ended.
+* **A STALE LITERAL.** It said a dispatch skips `3h58m-7h38m` of lateness.
+  `7h38m` is 458 minutes — the MAX under the weekday `0 4` cron, **reverted
+  the same day it was measured (2026-10-18)**. Nine other sites say
+  `3h58m-5h04m`; this one said something else and nothing compared them.
+  Re-measured over the live `0 0` series, n=10: **2h08m–5h05m**. *(The nine
+  are now stale at the low end too; named, not edited from inside a Telegram
+  change.)*
+* **RULE 3 applied to `88.1`:** the dispatch deadline is computed from the
+  retired SERIAL regime, so the alert now says so and says which direction it
+  errs in.
+
+#### The known-wrong control the directive named, driven
+
+`a failed run sends no Telegram; a card with zero picks still does; a margin
+breach still does.` The static half, run against `git HEAD` and the working
+tree:
+
+```
+BEFORE  5 offenders   closing-lines, daily-picks (x2), h1-collect, paper-trading
+AFTER   0 offenders
+```
+
+### PART B — `MARGIN ACKNOWLEDGED`
+
+**THE FIGURE MOVED WHILE THE DIRECTIVE WAS BEING WRITTEN.** It said `+19m`;
+the live binding is **`20.665799601890512`**, which displays as `+21`. Stored
+at full precision, because on 2026-10-21 an acknowledgement recorded at the
+rounded `19.0` correctly **refused** a real binding of `18.89232917906861`.
+
+**THE FLOOR IS DERIVED, NOT CHOSEN.** The acknowledgement covers down to
+`20.666 − 11.32 = +9.35`. 11.32 is the largest **ordinary** single-point move
+of the binding, measured by recomputing it over growing prefixes of the
+weekday series: `+5.53, +2.79, −11.32, −2.24, +1.77`. An acknowledgement
+pinned to the reading itself would re-alarm within a day or two and the daily
+red would be back.
+
+**AND THE EXCLUDED MOVE IS THE FINDING OF THE PART.** The sixth move is
+**−97.91**, and it is the moment the lateness series became **BIMODAL**:
+
+```
+weekday lateness, n=10, measured 2026-10-22
+  2026-10-02 .. 10-09   255.9  256.8  304.9  271.7  282.7  285.8
+  ── a ten-day gap ──
+  2026-10-19 .. 10-22   128.4  144.1  137.7  132.0
+```
+
+**The cron did not change** — it is `0 0 * * 1-5` throughout. So `mean+3sd`
+over this series is measuring **between-cluster spread, not tail risk**:
+adding the first low point moved the binding −97.91 minutes *while the level
+improved by 150*. That makes the `+21` reading conservative, and it is **not**
+a licence to resegment on n=4 — splitting a series on an eyeballed gap at n=4
+is `settled-pick-segments-are-noise`. Both clusters and "same cron" are
+written into the acknowledgement so the claim stays checkable.
+
+**WHY IT CANNOT CLEAR:** the deadline is the observed earliest kickoff and the
+ready time is ours. **CLEARING ACTION:** manual dispatch today; durably, the
+parallel series reaching n=10 and `FULL_CARD_PICKS_MAX` being re-derived.
+**REVIEW 2026-11-04**, the projected date of exactly that.
+
+**DRIVEN, not asserted:** it does not alarm at the level or at the floor, it
+**does** alarm one hundredth below the floor, it covers improvements, and with
+`date.today()` moved to 2026-11-05 it **refuses**. The weekend (+135.7) is
+deliberately not acknowledged.
+
+**AND THE ACKNOWLEDGED PATH NOW REPORTS EVERYTHING THE ALARM DID.** It printed
+`_ack['why'][:88]` — a truncation that cut the conservatism statement off
+entirely — and showed the floor as if it were the reading. It now prints the
+current reading, the floor *called a floor* with its band, the full why, the
+clearing action, and the regime clock. *An acknowledgement that reports less
+than the alarm it replaces is a silencer.*
+
+Result on live data: **0 marked lines**, and the Telegram body falls from 478
+to **130 bytes**.
+
+### PART C — `REMINDERS CLASSIFIED`: **FAILURE**, and the marker certified a lie
+
+One run: `39714443709`, 2026-10-22 03:00 UTC, `workflow_run`, `c2eef6d`,
+conclusion **failure**, `##[error]REMINDER DUE` **present**, exit annotation
+present → `classify_red` returned **VERDICT**, correctly by its own rules.
+
+**NO REMINDER WAS DUE.** Higher in the same log:
+
+```
+collected 1613 items / 17 errors / 1607 deselected / 1 skipped / 6 SELECTED
+1 skipped, 1607 deselected, 17 errors in 4.16s
+```
+
+Seventeen modules could not be **imported** — the job installed a "minimal"
+dependency set, and pytest must import every module under `tests/` to find the
+marked ones. pytest stops at collection errors, so **six reminders were
+selected and none ran**. It exited **2**; `continue-on-error` turned that into
+the word `failure`; the classifier read `failure` as "a reminder is due" and
+printed the marker itself. The same selection locally: **6 passed, 1 skipped —
+nothing due.**
+
+> **VERDICT 0, FAILURE 1.** A registered marker is only as honest as the
+> predicate that prints it.
+
+**THREE DEFECTS, THREE FIXES**, because any one alone would have produced the
+false verdict:
+
+1. **The classifier read the step OUTCOME.** It now branches on pytest's exit
+   code: `0` nothing due, `1` **a decision is due**, `2/3/4/5` **NOT
+   EVALUATED** — with a different, deliberately **unregistered** marker, so
+   `ci-audit` returns FAILURE for it with no change to the audit.
+2. **The install could not collect the suite.** `aiohttp beautifulsoup4 httpx
+   pandas` added, with the measurement that justifies them. Not
+   `-r requirements.txt`: that pulls transformers, playwright and camoufox for
+   a job that trains nothing.
+3. **Nothing checked the reminders had RUN.** A reminder that loses its
+   `calendar` marker leaves the selection and pytest exits **0** — a clean
+   result for a guard sailing past its date. The job now counts the tests that
+   ran and compares against a floor of **7**, verified against the registry by
+   AST (three other `@pytest.mark.calendar` decorators in the repo sit inside
+   **string literals**, and a grep counts those).
+
+**AND THE PLUMBING NEEDED `set +e`, NOT JUST `pipefail`.** Under `bash -e` a
+failing pytest terminates the step *at* the pipeline and `rc=${PIPESTATUS[0]}`
+never runs. Driven both ways:
+
+```
+with    set +e   ->  pytest_rc=2 reminders_ran=0   (classifier: NOT EVALUATED)
+without set +e   ->  <empty>                        (rc never reaches it)
+```
+
+Same family as the `| tee` that swallowed the coverage gate's exit code.
+
+**VERIFIED END TO END** by extracting the shipped step and running it:
+`pytest_rc=0, reminders_ran=7, exit 0` → "nothing due".
+
+**WHAT `reminders` WILL REDDEN ON BETWEEN NOW AND 11-01.** Of the seven, the
+only one driven by a date that has not passed is **`H1_RESERVATION_ACK_UNTIL =
+2026-11-01`** — the H1 reservation acknowledgement, whose clearing action is
+the deletion stage plus the re-run decision, already on the books for that
+date. The other two calendar guards fired and had their decisions taken
+(`EMPTY_CARD_UNTIL` 10-09; the H1 window 10-17, acknowledged 10-18). The
+remaining four are `live` and depend on data, not the clock. **So: nothing
+until 2026-11-01, then one VERDICT.**
+
+### PART D — the three lines that claimed more than they delivered
+
+Decided on this project's own test for an alarm — rare, actionable, **and
+cleared by an action**. The third condition is what separated them:
+
+| line | clears by | decision |
+|---|---|---|
+| a day type with no lateness series | the next scheduled run — **TIME** | **REWORDED** |
+| `gh workflow list` unreadable | restoring GH_TOKEN — an **EDIT** | **ALARMS** |
+| no cron for tomorrow's day type | editing the workflow — an **EDIT** | **ALARMS** |
+
+* **REWORDED.** "Not safe" asserts a safety property the line cannot evaluate;
+  it is reporting that there is nothing to evaluate. Now "margin NOT COMPUTED
+  … neither clear nor breached", and it states *why* it does not alarm, so the
+  mismatch is not rediscovered. An alarm here would be cleared by waiting,
+  which is what CLR-2 exists to prevent.
+* **ALARMS — and it is the one with no alternative carrier.** A disabled
+  workflow produces no runs, so nothing else in the audit can detect one. When
+  this check cannot look, that detector is **blind, not quiet**. Zero
+  occurrences to date, so it costs nothing in volume.
+* **ALARMS — read as a condition rather than as a margin.** It says
+  `daily-picks` is **not scheduled to run tomorrow**. The uncomputable margin
+  is the least of it.
+
+Marked sites: **4 → 6**, and all six alarm.
+
+### THE COUPLING THAT ALMOST WENT OUT SILENTLY
+
+Removing the Telegram send, I normalised `step(s) FAILED —` to a hyphen.
+`ci_audit.extract()` matches that line with `r"step\(s\) FAILED — (...)"`, so
+`steps_failed` and `steps_not_run` would both have become **permanently
+empty** — two detectors gone, no test failing, because a regex that stops
+matching reports nothing rather than erroring. Caught by a test asserting the
+audit can still read the line. The em dash is restored *and* the pattern now
+accepts either, and the workflow carries a "these are load-bearing" comment.
+
+Incidentally fixed: the capture ran to end-of-line, so the audit's table had
+been showing `update-results. Logs: https://…` as a step name for as long as
+that message existed. The URL now gets its own line.
+
+### SEVEN TEST FILES CORRECTED, AND WHAT THEY TAUGHT
+
+* **A locator keyed on a step NAME fails without saying what moved.** Renaming
+  "Alert on critical step failure" produced `StopIteration` and `IndexError`
+  in three files. All three now locate it by what it DOES — the script that
+  reads `steps["picks (incl. review)"]`.
+* **A control that passed only because its own fixture was broken.**
+  `test_a_scraper_failure_leaves_the_run_green_but_alerts` asserted
+  `"::error::" in out`. That annotation comes from `_annotate`, which fires
+  only when a Telegram delivery **fails** — and the harness sets
+  `TELEGRAM_BOT_TOKEN=""`. In production, with a token, it never printed. The
+  test now pins the real carrier: that `ci_audit.extract()` reads the line.
+* **A test that disabled the thing it was testing around.**
+  `test_the_ACKNOWLEDGEMENT_compares_the_REAL_figure...` restored
+  `ACKNOWLEDGED_MARGIN_BREACH` to `{}` in its `finally` — harmless only while
+  the real table was empty. It now restores what was there.
+* **A fake in `exec`'s globals is overwritten by the script's own `import`.**
+  My reminders driver passed `{"subprocess": fake}`; the extracted source
+  starts `import subprocess`, which rebound it, and the test spawned the real
+  `ci_alert` — stopped only by a Windows codepage error. It patches
+  `sys.modules` now. *One encoding away from sending real Telegram messages on
+  every test run.*
+* **The eighth comment-blind text scan of this program.**
+  `assert "ci_audit" not in daily` matched my own comment explaining that
+  `ci_audit.extract()` reads that log — which is true, and from the outside,
+  exactly as the test requires.
+
+### DISCIPLINE
+
+Gating selection **2,379 passed, 7 deselected** (was 2,312; +67). Non-gating
+**6 passed, 1 skipped**. Invariants pass, count not cited. Every workflow YAML
+parses. Fingerprint **UNCHANGED at `s5.18 / 51fbcb`**. No production write, no
+schema change, no model change.
+
+**Carried forward:** the ML-retrain staleness gap (no detector); the nine
+`3h58m-5h04m` sites now stale at the low end; the picks-bound re-derivation at
+n=10, **2026-11-04**; the H1 deletion stage, **2026-11-01**.
+
+*Recorded 2026-10-22. `scripts/ci_audit.py`, `scripts/pipeline_loss_alert.py`,
+six workflows, `tests/test_telegram_carries_content_not_status.py`,
+`tests/test_margin_acknowledged.py`, `tests/test_reminders_are_evaluated.py`,
+`tests/test_picks_bound_series.py`.*

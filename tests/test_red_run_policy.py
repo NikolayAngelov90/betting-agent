@@ -60,9 +60,25 @@ def _steps():
     return list(d["jobs"].values())[0]["steps"]
 
 
+#: The step's NAME changed on 2026-10-22 ("Alert on critical step failure" ->
+#: "Decide the run colour from the critical steps") when its Telegram send was
+#: removed and only its colour decision was left. Every test here broke with
+#: `StopIteration` on the old name, which is a bad failure mode for a locator:
+#: it says nothing about what moved.
+#:
+#: SO IT IS LOCATED BY WHAT IT DOES. The step that reads the five step
+#: outcomes and decides the run's colour is the step whose script indexes
+#: `steps["picks (incl. review)"]` -- that is behaviour, and it survives
+#: renaming.
+_PICKS_KEY = 'steps["picks (incl. review)"]'
+
+
 def _check_step():
-    return next(s for s in _steps()
-                if "Alert on critical step failure" in s.get("name", ""))
+    found = [s for s in _steps() if _PICKS_KEY in (s.get("run") or "")]
+    assert len(found) == 1, (
+        f"{len(found)} steps decide the run colour from the picks outcome; "
+        f"expected exactly 1. Two would mean two policies.")
+    return found[0]
 
 
 def _run(outcomes):
@@ -94,7 +110,10 @@ def test_pick_generation_failure_makes_the_run_red():
         "pick generation failed and the job still reports success — the run "
         "produced no picks and nothing in the Actions list says so")
     assert "::error::" in out
-    assert "Daily picks: step(s) FAILED" in out, "no alert was sent"
+    assert "step states: step(s) FAILED" in out, (
+        "the step states are no longer printed. The Telegram send was "
+        "removed 2026-10-22 and this LOG LINE is what replaces it, so "
+        "losing the line loses the information entirely")
 
 
 def test_a_scraper_failure_leaves_the_run_green_but_alerts():
@@ -103,9 +122,26 @@ def test_a_scraper_failure_leaves_the_run_green_but_alerts():
     assert code == 0, (
         "a scraper failure turned the run red — that is the noise this policy "
         "was deliberately narrowed to avoid")
-    assert "Daily picks: step(s) FAILED" in out, (
+    assert "step states: step(s) FAILED" in out, (
         "the run stayed green AND said nothing — the worst of both")
-    assert "::error::" in out
+    # ── WHAT THIS USED TO ASSERT, AND WHY IT WAS WRONG. ──────────────────
+    #
+    # It asserted `"::error::" in out`. That annotation came from
+    # `alert_delivery._annotate`, which fires only when a Telegram delivery
+    # FAILS -- and this harness sets `TELEGRAM_BOT_TOKEN=""`. So the test was
+    # pinning behaviour that existed ONLY because its own fixture had no
+    # credentials; in production, with a token, the send succeeded and no
+    # annotation was ever printed.
+    #
+    # The real carrier for a green run with a failed scraper is the AUDIT,
+    # which reads this very line. So that is what is pinned now -- and it
+    # catches the coupling that nearly went unnoticed: the audit's regex
+    # required an em dash, and normalising it here would have emptied
+    # `steps_failed` with no test failing.
+    import scripts.ci_audit as _ci
+    assert _ci.extract(out)["steps_failed"] == ["update-results"], (
+        "the audit can no longer read the step names out of this line, so "
+        "the only remaining carrier for a green-but-degraded run is gone")
 
 
 def test_settlement_failure_is_currently_green_and_that_is_a_known_choice():
@@ -124,7 +160,7 @@ def test_settlement_failure_is_currently_green_and_that_is_a_known_choice():
 def test_all_success_is_silent():
     code, out = _run({})
     assert code == 0
-    assert "Daily picks:" not in out
+    assert "step states:" not in out
 
 
 # ── SKIPPED: the third state, and the one that actually happened ──────────
@@ -248,7 +284,7 @@ def test_every_step_after_the_check_still_runs_when_it_exits_nonzero():
     """
     steps = _steps()
     idx = next(i for i, s in enumerate(steps)
-               if "Alert on critical step failure" in s.get("name", ""))
+               if _PICKS_KEY in (s.get("run") or ""))
     for s in steps[idx + 1:]:
         cond = str(s.get("if", ""))
         assert "always()" in cond or "failure()" in cond, (

@@ -158,7 +158,22 @@ def test_an_UNEVALUATED_day_type_does_NOT_alarm_and_cannot_win_WORSE():
     assert out["unevaluated"] == ["weekday"]
     assert out["worse"] == "weekend"
     text = ci.format_schedule_margins(out)
-    assert "UNEVALUATED" in text and "not safe" in text
+    # ── THE WORDING CHANGED 2026-10-22, AND THE REASON IS THE POINT. ─────
+    #
+    # It said "is UNEVALUATED, not safe" and alarmed on nothing. "Not safe"
+    # asserts a safety property, and this line cannot evaluate one -- it is
+    # reporting that there is nothing to evaluate. Of the three lines in that
+    # shape, this is the one that was REWORDED rather than promoted to an
+    # alarm, because it is cleared by the next scheduled run firing and
+    # CLR-2 exists because an alarm cleared by waiting teaches waiting.
+    assert "margin NOT COMPUTED" in text
+    assert "neither clear nor breached" in text, (
+        "the line no longer distinguishes 'not computed' from 'clear'")
+    assert "not safe" not in text, (
+        "the safety claim is back in a line that still alarms on nothing")
+    assert "does not alarm" in text, (
+        "the line must say WHY it does not alarm, or the mismatch between "
+        "its words and the alarm set gets rediscovered")
 
 
 def test_a_breaching_margin_DOES_alarm():

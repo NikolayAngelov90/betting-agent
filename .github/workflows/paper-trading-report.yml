@@ -169,10 +169,19 @@ jobs:
           path: logs/paper-trading-report.txt
           retention-days: 30
 
-      - name: Alert if the report failed
-        if: failure()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python -m scripts.ci_alert             "⚠️ Paper trading report failed. The experiment is still collecting, but its instrument is blind today. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      # ── THE TELEGRAM FAILURE ALERT WAS REMOVED HERE. 2026-10-22. ──────────
+      #
+      # It said "Paper trading report failed … its instrument is blind today."
+      # That is the run's conclusion, and the reader's action was to wait for
+      # tomorrow's run -- which is what would have happened anyway.
+      #
+      # WHAT CARRIES IT NOW: GitHub's own notification on the red run. And the
+      # report this workflow sends is itself the carrier that matters: it
+      # arrives daily with `--telegram`, so a day with no report IS the
+      # signal, and one that a reader notices by absence rather than by being
+      # told.
+      #
+      # MEASURED over 2026-09-22..10-22: 30 runs, 0 failures. This sender had
+      # never fired either. Note that `rc == 2` (a HEALTH ALERT) is
+      # deliberately mapped to `exit 0` above, so a health alert was never
+      # routed through here in the first place.

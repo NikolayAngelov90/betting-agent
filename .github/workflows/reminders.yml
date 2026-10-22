@@ -94,8 +94,32 @@ jobs:
         run: cp config/config.example.yaml config/config.yaml
 
       - name: Install dependencies
-        # Minimal, as paper-trading-report is: the reminder selection reads the
-        # DB, the GitHub API and football-data.org, and trains nothing.
+        # ── THE "MINIMAL" SET WAS A FALSE ECONOMY. CORRECTED 2026-10-22. ────
+        #
+        # It saved about a minute of pip and cost the entire mechanism. The
+        # selection is `-m "calendar or live"`, but pytest must IMPORT every
+        # module under `tests/` to find out which ones match -- and 17 of them
+        # import a scraper, so `aiohttp`, `bs4`, `httpx` and `pandas` were
+        # needed to COLLECT the suite even though no reminder uses them.
+        #
+        # MEASURED on run 39714443709 (2026-10-22 03:00 UTC), the first and
+        # only run this workflow had:
+        #
+        #     collected 1613 items / 17 errors / 1607 deselected
+        #                          / 1 skipped / 6 SELECTED
+        #     1 skipped, 1607 deselected, 17 errors in 4.16s
+        #
+        # Six reminders were selected and NONE of them ran: pytest stops at
+        # collection errors unless told otherwise. The job exited 2, the step
+        # outcome was `failure`, and the next step read `failure` as "a
+        # reminder is due" and announced one. Locally the same selection is
+        # `6 passed, 1 skipped` -- nothing was due at all.
+        #
+        # NOT `-r requirements.txt`: that pulls transformers, playwright and
+        # camoufox for a job that trains nothing. The four names below are
+        # what the import graph actually needs, and the step after this one no
+        # longer trusts them to be sufficient -- it checks that the reminders
+        # RAN.
         #
         # THE SQLALCHEMY BOUND IS REPEATED HERE because this step does not read
         # requirements.txt. SQLAlchemy 2.1 resolves a bare `postgresql://` URL
@@ -104,10 +128,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -c constraints.txt "sqlalchemy>=2.0.0,<2.1" \
-            psycopg2-binary pyyaml python-dotenv loguru numpy scipy pytest
+            psycopg2-binary pyyaml python-dotenv loguru numpy scipy pytest \
+            aiohttp beautifulsoup4 httpx pandas
 
       - name: Run the reminders
         id: reminders
+        # KEPT, BUT IT IS NO LONGER WHAT CARRIES THE RESULT. The script below
+        # ends in `exit 0` and hands its verdict on through `pytest_rc`, so
+        # this setting now covers only a failure in the step's OWN plumbing --
+        # and in that case `pytest_rc` is empty, which the classifier reports
+        # as NOT EVALUATED rather than as a clean run. Both paths are safe;
+        # this one keeps the classifier reachable instead of aborting the job.
         continue-on-error: true
         env:
           # ── THE CREDENTIALS ARE GIVEN DELIBERATELY, AND THAT IS THE POINT ──
@@ -125,9 +156,45 @@ jobs:
           TABLES_CREATED: '1'
           PYTHONIOENCODING: utf-8
         run: |
+          # ── THE EXIT CODE, NOT THE STEP OUTCOME. 2026-10-22. ─────────────
+          #
+          # `continue-on-error` turns every non-zero exit into the single word
+          # `failure`, and the next step read that word as "a reminder is
+          # due". pytest's codes are not interchangeable:
+          #
+          #     0  all reminders ran and passed      -> nothing due
+          #     1  a reminder FAILED                 -> A DECISION IS DUE
+          #     2  interrupted (collection errors)   -> NOT EVALUATED
+          #     3  internal error                    -> NOT EVALUATED
+          #     4  usage error                       -> NOT EVALUATED
+          #     5  no tests collected                -> NOT EVALUATED
+          #
+          # Only 1 is a verdict. Collapsing 2 into it is how this workflow
+          # announced a reminder on a day when none was due.
+          # `set +e` AROUND THE PIPELINE, not just `pipefail`. GitHub runs
+          # `run:` under `bash -e`, so a failing pytest terminates the step
+          # AT the pipeline and the `rc=` line below never executes -- the
+          # output would be unset and the classifier would read "". Same
+          # family as the `| tee` that swallowed an exit code in the coverage
+          # gate, and the reason `ci-audit.yml` brackets its audit the same
+          # way.
           set -o pipefail
+          set +e
           python -m pytest tests/ -v --tb=short -m "calendar or live" \
             | tee logs/reminders.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "pytest_rc=$rc" >> "$GITHUB_OUTPUT"
+          # HOW MANY REMINDERS ACTUALLY RAN, counted from pytest's own
+          # per-test lines rather than from a constant kept in step with them.
+          # `rc` alone cannot catch a reminder that silently LEFT the
+          # selection -- drop the `calendar` marker from a test and the run is
+          # a clean exit 0 while the guard sails past its date.
+          ran=$(grep -cE "^tests/.*::.* (PASSED|FAILED|SKIPPED|XFAIL|XPASS)" \
+                logs/reminders.txt || true)
+          echo "reminders_ran=$ran" >> "$GITHUB_OUTPUT"
+          echo "pytest exit=$rc, reminder tests that RAN=$ran"
+          exit 0        # the classification below decides, not this step
 
       - name: Upload the reminder log
         if: always()
@@ -142,7 +209,11 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          O_REMINDERS: ${{ steps.reminders.outcome }}
+          # THE CODE AND THE COUNT, not the outcome. `steps.reminders.outcome`
+          # is deliberately NOT read any more: it is the single word that
+          # collapsed "a reminder is due" into "pytest could not run".
+          RC: ${{ steps.reminders.outputs.pytest_rc }}
+          RAN: ${{ steps.reminders.outputs.reminders_ran }}
           UP_CONCL: ${{ github.event.workflow_run.conclusion }}
           EVENT: ${{ github.event_name }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -152,16 +223,70 @@ jobs:
           import subprocess
           import sys
 
-          outcome = os.environ.get("O_REMINDERS", "")
+          #: THE REMINDERS THAT MUST RUN, as a FLOOR with its measurement.
+          #: `measured` 2026-10-22: the selection `-m "calendar or live"`
+          #: collects 7 -- 2 in test_calendar_separation, 1 each in
+          #: test_absent_run_and_unparseable, test_cron_split_by_daytype,
+          #: test_empty_card_suppression, test_fixture_horizon_probe and
+          #: test_reference_deadline. A floor, not an equality, so adding a
+          #: reminder does not break the job; `tests/test_reminders_are_
+          #: evaluated.py` checks the floor against the LIVE selection, so it
+          #: cannot quietly drift below reality either.
+          REMINDERS_EXPECTED_MIN = 7
+
+          rc_raw = os.environ.get("RC", "")
+          ran_raw = os.environ.get("RAN", "")
           up = os.environ.get("UP_CONCL") or "UNEVALUATED"
           event = os.environ.get("EVENT", "")
           url = os.environ.get("RUN_URL", "")
+
+          def _int(s):
+              try:
+                  return int(str(s).strip())
+              except (TypeError, ValueError):
+                  return None
+
+          rc, ran = _int(rc_raw), _int(ran_raw)
+
+          # ── NOT EVALUATED IS ITS OWN STATE, AND IT IS NOT A VERDICT ───────
+          #
+          # Everything below until the `rc == 1` branch is "the reminder set
+          # was not read", which is a FAILURE of this workflow. It prints, it
+          # reddens, and it sends NO Telegram message: a broken job is run
+          # status and GitHub's notification carries it.
+          unevaluated = None
+          if rc is None:
+              unevaluated = (f"the pytest exit code did not reach this step "
+                             f"(RC={rc_raw!r}), so nothing can be concluded")
+          elif rc not in (0, 1):
+              unevaluated = (
+                  f"pytest exited {rc}, which is not a test result: 2 is "
+                  f"interrupted (a module failed to IMPORT), 3 internal, 4 "
+                  f"usage, 5 nothing collected. The reminders were not run, "
+                  f"so whether one is due is UNKNOWN")
+          elif ran is None or ran < REMINDERS_EXPECTED_MIN:
+              unevaluated = (
+                  f"only {ran} reminder test(s) RAN, against at least "
+                  f"{REMINDERS_EXPECTED_MIN} expected. pytest exited {rc}, so "
+                  f"it is reporting a clean result for a set it did not fully "
+                  f"evaluate -- a reminder that lost its marker leaves the "
+                  f"selection silently and this is the only thing that sees it")
+
+          if unevaluated:
+              print("::error::REMINDERS NOT EVALUATED - this red is a "
+                    "FAILURE of this workflow, NOT a reminder coming due.")
+              print(f"REMINDERS - NOT EVALUATED. {unevaluated}.")
+              print(f"NOTHING was sent to Telegram: a job that could not run "
+                    f"is run status, and GitHub's notification on this red "
+                    f"run carries it. upstream={up} trigger={event}")
+              print(url)
+              sys.exit(1)
 
           # TWO MESSAGES THAT MUST NOT LOOK ALIKE. "a reminder is due" and
           # "today's card was lost" arrive in the same Telegram chat, so each
           # names the workflow it came from and what it means. The daily-picks
           # alert keeps its own wording and is not touched.
-          if outcome == "failure":
+          if rc == 1:
               # ── THE REGISTERED MARKER. 2026-10-21. ─────────────────────
               # This workflow is DESIGNED to redden when a reminder reaches
               # its date, so `ci-audit` must be able to tell that red from a
@@ -188,18 +313,21 @@ jobs:
                              check=False)
               sys.exit(1)
 
-          if outcome not in ("success", "failure"):
-              # THIRD STATE. `skipped`/`cancelled` is not "no reminder due".
-              body = (
-                  "❓ REMINDERS — UNEVALUATED.\n"
-                  f"The reminder step did not run to completion "
-                  f"(outcome={outcome!r}), so whether a decision is due is "
-                  f"UNKNOWN. This is not a clear result.\n{url}")
-              print(body)
-              subprocess.run([sys.executable, "-m", "scripts.ci_alert", body],
-                             check=False)
-              sys.exit(1)
-
-          print(f"Reminders: nothing due. upstream={up} trigger={event}")
+          # ── THE THIRD-STATE TELEGRAM SEND WAS REMOVED HERE. 2026-10-22. ───
+          #
+          # It said "❓ REMINDERS — UNEVALUATED. The reminder step did not run
+          # to completion (outcome='skipped')". The THIRD STATE ITSELF IS KEPT
+          # and is now much stronger -- it is the `unevaluated` branch above,
+          # which also catches the two cases this one could not: pytest
+          # exiting 2 on a collection error, and a reminder that silently left
+          # the selection. What goes is only the push notification, because
+          # `outcome=='skipped'` is this job's own status.
+          #
+          # WHAT CARRIES IT NOW: the `::error::REMINDERS NOT EVALUATED`
+          # annotation, this run's red, GitHub's notification on it, and
+          # `ci-audit`'s per-workflow red classification -- which can now tell
+          # the two reds apart, because they carry different markers.
+          print(f"Reminders: nothing due. {ran} reminder test(s) ran, all "
+                f"passed or skipped. upstream={up} trigger={event}")
           sys.exit(0)
           EOF

@@ -163,7 +163,16 @@ def test_the_audit_is_wired_and_cannot_audit_itself_from_inside():
     assert WORKFLOW.is_file(), "the audit is not wired to anything"
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "workflow_run" in text
-    daily = pathlib.Path(".github/workflows/daily-picks.yml").read_text(encoding="utf-8")
+    # COMMENT-BLIND, as `_code_lines` further down this file already is. On
+    # 2026-10-22 a comment in daily-picks.yml explaining that
+    # `ci_audit.extract()` reads that step's log -- which is true, and from
+    # the OUTSIDE, exactly as this test requires -- failed this assertion.
+    # A test that greps for the ABSENCE of a name matches the comment
+    # explaining why the name is absent.
+    daily = chr(10).join(
+        l for l in pathlib.Path(".github/workflows/daily-picks.yml")
+        .read_text(encoding="utf-8").splitlines()
+        if not l.strip().startswith("#"))
     assert "ci_audit" not in daily, (
         "ci_audit was added as a step inside daily-picks — it cannot read its "
         "own log, so it would audit nothing")
@@ -276,8 +285,20 @@ def test_an_unreadable_gh_is_UNKNOWN_and_says_so(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["ci_audit", "--since", "2030-01-01"])
     ci.main()
     out = capsys.readouterr().out
-    assert "state UNKNOWN" in out
-    assert "indistinguishable from a quiet one" in out
+    # ── IT NOW ALARMS, AS OF 2026-10-22, AND THE WORDING CHANGED WITH IT ──
+    #
+    # This was a `note:` reading "state UNKNOWN … indistinguishable from a
+    # quiet one" that alarmed on NOTHING. It is the one line of the three in
+    # that shape with no alternative carrier: a disabled workflow produces no
+    # runs, so nothing else in the audit can detect one, and when this check
+    # cannot look that detector is simply blind. Cleared by restoring
+    # GH_TOKEN, which is an action, so it does not teach waiting.
+    assert "WORKFLOW STATE UNEVALUATED" in out
+    assert "BLIND DETECTOR, not a" in out, (
+        "the line no longer distinguishes 'could not look' from 'looked and "
+        "found nothing'")
+    assert "restore `gh` auth" in out, "it alarms without naming an action"
+    assert "!!" in out, "a line that alarms must wear the finding marker"
 
 
 # ── THE ALARM'S SCOPE: recent, not "never recorded" ──────────────────────────

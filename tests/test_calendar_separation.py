@@ -327,21 +327,36 @@ def test_the_LATENT_members_are_recorded_as_a_number_not_a_claim():
 # completes and the alert fires — has never happened, and a silence is only
 # trustworthy with a control behind it.
 
+#: The script that decides the run's colour from the five step outcomes,
+#: identified by WHAT IT READS. Its step name changed on 2026-10-22 when the
+#: Telegram send was removed, and a name-keyed `split` returned "" and raised
+#: `IndexError` — a locator that fails without saying what moved.
+_PICKS_KEY = 'steps["picks (incl. review)"]'
+
+
 def _alert_decision(monkeypatch, outcomes: dict):
-    """Execute the SHIPPED alert script against an injected step state.
+    """Execute the SHIPPED colour-decision script against an injected state.
 
     Extracted from the YAML rather than re-implemented, so the control cannot
-    pass while the real script drifts. Fakes are installed on the REAL modules:
-    the script's own `import os, subprocess, sys` would overwrite anything
-    injected into `exec`'s globals — a trap this suite has already paid for.
+    pass while the real script drifts.
+
+    THE CHANNEL IS NOW THE LOG. Until 2026-10-22 the script ended in
+    `subprocess.run([... "scripts.ci_alert", msg])` and this captured that
+    call; the Telegram send was removed because a list of step names and
+    outcomes is run status, and the printed line is what carries it now. The
+    return value is still a list, empty when nothing was reported, so every
+    caller's `assert sent` / `assert sent == []` keeps its meaning.
     """
-    import subprocess
+    import io
+    from contextlib import redirect_stdout
 
     text = WF.read_text(encoding="utf-8")
-    body = text.split("- name: Alert on critical step failure", 1)[1]
-    body = body.split("python - <<'EOF'", 1)[1].split("\n          EOF", 1)[0]
-    body = "\n".join(l[10:] if l.startswith(" " * 10) else l.lstrip()
-                     for l in body.splitlines())
+    blocks = [b for b in text.split("python - <<'EOF'")[1:] if _PICKS_KEY in b]
+    assert len(blocks) == 1, (
+        f"{len(blocks)} workflow scripts read the picks outcome; expected 1")
+    body = blocks[0].split(chr(10) + "          EOF", 1)[0]
+    body = chr(10).join(l[10:] if l.startswith(" " * 10) else l.lstrip()
+                        for l in body.splitlines())
 
     for var, key in (("O_UPDATE", "update"), ("O_SETTLE1", "settle1"),
                      ("O_PICKS", "picks"), ("O_RESULTS", "results"),
@@ -355,15 +370,15 @@ def _alert_decision(monkeypatch, outcomes: dict):
         "no longer reads -- the test would be exercising nothing")
     monkeypatch.setenv("RUN_URL", "http://example/run")
 
-    sent = []
-    monkeypatch.setattr(subprocess, "run",
-                        lambda *a, **k: sent.append(a) or None)
+    buf = io.StringIO()
     code = 0
     try:
-        exec(compile(body, "<alert>", "exec"), {"__name__": "__alert__"})
+        with redirect_stdout(buf):
+            exec(compile(body, "<colour>", "exec"), {"__name__": "__alert__"})
     except SystemExit as e:
         code = e.code or 0
-    return sent, code
+    reported = [l for l in buf.getvalue().splitlines() if "step states:" in l]
+    return reported, code
 
 
 _CAPTURE_OK = dict(update="success", settle1="success", picks="success",
@@ -407,8 +422,8 @@ def test_a_CAPTURE_failure_still_alerts_after_the_WORKFLOW_SPLIT(monkeypatch):
     """
     sent, code = _alert_decision(
         monkeypatch, dict(_CAPTURE_OK, picks="failure"))
-    assert sent, "a picks failure no longer alerts"
-    msg = " ".join(str(x) for x in sent[0][0])
+    assert sent, "a picks failure is no longer reported"
+    msg = " ".join(sent)
     assert "FAILED" in msg and "picks" in msg
     assert "CALENDAR" not in msg.upper(), (
         "a capture failure is being reported with calendar language")
@@ -423,10 +438,10 @@ def test_a_CAPTURE_failure_is_reported_ON_ITS_OWN_TERMS(monkeypatch):
     """
     sent, code = _alert_decision(
         monkeypatch, dict(_CAPTURE_OK, update="failure", picks="failure"))
-    assert sent, "a capture failure no longer alerts"
-    msg = " ".join(str(x) for x in sent[0][0])
+    assert sent, "a capture failure is no longer reported"
+    msg = " ".join(sent)
     assert "update" in msg and "picks" in msg, (
-        "a failing step vanished from the alert")
+        "a failing step vanished from the report")
     assert "CALENDAR" not in msg.upper(), (
         "a capture failure is being reported with calendar language")
     assert code == 1
@@ -571,8 +586,7 @@ def test_a_REMINDER_CANNOT_REDDEN_daily_picks():
     assert "cal_msg" not in src, (
         "the alert still composes a calendar message, so it still speaks "
         "about something other than capture")
-    alert = next(st for st in WF_STEPS
-                 if st.get("name") == "Alert on critical step failure")
+    alert = next(st for st in WF_STEPS if _PICKS_KEY in str(st.get("run", "")))
     body = str(alert["run"])
     tail = body[body.index("All critical steps OK"):][:200]
     assert "sys.exit(0)" in tail, "the clean path no longer exits 0"
@@ -614,11 +628,32 @@ def test_it_REPORTS_the_upstream_state_rather_than_inferring_it():
 
 
 def test_an_UNEVALUATED_reminder_step_is_its_OWN_message():
-    """Third state. `skipped`/`cancelled` is not "no reminder due"."""
+    """Third state. A reminder step that did not complete is not "nothing due".
+
+    RE-POINTED 2026-10-22, and the re-pointing is the interesting part. This
+    asserted the literal `outcome not in ("success", "failure")`, which pinned
+    a predicate that was itself the defect: it read the STEP OUTCOME, and
+    `continue-on-error` collapses every non-zero exit into the word `failure`.
+    On run 39714443709 pytest exited 2 on 17 collection errors, no reminder
+    ran, and the branch ABOVE this one claimed a reminder was due. The third
+    state existed and the one state that reached it was never the one that
+    occurred.
+
+    This file owns the SEPARATION -- that a reminder speaks for itself and
+    cannot redden capture. The mechanics of the three states now belong to
+    `tests/test_reminders_are_evaluated.py`, which drives the classifier at
+    each exit code, so they are asserted there and not duplicated here.
+    """
     rem = _code_of(REM)
-    assert "UNEVALUATED" in rem
-    assert 'outcome not in ("success", "failure")' in rem, (
-        "a reminder step that did not complete is treated as one that did")
+    assert "NOT EVALUATED" in rem, (
+        "the third state is gone: a reminder set that was not read would "
+        "report as a clear result")
+    assert 'outcome not in ("success", "failure")' not in rem, (
+        "the step OUTCOME is being read again, which is what turned 'pytest "
+        "could not run' into 'a reminder is due'")
+    assert "rc not in (0, 1)" in rem, (
+        "the third state is no longer keyed on the EXIT CODE, which is the "
+        "only thing that separates a verdict from a crash")
 
 
 def test_the_reminders_are_GIVEN_the_credentials_they_need():

@@ -183,10 +183,20 @@ jobs:
           TABLES_CREATED: '1'
         run: python -m scripts.refresh_and_capture --status
 
-      - name: Alert if the capture job failed
-        if: failure()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python -m scripts.ci_alert             "⚠️ Closing-line capture failed. CLV coverage will have a gap for this window. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      # ── THE TELEGRAM FAILURE ALERT WAS REMOVED HERE. 2026-10-22. ──────────
+      #
+      # It said "Closing-line capture failed. CLV coverage will have a gap."
+      # That is this run's conclusion and nothing more: it named no action and
+      # the reader could not have taken one, because the window it missed does
+      # not come back.
+      #
+      # WHAT CARRIES IT NOW: GitHub's own notification on the red run, and the
+      # coverage ratchet in `paper_trading_report.py` -- which is the honest
+      # carrier, because it measures the GAP ITSELF
+      # (`CLOSING_COVERAGE_FLOOR`, measured 0.1254 on 2026-10-21) rather than
+      # the fact that one job exited non-zero. A gap that matters shows up
+      # there whether or not any single run went red.
+      #
+      # MEASURED over 2026-09-22..10-22: 2 failures in 120 runs, so this
+      # removal is worth 0.07 Telegram messages/day. It is here for the rule,
+      # not for the volume.

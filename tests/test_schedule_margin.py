@@ -167,28 +167,43 @@ def test_the_test_step_still_HALTS_the_job():
         "needs its own record")
 
 
-# ── THE POSITIVE CONTROL: the alert fires on a TIMEOUT, not only a failure ───
+# ── THE POSITIVE CONTROL: it reports on a TIMEOUT, not only on a failure ────
 
-def _alert_decision(monkeypatch, outcomes: dict):
-    """The critical-step alert's own predicate, read from the workflow.
+def _colour_decision(monkeypatch, outcomes: dict):
+    """The critical-step predicate's own output, read from the workflow.
 
     Not re-implemented: the body is extracted from the YAML and executed, so the
     control cannot pass while the shipped script drifts.
 
-    The fakes are installed on the REAL modules rather than injected as globals.
-    The first version passed them in `exec`'s namespace and the script's own
-    `import os, subprocess, sys` overwrote them — every outcome then read as `''`
-    and the control reported UNEXPECTED for a state it had never been given. A
-    harness that silently substitutes its inputs is the failure mode this whole
-    file is about.
+    THE CHANNEL CHANGED ON 2026-10-22, AND SO DID THIS HARNESS. The step used
+    to `subprocess.run([... "scripts.ci_alert", msg])`, so the control
+    captured `subprocess.run` calls. The Telegram send was removed -- a list
+    of step names and their outcomes is run status, and the run's own page
+    already carries it -- and THE LOG LINE is now the carrier. So the control
+    captures STDOUT.
+
+    It is located by the step's SCRIPT rather than its name, because the name
+    changed with the channel and a name-keyed split returned an empty string
+    and an `IndexError` -- which says nothing about what moved.
+
+    The first version of this helper passed its fakes in `exec`'s namespace
+    and the script's own `import os, sys` overwrote them; every outcome then
+    read as `''` and the control reported UNEXPECTED for a state it had never
+    been given. A harness that silently substitutes its inputs is the failure
+    mode this whole file is about.
     """
-    import subprocess
+    import io
+    from contextlib import redirect_stdout
 
     text = WF.read_text(encoding="utf-8")
-    body = text.split("- name: Alert on critical step failure", 1)[1]
-    body = body.split("python - <<'EOF'", 1)[1].split("EOF", 1)[0]
-    body = "\n".join(line[10:] if line.startswith(" " * 10) else line.lstrip()
-                     for line in body.splitlines())
+    marker = 'steps["picks (incl. review)"]'
+    blocks = [b for b in text.split("python - <<'EOF'")[1:] if marker in b]
+    assert len(blocks) == 1, (
+        f"{len(blocks)} workflow scripts read the picks outcome; expected 1")
+    body = blocks[0].split("EOF", 1)[0]
+    body = chr(10).join(
+        line[10:] if line.startswith(" " * 10) else line.lstrip()
+        for line in body.splitlines())
 
     for var, key in (("O_UPDATE", "update"), ("O_SETTLE1", "settle1"),
                      ("O_PICKS", "picks"), ("O_RESULTS", "results"),
@@ -196,14 +211,16 @@ def _alert_decision(monkeypatch, outcomes: dict):
         monkeypatch.setenv(var, outcomes[key])
     monkeypatch.setenv("RUN_URL", "http://example/run")
 
-    sent = []
-    monkeypatch.setattr(subprocess, "run",
-                        lambda *a, **k: sent.append(a) or None)
+    buf = io.StringIO()
     try:
-        exec(compile(body, "<alert>", "exec"), {"__name__": "__alert__"})
+        with redirect_stdout(buf):
+            exec(compile(body, "<colour>", "exec"), {"__name__": "__alert__"})
     except SystemExit:
         pass
-    return sent
+    out = buf.getvalue()
+    # `[]` when nothing was reported, so every caller's `assert sent == []`
+    # and `assert sent` keep their meaning across the channel change.
+    return [l for l in out.splitlines() if "step states:" in l]
 
 
 def test_the_harness_itself_passes_the_outcomes_through(monkeypatch):
@@ -212,15 +229,15 @@ def test_the_harness_itself_passes_the_outcomes_through(monkeypatch):
     Without this, every assertion below could be passing on `''` outcomes — which
     is exactly what happened on the first attempt.
     """
-    sent = _alert_decision(monkeypatch,
+    sent = _colour_decision(monkeypatch,
                            dict(update="failure", settle1="success",
                                 picks="success", results="success",
                                 settle2="success"))
-    msg = " ".join(str(x) for x in sent[0][0])
+    msg = " ".join(sent)
     assert "update" in msg and "''" not in msg, msg
 
 
-def test_POSITIVE_CONTROL_a_step13_TIMEOUT_produces_an_alert(monkeypatch):
+def test_POSITIVE_CONTROL_a_step13_TIMEOUT_produces_a_REPORT(monkeypatch):
     """A bounded failure that does not alarm is the same defect, shorter.
 
     A step-level timeout marks step 13 `failure`; the job halts there, so every
@@ -231,28 +248,28 @@ def test_POSITIVE_CONTROL_a_step13_TIMEOUT_produces_an_alert(monkeypatch):
     """
     timeout_state = dict(update="skipped", settle1="skipped", picks="skipped",
                          results="skipped", settle2="skipped")
-    sent = _alert_decision(monkeypatch, timeout_state)
-    assert sent, "a step-13 timeout produced NO alert — the bound is cosmetic"
-    msg = " ".join(str(x) for x in sent[0][0])
+    sent = _colour_decision(monkeypatch, timeout_state)
+    assert sent, ("a step-13 timeout produced NO report — the bound is cosmetic")
+    msg = " ".join(sent)
     assert "DID NOT RUN" in msg, msg
 
 
-def test_POSITIVE_CONTROL_the_alert_is_SILENT_when_every_step_succeeded(monkeypatch):
+def test_POSITIVE_CONTROL_the_REPORT_is_SILENT_when_every_step_succeeded(monkeypatch):
     """The other half of the control: it must not alert unconditionally."""
     ok = dict(update="success", settle1="success", picks="success",
               results="success", settle2="success")
-    assert _alert_decision(monkeypatch, ok) == [], (
-        "the alert fires on a clean run, so its firing carries no information")
+    assert _colour_decision(monkeypatch, ok) == [], (
+        "it reports on a clean run, so its firing carries no information")
 
 
 def test_an_UNEXPECTED_outcome_is_reported_as_itself(monkeypatch):
     """`cancelled` is neither success, failure nor skipped, and must not be
     folded into one of them — the three-state rule, applied to the alert."""
-    sent = _alert_decision(monkeypatch, dict(update="cancelled", settle1="success",
+    sent = _colour_decision(monkeypatch, dict(update="cancelled", settle1="success",
                                 picks="success", results="success",
                                 settle2="success"))
-    assert sent, "a cancelled step produced no alert"
-    assert "UNEXPECTED" in " ".join(str(x) for x in sent[0][0])
+    assert sent, "a cancelled step produced no report"
+    assert "UNEXPECTED" in " ".join(sent)
 
 
 # ── THE REMAINING UNBOUNDED STEPS: reported, not fixed ──────────────────────

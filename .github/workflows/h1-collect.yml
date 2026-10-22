@@ -265,10 +265,18 @@ jobs:
           TABLES_CREATED: '1'
         run: python -m scripts.h1_collection_check --since 2026-10-09
 
-      - name: Alert if the collection job failed
-        if: failure()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python -m scripts.ci_alert "H1 collection job FAILED or TIMED OUT. A job hung while sleeping looks exactly like one that is working, which is why it carries an explicit 330-minute bound. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      # ── THE TELEGRAM FAILURE ALERT WAS REMOVED HERE. 2026-10-22. ──────────
+      #
+      # It said "H1 collection job FAILED or TIMED OUT". That is the run's
+      # conclusion. The sentence it carried about a hung job being
+      # indistinguishable from a working one is a real point, and it is kept:
+      # it belongs to the 330-minute `timeout-minutes` bound above, which is
+      # what actually makes the hang visible, and not to a Telegram message.
+      #
+      # WHAT CARRIES IT NOW: GitHub's own notification on the red run, plus
+      # `ci-audit`, which holds `h1-collect` in `WORKFLOWS` and classifies its
+      # red per workflow.
+      #
+      # AND SAID OUT LOUD: this workflow's SCHEDULE WAS DISABLED 2026-10-20,
+      # so it only runs on dispatch. MEASURED over 2026-09-22..10-22: 5 runs,
+      # 0 failures. This sender had never fired. Nothing is being traded away.

@@ -312,10 +312,21 @@ def test_the_report_delivers_on_success_not_only_on_failure():
     env = run_step.get("env") or {}
     for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
         assert key in env, f"{key} is not available to the delivering step"
-    # the failure alert must still exist -- this adds a path, it does not
-    # replace one
-    assert any("ci_alert" in str(s.get("run", "")) for s in steps), (
-        "the failure alert was removed")
+    # ── AND THE FAILURE ALERT IS NOW GONE, DELIBERATELY. 2026-10-22. ─────
+    #
+    # This asserted the failure alert still existed, on the reasoning that
+    # adding a success path must not remove one. That reasoning was right at
+    # the time and is now superseded: the success path IS the carrier, so a
+    # day with no report is itself the signal, and "⚠️ Paper trading report
+    # failed" was pure run status -- GitHub's notification on the red run
+    # says the same thing. MEASURED over 2026-09-22..10-22: 30 runs, 0
+    # failures, so the removed sender had never once fired.
+    #
+    # Inverted rather than deleted, so the decision is visible here instead
+    # of leaving a silently absent assertion.
+    assert not any("ci_alert" in str(s.get("run", "")) for s in steps), (
+        "a run-status Telegram alert is back in this workflow; the report "
+        "itself is the carrier and its ABSENCE is the failure signal")
 
 
 def test_the_report_calls_the_delivery_and_does_not_swallow_its_result():

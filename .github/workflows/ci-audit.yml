@@ -149,13 +149,35 @@ jobs:
         # named BROKEN and DID_NOT_RUN; on 2026-10-12 the alarm was
         # `schedule margin -85m < 30m`, which is neither.
         run: |
+          # ── AN EMPTY BODY NOW MEANS "DO NOT SEND". 2026-10-22. ────────────
+          #
+          # This branch used to send "(!) CI audit exited non-zero with NO
+          # alarm list written - treat as MACHINERY, not a finding." on an
+          # empty body. Two things changed and both point the same way:
+          #
+          #   1. MACHINERY IS RUN STATUS. "the audit crashed" is this run's
+          #      conclusion; the `::error::CI AUDIT CRASHED` annotation and
+          #      GitHub's notification on the red run carry it, and neither
+          #      needs a phone.
+          #   2. AN EMPTY BODY IS NO LONGER RARE. `_write_alarm_body` writes
+          #      only the ACTIONABLE alarms, so "every alarm this run raised
+          #      restated a run's own conclusion" now writes an empty file.
+          #      MEASURED over a 30-run sample of real alarming runs: with the
+          #      standing margin acknowledged, 21 of 30 write nothing. Keeping
+          #      the fallback would have converted the whole saving into a
+          #      daily "NO alarm list written" message -- strictly worse than
+          #      before, because that text names nothing at all.
+          #
+          # So the send is conditional, and the skip is announced in the log.
           if [ -s "$BODY_FILE" ]; then
-            MSG="(!) $(cat "$BODY_FILE")"
-          else
-            MSG="(!) CI audit exited non-zero with NO alarm list written - treat as MACHINERY, not a finding."
-          fi
-          python -m scripts.ci_alert "$MSG
+            python -m scripts.ci_alert "(!) $(cat "$BODY_FILE")
           Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            echo "No actionable alarm body: NOTHING SENT to Telegram."
+            echo "Either every alarm this run raised restates a run's own"
+            echo "conclusion, or the audit crashed before writing one. Both"
+            echo "are carried by this run's red and GitHub's notification."
+          fi
 
       - name: Fail the job when the audit alarmed
         # Separated from the audit step so the alert above always gets to run

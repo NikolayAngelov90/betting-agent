@@ -377,19 +377,35 @@ jobs:
         timeout-minutes: 50
         continue-on-error: true
 
-      # `== 'failure'`, NOT `!= 'success'`. On 2026-09-20 the retrain step was
-      # SKIPPED (the test step above it failed and halted the job), `skipped`
-      # is not `success`, and this delivered "ML training step killed by CI
-      # timeout" for a step that never started. The alert names a timeout; the
-      # condition must name the outcome a timeout produces. `skipped` is
-      # reported by the critical-step alert below as DID NOT RUN.
-      - name: Alert on ML training timeout or failure
-        if: always() && steps.retrain_ml.outcome == 'failure'
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python -m scripts.ci_alert             "⚠️ ML training step killed by CI timeout — model not updated. Raise timeout-minutes or reduce sample target."
+      # ── THE TELEGRAM FAILURE ALERT WAS REMOVED HERE. 2026-10-22. ──────────
+      #
+      # It said "⚠️ ML training step killed by CI timeout — model not updated.
+      # Raise timeout-minutes or reduce sample target." It is the hardest of
+      # the removals to argue, because it ends in an instruction — and an
+      # instruction is the class that STAYS. It goes anyway: the instruction is
+      # standing advice attached to a step's outcome, not a response to
+      # anything the run measured. Nothing in the message is a number.
+      #
+      # WHAT CARRIES IT NOW, and the last line is the uncomfortable one:
+      #   * NOT GitHub's notification. The retrain step above is
+      #     `continue-on-error: true`, so a retrain failure does not redden
+      #     this run and no notification is sent for it.
+      #   * The SELF-CORRECTION does carry the single-day case:
+      #     `_ml_models_stale(max_age_days=models.ml_retrain_days, default 3)`
+      #     is asked at the top of every `daily_update()`, so the next run
+      #     retrains. One failed retrain repairs itself.
+      #   * A PERSISTENTLY failing retrain is carried by NOTHING. Staleness is
+      #     `logger.info`-only; no workflow, report or audit surface alarms on
+      #     the models' age. That is a real gap and it is stated rather than
+      #     covered over -- it belongs in the diagnosed-finding register, not
+      #     in a sender that fires on a step outcome.
+      #
+      # MEASURED over 2026-09-22..10-22: `skipped` in 36 of 36 runs. This
+      # sender had never once fired, so no observation is being lost today.
+      #
+      # The condition it carried is kept here because it was itself a fix: it
+      # was `!= 'success'` until 2026-09-20, which delivered "killed by CI
+      # timeout" for a step that had been SKIPPED and never started.
 
       - name: Check DB health
         run: |
@@ -520,11 +536,16 @@ jobs:
             python -m scripts.ci_alert "$(cat "${{ runner.temp }}/loss_alert.txt")"
           fi
 
-      - name: Alert on critical step failure
+      # RENAMED from "Alert on critical step failure" 2026-10-22: it no longer
+      # alerts. It decides the run's COLOUR and prints the step states.
+      - name: Decide the run colour from the critical steps
         if: always()
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # The two TELEGRAM secrets were removed from this step with the send.
+          # A credential handed to a step that cannot use it is the shape that
+          # made an alert look configured for three weeks while delivering
+          # nothing (Stage 12.1, Defect 2) -- in the other direction, but the
+          # same mismatch between what a step is given and what it does.
           O_UPDATE: ${{ steps.update.outcome }}
           O_SETTLE1: ${{ steps.settle1.outcome }}
           O_PICKS: ${{ steps.picks.outcome }}
@@ -533,7 +554,9 @@ jobs:
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'EOF'
-          import os, subprocess, sys
+          # `subprocess` went with the Telegram send below: it was imported
+          # for `ci_alert` and nothing else here used it.
+          import os, sys
           # `tests` is no longer listed: it has no continue-on-error, so a
           # failure there fails the job outright and this step reports it
           # through the job status rather than as a "stayed green" warning.
@@ -560,6 +583,15 @@ jobs:
           if not (failed or not_run or odd):
               print("All critical steps OK:", steps)
               sys.exit(0)
+          # ── THE EM DASHES ARE LOAD-BEARING. DO NOT "TIDY" THEM. ──────────
+          #
+          # `ci_audit.extract()` reads this log with
+          #     r"step\(s\) FAILED — ([A-Za-z][^\n]{0,120})"
+          # and the same for DID NOT RUN. Replacing `—` with `-` while
+          # removing the Telegram send silently emptied `steps_failed` and
+          # `steps_not_run` -- two detectors gone, with no test failing,
+          # because the regexes would simply have stopped matching. The audit
+          # now accepts either dash as well, but these stay as they are.
           parts = []
           if failed:
               parts.append("step(s) FAILED — " + ", ".join(failed))
@@ -567,9 +599,34 @@ jobs:
               parts.append("step(s) DID NOT RUN — " + ", ".join(not_run))
           if odd:
               parts.append("step(s) in an UNEXPECTED state — " + ", ".join(odd))
-          msg = ("⚠️ Daily picks: " + "; ".join(parts)
-                 + ". Logs: " + os.environ.get("RUN_URL", ""))
-          subprocess.run([sys.executable, "-m", "scripts.ci_alert", msg], check=False)
+          # ── THE TELEGRAM SEND WAS REMOVED HERE. 2026-10-22. ───────────────
+          #
+          # It sent "⚠️ Daily picks: step(s) FAILED — update, picks". A list of
+          # step names and their outcomes is run status in its purest form:
+          # every word of it is already on the run's own page.
+          #
+          # THE STEP ITSELF STAYS, and so does everything below this line. It
+          # is what decides the run's COLOUR (DEL-2: red iff pick generation
+          # produced nothing), and the colour is now the carrier -- so deleting
+          # the step would have deleted the thing that replaces the message.
+          #
+          # WHAT CARRIES IT NOW: this `::group::`-less log line, which is kept
+          # verbatim so the log still says which steps; the run's red, hence
+          # GitHub's notification; `ci-audit`, which reads these same step
+          # outcomes out of the log and scores the run; and for the one
+          # consequence a reader can act on -- a card with no picks -- the LOSS
+          # report above, which carries the card size and the deadline.
+          #
+          # MEASURED over 2026-09-22..10-22: a non-success critical step in 9
+          # of 36 runs (0.30/day), against 1 firing of the loss alert.
+          # THE URL ON ITS OWN LINE. `ci_audit`'s pattern captures to the end
+          # of the line, so the old `… — update. Logs: <url>` made the
+          # captured "step name" the step name PLUS the URL -- visible in the
+          # audit's own table for as long as that message existed. Splitting
+          # the line makes the capture exact; it costs nothing and the
+          # historical shape is still readable by the same regex.
+          print("daily picks step states: " + "; ".join(parts))
+          print("Logs: " + os.environ.get("RUN_URL", ""))
 
           # DEL-2 (Stage 14). Narrow by decision: the job goes RED only when
           # pick generation failed.
@@ -637,12 +694,24 @@ jobs:
           path: logs/
           retention-days: 7
 
-      # Stage 12.1, Defect 2: this step previously had NO `env:` block, so its
-      # token was always empty and it had never delivered a single alert.
-      - name: Notify Telegram on workflow failure
-        if: failure()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python -m scripts.ci_alert             "❌ Daily picks workflow FAILED (run #${{ github.run_number }}). Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      # ── THE TELEGRAM FAILURE ALERT WAS REMOVED HERE. 2026-10-22. ──────────
+      #
+      # It said "❌ Daily picks workflow FAILED (run #NNN). Logs: …" and that
+      # is the whole message: a conclusion, a number and a link. It is the
+      # exact text `pipeline_loss_alert.py` was written to replace -- see its
+      # module docstring, which quotes it -- and the two then ran side by side
+      # for nine days, so a lost card sent BOTH a status line and a loss
+      # report. The status line arrived first and was the one that trained the
+      # reader.
+      #
+      # WHAT CARRIES IT NOW:
+      #   * the LOSS, which is the part that matters: the "Report the LOSS"
+      #     step above, which fires on `picks.outcome != success`, counts the
+      #     card, states that a price does not backfill, gives the deadline,
+      #     and escalates at N=2 and N=3.
+      #   * the run's red itself: GitHub's own notification.
+      #   * `ci-audit`, which classifies this workflow's red per workflow.
+      #
+      # MEASURED over 2026-09-22..10-22: it fired 11 times in 36 runs
+      # (0.37/day), against 1 firing of the loss alert. Eleven status messages
+      # bought one report of an actual loss.
