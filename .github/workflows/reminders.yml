@@ -207,15 +207,42 @@ jobs:
           errs=$(grep -cE "^ERROR tests/" logs/reminders.txt || true)
           echo "collect_errors=$errs" >> "$GITHUB_OUTPUT"
           echo "collection errors (not reminders, reported not absorbed): $errs"
-          # HOW MANY REMINDERS ACTUALLY RAN, counted from pytest's own
-          # per-test lines rather than from a constant kept in step with them.
-          # `rc` alone cannot catch a reminder that silently LEFT the
-          # selection -- drop the `calendar` marker from a test and the run is
-          # a clean exit 0 while the guard sails past its date.
-          ran=$(grep -cE "^tests/.*::.* (PASSED|FAILED|SKIPPED|XFAIL|XPASS)" \
+          # ── AN EQUALITY, NOT A FLOOR. 2026-10-23. ───────────────────────
+          #
+          # The floor was a literal and it moved 7 -> 9 -> 10 in two days,
+          # because every `live` test added re-opened the masking hole it
+          # existed to close. The warning went in the registry, which is
+          # where the previous two remember-this remedies also lived.
+          #
+          #     A remedy that must be remembered is not a remedy.
+          #
+          # So BOTH SIDES COME FROM THE SELECTION ITSELF: pytest reports how
+          # many tests it SELECTED, and `-v` prints one result line per test
+          # that produced an outcome. A reminder that is collected and does
+          # not run is the defect the floor was approximating, and the
+          # equality catches it with no number to maintain.
+          sel=$(grep -oE "[0-9]+ selected" logs/reminders.txt \
+                | tail -1 | grep -oE "^[0-9]+" || true)
+          sel=${sel:-0}
+          # AN `ERROR` LINE IS NOT AN OUTCOME. A test that errors at setup was
+          # attempted and produced no result, so it is deliberately absent
+          # from `ran`: the count then falls short of `sel` and the
+          # classifier reports NOT EVALUATED, which is what an errored
+          # reminder is.
+          ran=$(grep -cE "^tests.*::.* (PASSED|FAILED|SKIPPED|XFAIL|XPASS)" \
                 logs/reminders.txt || true)
+          # SKIPPED IS A THIRD STATE AND IS COUNTED SEPARATELY. A reminder may
+          # legitimately skip -- the live ones do, when their input is absent
+          # -- and `SKIPPED` is not `DID_NOT_RUN`. It counts as having run,
+          # and the count is reported so a run of all-skips is visible rather
+          # than reading as a clean pass.
+          skipped=$(grep -cE "^tests.*::.* SKIPPED" logs/reminders.txt || true)
+          errors=$(grep -cE "^tests.*::.* ERROR" logs/reminders.txt || true)
+          echo "reminders_selected=$sel" >> "$GITHUB_OUTPUT"
           echo "reminders_ran=$ran" >> "$GITHUB_OUTPUT"
-          echo "pytest exit=$rc, reminder tests that RAN=$ran"
+          echo "reminders_skipped=$skipped" >> "$GITHUB_OUTPUT"
+          echo "reminders_errored=$errors" >> "$GITHUB_OUTPUT"
+          echo "pytest exit=$rc, SELECTED=$sel RAN=$ran (SKIPPED=$skipped, ERRORED=$errors)"
           exit 0        # the classification below decides, not this step
 
       - name: Upload the reminder log
@@ -235,7 +262,10 @@ jobs:
           # is deliberately NOT read any more: it is the single word that
           # collapsed "a reminder is due" into "pytest could not run".
           RC: ${{ steps.reminders.outputs.pytest_rc }}
+          SEL: ${{ steps.reminders.outputs.reminders_selected }}
           RAN: ${{ steps.reminders.outputs.reminders_ran }}
+          SKIPPED: ${{ steps.reminders.outputs.reminders_skipped }}
+          ERRORED: ${{ steps.reminders.outputs.reminders_errored }}
           UP_CONCL: ${{ github.event.workflow_run.conclusion }}
           EVENT: ${{ github.event_name }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -245,19 +275,18 @@ jobs:
           import subprocess
           import sys
 
-          #: THE REMINDERS THAT MUST RUN, as a FLOOR with its measurement.
-          #: `measured` 2026-10-22: the selection `-m "calendar or live"`
-          #: collects 7 -- 2 in test_calendar_separation, 1 each in
-          #: test_absent_run_and_unparseable, test_cron_split_by_daytype,
-          #: test_empty_card_suppression, test_fixture_horizon_probe and
-          #: test_reference_deadline. A floor, not an equality, so adding a
-          #: reminder does not break the job; `tests/test_reminders_are_
-          #: evaluated.py` checks the floor against the LIVE selection, so it
-          #: cannot quietly drift below reality either.
-          REMINDERS_EXPECTED_MIN = 10
-
+          # ── NO LITERAL. BOTH SIDES COME FROM THE SELECTION. 2026-10-23 ──
+          #
+          # `REMINDERS_EXPECTED_MIN` was 7, then 9, then 10 inside two days:
+          # every `live` test added re-opened the masking hole the floor
+          # existed to close, and the reminder to raise it lived in the
+          # registry -- where the previous two remember-this remedies lived
+          # too. There is no number here any more.
           rc_raw = os.environ.get("RC", "")
+          sel_raw = os.environ.get("SEL", "")
           ran_raw = os.environ.get("RAN", "")
+          skipped_raw = os.environ.get("SKIPPED", "")
+          errored_raw = os.environ.get("ERRORED", "")
           up = os.environ.get("UP_CONCL") or "UNEVALUATED"
           event = os.environ.get("EVENT", "")
           url = os.environ.get("RUN_URL", "")
@@ -269,6 +298,8 @@ jobs:
                   return None
 
           rc, ran = _int(rc_raw), _int(ran_raw)
+          sel = _int(sel_raw)
+          skipped, errored = _int(skipped_raw), _int(errored_raw)
 
           # ── NOT EVALUATED IS ITS OWN STATE, AND IT IS NOT A VERDICT ───────
           #
@@ -293,13 +324,24 @@ jobs:
                   f"interrupted (a module failed to IMPORT), 3 internal, 4 "
                   f"usage, 5 nothing collected. The reminders were not run, "
                   f"so whether one is due is UNKNOWN")
-          elif ran is None or ran < REMINDERS_EXPECTED_MIN:
+          elif sel is None or ran is None:
               unevaluated = (
-                  f"only {ran} reminder test(s) RAN, against at least "
-                  f"{REMINDERS_EXPECTED_MIN} expected. pytest exited {rc}, so "
-                  f"it is reporting a clean result for a set it did not fully "
-                  f"evaluate -- a reminder that lost its marker leaves the "
-                  f"selection silently and this is the only thing that sees it")
+                  f"the selection/ran counts did not reach this step "
+                  f"(SEL={sel_raw!r} RAN={ran_raw!r}), so whether every "
+                  f"reminder ran is UNKNOWN")
+          elif sel == 0:
+              unevaluated = (
+                  "pytest SELECTED NO TESTS. An empty selection is not an "
+                  "empty set of reminders -- the markers or the -m expression "
+                  "changed, and nothing was asked")
+          elif ran != sel:
+              unevaluated = (
+                  f"{ran} of {sel} SELECTED reminder(s) produced an outcome "
+                  f"({errored} errored). pytest exited {rc}, so it is "
+                  f"reporting a clean result for a set it did not fully "
+                  f"evaluate -- a reminder collected and not run is exactly "
+                  f"the state this equality exists to catch, and no literal "
+                  f"has to be kept in step with the selection for it to work")
 
           if unevaluated:
               print("::error::REMINDERS NOT EVALUATED - this red is a "
@@ -356,7 +398,10 @@ jobs:
           # annotation, this run's red, GitHub's notification on it, and
           # `ci-audit`'s per-workflow red classification -- which can now tell
           # the two reds apart, because they carry different markers.
-          print(f"Reminders: nothing due. {ran} reminder test(s) ran, all "
-                f"passed or skipped. upstream={up} trigger={event}")
+          # SKIPPED IS REPORTED, not folded into "all fine". A run where
+          # every reminder skipped is not a clean result and must be visible.
+          print(f"Reminders: nothing due. {ran} of {sel} selected ran "
+                f"({skipped} SKIPPED, {errored} errored). "
+                f"upstream={up} trigger={event}")
           sys.exit(0)
           EOF

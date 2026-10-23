@@ -405,6 +405,28 @@ def pytest_collection_modifyitems(config, items):
 #
 # Use `code_of` for any assertion about what the code DOES. For assertions
 # about what is DOCUMENTED, read the raw text deliberately and say so.
+#
+# ══════════════════════════════════════════════════════════════════════════
+# IT IS REQUIRED, NOT OFFERED, AND A MECHANISM SAYS SO. 2026-10-23.
+#
+#     A remedy that must be remembered is not a remedy.
+#
+# ELEVEN instances of a negative assertion matching the test's own comment or
+# docstring about why the thing is absent -- the eleventh INSIDE the test
+# about that very failure. This helper existed through all of them and nothing
+# required it.
+#
+# Third confirmation of the same lesson: the calendar marker and the dialect
+# assertion both kept recurring until a mechanism REFUSED them.
+#
+# `tests/test_code_of_is_enforced.py` is that mechanism. It is a RATCHET, not
+# a conversion: measured 2026-10-23, of 61 negative assertions over `.py`
+# source, 48 read raw text, 8 hand-roll a `#`-stripper (and so are still
+# blind to DOCSTRINGS, which is the half that bit twice) and only 5 use this
+# function. Converting 56 blind would change what 56 tests assert, so the
+# mechanism refuses GROWTH and a site that must match raw text declares
+# itself with a reason.
+# ══════════════════════════════════════════════════════════════════════════
 
 def code_of(source: str) -> str:
     """`source` with comments and docstrings removed.

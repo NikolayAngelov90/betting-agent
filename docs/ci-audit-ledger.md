@@ -33674,3 +33674,147 @@ pass through it.
 *Recorded 2026-10-23. `scripts/ci_audit.py`,
 `tests/test_source_echo_is_stripped.py`,
 `tests/test_reminders_are_evaluated.py`, `.github/workflows/reminders.yml`.*
+
+---
+
+## Two hand-maintained couplings, both made mechanical — 2026-10-23
+
+> **A remedy that must be remembered is not a remedy.** Third confirmation —
+> after the calendar marker and the dialect assertion, both of which only
+> stopped recurring once a mechanism refused them.
+
+### PART A — the reminders floor becomes an equality
+
+**It was 7, then 9, then 10 inside two days.** Every `live` test added
+re-opened the masking hole the floor existed to close, and the reminder to
+raise it lived **in the registry** — which is where the previous two
+remember-this remedies also lived.
+
+**BOTH SIDES NOW COME FROM THE SELECTION ITSELF.** pytest reports how many
+tests it SELECTED; `-v` prints one result line per test that produced an
+outcome:
+
+```
+sel=$(grep -oE "[0-9]+ selected" logs/reminders.txt | tail -1 | …)
+ran=$(grep -cE "^tests.*::.* (PASSED|FAILED|SKIPPED|XFAIL|XPASS)" …)
+```
+
+and the classifier requires `ran == sel`. **There is no number left to
+maintain.** Driven end to end on the shipped step: `SELECTED=10 RAN=10
+(SKIPPED=2, ERRORED=0)`.
+
+**A reminder collected and not run is the defect the floor was
+approximating**, and the equality catches it without a literal — an error at
+setup, a crash between tests, a worker dying. The old floor could only catch
+it if the shortfall happened to cross a number someone had remembered to
+update.
+
+#### Three states, kept apart
+
+* **`SKIPPED` is not `DID_NOT_RUN`.** A `live` reminder skips when its input
+  is absent, which is a legitimate outcome: it RAN. The count is reported
+  separately so a run where *every* reminder skipped is visible rather than
+  reading as a clean pass.
+* **An `ERROR` line is not an outcome.** A test that errors at setup was
+  attempted and produced no result, so it is deliberately absent from `ran` —
+  the count then falls short of `sel` and the run reports NOT EVALUATED,
+  which is what an errored reminder is.
+* **An EMPTY selection is checked FIRST**, because `0 == 0` satisfies an
+  equality. An empty selection is not an empty set of reminders: it means the
+  markers or the `-m` expression changed and **nothing was asked**.
+
+#### Both known-wrong controls, driven
+
+| control | result |
+|---|---|
+| a reminder collected and not run (`ran < sel`, four shapes) | **exit 1**, `N of M SELECTED`, nothing to Telegram |
+| a reminder legitimately skipped (`ran == sel`, all skips) | **exit 0**, `9 SKIPPED` reported, not NOT-EVALUATED |
+| an errored reminder | **exit 1**, `1 errored`, NOT EVALUATED |
+| an empty selection | **exit 1**, `SELECTED NO TESTS` |
+
+**And no literal remains in that path**, with a test that one cannot be
+reintroduced: `REMINDERS_EXPECTED_MIN` must be absent from the workflow, and
+none of `== 7 / == 9 / == 10` (the three values it took in two days) may
+reappear as a comparison. That test is itself comment-blind by construction,
+because it asserts the ABSENCE of literals and its own comments name them —
+the twelfth instance, avoided rather than discovered.
+
+*The registry survives for a different job: it catches a reminder that LOSES
+ITS MARKER, which is not the same defect. Renamed `REMINDERS_REGISTERED`, and
+a blanket rename briefly made its own guard vacuous — it checked for the new
+name, which the workflow has never contained, so it passed while saying
+nothing. Caught and restored.*
+
+### PART B — `code_of` is required, not remembered
+
+#### The census, first, because the number decides the shape
+
+`measured` 2026-10-23 over every `tests/test_*.py` that reads a `.py` source
+and makes a **negative** assertion:
+
+```
+48  RAW text, no stripping at all
+ 8  HAND-ROLLED stripper (`l.split("#", 1)[0]`)
+ 5  uses conftest.code_of          (correct)
+--
+61  total
+```
+
+**The remedy exists in three forms and 5 of 61 use the right one.** The eight
+hand-rolled ones handle the comment half and **not the docstring half** —
+which is exactly the half that bit on 2026-10-22 (a quoted old code line in a
+docstring) and 2026-10-23 (the record that `_ECHO_COLOUR` had been deleted).
+
+**THE DEFECT SHAPE WAS NARROWED BY MEASUREMENT.** A first census of *all*
+matching gave **132 sites in 57 files**; restricting to NEGATIVE assertions —
+the form that false-fires on a comment — gave 61. A positive assertion cannot
+break the same way: at worst a comment satisfies it, which is weaker and is
+often where the thing is legitimately recorded.
+
+#### So it is a RATCHET, and the reason is stated
+
+Converting 56 sites blind would change what 56 tests assert, and **the
+load-bearing question cannot be settled statically for 29 of them** — they
+read through a helper or a fixture, so the target file is not resolvable from
+the AST. That is said rather than papered over with a confident number: two
+earlier cuts of this census produced 8 and then 6 "prose-only" sites, and
+both were artefacts of loose target attribution. One of the six turned out to
+be a site that *already* hand-rolls a stripper.
+
+The ratchet refuses GROWTH — the shape `test_pnc_detector`'s backlog already
+uses, and the only one this project has made work:
+
+```
+BASELINE = {"raw": 48, "hand": 8}      # may fall, never rise
+```
+
+**Driven**: adding a twelfth raw negative assertion fails it with
+`grew from 48 to 49` and the three clearing actions (route through `code_of`,
+declare an exemption with a reason, or lower the number).
+
+#### The known-wrong control and the positive control, on one input
+
+The **eleventh instance verbatim** — `assert "_ECHO_COLOUR" not in src`
+against raw text, with the comment recording the deletion reproduced —
+**raises** `AssertionError`; **the same assertion through `code_of` passes**,
+and still sees the code it is meant to check. Both directions on one fixture,
+which is what makes it a control rather than an illustration.
+
+**Exemptions take the dialect/marker shape**: a site that must match raw text
+declares itself with a reason. Two today, both of them controls, and a test
+refuses the list growing past four — *an exemption list that absorbs the
+backlog makes the mechanism vacuous.*
+
+**And the rule is recorded where the instrument lives**, in `tests/conftest.py`
+beside `code_of`, pointing at the mechanism that now requires it — so the next
+reader is told it is required rather than offered.
+
+### DISCIPLINE
+
+Gating selection **2,512 passed, 10 deselected**; non-gating 8 passed, 2
+skipped. Invariants pass, count not cited. Every workflow YAML parses.
+Fingerprint **UNCHANGED at `s5.19 / cdec29`** — both parts are test and
+notification machinery.
+
+*Recorded 2026-10-23. `.github/workflows/reminders.yml`, `tests/conftest.py`,
+`tests/test_reminders_are_evaluated.py`, `tests/test_code_of_is_enforced.py`.*

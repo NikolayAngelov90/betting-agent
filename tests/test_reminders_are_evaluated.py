@@ -84,7 +84,12 @@ REMINDERS = {
         "test_LIVE_the_strip_still_removes_only_NOISE_on_the_real_cache"],
 }
 
-REMINDERS_EXPECTED_MIN = sum(len(v) for v in REMINDERS.values())
+#: The registry's own count. NOT a floor any more -- the workflow derives
+#: both sides from the selection (see `test_NO_LITERAL_REMAINS_in_the_counting_
+#: path`). This exists so the registry below can be checked against reality,
+#: which catches a reminder that LOSES ITS MARKER -- a different defect from
+#: one that is collected and does not run.
+REMINDERS_REGISTERED = sum(len(v) for v in REMINDERS.values())
 
 
 def _marked_tests(path):
@@ -120,14 +125,49 @@ def test_every_registered_reminder_EXISTS_and_CARRIES_ITS_MARKER(path):
             f"'nothing due' while this guard sails past its date")
 
 
-def test_the_FLOOR_in_the_workflow_MATCHES_the_registry():
-    """Self-calibrating in the one direction that matters: the floor may not
-    quietly drop below the number of reminders that exist."""
-    m = re.search(r"REMINDERS_EXPECTED_MIN = (\d+)", SRC)
-    assert m, "the floor is gone from the workflow"
-    assert int(m.group(1)) == REMINDERS_EXPECTED_MIN == 10, (
-        f"the workflow's floor is {m.group(1)} against {REMINDERS_EXPECTED_MIN} "
-        f"registered reminders")
+def test_NO_LITERAL_REMAINS_in_the_counting_path():
+    """The floor became an equality on 2026-10-23, and the point is that
+    there is no number left to maintain.
+
+    It was 7, then 9, then 10 inside two days: every `live` test added
+    re-opened the masking hole it existed to close, and the reminder to raise
+    it lived in the registry -- where the previous two remember-this remedies
+    lived too.
+
+        A remedy that must be remembered is not a remedy.
+    """
+    # THE NEEDLE IS THE OLD NAME, and a blanket rename had briefly made this
+    # vacuous: it checked for `REMINDERS_REGISTERED`, which the workflow has
+    # never contained, so it passed while saying nothing.
+    assert "REMINDERS_EXPECTED_MIN" not in _code_of_yaml(SRC), (
+        "the literal floor is back in the workflow; both sides must come "
+        "from the selection itself")
+    # both sides derived
+    assert "selected" in SRC and "reminders_selected=$sel" in SRC
+    assert "ran != sel" in SRC, (
+        "the equality is gone; a floor cannot catch a reminder that is "
+        "collected and does not run without a number kept in step")
+    # AND THE NUMBERS THAT WERE THE FLOOR ARE GONE from the counting path.
+    # 7, 9 and 10 were the three values it took in two days; none may appear
+    # as a comparison again.
+    code = _code_of_yaml(SRC.split("- name: Say what it means", 1)[1])
+    for gone in ("== 7", ">= 7", "== 9", ">= 9", "== 10", ">= 10",
+                 "< 7", "< 9", "< 10"):
+        assert gone not in code, (
+            f"the comparison {gone!r} is back in the classifier; the floor "
+            f"took three different values in two days and every one of them "
+            f"had to be remembered")
+
+
+def _code_of_yaml(text):
+    """The workflow with its `#` comment lines dropped.
+
+    Comment-blind, because this file asserts the ABSENCE of a literal and the
+    comments here EXPLAIN which literals were removed -- the twelfth instance
+    of that class, avoided by construction rather than by remembering.
+    """
+    return chr(10).join(l for l in text.splitlines()
+                        if not l.strip().startswith("#"))
 
 
 # ── driving the classifier ────────────────────────────────────────────────
@@ -155,7 +195,8 @@ class _FakeSubprocess:
         return None
 
 
-def _drive(rc, ran, up="success", event="workflow_run"):
+def _drive(rc, ran, up="success", event="workflow_run", sel=None,
+           skipped=0, errored=0):
     """`(exit_code, stdout, [telegram bodies])`."""
     import io
     import os
@@ -164,6 +205,8 @@ def _drive(rc, ran, up="success", event="workflow_run"):
 
     fake = _FakeSubprocess()
     env = {"RC": str(rc), "RAN": str(ran), "UP_CONCL": up, "EVENT": event,
+           "SEL": str(ran if sel is None else sel),
+           "SKIPPED": str(skipped), "ERRORED": str(errored),
            "RUN_URL": "https://example/runs/1"}
     saved = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
@@ -236,7 +279,7 @@ def test_a_MISSING_exit_code_is_NOT_EVALUATED_rather_than_assumed():
 # ── the two real results ─────────────────────────────────────────────────
 
 def test_rc1_IS_the_verdict_and_DOES_send():
-    code, out, bodies = _drive(rc=1, ran=REMINDERS_EXPECTED_MIN)
+    code, out, bodies = _drive(rc=1, ran=REMINDERS_REGISTERED)
     assert code == 1
     assert "REMINDER DUE" in out, "the registered marker is gone"
     assert "VERDICT, not a failure" in out
@@ -249,34 +292,68 @@ def test_rc1_IS_the_verdict_and_DOES_send():
 
 
 def test_rc0_with_the_FULL_SET_is_nothing_due_and_GREEN():
-    code, out, bodies = _drive(rc=0, ran=REMINDERS_EXPECTED_MIN)
+    code, out, bodies = _drive(rc=0, ran=7, sel=7, skipped=2)
     assert code == 0, out
     assert "nothing due" in out
     assert bodies == []
-    assert f"{REMINDERS_EXPECTED_MIN} reminder test(s) ran" in out, (
-        "the clean path does not say how many ran, so 'nothing due' and "
-        "'nothing looked' read identically")
+    assert "7 of 7 selected ran" in out, (
+        "the clean path does not say how many of the SELECTED ran, so "
+        "'nothing due' and 'nothing looked' read identically")
+    assert "2 SKIPPED" in out, (
+        "SKIPPED is folded into 'all fine'; a run where reminders skipped is "
+        "not a clean result and must be visible")
 
 
 # ── the defect rc alone cannot catch ─────────────────────────────────────
 
-@pytest.mark.parametrize("ran", [0, 1, REMINDERS_EXPECTED_MIN - 1])
-def test_a_CLEAN_EXIT_with_TOO_FEW_reminders_is_NOT_EVALUATED(ran):
-    """A reminder that loses its `calendar` marker leaves the selection and
-    pytest exits 0. Without this, that is indistinguishable from a quiet day
-    -- and it is the shape that hides a guard past its date."""
-    code, out, bodies = _drive(rc=0, ran=ran)
+@pytest.mark.parametrize("ran,sel", [(0, 9), (1, 9), (8, 9), (0, 1)])
+def test_a_CLEAN_EXIT_with_FEWER_RAN_THAN_SELECTED_is_NOT_EVALUATED(ran, sel):
+    """THE DEFECT THE FLOOR WAS APPROXIMATING, caught by the equality.
+
+    A reminder that is COLLECTED and does not run -- an error at setup, a
+    crash between tests, a worker dying -- leaves pytest exiting 0 over a set
+    it did not finish. The old floor could only catch it if the shortfall
+    happened to cross a number someone had remembered to update.
+    """
+    code, out, bodies = _drive(rc=0, ran=ran, sel=sel)
     assert code == 1, (
-        f"pytest exited 0 having run only {ran} of 7 reminders and this was "
-        f"reported as a clean result")
+        f"pytest exited 0 having run {ran} of {sel} SELECTED reminders and "
+        f"this was reported as a clean result")
     assert "NOT EVALUATED" in out
-    assert f"only {ran} reminder test(s) RAN" in out
+    assert f"{ran} of {sel} SELECTED" in out
     assert bodies == []
+
+
+def test_an_EMPTY_SELECTION_is_NOT_EVALUATED_not_a_clean_run():
+    """`0 == 0` satisfies an equality, which is why this is checked first.
+
+    An empty selection is not an empty set of reminders: it means the markers
+    or the `-m` expression changed and NOTHING WAS ASKED.
+    """
+    code, out, bodies = _drive(rc=0, ran=0, sel=0)
+    assert code == 1, "an empty selection passed the equality"
+    assert "SELECTED NO TESTS" in out
+    assert bodies == []
+
+
+def test_a_SKIPPED_reminder_is_NOT_a_reminder_that_DID_NOT_RUN():
+    """The third state, with its own count. A `live` reminder skips when its
+    input is absent, and that is a legitimate outcome -- it RAN."""
+    code, out, bodies = _drive(rc=0, ran=9, sel=9, skipped=9)
+    assert code == 0, out
+    assert "9 SKIPPED" in out
+    assert "NOT EVALUATED" not in out, (
+        "a legitimately skipped reminder was treated as one that did not run")
+    # and an ERRORED one is NOT counted as having run
+    code2, out2, _ = _drive(rc=1, ran=8, sel=9, errored=1)
+    assert code2 == 1
+    assert "NOT EVALUATED" in out2 and "1 errored" in out2, (
+        "an errored reminder is being treated as an outcome")
 
 
 def test_MORE_reminders_than_the_floor_is_FINE():
     """The floor is a minimum. Adding a reminder must not break the job."""
-    code, _out, _b = _drive(rc=0, ran=REMINDERS_EXPECTED_MIN + 2)
+    code, _out, _b = _drive(rc=0, ran=REMINDERS_REGISTERED + 2)
     assert code == 0
 
 
