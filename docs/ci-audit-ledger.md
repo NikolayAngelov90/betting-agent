@@ -33994,3 +33994,203 @@ apply.
 
 *Recorded 2026-10-23. `tests/conftest.py`,
 `tests/test_matchers_assert_their_anchor.py`.*
+
+---
+
+## Decision paper for 2026-11-01 — measured 2026-10-23, not on the day
+
+`docs/decision-2026-11-01.md`, with every figure reproducible from
+`scripts/decision_paper_figures.py` (read-only, `assert db.is_postgres`
+before anything). **No model built, no threshold fitted, no config changed.**
+Fingerprint unmoved at `s5.19 / cdec29`.
+
+### THE THREE ANSWERS
+
+1. **What the models are worth:** nothing over the price. Five independent
+   routes agree and the best-measured model in the repository **is** the
+   price.
+2. **How long to keep measuring:** more of the same changes nothing —
+   **14.7 months** to reach the precision needed on a question already
+   answered an order of magnitude away.
+3. **Should the pick set change:** selectivity is **UNAVAILABLE**. There is
+   no quantity to be selective on.
+
+### THE STRUCTURAL FINDING THAT REFRAMES PART A
+
+**`is_paper` is collinear with the ERA, not merely with `model_version`.**
+Measured, not assumed:
+
+* no `model_version` value takes both `is_paper` values — every stamped
+  cohort is paper, every live pick carries `model_version = NULL`;
+* **the last live pick is 2026-08-10 and the first paper pick is
+  2026-08-11.** They share no day;
+* **the experiment window contains ZERO live picks** (`n_settled = 1,359`,
+  live = 0).
+
+So the live ROI record and the experiment are two populations in two eras with
+no overlap, and no change between them is treated as an effect anywhere in the
+paper. Part D is therefore tabulated **twice**, once per population, rather
+than pooled.
+
+### AND ALL 172 CAPTURED CLOSES ARE PAPER
+
+`measured` 2026-10-23: `late` 1,731 / `missing` 530 / **`captured` 172** /
+`pending` 28. Of the 172, **171 are paper + valid evidence and one carries a
+disposition**; the live population holds **zero**. So every CLV cell on the
+live record is `UNEVALUATED`, and the first Part D run — on
+`live + valid_evidence`, as the obvious population — came back `clv_n = 0` in
+every bucket. That is what sent me to look.
+
+**COVERAGE IS NO LONGER ZERO and the standing record said it was.**
+172/1,325 = **13.0%** of the era in which capture was possible
+(`pick_date >= 2026-08-14`); 7.0% of all saved picks. Memory corrected.
+
+### THE DECISIVE NUMBER, AND IT IS A MULTIPLICITY FIGURE
+
+Part D makes **1,000 pairwise 95%-interval comparisons** across 8 splits × 2
+populations. **11 separate. 50 would separate by chance alone.**
+
+> The number of apparently significant differences in the entire descriptive
+> exercise is **five times below** what pure noise would generate.
+
+Reported BEFORE the tables, so no table can be read as a signal. And the
+answer to the only question Part D was permitted to settle:
+
+* the **highest**-edge quartile is the **worst** on both ROI (−9.26% vs
+  −5.07%) and CLV (−1.48% vs +0.24%);
+* every ROI interval overlaps every other, so the ordering is not even
+  reliably inverted — it is **absent**.
+
+**Selectivity cannot help because there is nothing to be selective on**, and
+that covers the model's edge, its confidence, the price, league, market, lead
+time and the review's verdict.
+
+*Also found: on the paper population `expected_value` has median **−0.0536**
+and **1,034 of 1,359 picks are negative-EV by the model's own estimate**
+(live: median +0.1126, 153 of 1,074). "Highest edge" means "least negative".*
+
+### PART C DEMONSTRATES THE WIN-RATE QUESTION RATHER THAN ASSERTING IT
+
+| band | n | win rate | break-even | gap | flat ROI |
+|---|---|---|---|---|---|
+| short (<1.80) | 1,653 | 59.7% | 62.9% | **−3.2 pts** | −5.19% |
+| medium | 614 | 46.9% | 48.9% | **−2.0 pts** | −4.73% |
+| long (≥2.50) | 121 | 33.1% | 35.4% | **−2.3 pts** | −6.14% |
+
+**The win rate is below break-even in every band**, by 2.0–3.2 points, while
+the win rate itself nearly doubles across the range and **every ROI interval
+overlaps**. The gap is the loss, and it is close to the **+1.85%** overround.
+
+### PART B RE-MEASURED, NOT RESTATED
+
+`baseline_revision = b2.884ee8`, 2026-10-23. **The sweep is still monotone to
+w = 1.0**: +0.0430 (w=0) → +0.0163 (0.4) → +0.0079 (0.6) → +0.0024 (0.8) → 0
+(w=1.0), and **at w = 0.8 the mixture is still detectably worse than the pure
+price**. Every amount of model mixed in makes the forecast worse, in
+proportion.
+
+**A new reading of the same table:** the raw price *with the vig left in* is
+statistically indistinguishable from the de-vigged price (+0.0022,
+CI [−0.0003, +0.0046]). **De-vigging is worth about what the entire modelling
+stack is worth.**
+
+Both caveats carried: 3 effective folds of 5 on the PRICED subset, adjacent;
+and the era's book mix was itself anomalous (4,836 1X2 books rejected).
+**Three of the five routes carry no fold structure**, and the two weakest in
+*generality* are the ones the conclusion mostly rests on.
+
+### TWO FIGURES THE PAPER REFUSES TO QUOTE
+
+* **Paired review-versus-model ROI is `UNEVALUATED`.** There is no
+  `model_odds` column, so the model's leg has to borrow the FINAL pick's
+  price — wrong **exactly on the 413 `CHANGE` picks the comparison is
+  about**. Computed that way it gives +0.534% [−3.36%, +4.41%]; it is printed
+  only to say it is not a figure.
+* **The Claude review's monetary cost is zero, and that is the answer.** It
+  runs on the Claude Code CLI on a **Pro subscription** — a shared usage pool
+  at a fixed price, with the metered API only as fallback. There is no
+  per-run dollar figure. The real units: **21.4 reviews/day** over 54 days,
+  parallel bound 4 set by the pool, and a **pool share that is not recorded
+  at all** — `UNEVALUATED`, not zero.
+
+The measurable review figure, paired on CLV: n=132, **final − model =
++0.104%** CI [−0.2%, +0.5%]. **The sign has flipped** since the −0.101%
+reading, on a larger n, and both sit well inside the interval. *The most
+informative fact about this measurement is that its sign is unstable.*
+
+### PART E — WHAT CAN STILL BE HIDING
+
+| population | effective n | MDE (flat ROI) | vs +1.85% |
+|---|---|---|---|
+| all settled | 2,072 | +4.84% | 2.6× too coarse |
+| live + valid evidence | 810 | +8.51% | 4.6× too coarse |
+| paper + valid evidence | 1,281 | **+5.60%** | **3.0× too coarse** |
+| captured-close subset | 170 | +15.94% | 8.6× too coarse |
+
+So the honest claim is **not** "there is no edge" but **"no measurable edge,
+and the measurement cannot exclude one three times larger than the one worth
+having."** Part B is why the first remains the conclusion: the blend sweep is
+a monotone result that does not depend on this power calculation.
+
+At **23.4 picks/active day**: **+447 days = 14.7 months** to detect the
+overround; **+164 days = 5.4 months** to halve the current bound.
+
+### THREE RATCHETS CAUGHT THIS WORK, WHICH IS THE POINT OF THEM
+
+The new script was refused three times before it could ship:
+
+1. **`code_of` (yesterday's)** — `raw 48 → 49`, on an attribution artefact in
+   the anchor test file. **Split, not exempted.**
+2. **`pnc_scan`** — the script was committed half-built, with seven producers
+   `main()` did not yet call. Finishing it cleared the backlog growth.
+3. **the falsy-zero census** — **two real third-state conflations**:
+   `if v.get("n_eff_needed_to_detect_overround"):` (0 is a measurement, not an
+   absence) and `if not v.get("clv_n")`, which merged *"CLV was never looked
+   at"* with *"looked at, no captured close"*. Both now counted apart, so no
+   caller can read "0 buckets measured" as "CLV is zero".
+
+**And the fifth `sys.path` entry-point instance**, hit writing this script —
+with the finding that **the entry-point guard cannot catch it**: that test
+runs each script with `--help`, which argparse answers before any work, so a
+script whose `src.` imports live inside `main()` passes in **both** forms and
+still fails in use.
+
+**A printer bug also discarded a finished fifteen-minute computation** — a
+`KeyError` in `_print` after every figure was computed, because the guard
+asked `isinstance(dict)` and `pick_rate` is also a dict. The JSON is now
+written **before** anything is printed: the expensive artefact is persisted
+first and presentation cannot cost it.
+
+### THREE STALE CLAIMS FOUND AND NOT FIXED
+
+Hard rule 1 forbids changes in this stage, so they are recorded:
+
+1. `src/evaluation/baseline.py` still prints **`CLV: UNAVAILABLE — no closing
+   line is stored`** and sets `clv: None` with that note on every candidate.
+   True on 2026-08-07, false now.
+2. The sweep candidate is labelled **`market 80% + poisson/elo 19%`** —
+   `int((1 - 0.8) * 100)` is 19. A label defect; the weight is correct.
+3. The `sys.path` guard hole above.
+
+### A CORRECTION TO MY OWN FIRST DRAFT
+
+The lead-time split measured `pick_date` (a DATE, so midnight) minus
+`created_at` and came out **flat at −8 to −10 hours for every pick** — that is
+the clock time of the daily run (`created_at` ≈ 10:52), not lead time. A
+quantile split on it would have split the population by **nothing**, and four
+near-identical buckets would have read as *"lead time does not matter"*. It
+now joins `matches.match_date`; the real range is 4.2–8.8 h. The broken
+version is kept as its own `run_hour` split, because that is a real question
+— just not the one asked.
+
+### DISCIPLINE
+
+Gating selection **2,522 passed, 10 deselected**; non-gating 8 passed, 2
+skipped. Invariants 26 passed, count not cited. All seven workflow YAMLs
+parse. `pnc_scan` and the falsy-zero census both clean. Fingerprint
+**UNCHANGED at `s5.19 / cdec29`** — nothing under `src/` or `config/` is
+touched. Every database figure behind `assert db.is_postgres`; every read a
+`select`; nothing written back.
+
+*Recorded 2026-10-23 (measured) / committed 2026-10-23.
+`docs/decision-2026-11-01.md`, `scripts/decision_paper_figures.py`.*
