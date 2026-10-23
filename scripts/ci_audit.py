@@ -980,6 +980,25 @@ PATTERNS = {
 #:
 #:     An anchor narrows a pattern. Removing the echo removes the class.
 #:
+#: AND THE RULE THAT OUTLIVES IT:
+#:
+#:     A detector that reads logs containing its own source will match
+#:     itself. Comment-blindness is a property of the INPUT PATH, not of
+#:     the scanner.
+#:
+#: This project applied comment-blindness to the CODE eleven times --
+#: `conftest.code_of` exists for it -- and never once to the LOG, although the
+#: log contains the code. The question belongs to the path: strip what is not
+#: output BEFORE any pattern runs, in `extract` rather than at each call site,
+#: so a caller cannot forget.
+#:
+#: ASKED IN THE OTHER DIRECTION TOO, once, across every candidate: is there
+#: anywhere the audit matches against a file it also WRITES? The census and
+#: its verdicts are in `tests/test_source_echo_is_stripped.py`
+#: (`SELF_MATCH_CENSUS`) -- `pnc_scan`'s `KNOWN_INSTANCES` was exactly this
+#: shape and is guarded; the ledger, the cron parse and the audit's reading of
+#: its own run logs are measured clean or clean by design.
+#:
 #: Pinned to what the CONSUMER observes, as the `##[error]` marker rule
 #: already is: the `##[group]Run ` / `##[endgroup]` boundaries, which survive
 #: `fetch_log`'s ANSI stripping. An `_ECHO_COLOUR` constant was written first

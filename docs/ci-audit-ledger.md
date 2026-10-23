@@ -33561,3 +33561,116 @@ two days).
 *Recorded 2026-10-23. `scripts/ci_audit.py`, `scripts/schedule_deadline.py`,
 `.github/workflows/reminders.yml`, `tests/test_red_means_new.py` and six
 further test modules.*
+
+---
+
+## The source echo is stripped, and the question asked in both directions — 2026-10-23
+
+### THE RULE THIS LEAVES BEHIND
+
+> **A detector that reads logs containing its own source will match itself.**
+> **Comment-blindness is a property of the INPUT PATH, not of the scanner.**
+
+This project has applied comment-blindness to the **code** eleven times —
+`conftest.code_of` exists for it — and never once to the **log**, although the
+log contains the code. GitHub prints every step's shell source into it inside
+`##[group]Run …` / `##[endgroup]`.
+
+Recorded beside the input path, and the strip runs **inside `extract()`** so a
+caller cannot forget it.
+
+### WHAT WAS CONFIRMED BEFORE STRIPPING: nothing real lives only in the echo
+
+`measured` 2026-10-23 over the **156 cached real logs** in `ci_logs/`, every
+registered `PATTERNS` entry tested against the removed region and the surviving
+region separately:
+
+```
+PATTERNS matching ONLY inside the stripped echo : 0
+PATTERNS matching only outside (unaffected)     : 23 keys
+```
+
+So no case needed keeping explicitly. The one signal that *does* live only in
+the echo is the **producer** form `::error::` — and the project already pins
+its marker to the consumer form `##[error]`, which appears in real output.
+That decision is why this strip costs nothing.
+
+### END TO END, on the path the data takes
+
+`extract()` with the strip against `extract()` without it, over all 156 logs.
+**Exactly three facts in three logs moved, every one a false positive:**
+
+```
+tracebacks    1 -> 0                                  in 2 logs
+steps_failed  ['update, picks". A list of'] -> []      in 1 log
+```
+
+Nothing else changed. The figures are pinned in
+`STRIP_EFFECT_MEASURED`, because `ci_logs/` is a local cache and is not
+committed; a `live` test re-runs the comparison wherever the cache exists and
+refuses any fact moving outside that set.
+
+### THE THREE KNOWN-WRONG CONTROLS
+
+| control | what it was | now |
+|---|---|---|
+| the echoed **comment** | `# It sent "⚠️ Daily picks: step(s) FAILED — update, picks". A list of` — written 2026-10-22 *about* the removed sender, matched 2026-10-23 as `core step(s) reported failure` on a run whose every step succeeded | `steps_failed == []` |
+| the **pytest ID** | `test_…_is_a_FAILURE[Traceback (most recent call last)]` — a test parametrised on the string, counted as a traceback | `tracebacks == 0` |
+| **`870`** inside a run id | the source-side instance, 2026-10-18: `870` matched `38708288664` in a `RESOLVED_RUNS` comment and reported a deadline literal that was not there | word-bounded, and the boundary is pinned |
+
+The third is the same class in the other medium — a scanner matching inside a
+longer token — so it is kept as a control rather than filed separately.
+
+### THE POSITIVE CONTROL: the signal survives
+
+A real traceback and a real `##[error]` **outside** the echo are still found,
+with a comment mentioning both **inside** it being removed. *A strip that
+removes the signal with the noise is the worse failure.* Also pinned: only
+`##[group]Run ` is treated as an echo, so `##[group]Operating System` and its
+siblings keep their contents; and an **unterminated** group is stripped to the
+next boundary rather than to EOF, with the choice stated.
+
+### AND THE FIRST ATTEMPT PASSED ITS UNIT TEST AND CHANGED NOTHING
+
+It dropped a line only if it carried the echo's ANSI colour. `fetch_log` runs
+`ANSI.sub("", …)` **before** `extract` ever sees the log, so there was no
+colour left to match — and I had tested the function against a raw
+`gh run view --log` and called it a fix for the pipeline.
+
+> **Testing the function is not testing the path the data takes.**
+
+Pinned as a test: `fetch_log` must still strip ANSI, the group boundaries
+(which survive it) are what is used, and `_ECHO_COLOUR` must stay out of the
+**code** — an assertion that, in its first form, matched the comment recording
+that `_ECHO_COLOUR` had been deleted. **The eleventh comment-blind scan, inside
+the test about comment-blindness.**
+
+### THE OTHER DIRECTION, ASKED ONCE ACROSS EVERY CANDIDATE
+
+`pnc_scan`'s `KNOWN_INSTANCES` self-suppression was exactly this shape, so the
+question is whether anything else has it. All five verdicts measured
+2026-10-23 and recorded in `SELF_MATCH_CENSUS`:
+
+| candidate | verdict |
+|---|---|
+| `pnc_scan` / `KNOWN_INSTANCES` | **WAS REAL.** A blanket string-as-reference visitor made the scanner's own table of symbol *names* suppress its own findings. Already guarded — `visit_Constant` must stay absent, pinned by `test_pnc_detector`. |
+| the ledger / `ledger_history` | **CLEAN, measured:** 498 parsed rows, every id 10–12 digits, five real workflow names, not one row from prose or from the markdown tables the entries contain. |
+| the workflow crons / `current_crons_by_daytype` | **CLEAN BY CONSTRUCTION:** `^\s*- cron:` anchors to the line start. Driven with a file carrying a commented-out `0 2` — the *rejected* option, which is exactly what a comment there holds — and the parse was unchanged. |
+| `ci-audit`'s own run logs | **BY DESIGN.** It is in `WORKFLOWS`, so it audits itself: 76 of the 156 cached logs are its own, and every fact it extracts from them is either a partition term that exists for that purpose (`self_emitted_annotations`, `self_emitted_exits`) or a **real** traceback — 8 of 76, all from the two crash episodes of 2026-10-22/23. |
+| `RESOLVED_RUNS` / the pattern registry | **NO RUNTIME SELF-SOURCE READ.** The registry self-tests through `PATTERN_EXAMPLES`, which is the point. The `870` case was a *test* scanning `ci_audit.py`. |
+
+### DISCIPLINE
+
+Gating selection **2,502 passed, 10 deselected**; non-gating 8 passed, 2
+skipped. Invariants pass, count not cited. Every workflow YAML parses. PNC
+scan exits 0. Fingerprint **UNCHANGED at `s5.19 / cdec29`**.
+
+**And the reminders floor moved 9 → 10 — the second time in two days.** Adding
+a `live` test without raising it re-opens the masking hole every time (7
+against a selection of 9 yesterday, 9 against 10 today), so the registry now
+carries an entry whose comment says so, and the next `live` test added has to
+pass through it.
+
+*Recorded 2026-10-23. `scripts/ci_audit.py`,
+`tests/test_source_echo_is_stripped.py`,
+`tests/test_reminders_are_evaluated.py`, `.github/workflows/reminders.yml`.*

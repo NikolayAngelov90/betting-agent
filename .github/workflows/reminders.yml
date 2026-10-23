@@ -254,7 +254,7 @@ jobs:
           #: reminder does not break the job; `tests/test_reminders_are_
           #: evaluated.py` checks the floor against the LIVE selection, so it
           #: cannot quietly drift below reality either.
-          REMINDERS_EXPECTED_MIN = 9
+          REMINDERS_EXPECTED_MIN = 10
 
           rc_raw = os.environ.get("RC", "")
           ran_raw = os.environ.get("RAN", "")

@@ -74,6 +74,14 @@ REMINDERS = {
     "tests/test_cron_moved.py": [
         "test_the_PARALLEL_bound_carries_its_n_which_is_ONE",
         "test_the_SERIES_RESET_is_recorded_as_a_COST_with_the_new_date"],
+    # ── 9 -> 10 ON 2026-10-23, THE SECOND TIME IN TWO DAYS. ──────────────
+    #
+    # Adding a `live` test without raising the floor re-opens the masking
+    # hole every time: the floor was 7 against a selection of 9 yesterday and
+    # 9 against 10 today. The registry IS the selection, and this entry is
+    # here so the next `live` test added has to pass through it.
+    "tests/test_source_echo_is_stripped.py": [
+        "test_LIVE_the_strip_still_removes_only_NOISE_on_the_real_cache"],
 }
 
 REMINDERS_EXPECTED_MIN = sum(len(v) for v in REMINDERS.values())
@@ -117,7 +125,7 @@ def test_the_FLOOR_in_the_workflow_MATCHES_the_registry():
     quietly drop below the number of reminders that exist."""
     m = re.search(r"REMINDERS_EXPECTED_MIN = (\d+)", SRC)
     assert m, "the floor is gone from the workflow"
-    assert int(m.group(1)) == REMINDERS_EXPECTED_MIN == 9, (
+    assert int(m.group(1)) == REMINDERS_EXPECTED_MIN == 10, (
         f"the workflow's floor is {m.group(1)} against {REMINDERS_EXPECTED_MIN} "
         f"registered reminders")
 
