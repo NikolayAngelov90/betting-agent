@@ -63,6 +63,17 @@ REMINDERS = {
         "test_the_SIX_HOUR_control_reports_the_MEASURED_gap_per_run"],
     "tests/test_reference_deadline.py": [
         "test_LIVE_the_reference_answers_for_TOMORROW_and_our_table_does_not"],
+    # ── ADDED 2026-10-23, AND THE FLOOR HAD TO MOVE WITH THEM. ───────────
+    #
+    # The `s5.19` cron move registered two decisions as `live` tests. The
+    # floor was 7 against a selection that had become 9, so a run in which
+    # one of the SEVEN failed to collect would still have counted 8 and
+    # passed -- the masking this floor exists to prevent, reintroduced by
+    # adding reminders without raising it. The registry is the selection, not
+    # a subset of it.
+    "tests/test_cron_moved.py": [
+        "test_the_PARALLEL_bound_carries_its_n_which_is_ONE",
+        "test_the_SERIES_RESET_is_recorded_as_a_COST_with_the_new_date"],
 }
 
 REMINDERS_EXPECTED_MIN = sum(len(v) for v in REMINDERS.values())
@@ -106,7 +117,7 @@ def test_the_FLOOR_in_the_workflow_MATCHES_the_registry():
     quietly drop below the number of reminders that exist."""
     m = re.search(r"REMINDERS_EXPECTED_MIN = (\d+)", SRC)
     assert m, "the floor is gone from the workflow"
-    assert int(m.group(1)) == REMINDERS_EXPECTED_MIN == 7, (
+    assert int(m.group(1)) == REMINDERS_EXPECTED_MIN == 9, (
         f"the workflow's floor is {m.group(1)} against {REMINDERS_EXPECTED_MIN} "
         f"registered reminders")
 
@@ -217,7 +228,7 @@ def test_a_MISSING_exit_code_is_NOT_EVALUATED_rather_than_assumed():
 # ── the two real results ─────────────────────────────────────────────────
 
 def test_rc1_IS_the_verdict_and_DOES_send():
-    code, out, bodies = _drive(rc=1, ran=7)
+    code, out, bodies = _drive(rc=1, ran=REMINDERS_EXPECTED_MIN)
     assert code == 1
     assert "REMINDER DUE" in out, "the registered marker is gone"
     assert "VERDICT, not a failure" in out
@@ -230,18 +241,18 @@ def test_rc1_IS_the_verdict_and_DOES_send():
 
 
 def test_rc0_with_the_FULL_SET_is_nothing_due_and_GREEN():
-    code, out, bodies = _drive(rc=0, ran=7)
+    code, out, bodies = _drive(rc=0, ran=REMINDERS_EXPECTED_MIN)
     assert code == 0, out
     assert "nothing due" in out
     assert bodies == []
-    assert "7 reminder test(s) ran" in out, (
+    assert f"{REMINDERS_EXPECTED_MIN} reminder test(s) ran" in out, (
         "the clean path does not say how many ran, so 'nothing due' and "
         "'nothing looked' read identically")
 
 
 # ── the defect rc alone cannot catch ─────────────────────────────────────
 
-@pytest.mark.parametrize("ran", [0, 1, 6])
+@pytest.mark.parametrize("ran", [0, 1, REMINDERS_EXPECTED_MIN - 1])
 def test_a_CLEAN_EXIT_with_TOO_FEW_reminders_is_NOT_EVALUATED(ran):
     """A reminder that loses its `calendar` marker leaves the selection and
     pytest exits 0. Without this, that is indistinguishable from a quiet day
@@ -257,7 +268,7 @@ def test_a_CLEAN_EXIT_with_TOO_FEW_reminders_is_NOT_EVALUATED(ran):
 
 def test_MORE_reminders_than_the_floor_is_FINE():
     """The floor is a minimum. Adding a reminder must not break the job."""
-    code, _out, _b = _drive(rc=0, ran=9)
+    code, _out, _b = _drive(rc=0, ran=REMINDERS_EXPECTED_MIN + 2)
     assert code == 0
 
 

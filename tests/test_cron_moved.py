@@ -258,9 +258,18 @@ def test_the_REJECTED_CRON_is_a_BREACH_by_the_projects_OWN_instrument():
 def test_the_PARALLEL_bound_carries_its_n_which_is_ONE():
     """The weakest input in the whole derivation, stated rather than buried."""
     s = ci.parallel_regime_picks_series()
-    assert s.get("n") in (None, 0, 1), (
-        f"the parallel series has reached n={s.get('n')}; re-derive the picks "
-        f"bound and re-open `0 2` rather than quoting the simulated 55.1")
+    # ── IT FIRES AT n=10, NOT AT n=2. ────────────────────────────────────
+    #
+    # The first version asserted `n in (None, 0, 1)` and failed the next day
+    # at n=2 — a reminder reporting that one more run had happened, which is
+    # not a decision. The decision is due when the series can actually be
+    # RE-DERIVED, which is `MIN_N_TO_REDERIVE_PICKS_BOUND`. Same over-eager
+    # threshold as the series-reset reminder, made twice in two days.
+    n = s.get("n")
+    assert n is None or n < ci.MIN_N_TO_REDERIVE_PICKS_BOUND, (
+        f"the parallel series has reached n={n} of "
+        f"{ci.MIN_N_TO_REDERIVE_PICKS_BOUND}: RE-DERIVE the picks bound and "
+        f"re-open `0 2`, rather than going on quoting the simulated 55.1")
 
 
 # ── PART C: the series reset, as a COST ──────────────────────────────────

@@ -961,8 +961,100 @@ PATTERNS = {
 }
 
 
+#: ── THE COMMAND ECHO IS NOT OUTPUT. 2026-10-23. ──────────────────────────
+#:
+#: GitHub prints every `run:` block into the log before executing it, inside a
+#: `##[group]Run …` / `##[endgroup]` pair and coloured with the ANSI sequence
+#: below. Those lines are the workflow's SOURCE, not its output, and matching
+#: them reports a definition as an occurrence.
+#:
+#: THIS HAS NOW COST TWO FINDINGS, both of them false and both about the same
+#: pattern. On 2026-10-13 the `step(s) FAILED` matcher read its own emitting
+#: line and called two DEGRADED runs BROKEN; the remedy then was to require a
+#: letter after the dash, which excludes `… FAILED — " + ", ".join(failed)`.
+#: On 2026-10-23 it read a COMMENT I had written inside that same `run:` block
+#: — `# It sent "⚠️ Daily picks: step(s) FAILED — update, picks". A list of …`
+#: — which has a real step name after the dash and sails through the anchor.
+#: The audit reported `core step(s) reported failure: update, picks` for a run
+#: whose every critical step SUCCEEDED.
+#:
+#:     An anchor narrows a pattern. Removing the echo removes the class.
+#:
+#: Pinned to what the CONSUMER observes, as the `##[error]` marker rule
+#: already is: the `##[group]Run ` / `##[endgroup]` boundaries, which survive
+#: `fetch_log`'s ANSI stripping. An `_ECHO_COLOUR` constant was written first
+#: and DELETED when the strip widened to the whole region -- it had no
+#: consumer left, and a producer with none is PNC-1 whatever its comment says.
+
+
+def strip_non_output(log: str) -> str:
+    """`log` with everything that is NOT step OUTPUT removed.
+
+    TWO FILTERS, both of the same class: text that is a DEFINITION being read
+    as an OCCURRENCE.
+
+      1. GitHub's echoed `run:` blocks (see the note above).
+      2. pytest's verbose test-ID lines. On 2026-10-23 the `tracebacks`
+         counter read 1 for a `daily-picks` run whose every step succeeded,
+         because `tests/test_red_is_classified_per_workflow.py` is
+         PARAMETRISED ON THE STRING "Traceback (most recent call last)" and
+         pytest prints that parameter in the test's name. A test fixture
+         describing a traceback was counted as one.
+
+    A pytest `-v` progress line is `tests/x.py::test_y PASSED [ 12%]`: every
+    character of it is a test name or a parameter, never program output. A
+    real traceback inside a FAILED test appears on its own lines and survives.
+
+
+    Conservative on both failure modes: an unterminated group stops stripping
+    at the next step boundary rather than eating the rest of the log, and a
+    line is dropped on the colour alone only when it is INSIDE a group.
+    """
+    if not log:
+        return log or ""
+    out, in_echo = [], False
+    for line in log.splitlines(keepends=True):
+        if "##[group]Run " in line:
+            in_echo = True
+            continue
+        # pytest TEST-ID LINES. The log is `job<TAB>step<TAB>timestamp text`,
+        # so the test id is looked for after the last tab.
+        _tail = line.rsplit("	", 1)[-1].lstrip()
+        _tail = _tail.split(" ", 1)[-1].lstrip() if _tail[:2].isdigit() else _tail
+        if _tail.startswith("tests/") and "::" in _tail:
+            continue
+        if in_echo:
+            if "##[endgroup]" in line:
+                in_echo = False
+                continue
+            # ── EVERY LINE IN THE REGION, NOT ONLY THE COLOURED ONES. ─────
+            #
+            # The first version dropped a line only if it carried the echo
+            # colour, and that version PASSED a direct test and CHANGED
+            # NOTHING in production: `fetch_log` runs `ANSI.sub("", ...)`
+            # before `extract` ever sees the log, so there is no colour left
+            # to match. I had tested the function against a raw `gh` log and
+            # called it a fix for the pipeline.
+            #
+            #     Testing the function is not testing the path the data takes.
+            #
+            # `##[group]Run …` to `##[endgroup]` IS the echo region by
+            # definition -- the command, then `shell:` and `env:` -- and no
+            # step OUTPUT appears inside it. Only `Run ` groups are matched,
+            # so `##[group]Operating System` and its siblings are untouched.
+            continue
+        out.append(line)
+    return "".join(out)
+
+
 def extract(log: str) -> Dict[str, object]:
-    """Counts, not adjectives."""
+    """Counts, not adjectives.
+
+    NON-OUTPUT IS STRIPPED FIRST. See `strip_non_output`: every
+    pattern below would otherwise be able to match the workflow's own source,
+    and two have.
+    """
+    log = strip_non_output(log)
     f: Dict[str, object] = {}
     for key, pat in PATTERNS.items():
         ms = re.findall(pat, log)
@@ -1966,16 +2058,63 @@ LAG_CLUSTER_PROVENANCE = (
     "the p95 successor removes the need for any split at n>=100")
 
 
+#: The smallest n at which the split rule can reach a verdict at all. Below
+#: this there is no median gap worth the name, so "it did not split" is
+#: indistinguishable from "it is not bimodal" -- and binding on the pooled
+#: figure would be binding a mean+3sd on one or two observations.
+LAG_CLUSTER_MIN_N = 4
+
+
+def cluster_state(lags) -> str:
+    """`BIMODAL` / `UNIMODAL` / `UNSEPARABLE`.
+
+    THE THIRD STATE IS THE POINT. `split_lag_clusters` returns
+    `(vals, None)` both when a series is genuinely unimodal and when it is too
+    small to tell, and those are different facts: the first licenses binding
+    on the pooled figure, the second licenses nothing. At n=1 -- which is
+    where the 2026-10-22 cron move left both series -- `mean+3sd` equals the
+    single observation and a margin computed from it would read as a
+    measurement.
+    """
+    import statistics
+    vals = sorted(float(v) for v in lags if v is not None)
+    if len(vals) < LAG_CLUSTER_MIN_N:
+        return "UNSEPARABLE"
+    gaps = [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
+    med = statistics.median(gaps)
+    widest = max(gaps)
+    # ── A ZERO MEDIAN GAP IS NOT "CANNOT TELL". ──────────────────────────
+    #
+    # The first version returned UNSEPARABLE whenever `med <= 0`, and
+    # `test_a_breaching_margin_DOES_alarm` caught it immediately: five
+    # IDENTICAL observations have every gap zero, which is a single point
+    # mass — the opposite of bimodal — and the rule was silencing a genuine
+    # breach by calling it unseparable.
+    #
+    # So the two zero cases are told apart: every gap zero is UNIMODAL, and a
+    # zero median with a non-zero widest gap is an infinite ratio, i.e. the
+    # most bimodal a series can be.
+    if widest == 0:
+        return "UNIMODAL"
+    if med <= 0:
+        return "BIMODAL"
+    return ("BIMODAL" if widest / med >= LAG_CLUSTER_GAP_RATIO
+            else "UNIMODAL")
+
+
 def split_lag_clusters(lags):
     """`(slow, fast)` when the series is bimodal, else `(sorted(lags), None)`.
 
     SLOW FIRST, because the slow cluster is the one that governs a safety
     choice and returning it first makes a caller that ignores the second
     element conservative rather than optimistic.
+
+    Callers that need to tell "not bimodal" from "cannot tell" must ask
+    `cluster_state`; this function collapses both into `(vals, None)`.
     """
     import statistics
     vals = sorted(float(v) for v in lags)
-    if len(vals) < 4:
+    if len(vals) < LAG_CLUSTER_MIN_N:
         return vals, None
     gaps = [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
     med = statistics.median(gaps)
@@ -2079,13 +2218,33 @@ def schedule_margin(series, cron_minutes: int,
             cron_minutes + _c["mean_plus_3sd"] + FULL_CARD_PICKS_3SD)
         _c["binding"] = min(_c["margin_max"], _c["margin_3sd"])
         out["clusters"][_name] = _c
+    out["cluster_state"] = cluster_state(lags)
     if out["bimodal"]:
         out["binding"] = out["clusters"]["slow"]["binding"]
         out["binding_from"] = "slow cluster"
     else:
         out["binding"] = out["pooled_binding"]
-        out["binding_from"] = "the whole series (not bimodal)"
-    out["alarm"] = out["binding"] < MARGIN_ALARM_MIN
+        out["binding_from"] = ("the whole series (not bimodal)"
+                               if out["cluster_state"] == "UNIMODAL"
+                               else "the whole series, UNSEPARABLE at this n")
+    # ── UNSEPARABLE REPORTS AND DOES NOT ALARM. 2026-10-23. ──────────────
+    #
+    # A third state, distinct from clear and from breached. Below
+    # LAG_CLUSTER_MIN_N the split rule cannot reach a verdict, so "it did not
+    # split" carries no information -- and `mean+3sd` of one or two points is
+    # that point. Binding on it would be the "absent instrumentation is not a
+    # zero" error with extra arithmetic.
+    #
+    # EVERY FIGURE STILL PRINTS. This suppresses the ALARM, not the report:
+    # the margin, its basis and the reason are all on the line, and the
+    # conservative reading named beside them.
+    out["alarm"] = (out["binding"] < MARGIN_ALARM_MIN
+                    and out["cluster_state"] != "UNSEPARABLE")
+    if out["cluster_state"] == "UNSEPARABLE":
+        out["no_alarm_reason"] = (
+            f"n={n} is below {LAG_CLUSTER_MIN_N}, so the series cannot be "
+            f"separated into clusters and mean+3sd is not a bound - this is "
+            f"neither clear nor breached")
     out["deadline_min"] = deadline_min
     out["day_type"] = day_type
     return out
@@ -2501,10 +2660,17 @@ def format_schedule_margin(m) -> str:
             f"| margin max={_c['margin_max']:+.0f}m "
             f"3sd={_c['margin_3sd']:+.0f}m binding={_c['binding']:+.0f}m] "
             f"{_gov}")
+    if m.get("cluster_state") == "UNSEPARABLE":
+        _lines.append(
+            f"{'':10s}  UNSEPARABLE: {m.get('no_alarm_reason', '')}. It "
+            f"REPORTS and does NOT alarm. The conservative reading until the "
+            f"series separates is the retired cron's SLOW cluster.")
     _lines.append(
         f"{'':10s}  BINDING {m['binding']:+.0f}m from {m['binding_from']}, "
         f"threshold {MARGIN_ALARM_MIN}m"
-        + ("  ** DECISION FIRES **" if m["alarm"] else ""))
+        + ("  ** DECISION FIRES **" if m["alarm"] else
+           ("  (no alarm: UNSEPARABLE)"
+            if m.get("cluster_state") == "UNSEPARABLE" else "")))
     _lines.append(
         f"{'':10s}  successor[p95 delay={_qtxt} ({_verdict}); mean+3sd is "
         f"{'ABOVE' if m['mean_plus_3sd'] > m['max'] else 'within'} the "
@@ -3376,8 +3542,121 @@ def _write_alarm_body(alarmed: List[str]) -> None:
         print(f"could not write the alarm body: {exc}")
 
 
-def _emit_alarms(alarmed: List[str], alarmed_status: List[str]) -> int:
+#: ── RED MEANS NEW, UNACKNOWLEDGED, OR DETERIORATED. 2026-10-23. ──────────
+#:
+#: `ci-audit` reddened on every run for two weeks and the answer was always
+#: "one finding, a verdict by design". A workflow that reddens whenever a
+#: KNOWN state exists reddens every day, and then red carries no information
+#: at all -- which is how the only channel Niki reads became GitHub's own
+#: notification list.
+#:
+#: So a finding is classified before it decides the exit code:
+#:
+#:   NEW            no recorded occurrence                   -> RED
+#:   DETERIORATED   worse than the recorded figure            -> RED
+#:   UNACKNOWLEDGED recorded but its review date has passed    -> RED
+#:   UNCHANGED      within the tolerance of the recorded one  -> prints
+#:
+#: AND MACHINERY ALWAYS REDDENS, whatever the finding state. That is handled
+#: outside this table, in `_main_guarded`'s exit 2 and in the workflow's
+#: crash branch, so no classification here can silence a broken audit.
+#:
+#: THE TOLERANCE IS DERIVED, NOT CHOSEN. For a margin-shaped figure it is the
+#: largest ORDINARY single-point move of the binding, `measured` 2026-10-22 by
+#: recomputing it over growing prefixes of the weekday series: +5.53, +2.79,
+#: -11.32, -2.24, +1.77 (the -97.91 cluster boundary excluded). Same figure
+#: the standing acknowledgement's floor uses, and for the same reason -- a
+#: statistic that moves 11 minutes on one arrival must not call that a
+#: deterioration.
+#:
+#: FOR A COUNT the tolerance is ZERO: one more absent scheduled run, or one
+#: more failing pattern, is a new fact and not jitter.
+FINDING_TOLERANCE_MINUTES = ACKNOWLEDGED_MARGIN_BREACH_JITTER      # 11.32
+FINDING_TOLERANCE_COUNT = 0
+
+#: THE RECORDED OCCURRENCES. A source-level table, deliberately: CI cannot
+#: write back, and in this project recording a figure is already a human act
+#: with an argument beside it (`RESOLVED_RUNS`, `ACKNOWLEDGED_MARGIN_BREACH`,
+#: `STRUCTURAL_ACK`). Writing the figure down IS the acknowledgement.
+#:
+#: `figure` is the value last reported; `tolerance` names which of the two
+#: derived tolerances applies; `review` is the date after which it reddens
+#: again whatever its figure.
+KNOWN_FINDINGS: Dict[str, dict] = {
+    "margin.schedule": {
+        "figure": 20.665799601890512,
+        "tolerance": "minutes",
+        "since": "2026-10-22",
+        # 2026-11-06 here is the projected date the parallel picks series
+        # reaches n=10, NOT the R^2=0.451 fit that shares the date elsewhere
+        # in this file. Two different projections landing on one day is
+        # exactly how a figure acquires the wrong provenance.
+        "review": "2026-11-06",
+        "why": ("the deadline is the observed earliest kickoff and the ready "
+                "time is ours; the slow cluster governs and the cron was "
+                "derived from it"),
+        "action": ("dispatch daily-picks by hand that morning; durably, the "
+                   "parallel picks series reaching n=10"),
+    },
+}
+
+
+def classify_finding(key: str, figure, today=None) -> tuple:
+    """`(state, why)` for one finding. `state` decides whether red is earned.
+
+    LOWER IS WORSE for a margin and HIGHER IS WORSE for a count, so the
+    comparison direction comes from the tolerance kind rather than from the
+    sign of the number -- a figure's meaning is not recoverable from its
+    value.
+    """
+    rec = KNOWN_FINDINGS.get(key)
+    if rec is None:
+        return ("NEW", "no recorded occurrence for this finding")
+    today = today or _dt.date.today()
+    review = rec.get("review")
+    if review:
+        try:
+            if today > _dt.date.fromisoformat(review):
+                return ("UNACKNOWLEDGED",
+                        f"recorded, but its review date {review} has passed")
+        except ValueError:
+            return ("UNACKNOWLEDGED",
+                    f"recorded with an unparseable review date {review!r}")
+    if figure is None or rec.get("figure") is None:
+        return ("UNCHANGED", "recorded, and neither occurrence carries a "
+                             "figure to compare")
+    kind = rec.get("tolerance", "minutes")
+    # TWO STATEMENTS, NOT A TUPLE. `tol, worse = TOL, figure > rec + tol`
+    # reads `tol` on the right before the left side binds it --
+    # `UnboundLocalError`, and the count branch had never been exercised until
+    # the control for it was written. A tolerance kind that nothing drove was
+    # dead code wearing a parameter's clothes.
+    if kind == "count":
+        tol = FINDING_TOLERANCE_COUNT
+        worse = figure > rec["figure"] + tol
+    else:
+        tol = FINDING_TOLERANCE_MINUTES
+        worse = figure < rec["figure"] - tol
+    if worse:
+        return ("DETERIORATED",
+                f"{figure:+.2f} against the recorded {rec['figure']:+.2f} "
+                f"(tolerance {tol} {kind})")
+    return ("UNCHANGED",
+            f"{figure:+.2f} is within {tol} {kind} of the recorded "
+            f"{rec['figure']:+.2f}; review {review}")
+
+
+#: The states that earn a red. UNCHANGED prints and does not.
+FINDING_STATES_THAT_REDDEN = ("NEW", "DETERIORATED", "UNACKNOWLEDGED")
+
+
+def _emit_alarms(alarmed: List[str], alarmed_status: List[str],
+                 keyed=()) -> int:
     """Print every alarm, push only the actionable ones, return the exit code.
+
+    `keyed` is `[(finding_key, figure, text), ...]` -- findings that carry
+    their identity from the site that raised them, so a KNOWN one can print
+    without spending the run's colour. See `KNOWN_FINDINGS`.
 
     THE EXIT CODE COVERS BOTH LISTS, deliberately. A status alarm is not sent
     to Telegram, and the thing that carries it instead is THIS RUN'S RED --
@@ -3386,17 +3665,47 @@ def _emit_alarms(alarmed: List[str], alarmed_status: List[str]) -> int:
     into a deletion.
     """
     both = alarmed + alarmed_status
-    if not both:
+    if not both and not keyed:
         return 0
-    print(chr(10) + "::error::audit alarm — " + "; ".join(both))
-    if alarmed_status:
+
+    # ── CLASSIFY THE KEYED FINDINGS BEFORE THE EXIT CODE. 2026-10-23. ────
+    #
+    # A keyed finding carries its identity and its figure from the site that
+    # RAISED it, never recovered from its wording. Unkeyed alarms are treated
+    # as NEW and always redden, which is correct for every one of them today:
+    # the pattern self-test, model integrity, an absent scheduled run, an
+    # untriaged finding, an unparseable workflow, an unevaluated workflow
+    # state, a missing cron and the actionable margin are all RARE, and a
+    # per-run verdict relay is new for each run by construction.
+    quiet, loud = [], []
+    for key, figure, text in keyed:
+        state, why = classify_finding(key, figure)
+        line = f"{text}  [{state}: {why}]"
+        # EVERY KEYED FINDING IS ACTIONABLE TODAY. A keyed STATUS finding
+        # would need routing away from Telegram the way `alarmed_status` is;
+        # the seam for it was built and removed rather than left empty, since
+        # a parameter no caller populates is not a seam.
+        (quiet if state not in FINDING_STATES_THAT_REDDEN
+         else loud).append(line)
+    reddens = alarmed + alarmed_status + loud
+    for line in quiet:
+        # IT PRINTS, WITH ITS FIGURE AND ITS REVIEW DATE. A known state is
+        # reported; it just stops spending the run's colour.
+        print(f"note: KNOWN, does not redden: {line}")
+    if not reddens:
+        print("no NEW, DETERIORATED or UNACKNOWLEDGED finding: exit 0. "
+              "Machinery failure is handled separately and always reddens.")
+        return 0
+    print(chr(10) + "::error::audit alarm — " + "; ".join(reddens))
+    _status_n = len(alarmed_status)
+    if _status_n > 0:
         # SAID OUT LOUD, every time, so the absence of a Telegram message is
         # a recorded decision rather than something to rediscover.
-        print(f"note: {len(alarmed_status)} of {len(both)} alarm(s) above "
+        print(f"note: {_status_n} of {len(reddens)} alarm(s) above "
               f"RESTATE a run's own conclusion, so they are NOT sent to "
               f"Telegram - GitHub's notification on that red run carries "
               f"them, and this run's red carries the rest.")
-    _write_alarm_body(alarmed)
+    _write_alarm_body(alarmed + loud)
     return 1
 
 
@@ -3460,6 +3769,14 @@ def main() -> int:
     # workflow, so GitHub's notification carries them. They are not pushed to
     # a phone, because a phone cannot act on them.
     alarmed_status: List[str] = []
+    # ── KEYED FINDINGS. 2026-10-23. ────────────────────────────────────────
+    #
+    # `(finding_key, figure, text)` for findings that carry their identity and
+    # their figure from the site that RAISES them. `_emit_alarms` classifies
+    # each against `KNOWN_FINDINGS`, and only NEW / DETERIORATED /
+    # UNACKNOWLEDGED earn a red. Everything in `alarmed` is treated as NEW and
+    # reddens, which is correct for all of them today.
+    _keyed: List[tuple] = []
 
     # ── THE PATTERN SELF-TEST, AT REGISTRATION AND BEFORE ANY RUN ─────────
     #
@@ -3570,7 +3887,7 @@ def main() -> int:
                  "query, not an empty window.)" if listing_warning else ""))
         # A state alarm must survive the early return: a disabled workflow
         # produces no runs, so this is the branch it arrives on.
-        return _emit_alarms(alarmed, alarmed_status)
+        return _emit_alarms(alarmed, alarmed_status, _keyed)
 
     # HISTORY IS WHAT IS KNOWN, NOT WHAT IS IN THIS PASS. Seeded from the
     # ledger before the loop, so recording a finding no longer erases the
@@ -3672,6 +3989,23 @@ def main() -> int:
             _restates_the_red = (
                 v == "DID_NOT_RUN"
                 or str(r.get("conclusion") or "").lower() == "failure")
+            # ── NOT KEYED, AND THAT IS A DECISION. 2026-10-23. ────────────
+            #
+            # A per-run verdict already has an owner: `RESOLVED_RUNS`. A
+            # keyed version was built and REMOVED rather than shipped, because
+            # it would have been a SECOND mechanism suppressing the same
+            # alarm, and a run suppressed for two different reasons has no
+            # single place to look.
+            #
+            # AND THE EXISTING ONE DEMONSTRABLY WORKS. The 30-run sample of
+            # 2026-10-22 showed `daily-picks DID_NOT_RUN` in 30 of 30 firings
+            # — five real events relayed 12, 10, 5, 2 and 1 times — and all
+            # five are in `RESOLVED_RUNS`, recorded 2026-10-18 by `7514a50`
+            # and `465146a`. Re-audited today over 2026-10-13 onward, 156
+            # rows including those five, they produce ZERO alarms. The noise
+            # measured in that sample predates the resolution, not the rule.
+            #
+            #     The mechanism was not missing. It was not filled in.
             (alarmed_status if _restates_the_red else alarmed).append(
                 f"{rid} {r['workflow']} {v}"
                 + ("" if _restates_the_red else
@@ -3993,7 +4327,15 @@ def main() -> int:
             # labelled wherever it appears, the alert included. The operator
             # dispatching by hand needs to know what he is insuring against.
             _pb = parallel_regime_picks_series()
-            alarmed.append(
+            # ── KEYED, SO A KNOWN FIGURE PRINTS INSTEAD OF REDDENING. ─────
+            #
+            # This is the finding that reddened `ci-audit` every day for two
+            # weeks. It now carries its key and its FIGURE from here, and
+            # `_emit_alarms` classifies it NEW / DETERIORATED / UNACKNOWLEDGED
+            # / UNCHANGED against `KNOWN_FINDINGS["margin.schedule"]`. Only
+            # the first three earn a red; UNCHANGED prints with its figure and
+            # its review date.
+            _keyed.append(("margin.schedule", _margin["binding"],
                 f"schedule margin {_margin['binding']:+.0f}m "
                 f"< {MARGIN_ALARM_MIN}m - CONSERVATIVE: computed from "
                 f"FULL_CARD_PICKS_MAX={FULL_CARD_PICKS_MAX}m, a full-card MAX "
@@ -4004,7 +4346,7 @@ def main() -> int:
                 f"{MIN_N_TO_REDERIVE_PICKS_BOUND}"
                 + (f", ~{_pb['to_ten_weeks']} weeks to go (about "
                    f"{_pb['to_ten_date']})" if _pb["to_ten_date"] != "reached"
-                   else ", READY TO RE-DERIVE"))
+                   else ", READY TO RE-DERIVE")))
 
     if listing_warning:
         # Printed AGAIN under the table: the number a reader carries away is
@@ -4012,7 +4354,7 @@ def main() -> int:
         # truncation qualifies.
         print(f"\nnote: {listing_warning}")
         print(f"note: {len(runs)} run(s) listed above is a LOWER BOUND.")
-    return _emit_alarms(alarmed, alarmed_status)
+    return _emit_alarms(alarmed, alarmed_status, _keyed)
 
 
 #: Exit codes, so a red run says WHICH KIND it is.

@@ -33320,3 +33320,244 @@ n=10; and `0 2` re-opens if either premise of its rejection moves.
 `scripts/ci_audit.py`, `scripts/pipeline_loss_alert.py`,
 `tests/experiment_pins.py`, `tests/test_cron_moved.py`,
 `tests/test_picks_run_guard.py`.*
+
+---
+
+## Red means new or unacknowledged; today's two reds were both machinery — 2026-10-23
+
+### PART 0 — `TODAY CLASSIFIED`
+
+**Neither of today's reds was a finding, and neither was the one that had been
+predicted.** Both were broken mechanisms.
+
+| | `ci-audit` 39912635523 | `reminders` 39912635578 |
+|---|---|---|
+| created | 2026-10-23T06:37:30Z | 2026-10-23T06:37:30Z |
+| headSha | `dae9b9f` | `dae9b9f` |
+| event | `workflow_run` | `workflow_run` |
+| conclusion | failure | failure |
+| **class** | **MACHINERY** (exit 2) | **FAILURE** (unmarked) |
+| findings | **zero — nothing was audited** | zero — nothing was evaluated |
+
+**`ci-audit`: exit 2, `CI AUDIT CRASHED`.** Verbatim:
+
+```
+File "scripts/ci_audit.py", line 3870, in main
+    print(format_two_margins(_m2))
+File "scripts/schedule_deadline.py", line 1217, in format_two_margins
+    f"  {a['kind']:10s} {a['binding']:+6.0f}m  deadline {dls}  "
+KeyError: 'binding'
+```
+
+**TWO SPELLINGS FOR ONE THIRD STATE.** `prospective_margin` returns
+`verdict="UNKNOWN"` when no series exists under the cron; `two_margins` sets
+`"UNEVALUATED"` on the actionable half; the formatter's guard recognised only
+the second, so `UNKNOWN` fell through to the one key such a dict does not
+have. **Triggered by the cron move of 2026-10-22**, which empties the lag
+series by design — *the reset was recorded as a cost and then not handled.*
+
+> A state recorded as expected is not a state that is handled.
+
+Fixed by keying the guard on **the absence of the value** (`a.get("binding")
+is None`), which no later spelling can break.
+
+**`reminders`: FAILURE, correctly marked** — `##[error]REMINDERS NOT
+EVALUATED`, `pytest exit=2, reminder tests that RAN=0`. Yesterday's
+classifier called it right. The cause: the four packages added on 10-22
+(`aiohttp`, `bs4`, `httpx`, `pandas`) let more modules import and uncovered
+the **next** layer — `selenium` ×4 and `sklearn`. Growing the list is
+whack-o-mole; `--continue-on-collection-errors` plus the ran-count floor is
+not. The floor also had to move: it was **7 against a selection that had
+become 9**, so a run in which one of the seven failed to collect would have
+counted 8 and passed.
+
+**AND THE PREDICTED `−39m` FINDING WAS NOT THERE** — the audit never reached
+the margin. It is real, though: at `0 1` the pooled reading *is* `−39.4m`, and
+Part A is why it does not alarm.
+
+#### A third false finding, from the same family
+
+Today's `daily-picks` 39906308477 was scored **BROKEN** with
+`core step(s) reported failure: update, picks` and `1 traceback(s)` — while
+**every critical step succeeded** and the loss step was skipped. Both hits
+were false, and both were the audit reading text that is a DEFINITION:
+
+* **the echoed `run:` block.** GitHub prints every script into the log inside
+  `##[group]Run …`, and the matched line was a COMMENT I wrote on 2026-10-22
+  *about* the sender being removed: `# It sent "⚠️ Daily picks: step(s) FAILED
+  — update, picks". A list of …`. The 2026-10-13 remedy — require a letter
+  after the dash — excludes the emitting line and not a comment with a real
+  step name in it.
+* **a pytest test-ID line.**
+  `test_KNOWN_WRONG_a_reminders_red_WITHOUT_the_marker_is_a_FAILURE[Traceback
+  (most recent call last)…]` — a test PARAMETRISED ON THE STRING "Traceback",
+  counted as one.
+
+> An anchor narrows a pattern. Removing the echo removes the class.
+
+`strip_non_output()` now drops both before any pattern runs: the
+`##[group]Run` → `##[endgroup]` region, and pytest's `tests/…::…` progress
+lines. Measured on today's log: 826 lines removed, `steps_failed` `[…] → []`,
+`tracebacks` `1 → 0`, and a real traceback still counts 1.
+
+**AND THE FIRST VERSION OF THAT FIX CHANGED NOTHING IN PRODUCTION.** It
+dropped a line only if it carried the echo's ANSI colour — and `fetch_log`
+runs `ANSI.sub("", …)` before `extract` ever sees the log. It passed a direct
+test against a raw `gh` log and I called it a fix for the pipeline.
+
+> Testing the function is not testing the path the data takes.
+
+### PART A — `MARGIN PER CLUSTER`
+
+**The alarm already read the slow cluster** — yesterday's change made
+`binding` come from it. Measured from the output today: the pooled figure
+prints labelled, the slow cluster is marked `GOVERNS`, the fast one `reported,
+NOT relied on`, and the line names which population `BINDING` came from.
+
+**WHAT WAS MISSING IS THE THIRD STATE.** `split_lag_clusters` returns
+`(vals, None)` both when a series is genuinely unimodal and when it is too
+small to tell — and at today's **n=1** that would have bound a `mean+3sd` on a
+single observation and called it a measurement.
+
+```
+cluster_state(lags) -> BIMODAL | UNIMODAL | UNSEPARABLE
+  UNSEPARABLE below LAG_CLUSTER_MIN_N = 4: reports, does NOT alarm
+```
+
+**The known-wrong control, driven:**
+
+```
+today's pooled -39.4m   cluster_state BIMODAL   BINDING +70.3 (slow)  alarm False
+a real slow breach      cluster_state BIMODAL   BINDING -49.7 (slow)  alarm True
+today's n=1 series      cluster_state UNSEPARABLE                     alarm False
+```
+
+**AND THE CONTROL CAUGHT A FLAW IN THE RULE AS FIRST WRITTEN.** Five
+*identical* observations have every gap zero, so `med <= 0` classified them
+UNSEPARABLE and **silenced a genuine breach**. A zero median is now told apart
+from a zero *widest* gap: all gaps zero is a single point mass and therefore
+UNIMODAL; a zero median with a non-zero widest gap is an infinite ratio and
+the most bimodal a series can be.
+
+### PART B — `RED REDEFINED`
+
+```
+NEW            no recorded occurrence                     -> RED
+DETERIORATED   worse than the recorded figure              -> RED
+UNACKNOWLEDGED recorded, but its review date has passed    -> RED
+UNCHANGED      within the derived tolerance of the record  -> prints
+```
+
+**MACHINERY ALWAYS REDDENS**, outside the classifier entirely — `_main_guarded`
+returns `EXIT_CRASH` and the workflow branches on it, so no classification can
+make a broken audit quiet.
+
+**THE TOLERANCE IS DERIVED.** `FINDING_TOLERANCE_MINUTES = 11.32`, the largest
+*ordinary* single-point move of the binding (`measured` 2026-10-22: +5.53,
++2.79, −11.32, −2.24, +1.77, excluding the −97.91 cluster boundary) — the same
+figure the standing acknowledgement's floor uses. For a **count** the
+tolerance is **zero**: one more absent scheduled run is a new fact, not
+jitter.
+
+**A keyed finding carries its identity and figure from the site that RAISES
+it**, never recovered from its wording. The schedule margin — the finding that
+reddened this workflow every day for two weeks — is the first.
+
+#### The four controls, all driven through `_emit_alarms`
+
+| control | result |
+|---|---|
+| unchanged acknowledged finding | **exit 0**, prints with its figure and review date, nothing to Telegram |
+| the same finding deteriorated | **exit 1**, `DETERIORATED`, reaches Telegram |
+| a new finding | **exit 1**, `NEW: no recorded occurrence` |
+| a crash with no finding at all | **`EXIT_CRASH`**, banner says `NOTHING was audited` |
+
+Driven through the emitter and not against the classifier alone: the exit code
+is what the workflow reads, and a classifier returning the right word while
+the emitter ignored it would pass a test on the word.
+
+**TWO DEFECTS IN MY OWN NEW CODE, both found by these controls:**
+
+* `tol, worse = FINDING_TOLERANCE_COUNT, figure > rec["figure"] + tol` —
+  `UnboundLocalError`. **The count branch had never been exercised**; a
+  tolerance kind nothing drove was dead code wearing a parameter's clothes.
+* an always-empty `keyed_status` seam, built and then **removed** rather than
+  left — a parameter no caller populates is not a seam.
+
+#### A second mechanism, built and NOT shipped
+
+A per-run verdict keyed by run id with the **ledger** as its record of "already
+reported" was built, measured, and **removed**. The measurement is why:
+
+```
+30 sampled alarming runs: `daily-picks DID_NOT_RUN` in 30 of 30 firings
+  five real events, relayed 12, 10, 5, 2 and 1 times
+  ALL FIVE are in RESOLVED_RUNS, recorded 2026-10-18 by 7514a50 / 465146a
+  re-audited today over 2026-10-13 onward -- 156 rows, those five included --
+  they produce ZERO alarms
+```
+
+> The mechanism was not missing. It was not filled in.
+
+`RESOLVED_RUNS` owns that case and demonstrably works; a second table
+suppressing the same alarm would leave a run suppressed for two different
+reasons with no single place to look. `ledger_run_ids()` went with it.
+
+#### What each workflow reddens on tomorrow
+
+**A green audit must be a prediction, not a relief.** Both predicted **GREEN**,
+with their falsifiers written down:
+
+* **`ci-audit`** — unless a run scores BROKEN/DID_NOT_RUN and is not in
+  `RESOLVED_RUNS`; or the schedule margin deteriorates past the acknowledged
+  floor **+9.35** once the lag series reaches n≥4 and stops being
+  UNSEPARABLE; or the prospective margin fires; or a pattern self-test fails;
+  or it crashes.
+* **`reminders`** — unless fewer than **9** reminders RUN, or one of the nine
+  fails. The only date-driven one before 2026-11-01 is
+  `H1_RESERVATION_ACK_UNTIL`.
+
+### PART C — the count that says whether this worked
+
+The 30-run sample re-classified under today's rule set:
+
+```
+would have been GREEN : 21/30  (70%)
+still RED             :  9/30  (30%)
+     8  unkeyed -> NEW (the prospective/actionable margin)
+     1  machinery / unclassified
+```
+
+**Not vacuous**, which is the sanity check the brief asked for: if every red
+had gone green the controls would have been wrong.
+
+```
+firings per change (surface census, 30 days) : 163 / 5 = 33 : 1   measured
+                                       after :  49 / 5 = 10 : 1   simulated
+marked lines per finding                     :  10 / 1 ->  1 : 1   measured
+```
+
+*The `after` figure scales the measured firings by the 30% that still redden;
+the five changes are unchanged, because the same real findings caused them.*
+
+### DISCIPLINE
+
+Gating selection **2,489 passed, 9 deselected**; non-gating 7 passed, 2
+skipped — and one of those skips is new and deliberate: the live weekday-cron
+test now reports UNEVALUATED while the series refills, instead of failing
+because a cost this project recorded two days ago came true. Invariants pass,
+count not cited. Every workflow YAML parses. Fingerprint **UNCHANGED at
+`s5.19 / cdec29`** — this stage is notification semantics and must not bump.
+
+PNC: `_ECHO_COLOUR` lost its only consumer when the strip widened to the whole
+group region, and was **deleted**. Mark-never-delete applies to data, not to
+producers.
+
+**Carried forward:** the second step on 2026-11-06; the picks-bound
+re-derivation at n=10 (the series reached n=2 today, and the reminder for it
+now fires at 10 rather than at 2 — the same over-eager threshold made twice in
+two days).
+
+*Recorded 2026-10-23. `scripts/ci_audit.py`, `scripts/schedule_deadline.py`,
+`.github/workflows/reminders.yml`, `tests/test_red_means_new.py` and six
+further test modules.*

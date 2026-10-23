@@ -216,7 +216,14 @@ def test_the_APPEND_SITE_COUNT_matches_the_census():
     """A census of 11 surfaces over 12 append sites is a census with a hole."""
     import pathlib
     src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
-    sites = src.count("alarmed.append(")
+    # ── `_keyed.append((` COUNTS AS A SURFACE. 2026-10-23. ──────────────
+    #
+    # The schedule margin moved from `alarmed` to `_keyed` so a KNOWN figure
+    # can print without reddening the run. That is a change of ROUTING, not a
+    # surface leaving the census: it still alarms when `classify_finding`
+    # returns NEW, DETERIORATED or UNACKNOWLEDGED. Counting only
+    # `alarmed.append(` read the re-route as one fewer surface.
+    sites = src.count("alarmed.append(") + src.count("_keyed.append((")
     assert sites == len(SURFACE_CENSUS), (
         f"{sites} append sites against {len(SURFACE_CENSUS)} censused "
         f"surfaces -- a new surface was added without a census row")

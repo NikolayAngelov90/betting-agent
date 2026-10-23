@@ -219,8 +219,15 @@ def test_the_FULL_alarm_surface_is_enumerated_here():
     import inspect
 
     src = inspect.getsource(ci)
+    # ── `_keyed.append(` COUNTS TOO, AS OF 2026-10-23. ───────────────────
+    #
+    # The schedule margin moved from `alarmed` to `_keyed`, which is a change
+    # of ROUTING and not a removal from the surface: it still alarms, but only
+    # when `classify_finding` returns NEW, DETERIORATED or UNACKNOWLEDGED.
+    # Counting only `alarmed.append(` dropped the total 12 -> 11 and would
+    # have read a re-route as a shrinking surface.
     appends = [l.strip() for l in src.splitlines()
-               if "alarmed.append(" in l]
+               if "alarmed.append(" in l or "_keyed.append((" in l]
     # 9 -> 11 on 2026-10-21, both named rather than absorbed into the number.
     #
     # THE TENTH is a RED THIS AUDIT CANNOT CLASSIFY. `reminders.yml` reddens
@@ -244,6 +251,14 @@ def test_the_FULL_alarm_surface_is_enumerated_here():
     # value is a detector that CANNOT FIRE, and two of them sat dead for ten
     # days because the only diagnostic was gated on their condition. It
     # alarms at REGISTRATION, before the early return on "no runs to audit".
+    # THE TWELVE ARE UNCHANGED IN NUMBER; ONE IS NOW KEYED. The schedule
+    # margin is the finding that reddened this workflow every day for two
+    # weeks, so it is the first to carry a key and a figure and be classified
+    # against its recorded occurrence.
+    assert sum(1 for l in appends if "_keyed.append((" in l) == 1, (
+        f"{sum(1 for l in appends if '_keyed.append((' in l)} keyed alarm "
+        f"sites, expected 1 (the schedule margin). A new keyed finding needs "
+        f"a row in KNOWN_FINDINGS and a line here.")
     assert len(appends) == 12, (
         f"the alarm surface changed: {len(appends)} append sites, expected "
         f"12 (pattern self-test, workflow state, red UNCLASSIFIABLE, run "

@@ -178,13 +178,35 @@ jobs:
           # family as the `| tee` that swallowed an exit code in the coverage
           # gate, and the reason `ci-audit.yml` brackets its audit the same
           # way.
+          # ── `--continue-on-collection-errors`, ADDED 2026-10-23. ─────────
+          #
+          # The dependency list above was grown by one layer on 2026-10-22
+          # (aiohttp, bs4, httpx, pandas) and the NEXT layer appeared the same
+          # night: `selenium` x4 and `sklearn`. pytest aborts at collection
+          # errors, so the reminders were selected and NONE RAN, AGAIN -- the
+          # same failure the previous fix was for, one layer down.
+          #
+          # GROWING THE LIST IS WHACK-A-MOLE AND THE FLOOR MAKES IT
+          # UNNECESSARY. With this flag pytest runs every reminder it could
+          # collect, and `reminders_ran` below refuses any run where fewer
+          # than the registered number executed. So a collection error that
+          # touches a REMINDER is still caught and reported as NOT EVALUATED,
+          # while one touching an unrelated module no longer silences the set.
           set -o pipefail
           set +e
           python -m pytest tests/ -v --tb=short -m "calendar or live" \
+            --continue-on-collection-errors \
             | tee logs/reminders.txt
           rc=${PIPESTATUS[0]}
           set -e
           echo "pytest_rc=$rc" >> "$GITHUB_OUTPUT"
+          # COLLECTION ERRORS, COUNTED AND REPORTED SEPARATELY. They are not a
+          # test result and they are not nothing: an unrelated module that
+          # cannot import is a fact about this job's environment, and it is
+          # printed rather than absorbed by the flag above.
+          errs=$(grep -cE "^ERROR tests/" logs/reminders.txt || true)
+          echo "collect_errors=$errs" >> "$GITHUB_OUTPUT"
+          echo "collection errors (not reminders, reported not absorbed): $errs"
           # HOW MANY REMINDERS ACTUALLY RAN, counted from pytest's own
           # per-test lines rather than from a constant kept in step with them.
           # `rc` alone cannot catch a reminder that silently LEFT the
@@ -232,7 +254,7 @@ jobs:
           #: reminder does not break the job; `tests/test_reminders_are_
           #: evaluated.py` checks the floor against the LIVE selection, so it
           #: cannot quietly drift below reality either.
-          REMINDERS_EXPECTED_MIN = 7
+          REMINDERS_EXPECTED_MIN = 9
 
           rc_raw = os.environ.get("RC", "")
           ran_raw = os.environ.get("RAN", "")
@@ -258,6 +280,13 @@ jobs:
           if rc is None:
               unevaluated = (f"the pytest exit code did not reach this step "
                              f"(RC={rc_raw!r}), so nothing can be concluded")
+          # A COLLECTION ERROR MAKES `rc` UNTRUSTWORTHY ON ITS OWN. With
+          # `--continue-on-collection-errors` pytest exits 1 for a failed test
+          # AND for a module that could not be imported, so `rc == 1` no
+          # longer means "a reminder is due" by itself. THE RAN-COUNT IS WHAT
+          # SEPARATES THEM, and it is checked below BEFORE the verdict branch
+          # — so a run where fewer reminders executed than exist reports NOT
+          # EVALUATED whatever the exit code says.
           elif rc not in (0, 1):
               unevaluated = (
                   f"pytest exited {rc}, which is not a test result: 2 is "

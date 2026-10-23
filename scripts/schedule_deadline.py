@@ -1208,10 +1208,29 @@ def format_two_margins(m: dict) -> str:
         a = m[key]
         dl = a.get("deadline_min")
         dls = (f"{dl // 60:02d}:{dl % 60:02d}" if dl is not None else "--:--")
-        if a.get("verdict") == "UNEVALUATED":
-            out.append(f"  {a['kind']:10s} UNEVALUATED  deadline {dls}  "
-                       f"[{a['coverage']}]")
-            out.append(f"             {a.get('reason', '')}")
+        # ── KEYED ON THE ABSENCE OF THE VALUE, NOT ON A SPELLING. ─────────
+        #
+        # This read `a.get("verdict") == "UNEVALUATED"` and crashed the whole
+        # audit on 2026-10-23 with `KeyError: 'binding'`, exit 2, nothing
+        # audited. TWO SPELLINGS FOR ONE THIRD STATE: `prospective_margin`
+        # returns `verdict="UNKNOWN"` when no series exists under the cron,
+        # `two_margins` sets `"UNEVALUATED"` on the actionable half, and this
+        # branch recognised only the second -- so `UNKNOWN` fell through to
+        # `a['binding']`, which is exactly the key such a dict does not have.
+        #
+        # IT WAS TRIGGERED BY THE CRON MOVE OF 2026-10-22: moving a cron
+        # empties the lag series by design, and the reset was recorded as a
+        # cost WITHOUT checking every consumer of the margin dict for the
+        # n=0 shape. A state recorded as expected is not a state that is
+        # handled.
+        #
+        # So the test is "is there a binding figure", which no later spelling
+        # can break.
+        if a.get("binding") is None:
+            out.append(f"  {a['kind']:10s} "
+                       f"{a.get('verdict', 'UNEVALUATED'):11s} deadline {dls}"
+                       f"  [{a.get('coverage', 'coverage unknown')}]")
+            out.append(f"             {a.get('reason', 'no binding figure')}")
             continue
         out.append(
             f"  {a['kind']:10s} {a['binding']:+6.0f}m  deadline {dls}  "
