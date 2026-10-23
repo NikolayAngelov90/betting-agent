@@ -33818,3 +33818,179 @@ notification machinery.
 
 *Recorded 2026-10-23. `.github/workflows/reminders.yml`, `tests/conftest.py`,
 `tests/test_reminders_are_evaluated.py`, `tests/test_code_of_is_enforced.py`.*
+
+---
+
+## Every matcher asserts its anchor — 2026-10-23
+
+> **A matcher with zero hits has not verified anything. Passing is a claim
+> about what was found, and nothing was found.**
+
+### THE CENSUS, FIRST, because the number decides the shape
+
+`measured` 2026-10-23 over every `tests/test_*.py` that derives a text
+haystack (`read_text` / `inspect.getsource` / `fetch_log`, or a
+`re.findall/search/finditer/match`) and then claims **absence or emptiness**:
+
+```
+116  matcher sites with an absence/emptiness claim
+ 77    GUARDED    -- the test establishes its haystack is the right one
+ 39    UNGUARDED  -- zero hits reads as a pass
+```
+
+**A FIRST, BROADER CUT GAVE 336 OF 535 AND IS NOT THE NUMBER TO RATCHET.** It
+counted every anchor-keyed negative assertion, most of which are claims about
+a **computed** value — `assert exposure == 0` after a real calculation — where
+there is no anchor that can vanish and nothing for this mechanism to say. The
+figure above is the matcher population only. Both numbers are reported
+because the narrowing is the judgement, not an afterthought.
+
+### FOUR INCIDENTS, ONE SHAPE, AND THREE DIFFERENT GUARDS
+
+The shape is one: *a matcher that could no longer match passed silently.*
+
+| incident | why it matched nothing | what guards it |
+|---|---|---|
+| `"\b870\b"` in a non-raw string | `\b` became **chr(8)**, a backspace byte | a scan that refuses zero hits |
+| the ANSI colour filter | `fetch_log` strips ANSI **before** `extract` | a **measured effect on real input** |
+| `pnc_scan`'s `KNOWN_INSTANCES` | its own table read as the evidence | a **planted finding** |
+| `REMINDERS_REGISTERED` | a blanket rename; the name never existed | a **sentinel** in the same haystack |
+
+**ONE HELPER DOES NOT COVER FOUR INCIDENTS, and that is stated rather than
+papered over.** Two are mechanical and ship as `tests/conftest.py` helpers:
+
+* **`anchored(hay, sentinel, what)`** — for a NEGATIVE assertion, where the
+  needle cannot be its own anchor. `sentinel` is something known to be
+  present; if it is absent the haystack is not the thing being checked, and
+  the call raises **`UNEVALUATED, not clear`** rather than returning a flag. A
+  guard that can be ignored is not a guard.
+* **`must_match(pattern, hay, what)`** — for a POSITIVE scan, refusing an
+  empty `findall`.
+
+The other two cannot be: a filter's no-op and a scanner's self-suppression are
+claims about **effect**, not about text. They need a PLANTED example, which is
+what `ci_audit.PATTERN_EXAMPLES` and `calendar_marker_scan` already do.
+`must_match` is explicitly **unusable** for a violation scan, where zero is
+the goal.
+
+### THE FOUR KNOWN-WRONG CONTROLS, EACH DRIVEN
+
+**1 — the renamed constant.** The defect reproduced verbatim: `assert
+"REMINDERS_REGISTERED" not in raw` **passes**, against a name the workflow has
+never contained. `anchored(raw, "REMINDERS_REGISTERED", …)` reports
+`UNEVALUATED`.
+
+> **AND WRITING THIS CONTROL FOUND THE OTHER HALF.** Against **raw** YAML the
+> *real* needle `REMINDERS_EXPECTED_MIN` is still present — in the comment
+> that records its removal, at `reminders.yml:280`. **The thirteenth
+> comment-blind instance**, found by the control rather than in production.
+> So the real assertion needs **both**: `_code_of_yaml` to strip, *then*
+> `anchored` on `reminders_selected=$sel` to prove the haystack. Two different
+> failures, two different guards, and neither covers the other.
+
+**2 — the backspace regex.** `chr(8) in broken` asserted, so the fixture
+cannot silently lose the byte; `re.findall(broken, hay) == []` confirms the
+pattern matches nothing; `must_match` refuses it. The corrected,
+word-bounded pattern then finds the run id it should.
+
+**3 — the stripped ANSI key.** Driven on the text `fetch_log` really returns:
+`ANSI.sub` removes `\x1b[36;1m`, the colour-keyed filter is shown to be a
+**no-op on that text**, and `must_match` on the key reports `UNEVALUATED`. The
+shipped `strip_non_output`, keyed on the `##[group]Run` boundaries that
+survive, is then shown to **remove lines from real input** and keep the output
+line.
+
+**4 — the scanner suppressed by its own table.** `anchored` **cannot** guard
+this, and the control says so. The guard is a planted finding, and the
+discriminator had to be measured: *"is it reported at all"* distinguishes
+nothing, because the planted symbol lands in **some** bucket either way. What
+the defect changed is **which**:
+
+```
+named only as a STRING in a KNOWN_INSTANCES-shaped table -> no_consumer     (correct)
+called for real                                          -> orphan_cluster
+```
+
+so the control asserts the string-only plant stays in `no_consumer` **and**
+that a real call moves it out — the second half being what makes the first
+mean anything. A third plant with no table at all confirms the table is
+inert.
+
+**POSITIVE CONTROL** — a matcher whose anchor is present still asserts
+normally: `anchored` returns the haystack **unchanged** (`hay is src`), the
+real claim `"_ECHO_COLOUR" not in hay` holds, and `must_match` returns its one
+hit.
+
+### THE RATCHET, DRIVEN IN BOTH DIRECTIONS
+
+```
+BASELINE_UNGUARDED = 39        # measured 2026-10-23; may fall, never rise
+```
+
+* **it bites**: a planted unguarded site fails it with `grew from 39 to 40`,
+  the new site named, and the four clearing actions printed.
+* **the clearing action clears** (CLR-2): wrapping that same site in
+  `anchored` returns the count to 39 and the test passes. An alarm whose
+  remedy does not change the predicate is not a remedy.
+
+The population grew to 116 while the backlog stayed at **exactly 39** — the
+four new tests are all guarded, which is the ratchet working rather than a
+coincidence worth hiding.
+
+### THE EXEMPTION LIST SHIPS EMPTY — 0 of 4
+
+**The first draft's single entry was VACUOUS.** It named
+`test_the_CENSUS_is_reproducible`, and the census only reaches the exemption
+check for a site that reads a haystack **and** claims absence; that test does
+neither (`>=` on two counts). It excused nothing and would have sat in the
+list looking like a considered decision — **a vacuous check inside the
+mechanism built to refuse vacuous checks.** Removed, not reworded.
+
+So the cap test gained a third clause: an entry must name a site the census
+would **otherwise have counted**. Driven in four directions:
+
+| | result |
+|---|---|
+| a vacuous exemption | **REFUSED** |
+| a real exemption with a real reason | accepted |
+| five exemptions against a cap of four | **REFUSED** |
+| a real site with a one-word reason | **REFUSED** |
+
+*A list that absorbs the backlog makes the mechanism vacuous* — so the cap is
+stated, at four, and nothing is in it.
+
+### TWO THINGS FOUND BY BUILDING THIS, NOT BY LOOKING FOR THEM
+
+* **`reminders.yml:280`** — the thirteenth comment-blind instance, above.
+* **`must_match`'s own docstring was non-raw**, so the two characters it
+  quotes had become `chr(8)`: **the record of the backspace bug was written
+  in backspace**, and a grep for it would have found nothing. Marked `r"""`,
+  with a test asserting the docstring contains backslash-`b` and **not**
+  `chr(8)`.
+
+### AND YESTERDAY'S RATCHET CAUGHT TODAY'S FILE
+
+The `code_of` census went `raw 48 -> 49` on this file and **failed the gating
+selection**. The site was
+`test_the_RULE_is_RECORDED_beside_the_guards`, and it is an **attribution
+artefact**: its only negative claim is `chr(8) not in doc`, against a
+`__doc__` **object**, not file text — so `code_of` is inapplicable, and its
+positive claims are deliberately against raw text because the thing being
+checked *is* prose in comments.
+
+**Split into its own test rather than exempted.** An exemption would have
+spent one of four slots on an artefact. `raw` is back to **48**, and `code_of`
+rose **5 -> 7** with this file's two correct sites.
+
+### DISCIPLINE
+
+Gating selection **2,522 passed, 10 deselected**; non-gating 8 passed, 2
+skipped. Invariants 26 passed, count not cited. All seven workflow YAMLs
+parse. No control characters in either touched file. `pnc_scan` **33 / 7,
+byte-identical to HEAD** — verified by stashing. Fingerprint **UNCHANGED at
+`s5.19 / cdec29`**; nothing under `src/` or `config/` is touched, so no
+revision bump is due and `cohort_status`'s standing `BUMP` advisory does not
+apply.
+
+*Recorded 2026-10-23. `tests/conftest.py`,
+`tests/test_matchers_assert_their_anchor.py`.*

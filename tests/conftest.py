@@ -476,3 +476,74 @@ def code_of(source: str) -> str:
             at_stmt_start = False
         prev_end = end
     return "".join(out)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# EVERY MATCHER ASSERTS ITS ANCHOR. 2026-10-23.
+#
+#     A matcher with zero hits has not verified anything. Passing is a claim
+#     about what was found, and nothing was found.
+#
+# FOUR INCIDENTS, ONE SHAPE -- a matcher that could no longer match passed
+# silently:
+#
+#   * `\b` written through a non-raw string became a BACKSPACE byte, so the
+#     pattern matched nothing and `assert not offenders` passed;
+#   * an ANSI-colour filter was stripped of its key upstream by `fetch_log`,
+#     so it removed nothing and its unit test still passed;
+#   * `pnc_scan`'s own `KNOWN_INSTANCES` table read as the evidence it was
+#     scanning, suppressing its findings;
+#   * a blanket rename left `assert "REMINDERS_REGISTERED" not in yaml`
+#     checking for a name the workflow had never contained.
+#
+# `anchored` and `must_match` are the two mechanical guards. The other two
+# shapes -- a pattern that cannot match, and a scanner suppressed by its own
+# data -- need a PLANTED example instead, which is what
+# `ci_audit.PATTERN_EXAMPLES` and `calendar_marker_scan` already do.
+#
+# `tests/test_matchers_assert_their_anchor.py` holds the ratchet and the four
+# controls.
+
+def anchored(haystack: str, sentinel: str, what: str = "the haystack") -> str:
+    """`haystack`, once `sentinel` proves it is the right one.
+
+    FOR NEGATIVE ASSERTIONS, where the needle cannot be its own anchor: you
+    are about to claim `needle not in haystack`, and that claim is empty
+    unless the haystack is demonstrably the thing that could have contained
+    it. `sentinel` is something known to be present -- the enclosing
+    function, a neighbouring key, the section heading.
+
+    Raises rather than returning a flag: a guard that can be ignored is not a
+    guard.
+    """
+    if not isinstance(haystack, str):
+        raise AssertionError(
+            f"UNEVALUATED: {what} is {type(haystack).__name__}, not text, so "
+            f"no anchor could be looked for")
+    if sentinel not in haystack:
+        raise AssertionError(
+            f"UNEVALUATED, not clear: the anchor {sentinel!r} is absent from "
+            f"{what}, so this haystack is not the thing being checked and "
+            f"any absence claim about it verifies nothing. Re-point the "
+            f"anchor, or say why it moved.")
+    return haystack
+
+
+def must_match(pattern, haystack: str, what: str = "the haystack"):
+    r"""`re.findall(pattern, haystack)`, refusing an empty result.
+
+    FOR POSITIVE SCANS, where zero hits is indistinguishable from a pattern
+    that can no longer match -- the `\b`-as-backspace shape. A scan looking
+    for VIOLATIONS cannot use this (zero is the goal); such a scan proves its
+    pattern against a PLANTED example instead.
+    """
+    import re
+    hits = re.findall(pattern, haystack)
+    if not hits:
+        raise AssertionError(
+            f"UNEVALUATED, not clear: {pattern!r} found nothing in {what}. "
+            f"Zero hits does not distinguish 'absent' from 'this pattern can "
+            f"no longer match' -- which is how a backspace byte and a "
+            f"stripped ANSI key both passed. Prove the pattern against a "
+            f"known-positive example, or re-point it.")
+    return hits
