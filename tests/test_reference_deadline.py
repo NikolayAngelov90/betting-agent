@@ -222,7 +222,7 @@ def test_the_combination_can_only_TIGHTEN_never_relax():
     property that makes an incomplete reference safe to consult at all.
     """
     for day in (dt.date(2026, 4, 6), dt.date(2026, 5, 17)):
-        const = sd.DEADLINE_FLOOR[sd.day_type(day)][0]
+        const = sd.deadline_floor_for(sd.day_type(day), day)[0]
         for minute in range(6 * 60, 23 * 60, 17):
             iso = (f"{day.isoformat()}T{minute // 60:02d}:"
                    f"{minute % 60:02d}:00Z")

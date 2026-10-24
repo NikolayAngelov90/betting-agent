@@ -608,9 +608,10 @@ def test_the_1430_figure_is_a_PERCENTILE_not_a_minimum():
     from scripts.schedule_deadline import deadline_floor_for
     for _day in (_d.date(2026, 10, 24), _d.date(2026, 10, 26)):
         assert observed_earliest_min("weekday", _day) ==             deadline_floor_for("weekday", _day)[0]
-    assert WEEKDAY_EARLIEST_OBSERVED > DEADLINE_MIN_BY_DAYTYPE["weekday"], (
-        "the 2026-02-01-onward figure of 09:59 is no longer later than the "
-        "deadline; the full-record minimum is 09:30")
+    assert WEEKDAY_EARLIEST_OBSERVED > deadline_floor_for(
+        "weekday", _d.date(2026, 6, 18))[0], (
+        "the 2026-06-18 kickoff at 09:59 is no longer later than that day's "
+        "localized deadline; the full-record minimum is 09:30")
 
 
 def test_the_weekday_cron_CLEARS_a_holiday_weekday_since_the_revert():

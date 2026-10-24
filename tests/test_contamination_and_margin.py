@@ -158,12 +158,9 @@ def test_every_marked_ungated_site_names_exactly_one_category():
 # ── B: the margin is measured daily, and the fitted date never stands alone ──
 
 def test_the_deadline_is_the_WEEKEND_kickoff_and_says_so():
-    """09:15 since 2026-10-19, and the reason it is not 10:04 is recorded.
+    """The conservative deadline follows the localized weekend kickoff floor.
 
-    WAS 10:15, a ~5th percentile. The fallback is now a DERIVED FLOOR,
-    `ceil_15(weekend ready_binding 08:03 + 60m registered) = 09:15`. The
-    phantom and independent-source notes below are unchanged and still
-    required: they are why the weekend figure is not 10:04.
+    The provenance below records why the earlier 10:04 estimate was invalid.
     """
     # RE-ANCHORED 2026-10-20: the deadline is the OBSERVED EARLIEST KICKOFF (weekday 09:30, weekend 09:45), not ceil_15(ready+60). The self-anchored floor was a TAUTOLOGY -- it made margin>=60 true by construction -- and freezing it against a live series breached 60 within a day when mean+3sd drifted +11.4m on one new observation.
     # 570 -> 540 ON 2026-10-22, AND THE TEST'S OWN NAME BECAME TRUE. The
@@ -172,7 +169,7 @@ def test_the_deadline_is_the_WEEKEND_kickoff_and_says_so():
     # both sides of a DST transition. The retired UTC pair said the opposite
     # (weekday 09:30 < weekend 09:45), which was an artefact of two figures
     # measured in the same season on different days.
-    assert ci.SCHEDULE_DEADLINE_MIN == 9 * 60 + 0
+    assert ci.SCHEDULE_DEADLINE_MIN == ci.DEADLINE_MIN_BY_DAYTYPE["weekend"]
     # THE `[-1400:]` WINDOW IS GONE TOO, for the reason this file already
     # records one test below: a width is not an order. The localisation added
     # two small classes above the constant on 2026-10-22 and pushed both
