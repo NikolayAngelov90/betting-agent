@@ -238,11 +238,13 @@ jobs:
           # than reading as a clean pass.
           skipped=$(grep -cE "^tests.*::.* SKIPPED" logs/reminders.txt || true)
           errors=$(grep -cE "^tests.*::.* ERROR" logs/reminders.txt || true)
+          failed=$(grep -cE "^tests.*::.* FAILED" logs/reminders.txt || true)
           echo "reminders_selected=$sel" >> "$GITHUB_OUTPUT"
           echo "reminders_ran=$ran" >> "$GITHUB_OUTPUT"
           echo "reminders_skipped=$skipped" >> "$GITHUB_OUTPUT"
           echo "reminders_errored=$errors" >> "$GITHUB_OUTPUT"
-          echo "pytest exit=$rc, SELECTED=$sel RAN=$ran (SKIPPED=$skipped, ERRORED=$errors)"
+          echo "reminders_failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "pytest exit=$rc, SELECTED=$sel RAN=$ran (FAILED=$failed, SKIPPED=$skipped, ERRORED=$errors)"
           exit 0        # the classification below decides, not this step
 
       - name: Upload the reminder log
@@ -266,6 +268,8 @@ jobs:
           RAN: ${{ steps.reminders.outputs.reminders_ran }}
           SKIPPED: ${{ steps.reminders.outputs.reminders_skipped }}
           ERRORED: ${{ steps.reminders.outputs.reminders_errored }}
+          FAILED: ${{ steps.reminders.outputs.reminders_failed }}
+          COLLECT_ERRORS: ${{ steps.reminders.outputs.collect_errors }}
           UP_CONCL: ${{ github.event.workflow_run.conclusion }}
           EVENT: ${{ github.event_name }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -287,6 +291,8 @@ jobs:
           ran_raw = os.environ.get("RAN", "")
           skipped_raw = os.environ.get("SKIPPED", "")
           errored_raw = os.environ.get("ERRORED", "")
+          failed_raw = os.environ.get("FAILED", "")
+          collect_errors_raw = os.environ.get("COLLECT_ERRORS", "")
           up = os.environ.get("UP_CONCL") or "UNEVALUATED"
           event = os.environ.get("EVENT", "")
           url = os.environ.get("RUN_URL", "")
@@ -300,6 +306,8 @@ jobs:
           rc, ran = _int(rc_raw), _int(ran_raw)
           sel = _int(sel_raw)
           skipped, errored = _int(skipped_raw), _int(errored_raw)
+          failed = _int(failed_raw)
+          collect_errors = _int(collect_errors_raw)
 
           # ── NOT EVALUATED IS ITS OWN STATE, AND IT IS NOT A VERDICT ───────
           #
@@ -314,10 +322,9 @@ jobs:
           # A COLLECTION ERROR MAKES `rc` UNTRUSTWORTHY ON ITS OWN. With
           # `--continue-on-collection-errors` pytest exits 1 for a failed test
           # AND for a module that could not be imported, so `rc == 1` no
-          # longer means "a reminder is due" by itself. THE RAN-COUNT IS WHAT
-          # SEPARATES THEM, and it is checked below BEFORE the verdict branch
-          # — so a run where fewer reminders executed than exist reports NOT
-          # EVALUATED whatever the exit code says.
+          # longer means "a reminder is due" by itself. RAN verifies the
+          # complete selection; FAILED and COLLECT_ERRORS distinguish the
+          # result from collection-only exit 1.
           elif rc not in (0, 1):
               unevaluated = (
                   f"pytest exited {rc}, which is not a test result: 2 is "
@@ -329,6 +336,18 @@ jobs:
                   f"the selection/ran counts did not reach this step "
                   f"(SEL={sel_raw!r} RAN={ran_raw!r}), so whether every "
                   f"reminder ran is UNKNOWN")
+          elif failed is None or collect_errors is None:
+              unevaluated = (
+                  f"the selected-failure/collection-error counts did not "
+                  f"reach this step (FAILED={failed_raw!r} "
+                  f"COLLECT_ERRORS={collect_errors_raw!r}), so the pytest "
+                  f"exit code cannot be classified")
+          elif failed < 0 or collect_errors < 0 or failed > ran:
+              unevaluated = (
+                  f"the outcome counts are inconsistent "
+                  f"(FAILED={failed} RAN={ran} "
+                  f"COLLECT_ERRORS={collect_errors}), so the pytest exit "
+                  f"code cannot be classified")
           elif sel == 0:
               unevaluated = (
                   "pytest SELECTED NO TESTS. An empty selection is not an "
@@ -342,6 +361,14 @@ jobs:
                   f"evaluate -- a reminder collected and not run is exactly "
                   f"the state this equality exists to catch, and no literal "
                   f"has to be kept in step with the selection for it to work")
+          elif rc == 0 and (failed > 0 or collect_errors > 0):
+              unevaluated = (
+                  f"pytest exited 0 but reported FAILED={failed} and "
+                  f"COLLECT_ERRORS={collect_errors}, which is inconsistent")
+          elif rc == 1 and failed == 0 and collect_errors == 0:
+              unevaluated = (
+                  "pytest exited 1, but neither a selected reminder failure "
+                  "nor a collection error was reported")
 
           if unevaluated:
               print("::error::REMINDERS NOT EVALUATED - this red is a "
@@ -357,7 +384,7 @@ jobs:
           # "today's card was lost" arrive in the same Telegram chat, so each
           # names the workflow it came from and what it means. The daily-picks
           # alert keeps its own wording and is not touched.
-          if rc == 1:
+          if rc == 1 and failed > 0:
               # ── THE REGISTERED MARKER. 2026-10-21. ─────────────────────
               # This workflow is DESIGNED to redden when a reminder reaches
               # its date, so `ci-audit` must be able to tell that red from a
@@ -383,6 +410,17 @@ jobs:
               subprocess.run([sys.executable, "-m", "scripts.ci_alert", body],
                              check=False)
               sys.exit(1)
+
+          if rc == 1 and collect_errors > 0:
+              print("::warning::REMINDERS COLLECTION ERRORS - "
+                    f"{collect_errors} test collection error(s) were "
+                    "reported; selected reminders produced no failures. "
+                    "No due decision was made.")
+              print(f"Reminders: {ran} of {sel} selected ran "
+                    f"({failed} FAILED, {skipped} SKIPPED, {errored} "
+                    f"errored; {collect_errors} collection error(s)). "
+                    f"upstream={up} trigger={event}")
+              sys.exit(0)
 
           # ── THE THIRD-STATE TELEGRAM SEND WAS REMOVED HERE. 2026-10-22. ───
           #

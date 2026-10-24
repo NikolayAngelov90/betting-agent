@@ -196,7 +196,7 @@ class _FakeSubprocess:
 
 
 def _drive(rc, ran, up="success", event="workflow_run", sel=None,
-           skipped=0, errored=0):
+           skipped=0, errored=0, failed=0, collect_errors=0):
     """`(exit_code, stdout, [telegram bodies])`."""
     import io
     import os
@@ -207,6 +207,9 @@ def _drive(rc, ran, up="success", event="workflow_run", sel=None,
     env = {"RC": str(rc), "RAN": str(ran), "UP_CONCL": up, "EVENT": event,
            "SEL": str(ran if sel is None else sel),
            "SKIPPED": str(skipped), "ERRORED": str(errored),
+           "FAILED": "" if failed is None else str(failed),
+           "COLLECT_ERRORS": ("" if collect_errors is None
+                              else str(collect_errors)),
            "RUN_URL": "https://example/runs/1"}
     saved = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
@@ -279,7 +282,8 @@ def test_a_MISSING_exit_code_is_NOT_EVALUATED_rather_than_assumed():
 # ── the two real results ─────────────────────────────────────────────────
 
 def test_rc1_IS_the_verdict_and_DOES_send():
-    code, out, bodies = _drive(rc=1, ran=REMINDERS_REGISTERED)
+    code, out, bodies = _drive(
+        rc=1, ran=REMINDERS_REGISTERED, failed=1)
     assert code == 1
     assert "REMINDER DUE" in out, "the registered marker is gone"
     assert "VERDICT, not a failure" in out
@@ -289,6 +293,38 @@ def test_rc1_IS_the_verdict_and_DOES_send():
     assert "its conclusion on this trigger: success" in bodies[0], (
         "the upstream state is no longer printed, so a reader cannot tell "
         "this from a capture failure")
+
+
+def test_rc1_from_COLLECTION_ERRORS_only_is_warning_and_GREEN():
+    code, out, bodies = _drive(
+        rc=1, ran=REMINDERS_REGISTERED, failed=0, collect_errors=3)
+    assert code == 0, out
+    assert "::warning::" in out
+    assert "3 collection error(s)" in out
+    assert "REMINDER DUE" not in out
+    assert bodies == [], "collection errors must not send a due alert"
+
+
+def test_rc1_without_a_failure_or_collection_error_is_NOT_EVALUATED():
+    code, out, bodies = _drive(
+        rc=1, ran=REMINDERS_REGISTERED, failed=0, collect_errors=0)
+    assert code == 1
+    assert "NOT EVALUATED" in out
+    assert "REMINDER DUE" not in out
+    assert bodies == []
+
+
+@pytest.mark.parametrize(
+    "failed,collect_errors", [(None, 0), (0, None)])
+def test_rc1_with_UNKNOWN_classification_counts_is_NOT_EVALUATED(
+        failed, collect_errors):
+    code, out, bodies = _drive(
+        rc=1, ran=REMINDERS_REGISTERED, failed=failed,
+        collect_errors=collect_errors)
+    assert code == 1
+    assert "NOT EVALUATED" in out
+    assert "REMINDER DUE" not in out
+    assert bodies == []
 
 
 def test_rc0_with_the_FULL_SET_is_nothing_due_and_GREEN():
@@ -366,6 +402,20 @@ def test_the_step_OUTCOME_is_NO_LONGER_READ():
         "the step outcome is being read again; it is the single word that "
         "collapses 'a reminder is due' into 'pytest could not run'")
     assert "steps.reminders.outputs.pytest_rc" in code_only
+
+
+def test_failed_and_collection_error_COUNTS_REACH_the_CLASSIFIER():
+    """Both independent pytest facts must survive the producer/classifier gap."""
+    code_only = _code_of_yaml(SRC)
+    assert 'grep -cE "^tests.*::.* FAILED" logs/reminders.txt' in code_only
+    assert 'echo "reminders_failed=$failed" >> "$GITHUB_OUTPUT"' in code_only
+    assert 'echo "collect_errors=$errs" >> "$GITHUB_OUTPUT"' in code_only
+    assert "FAILED: ${{ steps.reminders.outputs.reminders_failed }}" in code_only
+    assert "COLLECT_ERRORS: ${{ steps.reminders.outputs.collect_errors }}" \
+        in code_only
+    classifier = _classifier_source()
+    assert 'os.environ.get("FAILED", "")' in classifier
+    assert 'os.environ.get("COLLECT_ERRORS", "")' in classifier
 
 
 def test_the_EXIT_CODE_SURVIVES_bash_e():
