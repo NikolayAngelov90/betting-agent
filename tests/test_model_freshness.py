@@ -269,11 +269,12 @@ def test_the_BODY_is_ASCII_so_PRINTING_IT_cannot_KILL_THE_DETECTOR():
 
 def test_the_EXIT_CODE_is_0_FRESH_and_1_FINDING(models, monkeypatch):
     monkeypatch.setenv("GITHUB_RUN_ID", "run-Z")
+    now = dt.datetime.now(dt.timezone.utc)
     for name in mf.ARTEFACTS:
-        _write(models, name, (NOW - dt.timedelta(days=1)).isoformat())
+        _write(models, name, (now - dt.timedelta(days=1)).isoformat())
     assert mf.main(["--quiet"]) == 0
     for name in mf.ARTEFACTS:
-        _write(models, name, (NOW - dt.timedelta(days=99)).isoformat())
+        _write(models, name, (now - dt.timedelta(days=99)).isoformat())
     assert mf.main(["--quiet"]) == 1
 
 
