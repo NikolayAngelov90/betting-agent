@@ -63,19 +63,40 @@ def test_the_config_copy_PRECEDES_the_test_run():
     placed after `if not runs: return 0`: correct code, unreachable position.
 
     So for every workflow that runs pytest, the copy must exist and come first.
+
+    ── BY STEP ORDER, NOT BY CHARACTER OFFSET. 2026-10-28. ───────────────
+    This compared `text.index("pytest")` against `text.index("cp config/...")`
+    in the RAW yaml, so the first mention of "pytest" ANYWHERE won — including
+    in a comment. `non-gating-tests.yml` explains in its header why the
+    non-gating tests are not routed through `reminders.yml`, which says
+    "a pytest exit of 1", and the test reported that the workflow copied its
+    config AFTER running pytest while the steps were in the right order.
+
+    A COMMENT IS NOT A COMMAND, and this is the same class as the thirteen
+    comment-blind source scans — in yaml, where `code_of` does not reach. The
+    fix is to ask the parsed document which STEP runs what, which is the thing
+    the assertion is actually about.
     """
+    import yaml as _yaml
+
     for wf in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
-        text = wf.read_text(encoding="utf-8")
-        if "pytest" not in text:
+        doc = _yaml.safe_load(wf.read_text(encoding="utf-8")) or {}
+        runs = []
+        for job in (doc.get("jobs") or {}).values():
+            for i, step in enumerate(job.get("steps") or []):
+                runs.append(str(step.get("run") or ""))
+        i_pytest = next((i for i, r in enumerate(runs) if "pytest" in r), None)
+        if i_pytest is None:
             continue
-        i_pytest = text.index("pytest")
-        assert "cp config/config.example.yaml config/config.yaml" in text, (
+        copy = "cp config/config.example.yaml config/config.yaml"
+        i_copy = next((i for i, r in enumerate(runs) if copy in r), None)
+        assert i_copy is not None, (
             f"{wf.name} runs pytest but never creates config/config.yaml — the "
             f"local-vs-example tests will SKIP there, silently")
-        i_copy = text.index("cp config/config.example.yaml config/config.yaml")
         assert i_copy < i_pytest, (
-            f"{wf.name} copies the config AFTER running pytest — the "
-            f"local-vs-example tests skip, and the skip looks like a pass")
+            f"{wf.name} copies the config in step {i_copy} and runs pytest in "
+            f"step {i_pytest} — the local-vs-example tests skip, and the skip "
+            f"looks like a pass")
 
 
 def test_local_config_is_not_tracked_and_carries_no_authority():

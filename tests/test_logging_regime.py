@@ -82,11 +82,33 @@ def test_caplog_is_only_used_where_it_can_observe():
     may be vacuous". A false flag is answered by naming the module in a comment;
     a missed vacuous test is answered by nobody, which is the asymmetry that
     decides the direction.
+
+    ── MEMBERSHIP BY THE FIXTURE, NOT BY THE WORD. 2026-10-28. ──────────
+    This asked `if "caplog" not in text`, so a file that merely NAMES caplog
+    was flagged. `tests/test_gate_is_opt_in.py` asserts that the single
+    collection hook still refuses caplog — `assert "caplog" in body` — and was
+    reported as a caplog test that observes nothing, while using no fixture at
+    all.
+
+    THE FIFTEENTH INSTANCE OF THE COMMENT-BLIND CLASS, and every fix has been
+    the same one: ask the AST for the thing the assertion is about. Here that
+    is a test whose SIGNATURE takes the `caplog` fixture.
     """
+    import ast as _ast
+
     offenders = []
     for p in sorted(pathlib.Path("tests").glob("*.py")):
         text = p.read_text(encoding="utf-8")
-        if "caplog" not in text:
+        try:
+            tree = _ast.parse(text)
+        except SyntaxError:
+            continue
+        uses_fixture = any(
+            isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+            and any(a.arg == "caplog"
+                    for a in n.args.args + n.args.kwonlyargs)
+            for n in _ast.walk(tree))
+        if not uses_fixture:
             continue
         # A file that builds its own loguru sink has already solved this.
         if "loguru" in text:

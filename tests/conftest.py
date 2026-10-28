@@ -1,6 +1,7 @@
 """Shared pytest fixtures and environment setup."""
 
 import os
+import pathlib
 
 
 # ─────────────── THE `calendar` MARKER (Stage 28, 2026-10-09) ───────────────
@@ -43,6 +44,42 @@ def pytest_configure(config):
         "(10-13..10-18, 137 fixtures, 0 picks). Stage 28 had already moved "
         "the calendar assertions out of the gate for this exact reason, at a "
         "cost of one card.")
+    config.addinivalue_line(
+        "markers",
+        "capture_critical: this test may STOP PRICE CAPTURE. Applied "
+        "AUTOMATICALLY from the import graph by `pytest_collection_modifyitems` "
+        "below - never written by hand - so the set cannot drift from its "
+        "criterion. See scripts/capture_critical.py.")
+
+
+# ───────────── GATING IS OPT-IN FROM 2026-10-28 (the gate inverted) ──────────
+#
+# FOUR CARDS LOST, AND THREE OF THE FOUR WERE CLOCK-DEPENDENT TESTS THAT SAY
+# NOTHING ABOUT CAPTURE CORRECTNESS:
+#
+#   2026-10-09  the empty-card suppression's expiry, + three quota tests that
+#               inherited the H1 allocator's first active day      1 card
+#   2026-10-13  a rolling-window assertion over a live `gh run list`
+#                                                                  6 cards
+#   2026-10-21  a COUNT against `finding_register.evaluate`, whose predicate
+#               reads a path git does not track                    1 card
+#   2026-10-27  a frozen `NOW` fixture asserted against `mf.main()`, which
+#               reads the clock with no seam                       1 card
+#
+# `Run tests` gated EVERY test and excluded two markers BY HAND, so each new
+# test gated capture by DEFAULT and had to be opted out. The default has been
+# wrong four times, and `calendar`/`live` are the two exceptions someone
+# noticed - each added only after it had already cost cards.
+#
+# SO THE DIRECTION FLIPS. A test gates capture only if it is capture-critical,
+# and that is DERIVED FROM THE IMPORT GRAPH rather than listed: a hand list is
+# the `LIVE_NAMES` shape, where 16 seamless clock readers sat unregistered
+# because a list is a remedy someone must remember.
+#
+# THE MARKER IS APPLIED HERE, NOT IN 69 FILES, and that is the point: a new
+# test that imports the write path is capture-critical the moment it is
+# written, with nothing to remember. `scripts/capture_critical.py` holds the
+# criterion and `tests/test_gate_is_opt_in.py` holds the controls.
 
 # Opt into the insecure default HMAC key for tests. Production runs require
 # MODEL_HMAC_KEY to be set or this env var to be set explicitly — see
@@ -242,32 +279,6 @@ def capture_loguru():
     return _capture
 
 
-def pytest_collection_modifyitems(config, items):
-    """Refuse `caplog` at COLLECTION, with the remedy in the message."""
-    offenders = []
-    for item in items:
-        if "caplog" not in getattr(item, "fixturenames", ()):
-            continue
-        nodeid = item.nodeid.replace(chr(92), "/")
-        if nodeid not in CAPLOG_ALLOWED:
-            offenders.append(nodeid)
-    if offenders:
-        raise _pytest.UsageError(
-            "caplog is REFUSED in this project: it captures stdlib logging, "
-            "and almost everything in src/ logs through LOGURU. An assertion "
-            "on caplog.records reads an EMPTY list, which is byte-identical "
-            "to the defect such a test is usually written to exclude. This "
-            "has happened three times.\n\n"
-            "USE THE `capture_loguru` FIXTURE INSTEAD (tests/conftest.py):\n\n"
-            "    def test_x(capture_loguru):\n"
-            "        with capture_loguru('ERROR') as records:\n"
-            "            do_the_thing()\n"
-            "        assert any('MARKER' in r['message'] for r in records)\n\n"
-            "If the code under test really does use stdlib logging — "
-            "src/scrapers/barren_leagues.py is the only such module in src/, "
-            "per tests/test_logging_regime.py — add the test to "
-            "CAPLOG_ALLOWED in tests/conftest.py with that reason.\n\n"
-            "Offending test(s):\n  " + "\n  ".join(offenders))
 
 
 # ────────────── THE CALENDAR/LIVE MARKER, ENFORCED RATHER THAN DECLARED
@@ -378,6 +389,33 @@ def pytest_collection_modifyitems(config, items):
            if f.nodeid not in CALENDAR_SCAN_ALLOWED]
     if bad:
         raise _pytest.UsageError(refusal_text(bad))
+
+    # ── GATING IS OPT-IN, AND THE MARKER IS DERIVED HERE. 2026-10-28. ──────
+    #
+    # Folded into THIS hook rather than added as its own, because Python keeps
+    # only the LAST `pytest_collection_modifyitems` in a module. There were
+    # already TWO in this file -- the one above this was superseded when this
+    # one absorbed its caplog logic ("as before") and has been DEAD since,
+    # byte-identical and looking live. Adding a third would have made mine
+    # dead too, which is exactly what happened on the first attempt: the
+    # marker was applied by a hook that never ran, and `-m capture_critical`
+    # selected NOTHING while reporting no error.
+    #
+    #     A shadowed hook is invisible. `test_ONE_collection_hook` refuses a
+    #     second definition rather than leaving it to be noticed.
+    try:
+        from scripts.capture_critical import classify
+        critical = {k for k, v in classify().items() if v["critical"]}
+    except Exception:
+        # FAIL CLOSED: an unreadable criterion marks EVERYTHING, because the
+        # alternative is "no test can stop capture", which is the unsafe
+        # direction and would look like a clean run.
+        critical = None
+    for item in items:
+        name = _pathlib.Path(str(item.fspath)).name
+        if critical is None or name in critical:
+            item.add_marker(_pytest.mark.capture_critical)
+
 
 
 # ── CODE WITHOUT PROSE, BECAUSE TEXT SCANS KEEP MATCHING THEIR OWN COMMENTS ──

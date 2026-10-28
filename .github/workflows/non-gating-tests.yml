@@ -1,0 +1,124 @@
+name: Non-Gating Tests
+
+# ── WHERE THE 916 WENT. 2026-10-28. ─────────────────────────────────────────
+#
+# `daily-picks`'s `Run tests` gated EVERY test and excluded two markers by
+# hand, so each new test gated price capture by DEFAULT. That default was
+# wrong four times:
+#
+#   2026-10-09  the empty-card suppression's expiry + three quota tests that
+#               inherited the H1 allocator's first active day      1 card
+#   2026-10-13  a rolling-window assertion over a live `gh run list`
+#                                                                  6 cards
+#   2026-10-21  a COUNT against `finding_register.evaluate`, whose predicate
+#               reads a path git does not track                    1 card
+#   2026-10-27  a frozen `NOW` fixture asserted against `mf.main()`, which
+#               reads the clock with no seam                       1 card
+#
+# THREE OF THE FOUR say nothing about whether capture writes correct rows, and
+# all four could stop it. So the gate is now opt-in — `capture_critical`,
+# applied automatically from the import graph — and the tests that do NOT gate
+# run here.
+#
+# ── WHY A SEPARATE WORKFLOW AND NOT A `continue-on-error` STEP ──────────────
+#
+# They ran as a `continue-on-error` step inside `daily-picks` once, and the
+# critical-step alert then exited 1 on that step's outcome — so ONE RUN
+# carried TWO FACTS, and a human reading red could not tell "the card was
+# lost" from "something else failed". That inability is what cost six cards on
+# 2026-10-13..18. The repair was to give the other fact its own workflow, and
+# this is the same repair for the same reason.
+#
+# ── AND NOT `reminders.yml` EITHER, THOUGH IT ALREADY RUNS NON-GATING TESTS ─
+#
+# That workflow's classifier reads a pytest exit of 1 as "A REMINDER IS DUE"
+# and prints the registered `##[error]REMINDER DUE` marker, which `ci-audit`
+# treats as a deliberate red. Routing ordinary tests through it would make
+# every non-critical failure certify that a date had arrived — the same lie
+# the marker already told once, on 2026-10-22, when pytest exited on 17
+# collection errors and the classifier announced a reminder.
+#
+#   ONE MEANING PER RUN. daily-picks red = capture is at risk.
+#   reminders red = a decision is due. This red = a defect that does not
+#   touch capture.
+#
+# ── WHAT THIS ADMITS, STATED RATHER THAN DISCOVERED ─────────────────────────
+#
+# Capture can now proceed on a tree whose non-critical tests fail. The classes
+# that admits: a wrong PICK (the models, the feature engineer, the ensemble),
+# a wrong REPORT (Telegram, the paper-trading report), a broken AUDIT
+# (ci_audit, the scans), and a broken ANALYSIS (the evaluation harness, H1).
+#
+# Every one of those is RECOVERABLE: the odds row is still on disk and the
+# pick can be re-made, the report re-sent, the audit re-run. A lost or
+# corrupted odds row never backfills — the price at that moment is gone — and
+# that is the only half the gate now defends.
+#
+# FOUR REALISED LOSSES AGAINST ONE ADMITTED CLASS, and the admitted class has
+# cost nothing yet. The trade is stated here so the first time it does cost
+# something, this comment is what gets revisited rather than re-derived.
+
+on:
+  workflow_run:
+    workflows: ["Daily Betting Picks"]
+    types: [completed]
+  workflow_dispatch:
+
+# Its own group, like every other workflow here. Nothing guards the SET —
+# two different workflows may still overlap — which is recorded in
+# docs/workflow-inventory.md and is not this file's job to fix.
+concurrency:
+  group: non-gating-tests
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  non-gating:
+    runs-on: ubuntu-latest
+    # RUNS WHETHER daily-picks SUCCEEDED OR FAILED, and says which. A
+    # non-critical test's verdict does not depend on whether the card was
+    # captured, and skipping this on a red upstream would hide a defect
+    # exactly when the tree is already suspect.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # ── CAUGHT BY `test_the_config_copy_PRECEDES_the_test_run` ──────────
+      #
+      # The first version of this workflow ran pytest with NO
+      # `config/config.yaml`, and the local-vs-example tests would have
+      # SKIPPED there — silently, reporting green. A test that cannot run is
+      # not a test that passed, and a new workflow that quietly loses a class
+      # of test is the kind of thing an inversion is supposed to avoid, not
+      # introduce.
+      - name: Create directories
+        run: mkdir -p data/models logs
+
+      - name: Create config from example
+        run: cp config/config.example.yaml config/config.yaml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Say what triggered this
+        run: |
+          echo "upstream conclusion : ${{ github.event.workflow_run.conclusion || 'n/a (dispatch)' }}"
+          echo "trigger             : ${{ github.event_name }}"
+
+      - name: Run the tests that do NOT gate capture
+        # THE COMPLEMENT OF THE GATE, written as the complement rather than
+        # re-listed: the gate is
+        #   capture_critical and not calendar and not live
+        # so everything else is its negation. `calendar` and `live` are
+        # EXCLUDED here too, because they have their own carrier in
+        # `reminders.yml` and running them in two places would relay one
+        # decision twice.
+        run: >-
+          python -m pytest tests/ -v --tb=short
+          -m "not capture_critical and not calendar and not live"

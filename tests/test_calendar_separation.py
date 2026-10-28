@@ -245,20 +245,42 @@ def test_DIRECTION_2_the_correctness_suite_STILL_gates_capture():
 
 
 
-def test_the_two_WORKFLOWS_PARTITION_the_suite():
-    """`not calendar and not live` + `calendar or live` must cover every test
-    exactly once.
+def test_the_THREE_WORKFLOWS_PARTITION_the_suite():
+    """Three selections now, and together they must cover every test once.
 
     A selector that drops tests silently is worse than no split: the dropped
-    ones stop running and nothing says so. The two selections now live in two
-    workflows, so the partition is asserted across them.
+    ones stop running and nothing says so.
+
+    ── IT WAS TWO UNTIL 2026-10-28 ──────────────────────────────────────
+    The capture gate was `not calendar and not live` — EVERY test except two
+    declared markers — so each new test gated price capture by default. That
+    default was wrong four times (10-09, 10-13, 10-21, 10-27; nine cards), and
+    three of the four were clock-dependent tests that say nothing about
+    capture correctness. Gating is now OPT-IN:
+
+        daily-picks        capture_critical and not calendar and not live
+        non-gating-tests   not capture_critical and not calendar and not live
+        reminders          calendar or live
+
+    `tests/test_gate_is_opt_in.py` asserts the partition is exact by
+    enumerating node ids, which is stronger than this test's check that each
+    workflow carries its own selection. Both are kept: this one catches a
+    workflow losing its selector, that one catches the selectors ceasing to
+    partition.
     """
-    gate = [str(st.get("run", "")) for st in WF_STEPS]
-    assert any('-m "not calendar and not live"' in r for r in gate), (
-        "the capture gate's selection changed")
-    rem = [str(st.get("run", "")) for st in _steps_of(REM)]
+    gate = [" ".join(str(st.get("run", "")).split()) for st in WF_STEPS]
+    assert any('-m "capture_critical and not calendar and not live"' in r
+               for r in gate), "the capture gate's selection changed"
+    rem = [" ".join(str(st.get("run", "")).split()) for st in _steps_of(REM)]
     assert any('-m "calendar or live"' in r for r in rem), (
         "the reminder workflow does not run the complementary selection")
+    ng = [" ".join(str(st.get("run", "")).split())
+          for st in _steps_of(pathlib.Path(
+              ".github/workflows/non-gating-tests.yml"))]
+    assert any('-m "not capture_critical and not calendar and not live"' in r
+               for r in ng), (
+        "non-gating-tests does not run the gate's complement, so the 907 "
+        "tests that left the gate are running nowhere")
 
 
 

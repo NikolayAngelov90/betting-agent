@@ -103,7 +103,18 @@ WORKFLOWS = ("daily-picks.yml", "closing-lines.yml", "paper-trading-report.yml",
              # later, and eight of its red runs survived unrecorded in the
              # gap. A workflow and its registration ship together or the gap
              # happens again.
-             "reminders.yml")
+             "reminders.yml",
+             # ADDED 2026-10-28 WITH THE WORKFLOW ITSELF, same rule, and the
+             # guard enforced it: `test_every_workflow_on_disk_is_AUDITED_or_
+             # EXCLUDED` failed the moment the file existed and before it had
+             # ever run, which is the registration arriving BEFORE the first
+             # red rather than a month after it.
+             #
+             # It carries the 907 tests that no longer gate price capture. Its
+             # red means "a defect that does not touch capture" — a third
+             # distinct meaning, alongside daily-picks' "capture is at risk"
+             # and reminders' "a decision is due".
+             "non-gating-tests.yml")
 
 #: Workflow files deliberately outside the audit, each with its reason. Empty
 #: today: every workflow is audited. An entry here is a decision, not an

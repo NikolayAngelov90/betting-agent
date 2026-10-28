@@ -397,7 +397,34 @@ jobs:
         # which is the property `calendar` was created for on 2026-10-09 —
         # and a `live` test was added straight back into this gate four days
         # later. Membership is DECLARED by the marker, never inferred.
-        run: python -m pytest tests/ -v --tb=short -m "not calendar and not live"
+        # ── GATING IS OPT-IN FROM 2026-10-28. FOUR CARDS BOUGHT THIS. ────
+        #
+        # WAS `-m "not calendar and not live"`, which gated EVERY test and
+        # excluded two markers by hand. So each new test gated price capture
+        # by DEFAULT and had to be opted out, and that default has been wrong
+        # four times -- 10-09 (1 card), 10-13 (6), 10-21 (1), 10-27 (1).
+        # THREE OF THE FOUR were clock-dependent tests that say nothing about
+        # whether capture writes correct rows.
+        #
+        # `capture_critical` is applied AUTOMATICALLY from the import graph by
+        # `tests/conftest.py`, never by hand: a test is capture-critical if it
+        # imports a module on the path that WRITES a captured row. The
+        # criterion lives in `scripts/capture_critical.py`; the controls in
+        # `tests/test_gate_is_opt_in.py`.
+        #
+        # MEASURED 2026-10-28: 2,547 tests gated; 1,641 gate now; 916 moved
+        # to `non-gating-tests.yml`, where a failure reddens that workflow and
+        # cannot stop `--update`, `--settle` or `--picks`.
+        #
+        # `not calendar and not live` IS KEPT. Those two are DECLARED
+        # membership and this one is DERIVED, and they do not cover each
+        # other: `test_empty_card_suppression.py` imports a scraper (inside
+        # one test, at line 307) and is therefore capture-critical, while the
+        # test that cost the 10-09 card is `calendar`-marked. Drop the markers
+        # and that card is lost again.
+        run: >-
+          python -m pytest tests/ -v --tb=short
+          -m "capture_critical and not calendar and not live"
 
       # ── CALENDAR ASSERTIONS, OUT OF THE CAPTURE-GATING PATH (Stage 28) ────
       #
