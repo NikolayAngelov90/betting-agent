@@ -61,12 +61,16 @@ BAND_HI_MIN = BAND_LO_MIN + H1_GAP_MINUTES              # 360
 #: Terminal states. `NO_CARD` is DISTINCT from `nothing to do`, which is what
 #: the old log said for both "the card is empty" and "the card has nothing in
 #: the band" and "every league was skipped for its own reason".
-STATE_OK = "OK"
+#: ── `OK` BECAME `READY`. 2026-10-28. ─────────────────────────────────────
+#: The printed value is what a reader of the log sees, and "OK" says the
+#: CHECK succeeded while `READY` says the COLLECTION may proceed - which is
+#: the fact the state carries. The other three already name their own fact.
+STATE_READY = "READY"
 STATE_NO_CARD = "NO_CARD"
 STATE_NO_FIXTURE_IN_BAND = "NO_FIXTURE_IN_BAND"
 STATE_UNEVALUATED = "UNEVALUATED"
 
-PRECONDITION_STATES = (STATE_OK, STATE_NO_CARD, STATE_NO_FIXTURE_IN_BAND,
+PRECONDITION_STATES = (STATE_READY, STATE_NO_CARD, STATE_NO_FIXTURE_IN_BAND,
                        STATE_UNEVALUATED)
 
 
@@ -82,7 +86,7 @@ class Precondition(NamedTuple):
 
     @property
     def can_collect(self) -> bool:
-        return self.state == STATE_OK
+        return self.state == STATE_READY
 
 
 def evaluate(session, leagues, now: Optional[_dt.datetime] = None,
@@ -133,6 +137,29 @@ def evaluate(session, leagues, now: Optional[_dt.datetime] = None,
             f"are fixtures. `matches` is written by `daily-picks --update`; "
             f"if that has not run, H1 has nothing to sample. This is NOT "
             f"'nothing to do'.")
+    elif not lg:
+        # ── "NOT PINNED" MEANS ALL, NOT NONE. 2026-10-28. ─────────────────
+        #
+        # `league = ANY(:lg)` with an empty list matches NOTHING, so an
+        # unpinned run scored `band_pinned = 0` and reported
+        # NO_FIXTURE_IN_BAND on a card full of in-band fixtures. The loop
+        # prints "pinned leagues: ALL (not pinned)" for that case, so the two
+        # disagreed about what an empty list meant.
+        #
+        # An empty selection is not an empty set of fixtures -- the same rule
+        # the reminders classifier needed, where `0 == 0` satisfied an
+        # equality and an empty selection had to be checked FIRST.
+        band_pinned = band_n
+        state, why = ((STATE_READY, f"{band_n} fixture(s) in "
+                       f"({band[0]},{band[1]}] minutes across ALL leagues "
+                       f"(none pinned), of {as_fix} on the card")
+                      if band_n else
+                      (STATE_NO_FIXTURE_IN_BAND,
+                       f"NO FIXTURE IN BAND: {as_fix} fixture(s) on the card "
+                       f"and {band_n} in ({band[0]},{band[1]}] minutes, with "
+                       f"no league pinned so ALL were considered. A fixture "
+                       f"nearer than {band[0]} min cannot carry {H1_ROUNDS} "
+                       f"instants at {H1_GAP_MINUTES}-minute gaps."))
     elif band_pinned == 0:
         state, why = STATE_NO_FIXTURE_IN_BAND, (
             f"NO FIXTURE IN BAND: {as_fix} fixture(s) on the card, {band_n} "
@@ -142,7 +169,7 @@ def evaluate(session, leagues, now: Optional[_dt.datetime] = None,
             f"{H1_GAP_MINUTES}-minute gaps, so counting the WINDOW overstates "
             f"what is collectable.")
     else:
-        state, why = STATE_OK, (
+        state, why = STATE_READY, (
             f"{band_pinned} pinned fixture(s) in ({band[0]},{band[1]}] "
             f"minutes, of {band_n} in band and {as_fix} on the card")
     return Precondition(state, int(total), int(as_fix), int(band_n),
@@ -269,7 +296,7 @@ def project_from_proxy(session) -> dict:
     # makes DATE the cluster and voids the sizing that produced 33-39.
     best_T = max(sweep, key=lambda T: (sweep[T]["dates"], sweep[T]["n"]))
     r = sweep[best_T]
-    return {"state": STATE_OK if (r["n"] >= 33 and r["dates"] >= 5)
+    return {"state": STATE_READY if (r["n"] >= 33 and r["dates"] >= 5)
             else STATE_NO_FIXTURE_IN_BAND,
             "verdict": "GO" if (r["n"] >= 33 and r["dates"] >= 5) else "NO-GO",
             "proxy": f"{a}..{b}", "provenance": PROXY_PROVENANCE,
@@ -349,7 +376,7 @@ def main() -> int:
                 "  WHERE observed_at >= :a AND observed_at < :b "
                 "  GROUP BY match_id HAVING count(DISTINCT observed_at) >= 3"
                 ") t"), {"a": d, "b": nxt}).scalar() or 0
-            state = STATE_OK if traj else (
+            state = STATE_READY if traj else (
                 STATE_NO_CARD if fx == 0 else STATE_NO_FIXTURE_IN_BAND)
             rows.append(ZeroDay(d, int(fx), int(traj), state,
                                 p.reason if d == today else
@@ -409,6 +436,126 @@ def main() -> int:
 #: `measured` 2026-10-28 from the proxy week. Rounds x leagues under the
 #: reservation: 168 credits / 2 = 84 requests over 8 days = 10.5/day, and at
 #: H1_ROUNDS rounds that prices 3 leagues a day.
+#: ── THE FIFA WINDOW, CHECKED 2026-10-28 AND NOT DEFERRED ─────────────────
+#:
+#: It was the proxy's largest stated risk, it is PUBLISHED EXTERNALLY, and a
+#: published fact is checked when it is knowable rather than when it binds.
+#: Not inferred from our own fixture table, which has a ZERO-DAY forward
+#: horizon and could not answer.
+#:
+#:   men's window, November 2026   9-17 November 2026
+#:       source: en.wikipedia.org/wiki/FIFA_International_Match_Calendar,
+#:       fetched 2026-10-28 ("9-17 November 2026", 2 matches); corroborated
+#:       by beinsports.com and the CONCACAF Nations League League A
+#:       quarter-finals, dated 9-17 November 2026.
+#:
+#:   men's window, November 2025   10-18 November 2025
+#:       source: search consensus 2026-10-28 across fan/aggregator sites, so
+#:       LOWER CONFIDENCE than the 2026 figure and labelled as such. It is
+#:       used only to establish the proxy's comparability, not any projection.
+#:
+#: THE VERDICT ON THE EIGHT DATES: 2026-11-01..11-08 is entirely OUTSIDE the
+#: window, which opens 11-09. The margin is ONE DAY, and 11-09 is also the
+#: reservation's exclusive end date -- the collection sits exactly in the
+#: club-football gap before the break.
+#:
+#: THAT IS LUCK AND IS RECORDED AS LUCK. The window was derived from the
+#: credit reset plus the pre-registered eight days; nobody checked the FIFA
+#: calendar when choosing it. One day later on either count and the last
+#: collection days would have fallen into the break.
+#:
+#: AND IT STRENGTHENS THE PROXY RATHER THAN MERELY CLEARING THE RISK. The
+#: proxy week 2025-11-01..11-08 sits in the SAME POSITION RELATIVE TO THE
+#: BREAK -- the eight club days immediately before a November international
+#: window (2025's opened 11-10). The two weeks are aligned on this axis, not
+#: just on the calendar.
+#:
+#: WHAT IS STILL OPEN: the window's edge effects. Clubs release players before
+#: it opens, so the final pre-break weekend can carry a thinner or
+#: rescheduled card in some leagues. The precondition checks the live card on
+#: the day; this check buys the ability to act in advance, and does not
+#: replace it.
+#: ── THE START TIME, DERIVED FROM BOTH ENDS. 2026-10-28. ─────────────────
+#:
+#: T = 14:00 UTC. Rounds fire at 14:00 / 16:00 / 18:00 and the band is
+#: (18:00, 20:00].
+#:
+#: LATE END - the card must EXIST before T. `measured` 2026-10-28 over the
+#: NEW-CRON regime only (`0 1` weekday / `30 0` weekend, runs 10-23..10-28,
+#: n=6): lateness mean 281.6 max 325.5 min; duration mean 41.2 max 65.2 min.
+#:
+#:     weekday  card-ready  max 07:30   CLEARANCE +389 min
+#:              card-ready  m+3sd 08:02 CLEARANCE +358 min
+#:     weekend  card-ready  max 07:00   CLEARANCE +419 min
+#:              card-ready  m+3sd 07:32 CLEARANCE +388 min
+#:
+#: The duration term is run END, not time-to-picks, so every figure above is
+#: CONSERVATIVE: the card exists before the run finishes. Regimes are not
+#: pooled - the pre-10-22 runs sat under three different crons and mixing them
+#: gave a 128-870 minute spread that supported nothing.
+#:
+#: EARLY END - the band must land on REAL kickoffs. A fixture kicking off
+#: before the LAST round yields no trajectory, so the binding quantity is the
+#: gap between the last round (18:00) and the earliest in-band kickoff.
+#: `measured` on the proxy week: earliest in-band kickoff 19:00, latest 20:00,
+#: 81 in-band fixtures.
+#:
+#:     CLEARANCE from the last round  +60 min
+#:
+#: SO THE EARLY END BINDS, AT +60 MINUTES, and the late end has 358 to spare.
+#: A fixture would have to be rescheduled an hour EARLIER to be lost. Moving T
+#: later does not buy early-end margin, because the band moves with it.
+H1_START_MIN_UTC = 14 * 60
+H1_CLEARANCE_LATE_MIN = 358      #: weekday, mean+3sd, the tighter statistic
+H1_CLEARANCE_EARLY_MIN = 60      #: last round -> earliest in-band kickoff
+H1_START_PROVENANCE = (
+    "measured 2026-10-28: late end from the new-cron regime n=6 "
+    "(lateness mean 281.6 max 325.5; duration mean 41.2 max 65.2, run END so "
+    "conservative); early end from the proxy week's earliest in-band kickoff "
+    "at 19:00 against a last round at 18:00")
+
+#: ── OVERLAP: "NONE" IS NOT ACHIEVABLE, SO THE COST IS MEASURED INSTEAD ───
+#:
+#: `measured` 2026-10-28 over the new-cron regime, occupancy against
+#: 14:00-18:00: `paper-trading-report` ran 14:02-16:49 (n=5), `closing-lines`
+#: 00:31-23:50 (n=22), `ci-audit` 00:32-23:52 (n=40), `reminders` 05:16-19:06
+#: (n=13). Scheduled `daily-picks` ends by 07:05, but a DISPATCHED one ended
+#: at 13:57 - three minutes before T.
+#:
+#: GitHub fires this repo's crons 3-5 HOURS LATE, so no choice of T can
+#: guarantee non-overlap, and every workflow declares its own concurrency
+#: group while NOTHING GUARDS THE SET. So the question is what overlap costs:
+#:
+#:   CREDIT CONTENTION - SOLVED, by the two-sided allocation shipped
+#:       2026-10-28. H1 cannot take normal pricing's share and normal pricing
+#:       cannot take H1's, in either order, with nothing stranded.
+#:
+#:   OBSERVATION CONTAMINATION - BOUNDED, and the grain is the whole answer.
+#:       At FIXTURE-DAY grain the in-band data looked alarming: 67-103
+#:       distinct instants per fixture-day. At SERIES grain - the unit
+#:       `qualifying_triple` actually sees - all 1,939 in-band series-days
+#:       carry EXACTLY ONE instant and ZERO carry three. An existing writer
+#:       therefore cannot manufacture a trajectory.
+#:
+#:       THE RESIDUAL, in the inflating direction: if H1 completes only 2 of
+#:       3 rounds, one foreign instant could supply the third and the triple
+#:       would count. Narrow, measured at one foreign instant per series-day,
+#:       and recorded rather than closed.
+#:
+#:   RUNNER CONTENTION - not a correctness question; GitHub runs jobs in
+#:       parallel.
+H1_OVERLAP_PROVENANCE = (
+    "measured 2026-10-28; credit contention closed by the allocation, "
+    "observation contamination bounded at series grain (0 of 1,939 in-band "
+    "series-days carry 3 instants), residual is the 2-of-3 completion path")
+
+FIFA_WINDOW_NOV_2026 = ("2026-11-09", "2026-11-17")
+FIFA_WINDOW_NOV_2025 = ("2025-11-10", "2025-11-18")
+FIFA_WINDOW_SOURCE = (
+    "en.wikipedia.org/wiki/FIFA_International_Match_Calendar, fetched "
+    "2026-10-28; corroborated by beinsports.com. The 2025 dates are search "
+    "consensus only and carry lower confidence.")
+
 PROXY_WEEK = ("2025-11-01", "2025-11-09")
 PROXY_PROVENANCE = (
     "measured 2026-10-28 over 291 matches / 23 leagues / 8 dates in "

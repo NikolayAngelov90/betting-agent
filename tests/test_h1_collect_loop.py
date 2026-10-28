@@ -92,7 +92,20 @@ def _spend_h1(mgr, credits):
 
 @pytest.fixture
 def wired(tmp_path, monkeypatch):
-    """A database the loop reads, with the clock and sleeps observable."""
+    """A database the loop reads, with the clock and sleeps observable.
+
+    THE PRECONDITION IS STUBBED TO `READY` HERE, and the reason matters. These
+    tests are about the LOOP -- which rounds run, which waits are skipped,
+    where the stop is checked -- while the precondition reads the REAL clock
+    and these fixtures are seeded relative to a frozen `NOW`. Leaving it live
+    made every one of them halt before round 1 with NO_FIXTURE_IN_BAND, which
+    is a true statement about the wrong subject.
+
+    SO THE WIRING GETS ITS OWN TEST:
+    `test_the_PRECONDITION_IS_CONSULTED_BEFORE_ANY_SPEND` below drives the
+    real one. A stub that hides the thing it stands in for is how
+    `h1_precondition` came to exist, pass its own tests, and never be called.
+    """
     mgr = _mgr(tmp_path)
     with mgr.get_session() as s:
         _seed_fixture(s, 1, NOW + timedelta(minutes=200))
@@ -107,6 +120,12 @@ def wired(tmp_path, monkeypatch):
 
     slept: list[int] = []
     monkeypatch.setattr(h1c.time, "sleep", lambda s_: slept.append(s_))
+    import scripts.h1_precondition as _pre
+    monkeypatch.setattr(
+        _pre, "evaluate",
+        lambda *a, **k: _pre.Precondition(
+            _pre.STATE_READY, 1, 1, 1, 1,
+            (_pre.BAND_LO_MIN, _pre.BAND_HI_MIN), (), "stubbed READY"))
     return mgr, slept, monkeypatch
 
 
@@ -395,19 +414,43 @@ def test_the_H1_SCHEDULE_IS_DISABLED_and_the_cron_rationale_is_HISTORY():
     wf = yaml.safe_load(pathlib.Path(".github/workflows/h1-collect.yml")
                         .read_text(encoding="utf-8"))
     on = wf.get("on") or wf.get(True)
-    assert "schedule" not in on, (
-        "H1 is scheduled again. Its window closed 2026-10-17 and a scheduled "
-        "run spent 8 credits from the normal pricing pool three days later. "
-        "Re-enabling needs the 2026-11-01 decision and a fresh "
-        "pre-registration -- not a resumption of the closed experiment.")
+    # ── THE RE-ENABLE CONDITION THIS PIN NAMED IS NOW MET. 2026-10-28. ────
+    #
+    # It asserted `"schedule" not in on` and stated its own release clause:
+    # "Re-enabling needs the 2026-11-01 decision and a fresh
+    # pre-registration -- not a resumption of the closed experiment." Both
+    # hold: Niki chose the re-run, the window is 2026-11-01..11-08 with its
+    # own pre-registration, and the credit leak that motivated the disable is
+    # structurally impossible now -- the two-sided allocation refuses H1 the
+    # normal pool and refuses normal operation H1's share, proved by refusal.
+    #
+    # So the pin flips from "must be absent" to "must be the DERIVED one",
+    # which is a stronger assertion than the one it replaces: it pins the
+    # cron's VALUE, not merely its absence.
+    assert "schedule" in on, (
+        "H1 is unscheduled again. The re-run window is 2026-11-01..11-08 and "
+        "a dispatch-only trigger means someone must remember to fire it on "
+        "eight consecutive mornings.")
+    crons = [c["cron"] for c in on["schedule"]]
+    assert crons == ["30 9 1-8 11 *"], (
+        f"the H1 cron is {crons}, not the derived `30 9 1-8 11 *`. The "
+        f"nominal is the TARGET MINUS THE MEASURED LATENESS (14:00 - 281.6 "
+        f"min), and `30 9` scored P(n>=33)=0.999 against 0.891 for `0 9` in "
+        f"a 20,000-trial resample of the measured n=6 lateness series. The "
+        f"day-of-month and month fields scope it to the window so it cannot "
+        f"fire past it, which is how 8 credits leaked in October.")
     assert "workflow_dispatch" in on, (
         "dispatch was removed too, so the re-run decision cannot be executed "
         "without a push")
     src = pathlib.Path(".github/workflows/h1-collect.yml").read_text(
         encoding="utf-8")
+    # THE OCTOBER LEAK STAYS RECORDED even though the schedule is back: it is
+    # why the cron is scoped to `1-8 11` instead of firing daily.
     for part in ("SCHEDULE DISABLED 2026-10-20", "8 TheOddsAPI CREDITS",
                  "normal_ceiling: 350", "39435238427"):
         assert part in src, f"the disable no longer records {part!r}"
+    for part in ("30 9 1-8 11 *", "P(n>=33)", "281.6"):
+        assert part in src, f"the derivation no longer records {part!r}"
 
 
 def test_the_scheduled_path_pins_the_MEASURED_league_set():

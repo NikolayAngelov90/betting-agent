@@ -53,11 +53,31 @@ from scripts.capture_critical import (
 
 #: `measured` 2026-10-28 by `scripts/capture_critical.py`.
 #:
+#: ── 69 -> 71, AND IT IS THE CRITERION'S KNOWN COST ───────────────────────
+#:
+#: `test_h1_analysis_path.py` and `test_h1_precondition.py` both build a
+#: SYNTHETIC SQLite database, so both import `src.data.models` and
+#: `src.data.database` and the criterion marks them capture-critical. The gate
+#: grew 1,641 -> 1,668 for 27 tests about H1's input guard and analysis path,
+#: neither of which says anything about whether capture writes correct rows.
+#:
+#: THAT IS OVER-SELECTION AND IT IS ACCEPTED RATHER THAN GAMED. The criterion
+#: is import-based at FILE grain with one hop, and any test that stands up a
+#: database satisfies it. Splitting files to dodge the import would make the
+#: set a hand-curated list again -- the `LIVE_NAMES` shape -- and a list is
+#: what this replaced.
+#:
+#: THE DIRECTION OF THE ERROR IS THE SAFE ONE: over-selection keeps a test in
+#: the gate that need not be there, which costs gate time. Under-selection
+#: lets a capture defect through, which costs a card. 27 tests of gate time
+#: against nine cards is the trade, and it is the same trade stated in
+#: `non-gating-tests.yml`.
+#:
 #: 131 -> 132 files and 62 -> 63 non-critical when THIS FILE was added, and
 #: it is correctly non-critical: a test about the gate does not import the
 #: write path, so it must not be able to stop capture. `capture_critical`
 #: is unchanged at 69.
-CENSUS = {"files": 132, "capture_critical": 69, "not_critical": 63}
+CENSUS = {"files": 133, "capture_critical": 71, "not_critical": 62}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -269,11 +289,10 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     selection with this file, for 923.
     """
     gate, nong = _ids(GATE_EXPR), _ids(NON_GATING_EXPR)
-    assert len(gate) == 1641, (
-        f"the gating selection is {len(gate)}, recorded 1641 — say what moved")
-    # 907 -> 923 when this file was added: its own 16 tests are non-gating.
-    assert len(nong) == 923, (
-        f"the non-gating selection is {len(nong)}, recorded 923")
+    assert len(gate) == 1671, (
+        f"the gating selection is {len(gate)}, recorded 1671 — say what moved")
+    assert len(nong) == 911, (
+        f"the non-gating selection is {len(nong)}, recorded 911")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 
@@ -340,3 +359,151 @@ def test_THE_CLOCK_READER_GAP_IS_ROUTED_AROUND_AND_SAYS_SO():
     assert scan.SEAMLESS_READERS, (
         "the enumeration was deleted; the gap is routed around, not closed, "
         "so the record of it stays")
+
+
+# ════════ TWO PINS FROM THIS WEEK — PART D, 2026-10-28 ══════════════════
+
+def test_PIN_1_the_MARKED_SELECTION_IS_NON_EMPTY():
+    """A selection returning zero items is `UNEVALUATED`, not an empty one.
+
+    `-m capture_critical` selected NOTHING and reported no error, because
+    Python kept only the last `pytest_collection_modifyitems` and the marker
+    hook was the third defined. Everything looked fine: pytest printed
+    "no tests collected", exit 0 on `--collect-only`, and the gate would have
+    run an EMPTY suite and passed.
+
+        A GATE THAT SELECTS NOTHING PASSES. That is the worst possible
+        failure mode for a guard, and it is indistinguishable from a clean
+        tree unless the count itself is asserted.
+    """
+    gate = _ids(GATE_EXPR)
+    assert gate, (
+        "the capture-critical selection is EMPTY. That is UNEVALUATED, not a "
+        "clean gate: `Run tests` would run no tests and pass. Check that "
+        "tests/conftest.py has exactly ONE "
+        "pytest_collection_modifyitems and that it still applies the marker.")
+    assert len(gate) > 1000, (
+        f"the gating selection fell to {len(gate)}; 1,641 was measured "
+        f"2026-10-28 and a collapse to a handful means the marker is being "
+        f"applied to almost nothing")
+
+
+def test_PIN_1_CONTROL_a_SECOND_HOOK_IS_DETECTED_AS_DEAD():
+    """The known-wrong control: define two hooks, and the earlier must be
+    identified as the dead one.
+
+    This is the detection, run against a planted module rather than against
+    `conftest.py` — a guard that can only check one file has not been shown to
+    work.
+    """
+    import ast as _ast
+    import textwrap
+
+    def live_and_dead(src):
+        """`(live_lineno, [dead_linenos])` for a module's hook definitions."""
+        tree = _ast.parse(textwrap.dedent(src))
+        hooks = [n for n in tree.body
+                 if isinstance(n, _ast.FunctionDef)
+                 and n.name == "pytest_collection_modifyitems"]
+        if not hooks:
+            return None, []
+        return hooks[-1].lineno, [h.lineno for h in hooks[:-1]]
+
+    planted = '''
+        def pytest_collection_modifyitems(config, items):
+            items.append("first")
+
+        def pytest_collection_modifyitems(config, items):
+            items.append("second")
+    '''
+    live, dead = live_and_dead(planted)
+    assert dead, "two hooks were defined and neither was reported dead"
+    assert len(dead) == 1 and dead[0] < live, (live, dead)
+
+    # THE POSITIVE CONTROL: one hook is not reported dead
+    live1, dead1 = live_and_dead('''
+        def pytest_collection_modifyitems(config, items):
+            items.append("only")
+    ''')
+    assert live1 and dead1 == [], (live1, dead1)
+
+    # and no hook at all is distinguishable from one hook
+    live0, dead0 = live_and_dead("x = 1\n")
+    assert live0 is None and dead0 == [], (live0, dead0)
+
+    # the live file has exactly one, by the same function. ANCHORED: an
+    # emptiness claim about a haystack that is not the right one verifies
+    # nothing, and `live_c is not None` does not count as an anchor because
+    # it is checked AFTER the parse rather than establishing the input.
+    # Asserted INLINE rather than through `tests.conftest.anchored`:
+    # importing conftest reaches the write path through its database fixtures
+    # and would make the test ABOUT the gate capture-critical, which is what
+    # this change exists to avoid. Same reason as
+    # `test_the_MARKER_IS_APPLIED_AUTOMATICALLY_not_written_by_hand`.
+    conf = pathlib.Path("tests/conftest.py").read_text(encoding="utf-8")
+    assert "def pytest_collection_modifyitems" in conf, (
+        "UNEVALUATED: tests/conftest.py holds no collection hook at all, so "
+        "an emptiness claim about its dead ones verifies nothing")
+    live_c, dead_c = live_and_dead(conf)
+    assert live_c is not None, "conftest has no collection hook at all"
+    assert dead_c == [], (
+        f"conftest.py has dead hook(s) at line(s) {dead_c}; Python keeps only "
+        f"the one at line {live_c} and the others never run")
+
+
+#: ── PIN 2 ────────────────────────────────────────────────────────────────
+#:
+#: > **Before optimising a duration term, establish that everything in it
+#: > belongs there.**
+#:
+#: TWO INSTANCES, a week apart, and both were the same mistake: a term was
+#: taken as given and then minimised, when the first question was whether its
+#: contents belonged to it at all.
+#:
+#:   2026-10-20  THE MARGIN'S DURATION TERM measured run START to run END,
+#:               so it charged the card for the POST-PICKS results scrape --
+#:               mean 12.8 min, max 49.6 min, n=111. Correcting the term
+#:               recovered 14.6 of 19.8 minutes WITH NO STEP GETTING FASTER.
+#:               Work had been done to speed up a run that was already fast
+#:               enough; the measurement was wrong, not the code.
+#:
+#:   2026-10-28  THE CAPTURE GATE ran 2,547 tests, of which 906 had nothing
+#:               to do with whether capture writes correct rows. Removing
+#:               them took the gate from 8m01s to 3m05s -- again with NO TEST
+#:               GETTING FASTER. And the same term had already been
+#:               "optimised" by parallelising the Claude review, which bought
+#:               +30.5 minutes of margin by cutting spread.
+#:
+#: THE RULE IS CHEAPER THAN EITHER FIX. Both times the question "does
+#: everything in this term belong here" was answerable in minutes from data
+#: already on disk, and both times it returned a larger saving than the
+#: optimisation it would have replaced.
+DURATION_TERM_INSTANCES = (
+    ("2026-10-20", "the margin's duration term charged the card for the "
+                   "post-picks scrape (mean 12.8m, max 49.6m, n=111); "
+                   "correcting it recovered 14.6 of 19.8 min with no step "
+                   "getting faster"),
+    ("2026-10-28", "the capture gate ran 906 tests unrelated to capture; "
+                   "removing them took it from 8m01s to 3m05s with no test "
+                   "getting faster"),
+)
+
+
+def test_PIN_2_the_DURATION_TERM_RULE_is_recorded_with_BOTH_instances():
+    """A rule with one instance is an anecdote. This one has two, a week
+    apart, and the second was found by applying it rather than by being
+    bitten again."""
+    assert len(DURATION_TERM_INSTANCES) == 2, DURATION_TERM_INSTANCES
+    dates = [d for d, _ in DURATION_TERM_INSTANCES]
+    assert dates == sorted(dates), "the instances are not in date order"
+    for when, what in DURATION_TERM_INSTANCES:
+        assert len(what) > 80, f"{when} is too vague to be an instance"
+        assert "no step getting faster" in what or \
+               "no test getting faster" in what, (
+            f"{when} does not record the diagnostic property: the saving came "
+            f"from the TERM being wrong, not from the work being slow")
+    # the gate figure is the one this file can check for itself
+    gate, nong = _ids(GATE_EXPR), _ids(NON_GATING_EXPR)
+    assert len(nong) >= 900, (
+        f"only {len(nong)} tests are outside the gate; the 2026-10-28 "
+        f"instance rests on 906 having left it")

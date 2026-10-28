@@ -3,6 +3,8 @@
 import os
 import pathlib
 
+import pytest
+
 
 # ─────────────── THE `calendar` MARKER (Stage 28, 2026-10-09) ───────────────
 #
@@ -101,6 +103,39 @@ os.environ.setdefault("BETTING_AGENT_ALLOW_SQLITE", "1")
 # re-briefed those rows. Remove the var at import (before any test constructs a
 # DatabaseManager) so every test falls back to a local/temp SQLite database.
 os.environ.pop("DATABASE_URL", None)
+
+
+# ── AND IT IS RE-CHECKED AFTER EVERY TEST. 2026-10-28. ──────────────────────
+#
+# The strip above runs ONCE, at import. A test that drives a script's `main()`
+# can put DATABASE_URL back: `h1_collect._load_env` calls `load_dotenv()`, and
+# every entry point here does the same thing inside its main() for the
+# documented reason that an IMPORT-time load would undo this strip. Reached
+# from a test, the call-time version undoes it just as well.
+#
+# WHAT THAT COST, 2026-10-28: a new test drove `h1_collect.main()`, PASSED,
+# and left DATABASE_URL set for the rest of the session. The failure surfaced
+# as `assert not mgr.is_postgres` in a DIFFERENT FILE's fixture -- six errors
+# in `test_h1_collect_loop`, which had nothing to do with the change. The
+# fixture guard did its job and no production write happened; what it could
+# not do is say WHO put the variable back.
+#
+#     A guard that fires in a later test names the wrong test.
+#
+# So this one fires on the test that did it, and re-strips so the rest of the
+# session is not lost as well.
+@pytest.fixture(autouse=True)
+def _no_database_url_leak():
+    yield
+    leaked = os.environ.pop("DATABASE_URL", None)
+    assert leaked is None, (
+        "this test put DATABASE_URL back into the environment, so every "
+        "DB-backed test after it would have reached PRODUCTION. Something it "
+        "called loaded `.env` -- almost certainly a script's `main()` or a "
+        "`_load_env()` helper. Stub that loader "
+        "(`monkeypatch.setattr(mod, '_load_env', lambda: None)`) rather than "
+        "letting the strip be undone. It has been re-stripped for the "
+        "remaining tests.")
 
 
 # SAFETY, the filesystem twin of the DATABASE_URL strip above — and it covers

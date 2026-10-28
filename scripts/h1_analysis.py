@@ -317,7 +317,8 @@ def influence_check(rows: List[dict]) -> List[str]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--since", help="ISO date; default 2026-10-01, the reset")
+    ap.add_argument("--since",
+                    help="ISO date; defaults to the reservation's own start")
     ap.add_argument("--days", type=int)
     ap.add_argument("--allow-sqlite", action="store_true")
     args = ap.parse_args(argv)
@@ -336,7 +337,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     elif args.since:
         since = datetime.fromisoformat(args.since)
     else:
-        since = datetime(2026, 10, 1)
+        # ── DERIVED FROM THE RESERVATION, NOT A LITERAL. 2026-10-28. ──────
+        #
+        # THIS WAS `datetime(2026, 10, 1)` — October's credit reset — and it
+        # became a defect the moment the window moved. With the upper clamp at
+        # `H1_WINDOW_TO` = 2026-11-09, the default population would have been
+        # 2026-10-01..2026-11-09: five weeks of NORMAL-PRICING snapshots
+        # counted as H1 observations, inflating n in the direction that
+        # licenses an analysis.
+        #
+        # THE THIRD HALF-MOVE FOUND TODAY. The window lives in `odds_quota`;
+        # `h1_collection_check` re-types both ends (guarded by a test); the
+        # collect loop's fixtures were pinned to the old dates; and this
+        # default was a third copy nobody had noticed. Both edges now come
+        # from the same place.
+        from src.data.odds_quota import H1_RESERVATION_FROM
+        since = datetime.combine(H1_RESERVATION_FROM, datetime.min.time())
 
     from src.data.database import get_db
     db = get_db()

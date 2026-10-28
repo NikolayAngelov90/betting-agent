@@ -197,6 +197,48 @@ def main(argv=None) -> int:
     pinned = [x.strip() for x in args.leagues.split(",") if x.strip()] or None
     print(f"  pinned leagues      : {pinned if pinned else 'ALL (not pinned)'}")
 
+    # ── THE INPUT PRECONDITION, BEFORE ANY SPEND. 2026-10-28. ──────────────
+    #
+    # IT WAS NEVER WIRED. `h1_precondition.evaluate` existed, had four states
+    # and its own tests, and the collection loop did not call it — so the
+    # first attempt spent credits on days whose card was 8, 4 and 1 fixtures
+    # and skipped even those, and the REASON was never recorded. PNC-1 again:
+    # a producer with no consumer looks like a working feature.
+    #
+    # THE REASON IS CAPTURED HERE, AT THE INSTANT OF THE DECISION, and that is
+    # the whole point. `is_fixture` is flipped later by the post-picks scrape,
+    # so a reason re-derived afterwards is not recoverable — which is exactly
+    # why the first attempt's answer was lost.
+    #
+    # FOUR STATES, PRINTING DIFFERENTLY, and "nothing to do" is not one of
+    # them: NO_CARD (daily-picks has not written the card), NO_FIXTURE_IN_BAND
+    # (there is a card and nothing in it can carry three instants), READY, and
+    # UNEVALUATED (the question could not be asked, which is NOT a clean
+    # precondition).
+    from scripts.h1_precondition import (PRECONDITION_STATES, STATE_READY,
+                                         evaluate as _pre_evaluate,
+                                         format_precondition)
+    from src.data.database import get_db as _get_db
+    try:
+        with _get_db().get_session() as _s:
+            pre = _pre_evaluate(_s, pinned or [])
+    except Exception as exc:                            # noqa: BLE001
+        print(f"  H1_PRECONDITION state=UNEVALUATED — "
+              f"{type(exc).__name__}: "
+              f"{str(exc).splitlines()[0][:120]}")
+        print("  REFUSING to spend: a precondition that could not be "
+              "evaluated is not a precondition that passed.")
+        return 1
+    print()
+    print(format_precondition(pre))
+    assert pre.state in PRECONDITION_STATES, pre.state
+    if pre.state != STATE_READY:
+        print(f"  NOT COLLECTING — {pre.state}. No credit claimed, no "
+              f"request made. The reason above was captured NOW, before the "
+              f"post-picks scrape can flip `is_fixture` and make it "
+              f"unrecoverable.")
+        return 0
+
     spent_total = 0
     instants: list[datetime] = []
     for rnd in range(1, args.rounds + 1):

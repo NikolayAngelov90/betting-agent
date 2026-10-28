@@ -130,6 +130,49 @@ on:
   # `workflow_dispatch` is KEPT so the 2026-11-01 re-run decision can be
   # executed without a push. RE-ENABLE CONDITION: that decision, taken
   # deliberately, with a fresh pre-registration — not a resumption of this one.
+  #
+  # ── THE RE-ENABLE CONDITION IS MET. 2026-10-28. ─────────────────────────
+  #
+  # Niki chose the re-run; the window is 2026-11-01..11-08 with its own
+  # pre-registration; the collection defect that starved the first attempt is
+  # fixed; and the reservation is now an ALLOCATION proved by refusal.
+  #
+  # `30 9 1-8 11 *` — AND EVERY FIELD IS DERIVED.
+  #
+  # THE START IS A DISTRIBUTION, NOT A TIME. GitHub fires this repo's crons
+  # 3-5 HOURS LATE, so the nominal is the TARGET MINUS THE MEASURED LATENESS,
+  # never the target. `measured` 2026-10-28, new-cron regime only (n=6):
+  # lateness min 260.9, mean 281.6, max 325.5 min. A `0 14` cron would have
+  # STARTED at 18:20-19:25 and the band would have missed the card entirely.
+  #
+  # WHY 09:30 AND NOT 09:00. `simulated` 2026-10-28, 20,000 trials resampling
+  # that measured series INDEPENDENTLY PER DAY — because each day draws its
+  # own lateness, and a bad draw on one day does not ruin the others:
+  #
+  #     cron     start window     p5   median   P(n>=33)   P(n>=39)
+  #     `0 9`    13:20-14:25      27     46      0.891      0.867
+  #     `20 9`   13:40-14:45      29     46      0.809      0.735
+  #     `30 9`   13:50-14:55      45     69      0.999      0.995
+  #
+  # A THIRTY-MINUTE SHIFT MOVES FLOOR-CLEARING FROM 89% TO 99.9%, because the
+  # kickoff distribution is lumpy — it clusters at 19:00, 19:45 and 20:00, so
+  # a band edge landing just before or just after a cluster changes the day's
+  # count by a factor of two.
+  #
+  # AND THE FIRST CUT OF THIS WAS WRONG IN THE PESSIMISTIC DIRECTION: holding
+  # ONE start time across all eight days gave a worst case of n=31 on 7 dates
+  # — below the floor — for every candidate cron. That model is not the
+  # experiment: the days are independent draws. Correcting it moved `30 9`
+  # from NO-GO to P=0.999.
+  #
+  # `1-8 11` SCOPES IT TO THE WINDOW rather than relying on the reservation to
+  # refuse. Outside the window the stop WOULD halt it spending nothing —
+  # reservation 0 means bound 0 and `0 >= 0` fires RESERVATION_EXHAUSTED — but
+  # a cron that fires every day for ever and is stopped by a guard is how this
+  # workflow came to run three days past its last window. The calendar is the
+  # on/off switch on both sides.
+  schedule:
+    - cron: '30 9 1-8 11 *'
 
   workflow_dispatch:
     inputs:
