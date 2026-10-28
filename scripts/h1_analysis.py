@@ -351,8 +351,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # collect loop's fixtures were pinned to the old dates; and this
         # default was a third copy nobody had noticed. Both edges now come
         # from the same place.
-        from src.data.odds_quota import H1_RESERVATION_FROM
-        since = datetime.combine(H1_RESERVATION_FROM, datetime.min.time())
+        # `as_datetimes()`, NOT `datetime.combine(...)` HERE. The rule the
+        # window module states is that NO CONSUMER COMPUTES A DATE FROM THE
+        # WINDOW -- and this line was computing one. The derivation lives
+        # beside the definition so there is one place for it to be wrong.
+        from src.data.h1_window import as_datetimes
+        since = as_datetimes()[0]
 
     from src.data.database import get_db
     db = get_db()

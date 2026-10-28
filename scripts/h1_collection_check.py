@@ -52,7 +52,25 @@ writes no row and changes no config.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+
+# ── THE REPO ROOT, SO A MODULE-LEVEL `src.` IMPORT IS SAFE HERE ───────────
+#
+# This module deliberately imported NOTHING from `src.` at module level: the
+# entry-point guard runs every script with `--help`, which argparse answers
+# before any work, and `python scripts/x.py` puts `scripts/` on sys.path[0]
+# rather than the repo root. So a `src.` import at module level broke the
+# script form, and two entry points are pinned in `SCRIPT_FORM_LATENT` for
+# exactly that.
+#
+# THE SUCCESSOR CONTRACT WRITTEN ON 2026-10-11 SAID: "both get the same
+# `sys.path` bootstrap `ci_audit.py` carries, AFTER 2026-10-17." That date has
+# passed and this file needs the import, so the bootstrap arrives here first.
+# `test_the_SCRIPT_form_is_either_WORKING_or_PINNED` keeps both forms honest.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.data import h1_window as _h1_window
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
@@ -77,7 +95,7 @@ CREDIT_CEILING = 200          #: the other stop condition, whichever comes first
 #: the live failure mode: the reservation would open on 11-01 while the
 #: analysis still clamped the population to the October dates, and every
 #: trajectory collected would be excluded with no error anywhere.
-_H1_WINDOW_FROM = '2026-11-01'   #: the reservation window's start, for the DID_NOT_START message
+_H1_WINDOW_FROM = _h1_window.iso()[0]   #: the window's start, for the DID_NOT_START message
 #: THE WINDOW'S END, AND IT CLOSES THE POPULATION. Added 2026-10-20 after a
 #: scheduled collection run fired THREE DAYS PAST the window and wrote rows.
 #:
@@ -92,7 +110,7 @@ _H1_WINDOW_FROM = '2026-11-01'   #: the reservation window's start, for the DID_
 #: 2026-11-01 -> 2026-11-09 exclusive (moved 2026-10-28 with the reservation;
 #: the retired October window is kept at
 #: `odds_quota.RETIRED_H1_RESERVATION_WINDOW`).
-H1_WINDOW_TO = '2026-11-09'
+H1_WINDOW_TO = _h1_window.iso()[1]
 MIN_GAP_MINUTES = 30          #: separation
 MAX_INTERVAL_RATIO = 2.0      #: comparability of the two intervals
 OVERROUND_LO = 1.005          #: below this a book is not pricing a real market
@@ -464,6 +482,28 @@ def collection_stop(*, n_fixtures: int, credits_spent: Optional[int],
     if reservation is None:
         from src.data.odds_quota import H1_RESERVED_CREDITS
         reservation = H1_RESERVED_CREDITS
+
+    # ── A WINDOW THAT STRADDLES A CREDIT RESET IS REFUSED. 2026-10-28. ───
+    #
+    # `credits_spent` comes from the ATTRIBUTED counter, which `api_budget`
+    # keys by CALENDAR MONTH. A window crossing a reset touches TWO keys and
+    # every reader here looks at one, so the spend would be understated by
+    # whatever was spent in the other month -- and understating spend against
+    # a bound means the stop does not fire. Silent, and in the direction that
+    # keeps collecting.
+    #
+    # The window does not straddle today (FROM is itself a reset), which is
+    # exactly why this is worth asserting rather than assuming: the property
+    # holds by construction now and nothing would notice if it stopped.
+    if _h1_window.straddles_a_month():
+        return CollectionStop(
+            True, "BUDGET_UNREADABLE",
+            f"the collection window {_h1_window.iso()} CROSSES a credit "
+            f"reset, touching ledger months "
+            f"{[str(k) for k in _h1_window.month_keys()]}. The attributed "
+            f"counter is keyed by one month, so the spend read against the "
+            f"bound is incomplete and this stop would not fire when it "
+            f"should. This is the bound being UNKNOWABLE, not reached.")
 
     bound = effective_bound(reservation)
     #: Which of the two supplied the bound. The registered ceiling binds only

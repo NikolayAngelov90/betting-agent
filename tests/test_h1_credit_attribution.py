@@ -51,7 +51,9 @@ allocator's first active day; 22 more are latent. A test that reads the wall
 clock states no regime.
 """
 
-from datetime import date
+from datetime import date, timedelta
+
+from src.data import h1_window as _h1_window
 
 import pytest
 
@@ -86,10 +88,18 @@ from scripts.h1_collection_check import (
 #: them, the way invariant 6b is handled.
 #:
 #: Inside the reservation window. The window is 2026-11-01..2026-11-09.
-IN_WINDOW = date(2026, 11, 1)
+#: ── DERIVED, NOT RESTATED. 2026-10-28. ───────────────────────────────────
+#: These were literals, and literals are how four sites came to be
+#: half-moved in one week. `h1_window` is the only place either date
+#: appears; a test that needs "a day inside the window" asks for one.
+#: The deliberate PINS -- BOUNDARY_DATES, WINDOW_EDGES, the ONSET pin --
+#: keep their literals on purpose: a pin that imports its own subject is
+#: a tautology. They are exempted by name in
+#: `test_every_H1_DATE_SITE_IMPORTS_rather_than_RESTATES`.
+IN_WINDOW = _h1_window.FROM
 #: Outside it, and deliberately in the SAME month so the month-key is identical
 #: and only the reservation differs.
-OUT_OF_WINDOW = date(2026, 11, 20)
+OUT_OF_WINDOW = _h1_window.UNTIL + timedelta(days=11)
 
 POOL = 400                  # 450 budget - 50 margin, production's numbers
 NORMAL_CEILING = 232        # POOL - 168

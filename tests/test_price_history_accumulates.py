@@ -12,6 +12,8 @@ Everything that can be established without waiting is established here.
 """
 
 import pathlib
+
+from tests.conftest import code_of
 import re
 
 import pytest
@@ -206,7 +208,18 @@ def test_only_DECLARED_consumers_read_the_snapshot_history():
         for path in pathlib.Path(base).rglob("*.py"):
             if path.name in _SNAPSHOT_READERS:
                 continue
-            txt = _code_lines(path.read_text(encoding="utf-8"))
+            # ── `code_of`, NOT `_code_lines`. 2026-10-28. ──────────────
+            #
+            # `_code_lines` strips COMMENTS and is blind to DOCSTRINGS, and
+            # `src/data/h1_window.py` names `odds_snapshots` in its MODULE
+            # DOCSTRING while explaining why the grain of a snapshot count
+            # decided an overlap question. The scan called it an undeclared
+            # reader.
+            #
+            # SEVENTEENTH INSTANCE of the comment-blind class, and the fifth
+            # time THIS test has had to tell prose from a query. `code_of`
+            # tokenises both away, which is the whole reason it exists.
+            txt = code_of(path.read_text(encoding="utf-8"))
             if "OddsSnapshot" in txt or "odds_snapshots" in txt:
                 offenders.append(str(path))
     assert not offenders, (

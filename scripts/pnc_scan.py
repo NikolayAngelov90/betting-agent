@@ -102,6 +102,17 @@ HUMAN_INVOKED: Dict[str, str] = {
 #:
 #: An empty reason is not accepted; the test suite asserts every entry has one.
 DECLARED_INTENTIONAL: Dict[str, str] = {
+    "src/data/h1_window.py:RETIRED":
+        "IT IS CONSUMED, and this entry records a SCAN LIMITATION rather than "
+        "an intention. `odds_quota` reads it as `_h1_window.RETIRED` through "
+        "a module alias and re-publishes it as "
+        "`RETIRED_H1_RESERVATION_WINDOW`, which is verified at runtime and by "
+        "`test_the_RETIRED_WINDOW_IS_HERE_AND_INERT`. The reference-collector "
+        "does not resolve an attribute read through an aliased module import, "
+        "so this reads as an orphan. Declared with the limitation named "
+        "rather than deleted -- a figure measured inside the October window "
+        "is not comparable with one measured inside November's, and the first "
+        "attempt's n=4 belongs to those dates.",
     "scripts/h1_collection_check.py:COLLECTION_STATES":
         "a DECLARED state set. Its consumer is the test that enumerates the "
         "states, deliberately: `fixtures_zero_active` happened four times "

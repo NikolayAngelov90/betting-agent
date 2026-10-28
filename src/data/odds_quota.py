@@ -52,6 +52,7 @@ from __future__ import annotations
 from datetime import date as _date
 from typing import Optional
 
+from src.data import h1_window as _h1_window
 from src.data.api_budget import ApiBudgetStore
 from src.utils.logger import get_logger
 
@@ -155,14 +156,19 @@ H1_RESERVED_CREDITS = 168
 #: else: with the old window past, `h1_reservation()` returned 0 on 11-01, so
 #: `h1_ceiling` was 0 and H1 would have been refused ENTIRELY. That is the
 #: safe direction and it is still a non-start.
-H1_RESERVATION_FROM = _date(2026, 11, 1)
-H1_RESERVATION_UNTIL = _date(2026, 11, 9)       #: exclusive — eight days
+#: ── IMPORTED, NOT RESTATED. 2026-10-28. ──────────────────────────────────
+#: These were two literals here and two more in `h1_collection_check`, and
+#: four sites were half-moved in one week. `src/data/h1_window.py` is now the
+#: only place either date appears; these names stay as the published spelling
+#: every existing consumer already imports.
+H1_RESERVATION_FROM = _h1_window.FROM
+H1_RESERVATION_UNTIL = _h1_window.UNTIL          #: exclusive — eight days
 
 #: THE RETIRED WINDOW, kept because a figure measured inside it is not
 #: comparable with one measured inside the new one, and the first attempt's
 #: `n=4` is quoted often enough that the dates it belongs to must stay
 #: readable.
-RETIRED_H1_RESERVATION_WINDOW = (_date(2026, 10, 9), _date(2026, 10, 17))
+RETIRED_H1_RESERVATION_WINDOW = _h1_window.RETIRED
 
 
 def h1_reservation(today: Optional[_date] = None) -> int:

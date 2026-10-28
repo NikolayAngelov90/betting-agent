@@ -193,6 +193,24 @@ def main(argv=None) -> int:
           f"workflow could otherwise skip a round)")
     print(f"  per-job credit cap  : {args.max_credits}")
     print(f"  reservation today   : {h1_reservation()}")
+    # ── WHERE IN THE WINDOW THIS RUN SITS. 2026-10-28. ─────────────────────
+    #
+    # The operator reading this log needs to know whether a thin day still has
+    # days left to recover in, and whether TODAY is the rate decision. Both
+    # are facts about the window, so both come from it rather than being
+    # counted off a calendar by whoever is reading.
+    from src.data import h1_window as _hw
+    _today = utcnow().date()
+    if _hw.contains(_today):
+        print(f"  window day          : {(_today - _hw.FROM).days + 1} of "
+              f"{_hw.DAYS}  (last day {_hw.LAST_DAY})")
+        if _today == _hw.RATE_DECISION:
+            print(f"  RATE DECISION TODAY : {_hw.RATE_DECISION} is the "
+                  f"midpoint. If the projection is below the floor of 33 it "
+                  f"goes to Niki TODAY, not at the end of the window.")
+    else:
+        print(f"  window day          : OUTSIDE {_hw.iso()} — collection is "
+              f"not due today, and the reservation above says so too")
     print(f"  observations since  : {since:%Y-%m-%d}")
     pinned = [x.strip() for x in args.leagues.split(",") if x.strip()] or None
     print(f"  pinned leagues      : {pinned if pinned else 'ALL (not pinned)'}")

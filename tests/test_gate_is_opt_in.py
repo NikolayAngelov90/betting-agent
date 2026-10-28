@@ -77,7 +77,7 @@ from scripts.capture_critical import (
 #: it is correctly non-critical: a test about the gate does not import the
 #: write path, so it must not be able to stop capture. `capture_critical`
 #: is unchanged at 69.
-CENSUS = {"files": 133, "capture_critical": 71, "not_critical": 62}
+CENSUS = {"files": 134, "capture_critical": 72, "not_critical": 62}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -289,8 +289,8 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     selection with this file, for 923.
     """
     gate, nong = _ids(GATE_EXPR), _ids(NON_GATING_EXPR)
-    assert len(gate) == 1671, (
-        f"the gating selection is {len(gate)}, recorded 1671 — say what moved")
+    assert len(gate) == 1680, (
+        f"the gating selection is {len(gate)}, recorded 1680 — say what moved")
     assert len(nong) == 911, (
         f"the non-gating selection is {len(nong)}, recorded 911")
     # and the gate must never grow back to everything

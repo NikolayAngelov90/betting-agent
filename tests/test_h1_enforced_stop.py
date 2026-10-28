@@ -306,9 +306,19 @@ from src.data.odds_quota import (
 #: These are the "dated pins" that are expected to fail on a window move, and
 #: they are updated in the same commit as the move with the argument beside
 #: them, the way invariant 6b is handled.
-IN_WINDOW = _d.date(2026, 11, 2)
-BEFORE_WINDOW = _d.date(2026, 10, 31)
-AFTER_WINDOW = _d.date(2026, 11, 9)
+#: ── DERIVED, NOT RESTATED. 2026-10-28. ───────────────────────────────────
+#: These were literals, and literals are how four sites came to be
+#: half-moved in one week. `h1_window` is the only place either date
+#: appears; a test that needs "a day inside the window" asks for one.
+#: The deliberate PINS -- BOUNDARY_DATES, WINDOW_EDGES, the ONSET pin --
+#: keep their literals on purpose: a pin that imports its own subject is
+#: a tautology. They are exempted by name in
+#: `test_every_H1_DATE_SITE_IMPORTS_rather_than_RESTATES`.
+from src.data import h1_window as _h1_window
+
+IN_WINDOW = _h1_window.FROM + _d.timedelta(days=1)
+BEFORE_WINDOW = _h1_window.FROM - _d.timedelta(days=1)
+AFTER_WINDOW = _h1_window.UNTIL
 
 
 def test_there_is_ONE_allocation_and_the_remainder_is_COMPUTED():

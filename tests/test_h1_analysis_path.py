@@ -211,8 +211,18 @@ def test_the_CLAMP_IS_PASSED_BY_THE_CALLER_not_remembered(db):
                     "load_observations", "h1_analysis.main")
     assert "until=until" in code, (
         "main no longer passes the clamp to load_observations")
-    assert "H1_RESERVATION_FROM" in code, (
-        "main's lower bound is not derived from the reservation")
+    # ── STRONGER THAN "DERIVED FROM THE RESERVATION". 2026-10-28. ─────────
+    #
+    # This asserted `H1_RESERVATION_FROM in code`, which was satisfied by
+    # `datetime.combine(H1_RESERVATION_FROM, datetime.min.time())` — a
+    # CONSUMER COMPUTING A DATE FROM THE WINDOW, the thing the window module's
+    # own rule forbids. The derivation now lives beside the definition and the
+    # assertion is that main imports it rather than performing it.
+    assert "as_datetimes" in code, (
+        "main computes its own lower bound again; `as_datetimes()` exists so "
+        "there is one place for that derivation to be wrong")
+    assert "datetime.combine" not in code, (
+        "main is back to combining a date and a time itself")
     assert "datetime(2026, 10, 1)" not in code, (
         "October's reset is back as the default lower bound")
 
