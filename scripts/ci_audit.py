@@ -347,6 +347,37 @@ RESOLVED_RUNS = {
                     "the month-boundary contradiction in "
                     "test_credit_reading_freshness was bounded; the test gate "
                     "that stopped --update can no longer fire on the 1st"),
+    # ── 2026-10-27: THE FOURTH OCCURRENCE OF THE SAME CLASS ────────────────
+    #
+    # `tests/test_model_freshness.py::test_the_EXIT_CODE_is_0_FRESH_and_1_
+    # FINDING` failed `assert 1 == 0` and stopped `Run tests`, so `update`,
+    # `settle (pre-picks)` and `picks` were all SKIPPED and the day's card was
+    # lost. Recovered by a dispatch at 10:25 the same morning.
+    #
+    # THE SHAPE, AND IT IS MINE. The test built its fixture from a FROZEN
+    # module constant (`NOW = dt.datetime(2026, 10, 22, 12, 0, ...)`) and then
+    # asserted on `mf.main(["--quiet"])`, which computes
+    # `datetime.now(timezone.utc)` ITSELF and takes no `now` argument. One
+    # side frozen, the other live: as real time passed the "fresh" artefact
+    # aged beyond the staleness threshold and the exit code turned 1.
+    #
+    # WHY THE MARKER SCAN DID NOT REFUSE IT, measured 2026-10-28: the scan's
+    # frozen-versus-moving logic is right, but it learns which functions are
+    # clock-derived from the HAND-MAINTAINED `LIVE_NAMES` / `LIVE_QUALIFIED` /
+    # `SEAMLESS_READERS` sets, and NO clock-reading function in `scripts/` has
+    # ever been in them -- 16 top-level functions there read the clock with no
+    # `now` seam and 0 of the 16 are registered. "A reader nobody registered
+    # is invisible" is enumerated in `UNCOVERABLE`; this is that gap
+    # materialising, at a cost of one card.
+    #
+    # Resolved by `b9dd01e`, which makes the fixture clock-RELATIVE
+    # (`now = datetime.now(utc)`) so both sides move together -- the
+    # discrimination `test_BOTH_SIDES_MOVING_TOGETHER_is_NOT_refused` already
+    # names as legitimate.
+    "40457295067": ("b9dd01e",
+                    "fourth capture-gate card loss: a frozen NOW fixture "
+                    "asserted against mf.main(), which reads the clock with "
+                    "no seam; the fixture is now clock-relative"),
     # THE MARKER'S FIRST REAL EXERCISE (2026-10-10). Recorded nine alarms late,
     # which is itself the measurement: 37885390196 failed at 04:45 on 10-09 and
     # EVERY ci-audit run from 05:14 on 10-09 to 05:43 on 10-10 alarmed on it —
@@ -706,6 +737,10 @@ PATTERN_EXAMPLES = {
     "fixtures_created": "API-Football: creating new fixture A vs B",
     "reviews": "Briefing decision [KEEP] for Team A vs Team B",
     "settled": "Settled 11 picks",
+    "reminder_collect_errors": (
+        "::warning::REMINDERS COLLECTION ERRORS - 3 test collection error(s) "
+        "were reported; selected reminders produced no failures. No due "
+        "decision was made."),
     "credits_claimed": "credits claimed  : 8",
     "captured": "captured         : 16",
     "capture_missing": "9 captured, 3 missing",
@@ -866,6 +901,24 @@ PATTERNS = {
     "fixtures_created": r"creating new fixture",
     "reviews": r"Briefing decision \[",
     "settled": r"Settled (\d+) picks",
+    # ── A GREEN REMINDERS RUN THAT DECIDED NOTHING. 2026-10-28. ───────────
+    #
+    # `2c537b1` correctly stopped treating `rc == 1` as "a reminder is due":
+    # with `--continue-on-collection-errors` pytest also exits 1 for a module
+    # it could not import, so the exit code alone conflated a verdict with an
+    # import error. Its collection-error branch prints `::warning::` and
+    # EXITS 0.
+    #
+    # MEASURED 2026-10-28: none of the 35 registered patterns matched that
+    # warning line, so the run concluded SUCCESS, carried no marker, and was
+    # examined by nothing. A reminder module that cannot be imported NEVER
+    # FIRES, and the whole point of `reminders.yml` is to fire on a date.
+    # PNC-1 in its purest form: the warning is a producer with no consumer.
+    #
+    # It matters in four days. `H1_RESERVATION_ACK_UNTIL` reddens on
+    # 2026-11-01, and a collection error that morning would have passed in
+    # silence on a green run.
+    "reminder_collect_errors": r"REMINDERS COLLECTION ERRORS - (\d+) test",
     # closing-lines evidence. Without these the audit reported 25 of 27 runs
     # CLEAN against a manual pass that found 9 DEGRADED — it was reading
     # daily-picks vocabulary against closing-lines logs and finding nothing.
@@ -3091,6 +3144,18 @@ def assertions(facts: Dict[str, object],
                 f"{label}: 0 created AND 0 matched while other sources still "
                 f"produce — this source produced within the last "
                 f"{LOOKBACK_RUNS} runs and is now silent on both counts")
+
+    # A REMINDER THAT COULD NOT BE IMPORTED DID NOT RUN, and the run is GREEN.
+    # Unconditional: unlike the rules above this is not "a producer fell
+    # silent", so it needs no history and must fire on the FIRST occurrence —
+    # a reminder's whole job is to fire once, on a date, and a missed date
+    # cannot be caught up.
+    _ce = facts.get("reminder_collect_errors")
+    if _ce:
+        hits.append(
+            f"reminders: {_ce} test COLLECTION ERROR(S) and the run concluded "
+            f"green — a reminder module that cannot be imported never fires, "
+            f"and no due decision was made. This is NOT 'no reminder was due'")
 
     picks = facts.get("picks_saved") or facts.get("picks_saved_live") or 0
     obs = facts.get("observations")

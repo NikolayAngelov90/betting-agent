@@ -38,7 +38,13 @@ def test_the_SELF_TEST_PASSES_for_every_registered_pattern():
     assert r["no_example"] == [], (
         f"pattern(s) with no example, so their health is UNEVALUATED rather "
         f"than proven: {r['no_example']}")
-    assert len(r["passed"]) == len(ci.PATTERNS) == 35, (
+    # 35 -> 36 ON 2026-10-28, and the ratchet is asking what was added:
+    # `reminder_collect_errors`, which matches the `##[warning]REMINDERS
+    # COLLECTION ERRORS - N test` line that `2c537b1` added and nothing
+    # consumed. It carries an example, so 36 of 36 still pass. The run that
+    # prints it concludes GREEN, which is why no marker or red-classification
+    # path could have caught it.
+    assert len(r["passed"]) == len(ci.PATTERNS) == 36, (
         f"{len(r['passed'])} of {len(ci.PATTERNS)} patterns pass; the count "
         f"moved, so say what was added and whether it carries an example")
 

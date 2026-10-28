@@ -350,13 +350,23 @@ class _Store:
         return self._budget - reserve - self._used
 
 
-def _quota(used, for_h1=False, budget=450, margin=50):
+def _quota(used, for_h1=False, budget=450, margin=50, h1_used=0):
+    """`h1_used` ADDED 2026-10-28, when the allocation became two-sided.
+
+    The fake used to set `_store` only. That was enough while the H1 side was
+    unbound, and it stopped being enough the moment `reserved_from_me` began
+    withholding the UNSPENT reservation and `remaining` began capping H1 at
+    its own allocation -- both of which read the ATTRIBUTED counter. A partial
+    stand-in is exactly how a widened object raises `AttributeError` in a
+    harness that looked complete.
+    """
     from src.data.odds_quota import OddsApiQuota
     q = OddsApiQuota.__new__(OddsApiQuota)
     q.for_h1 = for_h1
     q.monthly_budget, q.safety_margin = budget, margin
     q.max_credits_per_run, q.spent_this_run = 0, 0
     q._store = _Store(used, budget)
+    q._h1_store = _Store(h1_used, budget)
     return q
 
 
@@ -403,11 +413,36 @@ def test_POSITIVE_CONTROL_H1_HALTS_at_its_reservation_without_borrowing():
         "reached — a reader would think the experiment hit its own bound")
 
 
-def test_H1_sees_its_reservation_rather_than_having_it_withheld():
+def test_H1_sees_its_reservation_AND_IS_CAPPED_AT_IT():
     """`for_h1=True` must not have the reservation deducted from it — the
-    reservation IS H1's to spend; its bound is `collection_stop`, not the ledger."""
-    assert _quota(used=0, for_h1=True).remaining(today=IN_WINDOW) == 400
+    reservation IS H1's to spend — AND must not see more than it.
+
+    THIS ASSERTED 400 UNTIL 2026-10-28, and that figure was the blocker
+    written down as a specification. Its reason — "its bound is
+    `collection_stop`, not the ledger" — was true about intent and false
+    about effect: `collection_stop` is a PRE-FLIGHT check, read once before
+    the run, so it cannot bound what the run then claims.
+
+    MEASURED on a throwaway ledger inside the window: a `for_h1=True`
+    instance asked for 144 league requests and was GRANTED ALL 144 = 288
+    credits against a 168 reservation, overdrawing by 120, after which normal
+    operation's `remaining()` was 0 and a claim of 50 was refused outright.
+    Normal operation could not touch H1's share; H1 could take all of normal
+    operation's.
+
+    So the number changes to the allocation, both ceilings now come from
+    `allocate()`, and the refusal is driven in
+    `tests/test_h1_reservation_is_an_allocation.py`. The directive that
+    ordered it: "make the reservation an allocation ... H1 cannot borrow from
+    the global pool", with "enforcement is proved by a consumer being
+    refused".
+    """
+    assert _quota(used=0, for_h1=True).remaining(today=IN_WINDOW) == 168
     assert _quota(used=0, for_h1=False).remaining(today=IN_WINDOW) == 232
+    # and H1's own spend walks its ceiling down, measured against the
+    # ATTRIBUTED counter rather than the pool total
+    assert _quota(used=0, for_h1=True,
+                  h1_used=100).remaining(today=IN_WINDOW) == 68
 
 
 

@@ -156,6 +156,20 @@ def allocate(monthly_budget: int = DEFAULT_MONTHLY_BUDGET,
     return {"pool": pool,
             "h1_reserved": reserved,
             "normal_ceiling": pool - reserved,
+            #: H1'S OWN CEILING, ADDED 2026-10-23 — AND IT IS THE SAME NUMBER,
+            #: not a second one. Stage 26 collapsed two independent constants
+            #: into this remainder; naming H1's side here adds an ENFORCEMENT
+            #: POINT for the existing allocation, which is not the same thing
+            #: as adding a definition. Both consumers still read one function.
+            #:
+            #: IT EXISTS BECAUSE THE ALLOCATION WAS ONE-SIDED. Measured
+            #: 2026-10-23 on a throwaway ledger: inside the window, a
+            #: `for_h1=True` instance asked for 144 league requests and was
+            #: GRANTED ALL 144 = 288 credits against a 168 reservation,
+            #: overdrawing by 120 and leaving normal pricing with `remaining()
+            #: == 0` and a claim of 50 refused outright. Normal operation
+            #: could not touch H1's share; H1 could take normal operation's.
+            "h1_ceiling": reserved,
             "window": (H1_RESERVATION_FROM.isoformat(),
                        H1_RESERVATION_UNTIL.isoformat())}
 
@@ -246,28 +260,112 @@ class OddsApiQuota:
 
     def reserved_from_me(self, today: Optional[_date] = None) -> int:
         """Credits this instance may NOT spend: the margin, plus — for normal
-        operation inside the H1 window — H1's reservation.
+        operation inside the H1 window — H1's **unspent** reservation.
 
-        One source for both numbers, so the remainder cannot drift from the pool.
+        One source for both numbers, so the remainder cannot drift from the
+        pool.
+
+        UNSPENT, NOT THE WHOLE RESERVATION, and the difference strands
+        credits. Measured 2026-10-23, immediately after the H1 side was
+        bound: with H1's 168 fully spent, normal operation's `remaining()`
+        read **64** instead of its 232 ceiling, because the reservation was
+        withheld from the pool a second time after H1 had already drawn it.
+        Total spendable across both consumers was 168 + 64 = 232 of a
+        400-credit pool — **168 credits unspendable by anyone**, which is the
+        "two independent ceilings over one exhaustible pool" defect Stage 26
+        closed, re-entering through the other door.
+
+        FAIL-CLOSED DIRECTION: when the attributed counter cannot be read,
+        withhold the FULL reservation. Not knowing how much H1 has spent must
+        protect H1's share, never release it.
         """
-        extra = 0 if self.for_h1 else h1_reservation(today)
-        return self.safety_margin + extra
+        if self.for_h1:
+            return self.safety_margin
+        reservation = h1_reservation(today)
+        if reservation <= 0:
+            return self.safety_margin
+        spent = self.h1_used_for_reserve(today)
+        if spent is None:
+            return self.safety_margin + reservation
+        return self.safety_margin + max(0, reservation - spent)
+
+    def h1_used_for_reserve(self, today: Optional[_date] = None):
+        """H1's attributed spend as the NORMAL side needs it, or None.
+
+        Separate from `h1_used` only so a normal instance may read the H1
+        counter without being `for_h1` — the attribution store is built by
+        every instance, and reading it is not spending from it.
+        """
+        if not self._h1_store.available():
+            return None
+        return self._h1_store.used(day=month_key(today))
+
+    def h1_headroom(self, today: Optional[_date] = None) -> Optional[int]:
+        """Credits H1 may still spend under ITS OWN allocation, or None.
+
+        `None` means the attributed counter could not be read, and the caller
+        must treat that as "spend nothing" rather than as full headroom:
+        an H1 credit that cannot be attributed is refused anyway (see
+        `claim_requests`), and a bound compared against an unreadable counter
+        never binds.
+
+        MEASURED AGAINST `h1_used()`, NEVER `used()`. That distinction is
+        Stage 29's second defect: `used()` is the pool's month-to-date total
+        across every consumer, and comparing it to the 168 reservation once
+        charged H1 with 38 credits spent by normal pricing before H1 had run
+        at all.
+        """
+        if not self.for_h1:
+            return None
+        ceiling = allocate(self.monthly_budget, self.safety_margin,
+                           today)["h1_ceiling"]
+        used = self.h1_used(today)
+        if used is None:
+            return None
+        return max(0, ceiling - used)
 
     def remaining(self, today: Optional[_date] = None) -> int:
-        """Spendable credits, after the safety margin AND the H1 reservation.
+        """Spendable credits for THIS instance, and the number that is enforced.
 
-        Withholding the reservation here is what makes normal operation halt at
-        its remainder. `claim_requests` reserves THE SAME number, so there is
-        one definition and no second ceiling to drift.
+        Normal operation: the pool after the safety margin AND H1's
+        reservation. Withholding the reservation here is what makes normal
+        operation halt at its remainder.
 
-        THIS DOCSTRING WAS FALSE UNTIL 2026-10-09. It said `claim_requests`
-        "walks down from this number" — it walked down from the number the
-        CALLER asked for and claimed against `safety_margin`, so the reported
-        ceiling bound nothing. Verified by claim, not by reading: see
-        `test_normal_pricing_cannot_spend_the_H1_RESERVATION`.
+        H1: the SMALLER of its own allocation headroom and what is physically
+        left in the pool after the margin. Both limbs are needed — the first
+        stops H1 overdrawing its share, the second stops it spending credits
+        that do not exist.
+
+        `claim_requests` CLAMPS TO THIS NUMBER, so there is one definition and
+        no second ceiling to drift.
+
+        THIS DOCSTRING HAS BEEN FALSE TWICE, in the same way each time, and
+        the second time was the mirror of the first:
+
+        * UNTIL 2026-10-09 it said `claim_requests` "walks down from this
+          number" — it walked down from what the CALLER asked for and claimed
+          against `safety_margin` alone, so the reported ceiling bound
+          nothing on the NORMAL side.
+        * UNTIL 2026-10-23 the H1 side was still unbound here. `for_h1=True`
+          made `reserved_from_me` drop the reservation, which is correct —
+          the reservation is H1's to spend — but nothing then capped H1 AT
+          the reservation, so `remaining()` reported the whole 400-credit
+          pool to an instance allocated 168.
+
+        Verified by a consumer being REFUSED, never by reading a printed
+        number: see `test_H1_cannot_spend_past_its_RESERVATION` and
+        `test_normal_pricing_cannot_spend_the_H1_RESERVATION`, which drive
+        the two directions against each other.
         """
-        return max(0, self._store.remaining(
+        pool_room = max(0, self._store.remaining(
             reserve=self.reserved_from_me(today), day=month_key(today)))
+        if not self.for_h1:
+            return pool_room
+        head = self.h1_headroom(today)
+        if head is None:
+            # FAIL CLOSED. An unreadable attribution counter is not headroom.
+            return 0
+        return min(head, pool_room)
 
     def max_requests(self, today: Optional[_date] = None) -> int:
         """How many league requests the remaining budget allows."""
@@ -330,6 +428,32 @@ class OddsApiQuota:
             return n_requests
 
         day = month_key(today)
+
+        # ── THE ALLOCATION IS ENFORCED HERE, FOR BOTH CONSUMERS ───────────
+        #
+        # `remaining()` is the reported ceiling, so it is the one clamped to.
+        # Before 2026-10-23 only the NORMAL side was bound, by the pool-level
+        # `reserve=` below; H1's own 168 was reported by `remaining()` and
+        # enforced nowhere, so an H1 instance asking for 144 requests got all
+        # 144 (288 credits) and left normal pricing at zero.
+        #
+        # For normal operation this is belt to the pool-level reserve's
+        # braces and changes no outcome — it reaches the same number without
+        # the walk-down. For H1 it is the only enforcement there is.
+        allowed = self.remaining(today) // CREDITS_PER_REQUEST
+        if allowed < n_requests:
+            logger.warning(
+                f"OddsApiQuota: the allocation limits this "
+                f"{'H1' if self.for_h1 else 'normal'} instance to {allowed} of "
+                f"{n_requests} request(s) — {self.remaining(today)} credit(s) "
+                f"spendable"
+                + (f", H1 headroom {self.h1_headroom(today)} of "
+                   f"{allocate(self.monthly_budget, self.safety_margin, today)['h1_ceiling']}"
+                   if self.for_h1 else ""))
+            n_requests = max(0, allowed)
+        if n_requests == 0:
+            return 0
+
         granted = 0
         # Claim the whole block first; if refused, walk down so a partially
         # available budget still buys the most valuable requests (the caller

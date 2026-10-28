@@ -147,7 +147,9 @@ def test_a_QUIET_run_prints_ZERO_marked_lines():
 def test_a_CLEAN_pattern_registry_prints_zero_marks_and_still_REPORTS():
     out = ci.format_pattern_selftest(ci.selftest_patterns())
     assert _marks(out) == [], out
-    assert "35 pass" in out, "the quiet state stopped reporting the count"
+    # 36 since 2026-10-28: `reminder_collect_errors`. See
+    # test_patterns_self_tested for what was added and why.
+    assert "36 pass" in out, "the quiet state stopped reporting the count"
 
 
 # ── KNOWN-WRONG CONTROL ────────────────────────────────────────────────────
