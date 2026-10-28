@@ -43,6 +43,11 @@ from __future__ import annotations
 
 import datetime as _dt
 import os as _os
+import sys as _sys
+
+
+def _sys_argv():
+    return _sys.argv[1:]
 from typing import List, NamedTuple, Optional
 
 #: Rounds x gap, from the registered design. The last request fires at
@@ -229,6 +234,52 @@ def format_zero_alarm(streak: List[ZeroDay], target_n: int, floor_n: int,
     return chr(10).join(lines)
 
 
+def project_from_proxy(session) -> dict:
+    """The GO/NO-GO, run against the proxy week. Spends nothing.
+
+    Wired into `main --project` so the verdict is a COMMAND rather than a
+    figure someone once computed: "no number without provenance" is not
+    satisfied by a number I cannot re-run.
+    """
+    from sqlalchemy import text
+
+    from scripts.h1_collection_check import TARGET_N
+    from src.data.odds_quota import (CREDITS_PER_REQUEST,
+                                     H1_RESERVATION_FROM,
+                                     H1_RESERVATION_UNTIL,
+                                     H1_RESERVED_CREDITS)
+
+    days = (H1_RESERVATION_UNTIL - H1_RESERVATION_FROM).days
+    a, b = PROXY_WEEK
+    rows = [(r.d, r.league, r.ko.hour * 60 + r.ko.minute)
+            for r in session.execute(text(
+                "SELECT match_date::date d, league, match_date::time ko "
+                "FROM matches WHERE match_date >= :a AND match_date < :b "
+                "AND training_exclusion_reason IS NULL"), {"a": a, "b": b})]
+    if not rows:
+        return {"state": STATE_UNEVALUATED,
+                "why": f"the proxy week {a}..{b} holds no match row, so the "
+                       f"projection could not be computed -- this is NOT n=0"}
+    per_day = leagues_per_day(H1_RESERVED_CREDITS, CREDITS_PER_REQUEST, days)
+    sweep = {}
+    for T in range(6 * 60, 15 * 60 + 1, 30):
+        sweep[T] = project_band_density(rows, T, per_day)
+    # RANKED ON (dates, n) AND IN THAT ORDER. Spread is a CONSTRAINT, not a
+    # tie-break: rho = 0.42 clusters on fixture, and a big n on two dates
+    # makes DATE the cluster and voids the sizing that produced 33-39.
+    best_T = max(sweep, key=lambda T: (sweep[T]["dates"], sweep[T]["n"]))
+    r = sweep[best_T]
+    return {"state": STATE_OK if (r["n"] >= 33 and r["dates"] >= 5)
+            else STATE_NO_FIXTURE_IN_BAND,
+            "verdict": "GO" if (r["n"] >= 33 and r["dates"] >= 5) else "NO-GO",
+            "proxy": f"{a}..{b}", "provenance": PROXY_PROVENANCE,
+            "best_start_min": best_T, "n": r["n"], "dates": r["dates"],
+            "days": days, "leagues_per_day": per_day, "target_n": TARGET_N,
+            "floor": 33, "by_date": r["by_date"],
+            "sweep": {f"{T // 60:02d}:{T % 60:02d}":
+                      (v["n"], v["dates"]) for T, v in sweep.items()}}
+
+
 def main() -> int:
     """Report the precondition. Spends nothing, writes nothing."""
     import re
@@ -241,6 +292,25 @@ def main() -> int:
                         m.group(2).strip().strip('"').strip("'"))
         except FileNotFoundError:
             continue
+    if "--project" in _sys_argv():
+        from src.data.database import get_db
+        with get_db().get_session() as _s:
+            r = project_from_proxy(_s)
+        print("H1 GO/NO-GO from the labelled proxy")
+        print(f"  {r.get('provenance', '')}")
+        if r["state"] == STATE_UNEVALUATED:
+            print(f"  UNEVALUATED: {r['why']}")
+            return 1
+        print(f"  band (T+{BAND_LO_MIN}, T+{BAND_HI_MIN}]  "
+              f"leagues/day {r['leagues_per_day']}  days {r['days']}")
+        for t, (n, d) in r["sweep"].items():
+            print(f"    T={t}  n={n:3d}  on {d} date(s)")
+        print(f"  BEST T={r['best_start_min'] // 60:02d}:"
+              f"{r['best_start_min'] % 60:02d}  n={r['n']}  "
+              f"spread {r['dates']} date(s)")
+        print(f"  VERDICT: {r['verdict']}  (floor {r['floor']}, "
+              f"TARGET_N {r['target_n']})")
+        return 0
     leagues = [l for l in (_os.environ.get("H1_LEAGUES") or "").split(",") if l]
     if not leagues:
         leagues = ["england/championship", "europe/champions-league",
@@ -297,6 +367,97 @@ def main() -> int:
               "trajectories]")
     return 0        # reporting only; never gates
 
+# ── THE GUARD MOVED TO THE END. 2026-10-28. ──────────────────────────
+#
+# The block below was appended AFTER `if __name__ == "__main__"`, so
+# `raise SystemExit(main())` executed before these definitions existed
+# and `--project` died on `NameError: PROXY_WEEK`. Module-level code
+# runs top to bottom; an entry-point guard in the MIDDLE of a file
+# makes everything after it invisible to its own main().
+
+
+# ══════════ GO/NO-GO FROM A LABELLED PROXY — PART C, 2026-10-28 ═════════════
+#
+# THE FORWARD FIXTURE HORIZON IS ZERO DAYS. `measured` 2026-10-28: no match
+# row exists beyond today, so band density for 2026-11-01 -> 11-08 CANNOT be
+# measured from the scraper. The same calendar position in the previous season
+# can: 2025-11-01..11-09 holds 291 matches over 23 leagues and 8 dates.
+#
+#     IT IS A PROXY, IT IS LABELLED ONE, AND IT IS FOR GO/NO-GO ONLY.
+#
+# It answers exactly one question - is there enough card inside the band, on
+# enough separate dates, to reach n=33 under the reservation - and it does NOT
+# choose leagues. The selection is a RULE EVALUATED ON THE DAY from the live
+# card, because the fixtures it would rank do not exist yet.
+#
+# THE PROXY'S OWN ERROR, stated rather than implied:
+#
+#   * THE FIXTURE LIST DIFFERS. Promotions, relegations, cup rounds and
+#     rescheduling mean no league's 2026 card is last season's card.
+#   * INTERNATIONAL WINDOWS MOVE. November carries a FIFA window; if any of
+#     11-01..11-08 falls inside it the club card thins sharply, and the proxy
+#     week (which did not) would overstate n. This is the largest single risk
+#     and it is checkable on the day by the precondition, not now.
+#   * COMPETITION PHASE DIFFERS. European group stages fall on different
+#     midweeks, and a midweek round is the densest thing in the band.
+#
+# So the projection below is a FLOOR-CLEARING ARGUMENT, not a plan. If the
+# live card on 11-01 is thinner than the proxy, the precondition reports
+# `NO_FIXTURE_IN_BAND` that morning and the daily projection carries it to the
+# 11-04 rate decision.
+
+#: `measured` 2026-10-28 from the proxy week. Rounds x leagues under the
+#: reservation: 168 credits / 2 = 84 requests over 8 days = 10.5/day, and at
+#: H1_ROUNDS rounds that prices 3 leagues a day.
+PROXY_WEEK = ("2025-11-01", "2025-11-09")
+PROXY_PROVENANCE = (
+    "measured 2026-10-28 over 291 matches / 23 leagues / 8 dates in "
+    "2025-11-01..2025-11-09, the same calendar position one season earlier; "
+    "a PROXY for go/no-go only, never a plan")
+
+
+def leagues_per_day(reserved_credits: int, credits_per_request: int,
+                    days: int, rounds: int = H1_ROUNDS) -> int:
+    """How many leagues one day may price, under the reservation.
+
+    Every round re-prices the SAME pinned leagues -- a trajectory is three
+    observations of one fixture -- so the cost of a day is
+    `rounds * leagues * credits_per_request`, not `leagues * credits`.
+    """
+    if days <= 0 or rounds <= 0 or credits_per_request <= 0:
+        return 0
+    return int(((reserved_credits // credits_per_request) / days) // rounds)
+
+
+def project_band_density(rows, start_minute: int, per_day: int,
+                         lo: int = BAND_LO_MIN, hi: int = BAND_HI_MIN) -> dict:
+    """`{'n', 'dates', 'by_date'}` for a job starting at `start_minute`.
+
+    `rows` are `(date, league, kickoff_minute)`. THE UNIT IS THE FIXTURE: `n`
+    counts fixtures inside the band in the `per_day` densest leagues, summed
+    over the dates. A league request prices every fixture in that league at
+    one instant, which is why ranking by fixtures-in-band is the rule.
+
+    SPREAD IS REPORTED BESIDE `n` AND IS NOT OPTIONAL. rho = 0.42 clusters on
+    FIXTURE; if every fixture comes from one date then date becomes the
+    cluster and the sizing that produced 33-39 stops applying. A projection
+    with a large `n` on two dates is a worse plan than a smaller one on eight.
+    """
+    by_date: dict = {}
+    for d, lg, km in rows:
+        if start_minute + lo < km <= start_minute + hi:
+            by_date.setdefault(d, {})
+            by_date[d][lg] = by_date[d].get(lg, 0) + 1
+    out, dates = 0, 0
+    detail = {}
+    for d, per_lg in sorted(by_date.items()):
+        top = sorted(per_lg.items(), key=lambda kv: -kv[1])[:per_day]
+        got = sum(n for _, n in top)
+        if got:
+            dates += 1
+            out += got
+            detail[str(d)] = {"n": got, "leagues": [lg for lg, _ in top]}
+    return {"n": out, "dates": dates, "by_date": detail}
 
 if __name__ == "__main__":
     raise SystemExit(main())
