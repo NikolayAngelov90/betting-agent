@@ -34194,3 +34194,190 @@ touched. Every database figure behind `assert db.is_postgres`; every read a
 
 *Recorded 2026-10-23 (measured) / committed 2026-10-23.
 `docs/decision-2026-11-01.md`, `scripts/decision_paper_figures.py`.*
+
+---
+
+## `RESERVATION ENFORCED`, and the fourth card loss — 2026-10-28
+
+### DECLARATION — `RESERVATION ENFORCED`, with the refusal that proves it
+
+> **Enforcement is proved by a consumer being refused, never by reading a
+> printed number.**
+
+| direction | asked | granted | verdict |
+|---|---|---|---|
+| **H1, before the fix** | 144 req = 288 cr | **144 = 288 cr** | overdrew its 168 reservation by **120**, and normal operation was left with `remaining() == 0` and a claim of 50 **refused** |
+| **H1, after** | 144 req = 288 cr | **84 = 168 cr** | refused at exactly its allocation; a second claim of 10 → **0** |
+| **normal, after** | 200 req = 400 cr | **116 = 232 cr** | refused at its remainder, reservation intact |
+
+**The allocation was ONE-SIDED.** Stage 26 collapsed two constants into a
+remainder; Stage 29 bound the **normal** side. H1's side was left to
+`collection_stop` — which is a **pre-flight check**, read once before the run,
+and therefore cannot bound what the run then claims. `remaining()` reported
+the whole 400-credit pool to an instance allocated 168.
+
+**One definition, two enforcement points.** `allocate()` now names
+`h1_ceiling` — the *same* number at the point it is enforced, not a second
+constant. `remaining()` caps H1 at the smaller of its allocation headroom and
+what is physically left. `claim_requests` **clamps to `remaining()`** for both
+consumers, so the reported ceiling is the enforced one on both sides, and a
+test asserts the two ceilings sum to the pool.
+
+#### And fixing it exposed a second defect, in the opposite direction
+
+With H1's 168 spent, normal operation's `remaining()` read **64** instead of
+its 232 ceiling — the reservation was withheld from the pool a **second time**
+after H1 had already drawn it. `168 + 64 = 232` spendable of a **400** pool:
+**168 credits unspendable by anyone.** That is Stage 26's "two independent
+ceilings over one exhaustible pool" re-entering through the other door.
+`reserved_from_me` now withholds the **unspent** reservation, and the
+fail-closed direction is stated: when the attributed counter cannot be read,
+withhold the **full** reservation — not knowing how much H1 drew must protect
+its share, never release it.
+
+**Driven against each other, both orderings:** each consumer run to refusal,
+then the other asked for its full share. Each gets exactly its allocation,
+the total is **400 of 400**, nothing stranded, and order does not matter.
+Reverting the clamp fails four tests with *"asked for 288 credits against a
+168-credit reservation and was granted 288"*.
+
+#### `RESERVATION_EXHAUSTED` is reached from the WIRED path
+
+Through `collection_state(session, since)` with real `odds_snapshots` rows —
+not through `collection_stop` with a hand-supplied number. That is the
+distinction Stage 29 named: *a parameter supplied only by the harness was
+never wrong.* All five terminal states are driven and each gives a distinct
+reason text.
+
+The synthetic builder is **shared** with the analysis verification rather than
+duplicated, and it builds the grain trap in on purpose: **60 qualifying SERIES
+on 6 qualifying FIXTURES.**
+
+#### The exact landing is now required rather than lucky
+
+The claim grants whole requests, so H1's attributed spend only takes multiples
+of `CREDITS_PER_REQUEST`, while the stop halts on `spent >= bound`. **A
+reservation that is not such a multiple can never be reached** — nothing can
+be claimed and nothing halts, so the state stays `COLLECTING` for ever. 168/2
+divides; a test now requires it, and names the livelock.
+
+#### One test encoded the blocker as a specification
+
+`test_H1_sees_its_reservation_rather_than_having_it_withheld` asserted
+`remaining() == 400`, reasoning *"its bound is `collection_stop`, not the
+ledger"* — true about intent, false about effect. **Moved to the allocation
+with the argument beside it, not relaxed.** Its fake quota also set `_store`
+only, which is how a widened object raises `AttributeError` in a harness that
+looked complete.
+
+#### THE ENFORCEMENT IS INERT UNTIL THE WINDOW MOVES
+
+`H1_RESERVATION_FROM/UNTIL` is still **2026-10-09 … 10-17**, so `h1_ceiling`
+is **0 today and 0 on 2026-11-01**. H1 would be refused *entirely* — the safe
+direction — but **the re-run cannot start until the window is moved**, and
+moving it will fail the calendar-marked
+`test_the_H1_RESERVATION_WINDOW_has_EXPIRED` by design. Stated here rather
+than discovered on the day.
+
+---
+
+### THE FOURTH CAPTURE-GATE CARD LOSS — 2026-10-27, and it is mine
+
+`tests/test_model_freshness.py::test_the_EXIT_CODE_is_0_FRESH_and_1_FINDING`
+failed `assert 1 == 0`, which stopped `Run tests`, which **SKIPPED `update`,
+`settle (pre-picks)` and `picks`**. The card was lost and recovered by a
+dispatch at 10:25 the same morning.
+
+**THE SHAPE.** The test built its fixture from a **frozen** module constant
+(`NOW = dt.datetime(2026, 10, 22, 12, 0)`) and asserted on
+`mf.main(["--quiet"])`, which computes `datetime.now(utc)` **itself** and takes
+no `now` argument. One side frozen, one side live: as time passed the "fresh"
+artefact aged past the staleness threshold and the exit code turned 1.
+
+**WHY THE MARKER SCAN DID NOT REFUSE IT.** Its frozen-versus-moving logic is
+right, but it learns which functions are clock-derived from **hand-maintained**
+sets. `measured` 2026-10-28:
+
+```
+16  top-level functions in scripts/ that read the clock with NO `now` seam
+ 0  of the 16 registered in LIVE_NAMES / LIVE_QUALIFIED / SEAMLESS_READERS
+```
+
+*"A reader nobody registered is invisible"* is **already enumerated** in
+`UNCOVERABLE`. This is that gap materialising, at a cost of one card.
+
+#### No new detector is shipped, and the measurement is why
+
+Registering the clock readers bluntly in `LIVE_QUALIFIED` took unmarked
+findings **3 → 11**, and of the 8 new ones **1** was the real defect:
+
+* `ci_alert.main` has **zero** clock reads — a bare-name false positive, killed
+  by qualification;
+* four `test_picks_bound_series` sites **stub the transport**;
+* the `record_provenance` sites pass the frozen `NOW` **into** the
+  `assess(now=…)` seam, so the clock never reaches the assert — the scan's own
+  **"DOES NOT REACH"** ground.
+
+Narrowing to the shape that actually cost the card — *a seamless clock
+reader's result compared against a literal, with a frozen fixture feeding it*
+— gives **zero instances today**, because `b9dd01e` made that fixture
+clock-relative. **A guard with no findings is a regression guard, and saying
+so is better than shipping one as a discovery.**
+
+### Copilot's three commits, reviewed — all sound
+
+| commit | verdict |
+|---|---|
+| `b9dd01e` | the correct repair above: the fixture becomes clock-**relative**, so both sides move together — the discrimination `test_BOTH_SIDES_MOVING_TOGETHER_is_NOT_refused` already calls legitimate |
+| `2c537b1` | **a genuine repair of my own classifier.** `rc == 1` no longer means "a reminder is due", because `--continue-on-collection-errors` makes pytest exit 1 for an unimportable module too. It adds `UNEVALUATED` branches rather than guessing, and drives each one |
+| `1a3b714` | replaces a literal deadline with `DEADLINE_MIN_BY_DAYTYPE["weekend"]`. **Not a tautology** — `SCHEDULE_DEADLINE_MIN = min(values)`, so it asserts **which day type binds**, and the two differ by 30 min |
+
+---
+
+### Two live repairs
+
+#### `ci-audit` had been red for TEN consecutive runs
+
+Every one alarming on the single 10-27 `daily-picks DID_NOT_RUN` — a resolved
+past event that cannot be changed. Recorded in `RESOLVED_RUNS` against
+`b9dd01e`.
+
+> **The mechanism was not missing. It was not filled in.** For the second
+> time, and the entry now says so.
+
+#### A GREEN reminders run that decided nothing was invisible
+
+`2c537b1`'s collection-error branch prints `::warning::` and **exits 0**.
+`measured`: **none of the 35 registered patterns matched that line**, so the
+run concluded SUCCESS, carried no marker, and was examined by nothing —
+**PNC-1, a producer with no consumer.** A reminder module that cannot be
+imported **never fires**, and firing on a date is this workflow's whole
+purpose.
+
+**It matters in four days:** `H1_RESERVATION_ACK_UNTIL` reddens on
+**2026-11-01**, and a collection error that morning would have passed in
+silence on a green run.
+
+Pattern + example added (**36 of 36** self-test at load), matching the
+**rendered** `##[warning]` form. The workflow's own source echo **cannot**
+match it — there the count is an f-string placeholder, not a digit — which is
+the lesson from the matcher that counted echoed script text. The finding fires
+**unconditionally on the first occurrence**: unlike the producer-fell-silent
+rules it needs no history, because **a missed date cannot be caught up**. It
+is silent on 0 and on an absent key.
+
+### DISCIPLINE
+
+Gating selection **2,540 passed, 10 deselected**; non-gating 8 passed, 2
+skipped. Invariants 26 passed, count not cited. All seven workflow YAMLs
+parse. Fingerprint **UNCHANGED at `s5.19 / cdec29`**.
+
+**H1 readiness status: Part A complete. Parts B–E outstanding**, and Part C is
+blocked on data — the forward fixture horizon is **zero days** (no match row
+exists beyond today), so band density for 11-01 → 11-08 cannot be measured
+from the scraper yet; the same calendar position last season holds 291 matches
+over 23 leagues and 8 dates as a proxy.
+
+*Recorded 2026-10-28. `src/data/odds_quota.py`, `scripts/ci_audit.py`,
+`tests/test_h1_reservation_is_an_allocation.py`, `tests/h1_synthetic.py`,
+`tests/test_h1_enforced_stop.py`.*
