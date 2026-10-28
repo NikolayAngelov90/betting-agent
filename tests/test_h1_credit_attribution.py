@@ -74,11 +74,22 @@ from scripts.h1_collection_check import (
     h1_credits_used,
 )
 
-#: Inside the reservation window. The window is 2026-10-09..2026-10-17.
-IN_WINDOW = date(2026, 10, 9)
+#: ── THE DATES MOVED WITH THE WINDOW. 2026-10-28, AUTHORISED. ─────────────
+#:
+#: WAS 2026-10-09..2026-10-17. The re-run is chosen and starts at the credit
+#: reset, so the window is 2026-11-01..2026-11-09 exclusive — the SAME
+#: pre-registered eight days, repositioned. Only these date pins move; not one
+#: assertion about the allocation, the attribution or the stop is weakened.
+#:
+#: These are the "dated pins" that are expected to fail on a window move, and
+#: they are updated in the same commit as the move with the argument beside
+#: them, the way invariant 6b is handled.
+#:
+#: Inside the reservation window. The window is 2026-11-01..2026-11-09.
+IN_WINDOW = date(2026, 11, 1)
 #: Outside it, and deliberately in the SAME month so the month-key is identical
 #: and only the reservation differs.
-OUT_OF_WINDOW = date(2026, 10, 20)
+OUT_OF_WINDOW = date(2026, 11, 20)
 
 POOL = 400                  # 450 budget - 50 margin, production's numbers
 NORMAL_CEILING = 232        # POOL - 168
@@ -187,8 +198,8 @@ def test_the_stop_counts_only_H1s_OWN_spend(tmp_path):
     assert normal.used(IN_WINDOW) == 38
 
     with mgr.get_session() as s:
-        attributed = h1_credits_used(s)
-        pool_total = credits_used(s)
+        attributed = h1_credits_used(s, IN_WINDOW)
+        pool_total = credits_used(s, IN_WINDOW)
     assert pool_total == 38, "the pool total should still see normal's spend"
     assert attributed == 0, (
         f"H1 is charged {attributed} credits it did not spend — normal "
@@ -211,8 +222,8 @@ def test_H1s_spend_IS_attributed(tmp_path):
     assert h1.used(IN_WINDOW) == 44, "the pool must count BOTH"
     assert h1.h1_used(IN_WINDOW) == 6, "the account must count only H1's"
     with mgr.get_session() as s:
-        assert h1_credits_used(s) == 6
-        assert credits_used(s) == 44
+        assert h1_credits_used(s, IN_WINDOW) == 6
+        assert credits_used(s, IN_WINDOW) == 44
 
 
 def test_a_full_reservation_of_H1_spend_exhausts_it_and_nothing_else_does(tmp_path):
@@ -221,7 +232,7 @@ def test_a_full_reservation_of_H1_spend_exhausts_it_and_nothing_else_does(tmp_pa
     normal = _quota(tmp_path, mgr=mgr)
     normal.claim_requests(84, today=IN_WINDOW)          # 168 credits of NORMAL
     with mgr.get_session() as s:
-        stop = collection_stop(n_fixtures=5, credits_spent=h1_credits_used(s),
+        stop = collection_stop(n_fixtures=5, credits_spent=h1_credits_used(s, IN_WINDOW),
                                raw_rows=100,
                                reservation=h1_reservation(IN_WINDOW))
     assert stop.state != "RESERVATION_EXHAUSTED", (
@@ -297,7 +308,7 @@ def test_an_unreadable_ledger_gives_the_stop_BUDGET_UNREADABLE(tmp_path):
     with mgr.get_session() as s:
         s.execute(__import__("sqlalchemy").text("DROP TABLE api_budget"))
         s.commit()
-        assert h1_credits_used(s) is None, (
+        assert h1_credits_used(s, IN_WINDOW) is None, (
             "a dropped table answered with a number — the stop would compare "
             "it to the reservation and keep spending")
     stop = collection_stop(n_fixtures=0, credits_spent=None, raw_rows=0,
@@ -314,13 +325,17 @@ def test_the_two_quantities_are_not_the_same_variable(tmp_path):
     normal.claim_requests(10, today=IN_WINDOW)      # 20
     h1.claim_requests(2, today=IN_WINDOW)           # 4
     with mgr.get_session() as s:
-        pool, mine = credits_used(s), h1_credits_used(s)
+        pool, mine = credits_used(s, IN_WINDOW), h1_credits_used(s, IN_WINDOW)
     assert (pool, mine) == (24, 4), (pool, mine)
     assert pool != mine, (
         "the pool total and H1's attributed spend returned the same number — "
         "if they are ever equal by construction the distinction is gone")
     assert PROVIDER != PROVIDER_H1
-    assert month_key(IN_WINDOW) == date(2026, 10, 1)
+    # THE MONTH KEY FOLLOWS THE WINDOW. It is asserted against the window's
+    # own month rather than a second literal, so the two cannot disagree
+    # when the window moves again -- which is how these three tests came to
+    # depend on the window and the wall clock sharing a month.
+    assert month_key(IN_WINDOW) == IN_WINDOW.replace(day=1)
 
 
 def test_the_bound_is_the_reservation_and_the_ceiling_is_not_reachable_below_it():

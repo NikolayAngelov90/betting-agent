@@ -236,8 +236,13 @@ def test_RESERVATION_EXHAUSTED_is_reachable_FROM_THE_WIRED_PATH(tmp_path):
                       today=IN_WINDOW)
     assert h1.h1_used(IN_WINDOW) == H1_RESERVED_CREDITS
 
+    # `today=IN_WINDOW`, STATED RATHER THAN INHERITED. The claim above wrote
+    # the ledger row under `month_key(IN_WINDOW)`; without the seam this read
+    # `month_key()` off the wall clock, found no November row from an October
+    # clock, and reported `credits=0/168` with 168 credits spent. A test that
+    # reads the wall clock states no regime.
     with mgr.get_session() as s:
-        stop = collection_state(s, datetime(2026, 10, 1))
+        stop = collection_state(s, datetime(2026, 10, 1), today=IN_WINDOW)
 
     assert stop.halt is True, stop
     assert stop.state == "RESERVATION_EXHAUSTED", (
@@ -364,3 +369,106 @@ def test_AN_UNREADABLE_H1_COUNTER_PROTECTS_THE_RESERVATION(tmp_path, monkeypatch
 
     assert normal.reserved_from_me(IN_WINDOW) == MARGIN + H1_RESERVED_CREDITS
     assert normal.remaining(IN_WINDOW) == NORMAL_CEILING
+
+
+# ══════════════ THE MOVED WINDOW, DRIVEN ON ITS FOUR EDGES ══════════════
+#
+# `WINDOW MOVED`, 2026-10-28. The window was 2026-10-09..10-17 and `h1_ceiling`
+# was therefore 0 on 11-01: H1 would have been refused ENTIRELY, which is the
+# safe direction and still a non-start.
+#
+# BOTH DATES ARE DERIVED. FROM is the TheOddsAPI monthly credit reset (the
+# 1st), because a reservation carved out of a monthly pool must open when that
+# pool does -- opening later spends it from a pool normal pricing has already
+# drawn on. UNTIL is FROM + 8 days exclusive, preserving the PRE-REGISTERED
+# eight-day length exactly: 10-09..10-16 was eight days and so is 11-01..11-08.
+# Only the position moves, so this is a reschedule, not an amendment to what
+# is collected.
+
+#: The four edges. `0` means "no allocation on that date".
+WINDOW_EDGES = (
+    (date(2026, 10, 31), 0,                    "the day before the onset"),
+    (date(2026, 11, 1),  H1_RESERVED_CREDITS,  "the onset, == the credit reset"),
+    (date(2026, 11, 8),  H1_RESERVED_CREDITS,  "the last collection day"),
+    (date(2026, 11, 9),  0,                    "the expiry, exclusive"),
+)
+
+
+@pytest.mark.parametrize("day,expected,what", WINDOW_EDGES)
+def test_the_NEW_WINDOW_is_INERT_before_and_after(day, expected, what):
+    """`h1_ceiling` on each edge, and `h1_reservation` with it.
+
+    Driven on all four rather than asserting the pair of constants, because
+    the constants are not what any consumer reads -- `allocate()` is, and it
+    clamps the reservation to the pool before reporting it.
+    """
+    a = allocate(BUDGET, MARGIN, day)
+    assert a["h1_ceiling"] == expected, (
+        f"{day} ({what}): h1_ceiling is {a['h1_ceiling']}, expected "
+        f"{expected}")
+    assert oq.h1_reservation(day) == expected, f"{day} ({what})"
+    # and the two ceilings always account for the whole pool, on every edge
+    assert a["normal_ceiling"] + a["h1_ceiling"] == a["pool"], (
+        f"{day}: the allocation does not account for the pool")
+
+
+def test_the_RETIRED_WINDOW_IS_INERT_ON_BOTH_ITS_OWN_EDGES():
+    """A moved window must not leave the old one live anywhere.
+
+    The October pair is kept as `RETIRED_H1_RESERVATION_WINDOW` because a
+    figure measured inside it is not comparable with one measured inside the
+    new window -- the first attempt's `n=4` is quoted often enough that the
+    dates it belongs to have to stay readable.
+    """
+    old_from, old_until = oq.RETIRED_H1_RESERVATION_WINDOW
+    for day in (old_from, old_until, date(2026, 10, 13)):
+        assert oq.h1_reservation(day) == 0, (
+            f"the retired window is still live on {day}")
+        assert allocate(BUDGET, MARGIN, day)["h1_ceiling"] == 0
+
+
+def test_THE_REFUSAL_STILL_HOLDS_INSIDE_THE_NEW_WINDOW(tmp_path):
+    """Part A's proof, re-driven on a date inside the MOVED window.
+
+    The enforcement was proved on 2026-10-09 and then the window moved out
+    from under it. A proof that is not re-run after the thing it depends on
+    moves is a proof about a configuration that no longer exists.
+    """
+    day = date(2026, 11, 1)
+    for order in (("h1", "normal"), ("normal", "h1")):
+        mgr = _mgr(tmp_path, name=f"moved_{'_'.join(order)}.db")
+        inst = {"h1": _q(mgr, for_h1=True), "normal": _q(mgr, for_h1=False)}
+        expect = {"h1": H1_RESERVED_CREDITS, "normal": NORMAL_CEILING}
+        spent = {}
+        for who in order:
+            spent[who] = credits_for(inst[who].claim_requests(300, today=day))
+            assert spent[who] == expect[who], (
+                f"{order[0]} first, inside the new window: {who} got "
+                f"{spent[who]} credits, expected {expect[who]}")
+        assert sum(spent.values()) == POOL, (
+            f"{order[0]} first: {sum(spent.values())} of {POOL} spendable — "
+            f"{POOL - sum(spent.values())} credits stranded inside the new "
+            f"window")
+
+
+def test_THE_ANALYSIS_WINDOW_MATCHES_THE_RESERVATION():
+    """The one coupling that could not be collapsed into an import.
+
+    `h1_collection_check` imports nothing from `src.` at module level — the
+    entry-point guard runs it with `--help`, which argparse answers before any
+    work — so its two window dates are RE-TYPED. This is the mechanism that
+    stops the window being moved in one place and not the other.
+
+    HALF-MOVING IT IS THE LIVE FAILURE MODE: the reservation would open on
+    11-01 while `load_observations` still clamped the population to October,
+    and every trajectory collected would be excluded with NO ERROR ANYWHERE —
+    a second `n=0` that looked like a collection failure rather than a date.
+    """
+    from scripts.h1_collection_check import H1_WINDOW_TO, _H1_WINDOW_FROM
+    assert _H1_WINDOW_FROM == oq.H1_RESERVATION_FROM.isoformat(), (
+        f"the analysis start {_H1_WINDOW_FROM} does not match the reservation "
+        f"start {oq.H1_RESERVATION_FROM}")
+    assert H1_WINDOW_TO == oq.H1_RESERVATION_UNTIL.isoformat(), (
+        f"the analysis clamp {H1_WINDOW_TO} does not match the reservation "
+        f"end {oq.H1_RESERVATION_UNTIL} — observations inside the window "
+        f"would be excluded from their own experiment")

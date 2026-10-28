@@ -53,7 +53,7 @@ REMINDERS = {
     "tests/test_absent_run_and_unparseable.py": [
         "test_the_detector_does_not_call_a_day_with_a_RUN_missing"],
     "tests/test_calendar_separation.py": [
-        "test_the_H1_RESERVATION_WINDOW_has_EXPIRED",
+        "test_the_H1_RESERVATION_WINDOW_EXPIRES",
         "test_the_H1_RESERVATION_ACKNOWLEDGEMENT_EXPIRES"],
     "tests/test_cron_split_by_daytype.py": [
         "test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED"],

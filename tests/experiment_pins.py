@@ -248,7 +248,7 @@ from datetime import date as _date
 
 # ───────── THE H1 RESERVATION GUARD, ACKNOWLEDGED — NOT EXTENDED, 2026-10-18
 #
-# `test_the_H1_RESERVATION_WINDOW_has_EXPIRED` has fired every day since
+# `test_the_H1_RESERVATION_WINDOW_EXPIRES` has fired every day since
 # 2026-10-18. Its instruction is correct: DELETE the reservation rather than
 # move the date. Its estimate of the work is not — MEASURED 2026-10-18, the
 # deletion is:
@@ -266,11 +266,27 @@ from datetime import date as _date
 #     fires, and this project has paid for that six times.
 #
 # So the condition is ACKNOWLEDGED: recorded, dated, and alarming on CHANGE.
-# THE DATE IN THE GUARD DOES NOT MOVE. The guard still evaluates its own
-# predicate; the acknowledgement is what stops an unchanged, known, sized
-# condition reddening the run until its review.
+#
+# ── AND THE ACKNOWLEDGEMENT IS NOW MOOT, NOT EXPIRED. 2026-10-28. ──────────
+#
+# "THE DATE IN THE GUARD DOES NOT MOVE" was written above, and the date has
+# moved: the re-run is authorised and the window is 2026-11-01..2026-11-09.
+# The argument is in the guard's own docstring — the first attempt is CLOSED
+# at n=4, so what starts on 11-01 is a NEW allocation with its own
+# pre-registration, which is precisely the carve-out the instruction allowed.
+#
+# WHAT THAT DOES TO THIS ACKNOWLEDGEMENT: it covered an INERT window, and from
+# 11-01 the window is LIVE. Its branch in the guard is unreachable while the
+# window is open, which is correct rather than a bypass — there is no longer a
+# standing condition to acknowledge. The 87/31/9 deletion stays DEFERRED past
+# the window, because those 31 assertions encode live facts about the stop and
+# the attribution that the re-run depends on.
+#
+# The guard still evaluates its own predicate; it now fires on 2026-11-09.
 ACKNOWLEDGED_H1_RESERVATION_GUARD = {
-    "figure": "h1_reservation() == 0 and the window 2026-10-09..2026-10-17 "
+    "figure": "MOOT from 2026-11-01: the window moved to 2026-11-01..11-09 "
+              "and is LIVE, so there is no inert window to acknowledge. Was: "
+              "h1_reservation() == 0 and the window 2026-10-09..2026-10-17 "
               "is closed; the symbols are still present in odds_quota.py",
     "why_not_retired": "the guard's instruction is to DELETE the machinery, "
                        "and the machinery is 87 references / 31 assertions / "

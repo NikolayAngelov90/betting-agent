@@ -61,7 +61,23 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 TARGET_N = 39                 #: stop condition, upper end of the 33-39 band
 CREDIT_CEILING = 200          #: the other stop condition, whichever comes first
-_H1_WINDOW_FROM = '2026-10-09'   #: the reservation window's start, for the DID_NOT_START message
+#: ── THESE TWO MIRROR `odds_quota`'s WINDOW AND CANNOT IMPORT IT ───────────
+#:
+#: This module imports NOTHING from `src.` at module level, on purpose: the
+#: entry-point guard runs every script with `--help`, which argparse answers
+#: before any work, and a module-level `src.` import would need the sys.path
+#: bootstrap to survive the script form. Every `src.` import here lives inside
+#: a function for that reason.
+#:
+#: So the dates are RE-TYPED, which is a hand-maintained coupling and the kind
+#: this project refuses to leave on trust. It is made mechanical from the
+#: other side instead: `test_the_ANALYSIS_WINDOW_MATCHES_THE_RESERVATION`
+#: asserts these two against `odds_quota.H1_RESERVATION_FROM/UNTIL`, so the
+#: window cannot be moved in one place and not the other. Half-moving it is
+#: the live failure mode: the reservation would open on 11-01 while the
+#: analysis still clamped the population to the October dates, and every
+#: trajectory collected would be excluded with no error anywhere.
+_H1_WINDOW_FROM = '2026-11-01'   #: the reservation window's start, for the DID_NOT_START message
 #: THE WINDOW'S END, AND IT CLOSES THE POPULATION. Added 2026-10-20 after a
 #: scheduled collection run fired THREE DAYS PAST the window and wrote rows.
 #:
@@ -73,8 +89,10 @@ _H1_WINDOW_FROM = '2026-10-09'   #: the reservation window's start, for the DID_
 #: by accident. The analysis now passes this as `until`, always.
 #:
 #: EXCLUSIVE, matching the pre-registration: the window is
-#: 2026-10-09 -> 2026-10-17 exclusive.
-H1_WINDOW_TO = '2026-10-17'
+#: 2026-11-01 -> 2026-11-09 exclusive (moved 2026-10-28 with the reservation;
+#: the retired October window is kept at
+#: `odds_quota.RETIRED_H1_RESERVATION_WINDOW`).
+H1_WINDOW_TO = '2026-11-09'
 MIN_GAP_MINUTES = 30          #: separation
 MAX_INTERVAL_RATIO = 2.0      #: comparability of the two intervals
 OVERROUND_LO = 1.005          #: below this a book is not pricing a real market
@@ -549,9 +567,13 @@ def apparatus_state(*, in_window: bool, raw_rows: int,
         f"H1 COLLECTION: {n_fixtures} of {TARGET_N} qualifying trajectories")
 
 
-def collection_state(session, since: datetime) -> CollectionStop:
+def collection_state(session, since: datetime, today=None) -> CollectionStop:
     """Evaluate the stop against the database. One call, so the runner does not
-    re-assemble the check's four steps and drift from them."""
+    re-assemble the check's four steps and drift from them.
+
+    `today` is passed straight to `h1_credits_used` and defaults to the clock,
+    so the runner is unchanged and a test can state its regime.
+    """
     observations, _dropped = load_observations(session, since)
     attach_fixture_identity(session, observations)
     _series, by_provider = count_qualifying_fixtures(observations)
@@ -561,16 +583,28 @@ def collection_state(session, since: datetime) -> CollectionStop:
         # 2026-10-09 that charged H1 with 38 credits spent by normal pricing
         # before H1 had run at all. See `h1_credits_used`.
         n_fixtures=len(by_provider.get("TheOddsAPI", set())),
-        credits_spent=h1_credits_used(session),
+        credits_spent=h1_credits_used(session, today),
         raw_rows=len(observations))
 
 
-def h1_credits_used(session) -> Optional[int]:
+def h1_credits_used(session, today=None) -> Optional[int]:
     """Credits spent BY H1 this month, or None when the ledger cannot answer.
 
     THE ONLY NUMBER COMPARABLE TO THE RESERVATION. `credits_used` below is the
     month's total across every consumer; this reads the attributed counter that
     only a `for_h1=True` quota increments.
+
+    `today` IS A SEAM, ADDED 2026-10-28, and the reason is the morning's
+    card loss. This function read `month_key()` off the WALL CLOCK while the
+    claim writes under `month_key(today)` — the claim's date. In production
+    both read the same clock on the same day, so they agree and nothing was
+    wrong. In a test they do not: driving a claim at 2026-11-01 from an
+    October clock wrote the November row and read the October one, and the
+    stop reported `credits=0/168` with 168 credits spent.
+
+    A function that reads the clock itself and takes no `now` cannot be
+    driven at a date. That is the shape that cost a card on 2026-10-27, and
+    the remedy is the seam rather than a frozen fixture on the other side.
 
     A MISSING ROW IS ZERO, NOT UNKNOWN, and that is safe here only because
     `OddsApiQuota.claim_requests` REFUSES to spend an H1 credit it cannot
@@ -583,17 +617,22 @@ def h1_credits_used(session) -> Optional[int]:
         from sqlalchemy import text
         row = session.execute(text(
             "SELECT used FROM api_budget WHERE day = :d AND provider = :p"),
-            {"d": month_key(), "p": PROVIDER_H1}).fetchone()
+            {"d": month_key(today), "p": PROVIDER_H1}).fetchone()
         return int(row[0]) if row else 0
     except Exception:
         return None
 
 
-def credits_used(session) -> Optional[int]:
+def credits_used(session, today=None) -> Optional[int]:
     """Credits spent this month BY EVERY CONSUMER, or None if unreadable.
 
     NOT H1's spend — see `h1_credits_used`. This is the pool's total and it is
     reported, never compared against the reservation or the ceiling.
+
+    `today` IS A SEAM for the same reason as `h1_credits_used`'s, added the
+    same day: this read `month_key(today)` off the wall clock while a claim writes
+    under the claim's date, so the two disagree whenever they are not the same
+    month. Defaults to the clock, so no caller changes.
 
     `api_budget` is keyed (day, provider) where the credit ledger stores the
     MONTH in `day` — see `odds_quota.month_key`. The column is `used`, not
@@ -606,7 +645,7 @@ def credits_used(session) -> Optional[int]:
         from sqlalchemy import text
         row = session.execute(text(
             "SELECT used FROM api_budget WHERE day = :d AND provider = :p"),
-            {"d": month_key(), "p": PROVIDER}).fetchone()
+            {"d": month_key(today), "p": PROVIDER}).fetchone()
         return int(row[0]) if row else 0
     except Exception:
         return None

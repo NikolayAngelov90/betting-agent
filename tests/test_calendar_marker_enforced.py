@@ -106,8 +106,14 @@ def test_the_scan_finds_ALL_THREE_tests_the_MARKER_EXISTS_FOR():
     # collected n=4 of 39 against a floor of 33, so no analysis runs). Its
     # successor contract lives in tests/test_calendar_separation.py. The
     # predicate's coverage is unchanged; the population shrank.
+    # RENAMED 2026-10-28 WITH THE WINDOW MOVE. The guard now fires on the
+    # NEW expiry (2026-11-09) instead of the old one, so the name says
+    # something true again. The marker POPULATION is unchanged: it is the
+    # same test. Both this assertion and the reminders registry's copy
+    # FAILED on the rename before being updated, which is how a
+    # name-keyed guard is shown not to be vacuous.
     found = {f.name for f in scan.scan() if f.markers}
-    for name in ("test_the_H1_RESERVATION_WINDOW_has_EXPIRED",
+    for name in ("test_the_H1_RESERVATION_WINDOW_EXPIRES",
                  "test_the_suppression_has_EXPIRED"):
         assert name in found, (
             f"{name} is no longer flagged; the predicate has lost the "

@@ -83,17 +83,59 @@ def _code_of(path):
 
 #: Measured 2026-10-09 by evaluating the predicates at explicit dates.
 #:
-#:   h1_reservation          0 -> 168 at 2026-10-09, 168 -> 0 at 2026-10-17
+#:   h1_reservation          0 -> 168 at 2026-11-01, 168 -> 0 at 2026-11-09
 #:   month_key               2026-10-01 -> 2026-11-01 at 2026-11-01
 #:   empty_card_window_active  True -> False at 2026-10-09  (fired)
-BOUNDARY_DATES = ("2026-10-09", "2026-10-17", "2026-11-01")
+#:
+#: ── THE WINDOW MOVED 2026-10-28, AUTHORISED ───────────────────────────────
+#:
+#: WAS ("2026-10-09", "2026-10-17", "2026-11-01"). The re-run is chosen and
+#: starts at the credit reset, so the onset and the month flip are now THE
+#: SAME DATE. That is by design rather than coincidence -- the reservation is
+#: carved out of a monthly pool, and opening it on any other day spends it
+#: from a pool normal pricing has already drawn on.
+#:
+#: AND IT MAKES 11-01 A THREE-PREDICATE DATE: the month key flips, the
+#: reservation opens, and `H1_RESERVATION_ACK_UNTIL` reddens `reminders`. All
+#: three on one morning, which is why the collection-error gap in that
+#: workflow was worth closing first.
+BOUNDARY_DATES = ("2026-11-01", "2026-11-09")
 
 
 # ── THE SUCCESSOR CONTRACT FOR 10-17, WRITTEN BEFORE THE DATE ───────────────
 
 @pytest.mark.calendar
-def test_the_H1_RESERVATION_WINDOW_has_EXPIRED():
-    """FAILS FROM 2026-10-17. That is the point, not a bug.
+def test_the_H1_RESERVATION_WINDOW_EXPIRES():
+    """FAILS FROM 2026-11-09. That is the point, not a bug.
+
+    ── THE DATE MOVED 2026-10-28, AND THIS DOCSTRING FORBADE IT ───────────
+    It read: "WHEN THIS GOES RED: delete the reservation ... Do NOT move the
+    date. If collection genuinely needs longer, that is a new allocation with
+    a fresh measurement, not an extension of this one."
+
+    THAT CONDITION IS SATISFIED RATHER THAN OVERRIDDEN, and the distinction is
+    the whole argument. The first attempt is CLOSED at n=4 with power 0.073;
+    its analysis was never run and never will be. What starts on 2026-11-01 is
+    not a longer version of it — it is a new collection, with its own
+    pre-registration, its own eight days and its own sizing, after the
+    collection defect that starved the first one was found and fixed. The
+    docstring's own carve-out is "a new allocation with a fresh measurement",
+    and that is exactly what this is.
+
+    So the dates move together and the old pair is kept inert at
+    `odds_quota.RETIRED_H1_RESERVATION_WINDOW`, because a figure measured
+    inside the October window is not comparable with one measured inside this
+    one. Authorised by Niki, 2026-10-28; no assertion in this file is
+    weakened, and the four boundary dates are driven in
+    `test_the_boundary_dates_are_recorded_with_their_predicates` and in
+    `test_the_NEW_WINDOW_is_INERT_before_and_after`.
+
+    AND THE ACKNOWLEDGEMENT BELOW IS NOW MOOT, not expired: it covered an
+    INERT window ("the acknowledgement covers an INERT window, not a live
+    one"), and from 11-01 the window is live. Its branch is unreachable while
+    the window is open, which is the correct behaviour and not a bypass.
+
+    ── the original record, unchanged ────────────────────────────────────
 
     THE GAP THIS CLOSES. The empty-card suppression had a firing test, so its
     expiry forced a decision. The H1 reservation had NONE — `h1_reservation()`
@@ -108,11 +150,12 @@ def test_the_H1_RESERVATION_WINDOW_has_EXPIRED():
     RESTORATION, not a new break. The onset was the dangerous edge and it has
     already fired.
 
-    WHEN THIS GOES RED: delete the reservation — `H1_RESERVED_CREDITS`,
-    `H1_RESERVATION_FROM`, `H1_RESERVATION_UNTIL`, `h1_reservation`, the
-    `for_h1` branch in `reserved_from_me`, and this test. Do NOT move the date.
-    If collection genuinely needs longer, that is a new allocation with a fresh
-    measurement, not an extension of this one.
+    WHEN THIS GOES RED ON 2026-11-09: delete the reservation —
+    `H1_RESERVED_CREDITS`, `H1_RESERVATION_FROM`, `H1_RESERVATION_UNTIL`,
+    `h1_reservation`, the `for_h1` branch in `reserved_from_me`, the H1 cap in
+    `remaining`/`claim_requests`, and this test. Do NOT move the date a second
+    time: one re-run was authorised on the argument above, and a THIRD window
+    would be an extension dressed as a new allocation.
     """
     from src.data.odds_quota import H1_RESERVATION_UNTIL, h1_reservation
 
@@ -289,13 +332,18 @@ def test_the_declared_members_carry_the_marker():
 def test_the_boundary_dates_are_recorded_with_their_predicates():
     """Every date in the census, and what flips on it."""
     from src.data.odds_quota import h1_reservation, month_key
-    assert h1_reservation(dt.date(2026, 10, 8)) == 0
-    assert h1_reservation(dt.date(2026, 10, 9)) == 168
-    assert h1_reservation(dt.date(2026, 10, 16)) == 168
-    assert h1_reservation(dt.date(2026, 10, 17)) == 0, "the 10-17 expiry moved"
+    assert h1_reservation(dt.date(2026, 10, 31)) == 0, "the day before the onset"
+    assert h1_reservation(dt.date(2026, 11, 1)) == 168, "the onset moved"
+    assert h1_reservation(dt.date(2026, 11, 8)) == 168, "the last collection day"
+    assert h1_reservation(dt.date(2026, 11, 9)) == 0, "the 11-09 expiry moved"
     assert str(month_key(dt.date(2026, 10, 31))) == "2026-10-01"
     assert str(month_key(dt.date(2026, 11, 1))) == "2026-11-01", "the 11-01 flip moved"
-    assert BOUNDARY_DATES == ("2026-10-09", "2026-10-17", "2026-11-01")
+    assert BOUNDARY_DATES == ("2026-11-01", "2026-11-09")
+    # THE RETIRED WINDOW IS STILL INERT, both edges. A moved window must not
+    # leave the old one live anywhere.
+    from src.data.odds_quota import RETIRED_H1_RESERVATION_WINDOW as _old
+    assert h1_reservation(_old[0]) == 0 and h1_reservation(_old[1]) == 0, (
+        "the retired October window is still reporting a reservation")
 
 
 def test_the_LATENT_members_are_recorded_as_a_number_not_a_claim():
@@ -477,7 +525,7 @@ def test_the_10_14_decision_rule_is_DECLARED_and_dated():
 # the requirement that the decision stay recorded, so retiring the guard
 # cannot discard the question it was asking.
 #
-# The OTHER guard, `test_the_H1_RESERVATION_WINDOW_has_EXPIRED`, is deliberately
+# The OTHER guard, `test_the_H1_RESERVATION_WINDOW_EXPIRES`, is deliberately
 # STILL PRESENT and still firing. Its instruction is correct and its estimate of
 # the work is not: the deletion it asks for is 87 references and 31 assertions
 # across 9 test files, measured 2026-10-18. That is a stage with its own
@@ -507,15 +555,21 @@ def test_the_RESERVATION_guard_is_STILL_THERE_and_its_work_is_SIZED():
     """
     src = pathlib.Path("tests/test_calendar_separation.py").read_text(
         encoding="utf-8")
-    assert "test_the_H1_RESERVATION_WINDOW_has_EXPIRED" in src, (
+    assert "test_the_H1_RESERVATION_WINDOW_EXPIRES" in src, (
         "the reservation guard was deleted; if the reservation is gone, "
         "replace this with the inertness contract instead")
     import src.data.odds_quota as q
     assert hasattr(q, "h1_reservation"), (
         "the reservation is gone but its guard remains - one of the two is "
         "stale")
-    assert q.h1_reservation() == 0, (
-        "the window is reporting a live reservation after 2026-10-17")
+    # PURE, NOT `h1_reservation()` ON TODAY. It asserted `== 0` and that was
+    # true only while the window was past; from 2026-11-01 the live window
+    # legitimately returns 168 and the assertion would have failed for eight
+    # days running, reading as a defect. The POSITION is what this guard
+    # cares about, and position is clock-free.
+    assert q.h1_reservation(q.H1_RESERVATION_FROM) == q.H1_RESERVED_CREDITS
+    assert q.h1_reservation(q.H1_RESERVATION_UNTIL) == 0, (
+        "the window does not close at its own UNTIL date")
 
 
 @pytest.mark.calendar

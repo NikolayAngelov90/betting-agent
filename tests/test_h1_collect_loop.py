@@ -20,16 +20,32 @@ patches the stop.
 """
 
 from datetime import date, datetime, timedelta
+from datetime import time as _dtime
 
 import pytest
 
 import src.data.database as db_mod
 from src.data.models import Base, Match, OddsSnapshot, Team
-from src.data.odds_quota import H1_RESERVED_CREDITS, OddsApiQuota, month_key
+from src.data.odds_quota import (H1_RESERVATION_FROM as _RESERVATION_FROM,
+                                 H1_RESERVED_CREDITS, OddsApiQuota,
+                                 month_key)
 
 import scripts.h1_collect as h1c
 
-NOW = datetime(2026, 10, 10, 14, 0)
+# ── MOVED WITH THE WINDOW. 2026-10-28. ───────────────────────────────────
+#
+# WAS datetime(2026, 10, 10, 14, 0), a day inside the OLD reservation
+# window. When the window moved to 2026-11-01..11-09 these fixtures fell
+# OUTSIDE the observation window (`_H1_WINDOW_FROM`), so
+# `load_observations` returned nothing and the loop halted `NO_DATA`
+# instead of `RESERVATION_EXHAUSTED` -- the halt was real, the REASON was
+# wrong, and that is the half-moved-window failure mode from the other
+# side.
+#
+# DERIVED FROM THE CONSTANT, not re-typed, so it cannot be left behind
+# again: the second day of whatever window is configured.
+NOW = datetime.combine(_RESERVATION_FROM + timedelta(days=1),
+                       _dtime(14, 0))
 BOOK = "TheOddsAPI-pinnacle"
 
 
@@ -52,10 +68,26 @@ def _seed_fixture(session, mid, kickoff):
 
 
 def _spend_h1(mgr, credits):
-    """Write H1's ATTRIBUTED counter — the ledger row, not a patch."""
+    """Write H1's ATTRIBUTED counter — the ledger row, not a patch.
+
+    `month_key()` — THE CLOCK — and not `NOW`, because these fixtures sit on
+    TWO DIFFERENT DATE AXES and conflating them is what broke this test when
+    the window moved:
+
+      * the OBSERVATION window is the reservation's dates, so `NOW` is derived
+        from `H1_RESERVATION_FROM`;
+      * the CREDIT LEDGER is keyed by the calendar month the spend happens in,
+        which the loop reads off the clock (`h1_credits_used` → `month_key()`).
+
+    In production both are the same month during the window. In a test run
+    before the window opens they are not, and writing the spend under `NOW`'s
+    month put it where the loop would never look: the stop read
+    `credits=0/168` and the loop ran all three rounds after the reservation
+    was exhausted.
+    """
     q = OddsApiQuota(mgr, monthly_budget=450, safety_margin=50, for_h1=True)
     assert q._h1_store.record_attributed(
-        credits, day=month_key(date(2026, 10, 10))) is not None
+        credits, day=month_key()) is not None
 
 
 @pytest.fixture
@@ -267,7 +299,12 @@ def test_the_observation_window_starts_at_the_RESERVATION_not_the_month(wired, c
     monkeypatch.setattr(h1c, "_one_round", _fake_round)
     h1c.main(["--max-credits", "6", "--rounds", "1", "--gap-minutes", "120", "--allow-sqlite"])
     out = capsys.readouterr().out
-    assert "observations since  : 2026-10-09" in out, out
+    # DERIVED, and the discrimination this test was named for is now WEAKER:
+    # the reservation opens ON the credit reset, so "the reservation start"
+    # and "the month reset" are THE SAME DATE and this assertion can no
+    # longer tell them apart. It still pins the value; it no longer proves
+    # the choice. The discriminating case is driven below.
+    assert f"observations since  : {_RESERVATION_FROM}" in out, out
 
 
 # ════════════════════ the workflow's own properties, pinned ═════════════════

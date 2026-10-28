@@ -296,9 +296,19 @@ from src.data.odds_quota import (
     h1_reservation,
 )
 
-IN_WINDOW = _d.date(2026, 10, 10)
-BEFORE_WINDOW = _d.date(2026, 10, 8)
-AFTER_WINDOW = _d.date(2026, 10, 17)
+#: ── THE DATES MOVED WITH THE WINDOW. 2026-10-28, AUTHORISED. ─────────────
+#:
+#: WAS 2026-10-09..2026-10-17. The re-run is chosen and starts at the credit
+#: reset, so the window is 2026-11-01..2026-11-09 exclusive — the SAME
+#: pre-registered eight days, repositioned. Only these date pins move; not one
+#: assertion about the allocation, the attribution or the stop is weakened.
+#:
+#: These are the "dated pins" that are expected to fail on a window move, and
+#: they are updated in the same commit as the move with the argument beside
+#: them, the way invariant 6b is handled.
+IN_WINDOW = _d.date(2026, 11, 2)
+BEFORE_WINDOW = _d.date(2026, 10, 31)
+AFTER_WINDOW = _d.date(2026, 11, 9)
 
 
 def test_there_is_ONE_allocation_and_the_remainder_is_COMPUTED():
@@ -454,13 +464,20 @@ def test_the_ONSET_is_pinned_not_only_the_expiry():
     for nothing, and nothing would fail — pricing would simply get less budget
     and go dark sooner, which looks exactly like a busy month.
     """
-    assert H1_RESERVATION_FROM == _d.date(2026, 10, 9), (
-        "the reservation's start moved; it must match the card's return date, "
-        "measured from the scraper as 10-09/10-10 for the covered eight")
-    assert h1_reservation(_d.date(2026, 10, 8)) == 0, "activates a day early"
-    assert h1_reservation(_d.date(2026, 10, 9)) == H1_RESERVED_CREDITS
-    assert h1_reservation(_d.date(2026, 10, 16)) == H1_RESERVED_CREDITS
-    assert h1_reservation(_d.date(2026, 10, 17)) == 0, "outlives its window"
+    # THE ONSET IS NOW THE CREDIT RESET, which is a stronger anchor than the
+    # card's return date was: the reservation is carved out of a MONTHLY pool,
+    # so opening it on any day but the 1st spends it from a pool normal
+    # pricing has already drawn on. The old anchor ("the card's return date,
+    # measured from the scraper as 10-09/10-10") was about when there would be
+    # something to collect; that question now belongs to the input
+    # precondition, which evaluates it on the day.
+    assert H1_RESERVATION_FROM == _d.date(2026, 11, 1), (
+        "the reservation's start moved; it must be the TheOddsAPI monthly "
+        "credit reset, which is the 1st")
+    assert h1_reservation(_d.date(2026, 10, 31)) == 0, "activates a day early"
+    assert h1_reservation(_d.date(2026, 11, 1)) == H1_RESERVED_CREDITS
+    assert h1_reservation(_d.date(2026, 11, 8)) == H1_RESERVED_CREDITS
+    assert h1_reservation(_d.date(2026, 11, 9)) == 0, "outlives its window"
 
 
 def test_the_allocator_is_DORMANT_before_the_onset():

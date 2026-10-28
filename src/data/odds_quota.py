@@ -130,8 +130,39 @@ H1_RESERVED_CREDITS = 168
 #: The reservation turns itself on and off BY CALENDAR, never by a flag. A switch
 #: someone must remember to unset is how SUP-1 happens, and this one would
 #: silently throttle normal pricing for every month after the experiment.
-H1_RESERVATION_FROM = _date(2026, 10, 9)
-H1_RESERVATION_UNTIL = _date(2026, 10, 17)      #: exclusive — eight days
+#:
+#: ── MOVED TO THE RE-RUN WINDOW. 2026-10-28, AUTHORISED. ───────────────────
+#:
+#: WAS 2026-10-09 .. 2026-10-17. The first attempt returned n=4 because the
+#: INPUT starved, not because the method failed, and the re-run is chosen.
+#:
+#: BOTH DATES ARE DERIVED, not picked:
+#:   FROM  = the TheOddsAPI monthly credit reset, which is the 1st. Starting
+#:           anywhere later spends the reservation out of a pool normal
+#:           pricing has already drawn on, and the whole point of an
+#:           allocation is that neither consumer depends on the other's
+#:           timing.
+#:   UNTIL = FROM + 8 days, exclusive, preserving the pre-registered
+#:           EIGHT-DAY length exactly (10-09..10-16 inclusive was 8; so is
+#:           11-01..11-08). The LENGTH is pre-registered; only its position
+#:           moves, so this is a reschedule and not an amendment to what is
+#:           collected.
+#:
+#: The 2026-11-04 rate decision therefore falls on DAY 4 OF 8 — the midpoint,
+#: which is where a projection can still change the plan.
+#:
+#: AND IT WAS INERT UNTIL NOW, which is why this had to move before anything
+#: else: with the old window past, `h1_reservation()` returned 0 on 11-01, so
+#: `h1_ceiling` was 0 and H1 would have been refused ENTIRELY. That is the
+#: safe direction and it is still a non-start.
+H1_RESERVATION_FROM = _date(2026, 11, 1)
+H1_RESERVATION_UNTIL = _date(2026, 11, 9)       #: exclusive — eight days
+
+#: THE RETIRED WINDOW, kept because a figure measured inside it is not
+#: comparable with one measured inside the new one, and the first attempt's
+#: `n=4` is quoted often enough that the dates it belongs to must stay
+#: readable.
+RETIRED_H1_RESERVATION_WINDOW = (_date(2026, 10, 9), _date(2026, 10, 17))
 
 
 def h1_reservation(today: Optional[_date] = None) -> int:
