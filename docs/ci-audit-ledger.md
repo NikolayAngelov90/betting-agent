@@ -34381,3 +34381,216 @@ over 23 leagues and 8 dates as a proxy.
 *Recorded 2026-10-28. `src/data/odds_quota.py`, `scripts/ci_audit.py`,
 `tests/test_h1_reservation_is_an_allocation.py`, `tests/h1_synthetic.py`,
 `tests/test_h1_enforced_stop.py`.*
+
+---
+
+## H1 re-run readiness — 2026-10-28. Collection starts 2026-11-01.
+
+Four commits: `49887a3` the window, `9c9c09f` the gate, `4316078` the
+go/no-go, `29e1927` the FIFA check, the input guard and the analysis path.
+Fingerprint **UNCHANGED at `s5.19 / cdec29`** throughout.
+
+### `WINDOW MOVED` — 2026-11-01 … 2026-11-09 exclusive
+
+Both dates **derived**: `FROM` is the TheOddsAPI monthly credit reset, because
+a reservation carved out of a monthly pool must open when that pool does;
+`UNTIL` is `FROM + 8 days`, preserving the pre-registered length exactly. Only
+the position moves, so it is a reschedule and not an amendment to what is
+collected. The 11-04 rate decision lands on **day 4 of 8**.
+
+| date | `h1_ceiling` | `normal_ceiling` | sum |
+|---|---|---|---|
+| 2026-10-31 | 0 | 400 | 400 |
+| **2026-11-01** | **168** | 232 | 400 |
+| 2026-11-08 | 168 | 232 | 400 |
+| 2026-11-09 | 0 | 400 | 400 |
+
+The pin said *"Do NOT move the date"* and its own carve-out was *"a new
+allocation with a fresh measurement"*. The first attempt is closed at n=4;
+this is a new collection with its own pre-registration, so **the condition is
+satisfied rather than overridden**. The docstring now refuses a *third* window.
+
+**A name-keyed guard proved itself non-vacuous:** two sites assert that test's
+name and **both failed** on the rename before being updated.
+
+**Two seamless month reads given a seam.** `h1_credits_used` and
+`credits_used` read `month_key()` off the **wall clock** while a claim writes
+under the claim's date. In production both read the same clock and nothing was
+wrong; the moment the window and the clock sat in different months the stop
+reported `credits=0/168` **with 168 credits spent**, and the loop ran all
+three rounds after its reservation was exhausted.
+
+### `GATE INVERTED` — gating is opt-in
+
+**Nine cards, four events**, and not one of the four tests says anything about
+whether capture writes correct rows.
+
+```
+133 files    71 capture-critical, 62 not
+2,547 gated  ->  1,671 gate, 911 moved out
+gate wall clock  8m01s -> 3m05s
+```
+
+The criterion is **derived from the import graph**, not listed: a test is
+capture-critical if it imports a module on the path that **writes a captured
+row**. `src/models`, the features, reporting and evaluation are deliberately
+out — a defect there produces a **wrong pick**, which is recoverable, where a
+lost odds row **never backfills**.
+
+**All four known-wrong controls pass.** Three of the four aren't
+capture-critical; the fourth is (`test_empty_card_suppression.py` imports a
+scraper inside one test, line 307) and the test that cost the card is
+`calendar`-marked. **The inversion alone prevents 3 of 4; with the markers
+kept, 4 of 4** — the two mechanisms do not cover each other.
+
+**Both positive controls pass**, driven by planting the real defects: a
+double-spending budget claim (6 failures inside the gate) and the two-way bet
+admitted as a 1X2 authority (3 failures).
+
+**Over-selection is accepted rather than gamed.** Any test that stands up a
+synthetic database satisfies the criterion, so the gate carries 27 tests about
+H1's own guards. The direction of the error is the safe one: over-selection
+costs gate time, under-selection costs a card.
+
+> **My first marker hook never ran.** Python keeps only the last
+> `pytest_collection_modifyitems` and there were already two — one dead since
+> the other absorbed its logic. `-m capture_critical` selected **nothing and
+> reported no error**.
+
+### `GO/NO-GO` — GO, from a labelled proxy
+
+The forward fixture horizon is **zero days**, so 11-01→11-08 cannot be
+measured. The proxy (2025-11-01…11-09, 291 matches, 23 leagues, 8 dates)
+projects **n=70 against a floor of 33, on 8 of 8 dates**.
+
+Ranked on `(dates, n)` **in that order** — spread is a constraint, not a
+tie-break. T=09:00 reaches n=39 on only **four** dates and is the worse plan
+despite clearing `TARGET_N`.
+
+### `FIFA WINDOW CHECKED` — no overlap, one day of margin
+
+The men's November 2026 window is **9–17 November**
+(en.wikipedia.org/wiki/FIFA_International_Match_Calendar, fetched 2026-10-28;
+corroborated by beinsports.com and the CONCACAF Nations League). The
+collection window 11-01…11-08 is entirely outside it.
+
+**The margin is one day, and that is luck recorded as luck** — the window came
+from the credit reset plus eight days; nobody consulted the calendar.
+
+**And it strengthens the proxy.** November 2025's window opened 11-10, so the
+proxy week sits in the **same position relative to the break**: the eight club
+days immediately before a November window. Aligned on this axis, not just on
+the calendar. (The 2025 dates are search consensus only, labelled lower
+confidence, used for comparability and never for a projection.)
+
+### `INPUT GUARDED` — and the precondition was never wired
+
+`h1_precondition.evaluate` existed, had four states and fifteen tests, and
+**the collection loop did not call it**. The first attempt spent credits on
+days whose card was 8, 4 and 1 fixtures and the reason was never recorded.
+PNC-1 again — and its own passing tests are what made it look like a working
+feature.
+
+The reason is now captured **at the instant of the decision**, which is the
+point: `is_fixture` is flipped later by the post-picks scrape, so a reason
+re-derived afterwards is not recoverable.
+
+**`OK` became `READY`**, and **"not pinned" had meant "none"**:
+`league = ANY(:lg)` with an empty list matches nothing, so an unpinned run
+reported `NO_FIXTURE_IN_BAND` on a card full of in-band fixtures while the
+loop printed "ALL (not pinned)".
+
+#### The start is a distribution, not a time
+
+A `0 14` cron would have **started at 18:20–19:25** and missed the card
+entirely. The nominal is the target minus the measured lateness.
+
+`simulated` 2026-10-28, 20,000 trials, resampling the `measured` n=6 series
+**independently per day**:
+
+| cron | start window | p5 | median | P(n≥33) | P(n≥39) |
+|---|---|---|---|---|---|
+| `0 9` | 13:20–14:25 | 27 | 46 | 0.891 | 0.867 |
+| `20 9` | 13:40–14:45 | 29 | 46 | 0.809 | 0.735 |
+| **`30 9`** | 13:50–14:55 | **45** | **69** | **0.999** | 0.995 |
+
+**A thirty-minute shift moves floor-clearing from 89% to 99.9%**, because the
+kickoff distribution is lumpy. Cron `30 9 1-8 11 *`, scoped to the window.
+
+**The first cut was wrong in the pessimistic direction:** holding one start
+time across all eight days gave a worst case of n=31 on 7 dates — below the
+floor — for every candidate. That model is not the experiment.
+
+#### The clearances, from both ends
+
+* **LATE END** +358 min (weekday, mean+3sd); +389 at the observed max. The
+  duration term is run **end** rather than time-to-picks, so conservative.
+* **EARLY END** +60 min — the last round at 18:00 against the earliest in-band
+  kickoff at 19:00.
+
+**The early end binds at 60 minutes** and the late end has 358 to spare.
+Moving T later buys nothing because the band moves with it.
+
+#### "No overlap" is not achievable, so the cost is measured
+
+`paper-trading-report` ran 14:02–16:49; `closing-lines` 00:31–23:50;
+`reminders` 05:16–19:06. A **dispatched** daily-picks ended at 13:57 — three
+minutes before T. With 3–5h cron lateness and nothing guarding the set, no T
+guarantees non-overlap.
+
+* **credit contention** — closed by the two-sided allocation.
+* **observation contamination** — bounded, **and the grain is the whole
+  answer.** At fixture-day grain the in-band data showed **67–103** distinct
+  instants per fixture-day. At **series** grain — the unit
+  `qualifying_triple` sees — all **1,939** in-band series-days carry **exactly
+  one** and **zero** carry three. *I measured the wrong grain first and it
+  said "serious contamination".* Residual: if H1 completes only 2 of 3 rounds
+  a foreign instant could supply the third. Recorded, not closed.
+
+### `ANALYSIS VERIFIED` — on a synthetic collection
+
+The whole path now runs on a database with each step's output asserted. The
+builder puts the `ρ=0.42` structure in on purpose: **60 qualifying series on 6
+qualifying fixtures.**
+
+**The clamp has its discrimination control:** 3 in-window and 4 post-window
+fixtures; clamped gives 3, unclamped 7. Without it the clamp could exclude
+nothing and the test would still pass.
+
+**A third half-moved window found:** `h1_analysis.main`'s `--since` defaulted
+to `datetime(2026, 10, 1)`. With the clamp at 11-09 the default population
+would have been **10-01…11-09** — five weeks of normal-pricing snapshots
+counted as H1 observations.
+
+### Two pins, and a test that reached production
+
+* **A selection returning zero is `UNEVALUATED`.** A gate that selects nothing
+  **passes**, and that is indistinguishable from a clean tree unless the count
+  is asserted. Pinned with a planted-two-hooks control.
+* **Before optimising a duration term, establish that everything in it belongs
+  there.** Both instances: 10-20 recovered 14.6 of 19.8 min with **no step
+  getting faster**; 10-28 took the gate 8m01s→3m05s with **no test getting
+  faster**.
+
+> **A guard that fires in a later test names the wrong test.** The new wiring
+> test drives `h1_collect.main()`, which calls `load_dotenv()` and put
+> `DATABASE_URL` back after conftest stripped it. The test **passed** and
+> poisoned the session — the failure surfaced as `assert not mgr.is_postgres`
+> in a different file's fixture, six errors away. Nothing reached production
+> because that guard held. An autouse fixture now fails the **offending** test
+> and re-strips; driven both ways.
+
+### DISCIPLINE
+
+Gate **1,671 passed**; non-gating **911 passed**; calendar/live 8 passed, 2
+skipped; invariants 26, count not cited; all eight workflow YAMLs parse.
+Three ratchets caught this work and all three were cleared by **wiring or
+guarding, never by raising a baseline**: PNC (8 constants consumed by pinning
+them), `code_of` (two hand-rolled strippers replaced), the anchor census (one
+matcher anchored inline, because importing conftest would have pulled the test
+about the gate into the gate).
+
+*Recorded 2026-10-28. `src/data/odds_quota.py`, `scripts/capture_critical.py`,
+`scripts/h1_precondition.py`, `scripts/h1_collect.py`, `scripts/h1_analysis.py`,
+`scripts/h1_collection_check.py`, `.github/workflows/{daily-picks,
+non-gating-tests,h1-collect}.yml`, `tests/conftest.py` and seven test files.*
