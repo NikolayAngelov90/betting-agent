@@ -140,9 +140,35 @@ def _seed_trajectory(session, mid, kickoff, offsets=(-300, -180, -60)):
 
 
 def _set_h1_spend(mgr, credits):
-    """Write H1's ATTRIBUTED counter directly — the ledger row, not a patch."""
+    """Write H1's ATTRIBUTED counter directly — the ledger row, not a patch.
+
+    `month_key()` — THE CLOCK — and NOT `month_key(NOW.date())`. These
+    fixtures sit on TWO DIFFERENT DATE AXES:
+
+      * the OBSERVATION window is `NOW`-relative, because the band is
+        measured from the run's own start;
+      * the CREDIT LEDGER is keyed by the calendar month the spend happens
+        in, which `h1_credits_used` reads off the clock.
+
+    WRITING THE SPEND UNDER `NOW`'s MONTH PUT IT WHERE THE READER NEVER
+    LOOKS, and it cost TWO CARDS. `NOW` is 2026-10-10, so the row went to
+    the 2026-10-01 key; from 2026-11-01 the reader asked for 2026-11-01,
+    found nothing, read `credits_spent = 0`, and the halt never fired — so
+    `plan["h1_stop"]` was absent and `Run tests` failed on a KeyError.
+
+    IT PASSED ON 10-31 AND FAILED ON 11-01, with no code change: the cause is
+    the CALENDAR MONTH turning over, not the H1 window opening on the same
+    day. It would have broken on the 1st of any month.
+
+    THE SAME DEFECT WAS FIXED IN TWO OTHER FILES ON 2026-10-28
+    (`test_h1_collect_loop._spend_h1`, `test_h1_credit_attribution`) when the
+    seam was added to `h1_credits_used`. This was the third site and it was
+    missed — a two-of-three fix, which is the shape the window
+    consolidation exists to prevent and which a test fixture is not covered
+    by.
+    """
     q = OddsApiQuota(mgr, monthly_budget=450, safety_margin=50, for_h1=True)
-    assert q._h1_store.record_attributed(credits, day=month_key(NOW.date())) == credits
+    assert q._h1_store.record_attributed(credits, day=month_key()) == credits
 
 
 def _run(sc, quota=None):
