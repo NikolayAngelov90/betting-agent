@@ -34594,3 +34594,157 @@ about the gate into the gate).
 `scripts/h1_precondition.py`, `scripts/h1_collect.py`, `scripts/h1_analysis.py`,
 `scripts/h1_collection_check.py`, `.github/workflows/{daily-picks,
 non-gating-tests,h1-collect}.yml`, `tests/conftest.py` and seven test files.*
+
+---
+
+## 2026-11-03 — THREE EMPTY DAYS UNDER A GREEN LIGHT, AND A RESEND THAT REFUSED
+
+`ALARM WIRED` · `BAND NOT REPOSITIONED` · `PROJECTION` · `FREEZE SCOPE` ·
+`RESEND REFUSED`
+
+### THE ALARM WAS TRUE OF OCTOBER
+
+H1 collected **nothing on days 1, 2 and 3** of an eight-day window. On both
+completed days the apparatus printed `state=RUNNING_AND_FINE alarms=False` and
+`H1 COLLECTION: 4 of 39 qualifying trajectories`. **Those 4 are October's
+pilot** — the live workflow still passed `--since 2026-10-09`, so the check
+answered about a window that closed before this one opened, and answered
+cheerfully. The in-window figure, `grain=FIXTURE provider=TheOddsAPI
+window=2026-11-01..2026-11-09`, is **0**. Credits spent: **0 of 168**.
+
+**The two completed days failed differently, which is why one fix covers
+neither.**
+
+| day | started | lateness | state | why |
+|---|---|---|---|---|
+| 11-01 | 16:09 | 399.7 min | `NO_CARD` | `Run tests` failed → `--update` **skipped** → `matches` empty |
+| 11-02 | 19:38 | 608.7 min | `NO_FIXTURE_IN_BAND` | `card=28 fixtures=18` — the card was **there**; nothing was 4–6h out |
+
+Both refusals were correct and cost nothing. The 11-02 ordering asked for: the
+dispatch finished writing the card at **17:44:37Z**, H1 read the precondition
+at **19:38:39Z** — **1h54m later** — and got `NO_FIXTURE_IN_BAND`.
+
+`scripts/h1_precondition.py` had **never been called**. It now runs daily and
+calls the real `load_observations` / `attach_fixture_identity` /
+`count_qualifying_fixtures`. The first version of that reported **`n=118 of
+39`** on a day with zero, missing all three filters — the **window** (a 7-day
+lookback), the **provider** (summed) and the **grain** (instants of any
+series, not fixtures carrying three).
+
+* **A past day's state is not derivable from `is_fixture`.** The first per-day
+  table labelled 11-02 `NO_CARD`; that run's log says `NO_FIXTURE_IN_BAND`
+  with 18 fixtures. **`is_fixture` flips at kickoff**, so every past day reads
+  as zero fixtures whatever its card held. The two states call for **opposite
+  repairs** — fix the card writer, or move the window — so the wrong label
+  sends the next reader at the wrong one. Past days now report `UNEVALUATED`.
+* **And fixing that silently broke the alarm.** The streak ended on
+  `card_as_fixture == 0` unless the state was `NO_CARD`. Relabelling past days
+  honestly made that guard fire on ordinary past days, and *"nothing for 3
+  days, the window is at risk"* became *"nothing today"* — **the signal lost
+  on the day it mattered**. The streak now keys on `trajectories == 0` alone.
+  The exemption was wrong even when measurable: the window is a **fixed** eight
+  days, so a day without football is still a day spent.
+
+> **A GO read at a start time nothing runs.** `--project` reports `BEST
+> T=14:00 n=70 VERDICT: GO`. At the **deployed** nominal it is n=38 dates=4
+> over eight days and n=16 dates=2 over the remaining six — **below the floor
+> on the spread constraint in both**. The verdict was true of a configuration
+> that is not deployed.
+
+### THE NOMINAL IS NOT THE BINDING VARIABLE
+
+A move to `0 10` was prepared and **withdrawn before shipping** when day 2
+fired. The viable **start** window is **[13:00, 15:30] UTC** — band
+(T+240, T+360], proxy week with the two lost days excluded, leagues/day=4:
+
+| start | n | dates | | start | n | dates |
+|---|---|---|---|---|---|---|
+| 12:00 | 30 | 5 | | 15:00 | 60 | 6 |
+| 13:00 | 38 | 6 | | 15:30 | 60 | 6 |
+| 14:00 | 66 | 6 | | 16:00 | **4** | 3 |
+| 14:30 | 66 | 6 | | 17:00 | **0** | 0 |
+
+A **cliff, not a slope**, and both realised starts were past it.
+
+    day 1's 399.7 min needs nominal in [06:20, 08:50]
+    day 2's 608.7 min needs nominal in [02:51, 05:21]
+
+**Disjoint by 59 minutes.** There is no value to move this cron to, so
+*"derive from the pessimistic end"* **has no solution**. At n=2 firings no
+distribution is supported either; the earlier n=5 belongs to a different cron
+and is not pooled.
+
+**The fix is several nominals a day — an AMENDMENT, not shipped.** Measured
+support: `closing-lines` fires 8 nominals/day, and over the 4 days with ≥5
+observed firings the **within-day** lateness spread is 92.8 min while the sd
+of day **means** is 10.1 against a pooled sd of 32.9 — only **0.09 of the
+variance sits between days**. Lateness is per-firing, so extra nominals buy
+near-independent draws. **The cost that must land with it:**
+`--max-credits 24` caps one job and 168/6 = 28 credits a day, so two in-band
+firings on one day overdraw it and starve a later one. This reservation has
+already been overdrawn once (288 against 168), so the amendment needs a
+**per-day** ceiling, not only a per-job one.
+
+### PROJECTION
+
+`n=0` of TARGET_N 39, floor 33, with 5 days left. Six remaining days at
+leagues/day=4 reach n=38 dates=6 **only if the start lands in the viable
+window**, which no nominal guarantees — P(both in band and card written) peaks
+at **0.444** on a borrowed series, giving 2.7 of 6 days, where the spread
+constraint needs 5. **It is already below the floor**, which is why this is
+recorded on 11-03 and not on the 11-04 rate-decision date.
+
+### RESEND REFUSED
+
+`--resend <date>` rebuilds the card as a view over `saved_picks` and **refused
+to send it**: the formatter renders 16 pick fields, the store holds 11 plus
+`match_date` by join, and **nine of today's fourteen lines certainly lost
+`models_for`** — derived from the agreement definition (`solo`, `unanimous`
+and `majority` each imply a non-empty list), not sampled. `contrarian_value`
+is recovered as an **identity** (`prob × odds`); `opening_odds` is left
+**absent** because the book is not stored and the 3% movement threshold has a
+pick sitting at 2.99%. **A field rebuilt to the wrong value is worse than one
+left out, because only the second is visible.**
+
+Identity is **structural**: the formatter is extracted and both paths call it.
+The resend does **not** go through `send_daily_picks`, which ends by writing
+the marker that gates the review freeze.
+
+> **The constructor is not read-only.** `FootballBettingAgent()` calls
+> `create_tables` → `create_all`, two migrations **and
+> `_drop_removed_tables`** — DDL including a DROP, issued **before any command
+> dispatches**, where an in-branch census cannot see it.
+
+* **`pick_date` is `Column(Date)`**, so a `::date` cast was a PostgreSQL-only
+  no-op hiding a datetime range that matches **nothing** on SQLite. Two
+  assertions had already passed over the empty result, one an `all()` over an
+  empty list.
+* Two defects in the new code found by **the project's own registries**:
+  `NOT_STORED` was a producer with no consumer (PNC-1), now the single source
+  the verdict is built from; and two `if n:` sites where zero is a meaningful
+  answer, now `> 0`.
+
+### FREEZE SCOPE
+
+**Repairs**, shipped: the alarm's wiring and its three corrections; the stale
+`--since`; the resend capability. **Not shipped**: the multi-nominal cron
+(amendment), and the weekday-margin re-statement — that red fires because the
+margin **improved to +110m** and now clears the 60-minute minimum, so it is a
+verdict in the favourable direction whose restatement would bake a number into
+a population that has just produced a 608.7-min draw.
+
+### DISCIPLINE
+
+Gate **1,696 passed**, 921 deselected; non-gating **911 passed**;
+calendar/live **2 failed, both VERDICTS** (the dated H1 acknowledgement
+expiry, and the improved weekday margin), 7 passed, 1 skipped; invariants 26,
+count not cited; all eight workflow YAMLs parse. Census 135 files /
+73 `capture_critical` — the resend test is correctly **critical**, because a
+resend that wrote would corrupt the pick record. **Fingerprint unmoved at
+s5.19 / cdec29.**
+
+*Recorded 2026-11-03. `scripts/h1_precondition.py`,
+`scripts/h1_collection_check.py`, `.github/workflows/h1-collect.yml`,
+`src/reporting/pick_resend.py` (new), `src/reporting/telegram_bot.py`,
+`src/agent/betting_agent.py`, `tests/test_resend_is_read_only.py` (new) and
+four test files.*
