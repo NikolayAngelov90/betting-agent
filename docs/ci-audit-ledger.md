@@ -34748,3 +34748,158 @@ s5.19 / cdec29.**
 `src/reporting/pick_resend.py` (new), `src/reporting/telegram_bot.py`,
 `src/agent/betting_agent.py`, `tests/test_resend_is_read_only.py` (new) and
 four test files.*
+
+---
+
+## 2026-11-03 — `PLACEMENT MEASURABLE`, AND DECEMBER BLOCKED BY SUPPLY NOT PLACEMENT
+
+Measurement only. Nothing shipped but this record.
+
+### A. SLEEP TO THE TARGET: THE DOOR IS THE JOB CAP
+
+**The documented cap.** "Each job in a workflow can run for up to 6 hours of
+execution time"; step `timeout-minutes` states "Maximum: 360 for both
+GitHub-hosted and self-hosted runners"
+([GitHub Actions limits](https://docs.github.com/en/actions/reference/limits),
+[workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax),
+fetched 2026-11-03). **`timeout-minutes` cannot exceed it.**
+
+**The cap binds the SLEEP, which is the whole finding.** A job delivered at
+`D` can sleep to target `T` only if `D ≤ T` and `T − D ≤ MAX_SLEEP`. With one
+capture, `MAX_SLEEP = 360 − 3 setup − 2 capture = 355 min`, so each target has
+a **355-minute door**. Against it:
+
+* `measured` 2026-11-03, grain=RUN, provider=GitHub scheduler, **borrowed
+  population n=723** (every cron but h1-collect): p5 **13.5 min**, p95
+  **805.4 min** — a **791.9-minute** span.
+* **The door is short by 436.9 minutes.** One nominal reaches **P=0.566**.
+
+**Lateness by cron, regimes NOT pooled** (`measured` 2026-11-03):
+
+| workflow | nominal | n | p50 | p95 | max |
+|---|---|---|---|---|---|
+| daily-picks | 01:00 | 286 | 518.1 | 871.6 | **1198.3** |
+| ci-audit | 12:00 | 39 | 343.8 | 507.3 | 576.7 |
+| paper-trading | 10:23 | 84 | 288.4 | 540.1 | 651.8 |
+| reminders | 13:00 | 12 | 329.5 | 365.5 | 554.9 |
+| closing-lines | 23:17 | 70 | 102.8 | 216.1 | 364.6 |
+| closing-lines | 15:17 | 66 | 40.4 | 111.9 | 115.0 |
+| **h1-collect** | **09:30** | **2** | — | — | **608.6** |
+
+**A single job that sleeps then collects for 4 hours cannot work.**
+`MAX_SLEEP` falls to **117 min**, and the best nominal reaches **P=0.404**.
+
+**Three jobs, one capture each, fixes the cap but not the tail**, because the
+360-minute limit no longer has to hold the 4-hour span. Still P=0.566/target.
+
+**Redundancy is free in credits.** A job outside its door **makes no request** —
+the same refusal the precondition already performs — so extra nominals cost
+nothing unless they succeed.
+
+> **GREEDY-BY-P PICKS THE WRONG NOMINALS.** Top-6 by individual P clusters at
+> 07:00–09:30 and scores 0.988 on the borrowed pool — but it **misses
+> h1-collect's own 608.6-min draw entirely**. Those two real draws sit in the
+> borrowed pool's **upper half** (p50=272), so a plan centred on the bulk
+> misses the only regime this workflow has actually shown. Only nominals
+> **01:30–03:30** catch both.
+
+**The configuration, constrained to cover both observed draws:**
+
+| k/target | nominals (target 14:00) | P/target | P(all 3) |
+|---|---|---|---|
+| 4 | 03:30, 08:00, 08:30, 09:00 | 0.945 | 0.844 |
+| 5 | 03:30, 07:30, 08:00, 08:30, 09:00 | 0.973 | 0.920 |
+| **6** | **03:30, 07:30, 08:00, 08:30, 09:00, 09:30** | **0.986** | **0.959** |
+
+Targets 16:00 and 18:00 take the same set shifted +120 and +240 min. **18 cron
+entries.** `P(all three captures) = 0.959`, `simulated` 2026-11-03 on the
+borrowed population, each firing drawing independently — supported by the
+**0.09** between-day variance share, not assumed.
+
+**Concurrency, the term the credit argument hides.** Documented 20 concurrent
+jobs on Free (40 Pro). `simulated` 2,000 one-day trials: peak concurrent H1
+jobs **p50=7, p95=10, max=12**, and **0.000** of days leave fewer than 5 slots
+for the other five workflows — because most jobs refuse immediately and only
+in-door jobs sleep. **Concurrency is not the blocker.**
+
+**Spacing is exact, not approximate.** Three jobs sleeping to absolute
+wall-clock targets give **exactly 120 and 120 min**. The in-job-wait design
+`measured` 121.1 and 120.9: that drift is the wait plus the request time and
+it accumulates. Sleep-to-target cannot drift, because a missed target is a
+**miss**, not a late shot.
+
+**`PLACEMENT MEASURABLE`** — 3 targets × 6 nominals, sleep-to-target, one
+capture per job, **P=0.959/day**, peak concurrency 10 of 20, 18 credits/day at
+3 pinned leagues (144 of 168 over 8 days). **The binding term was the job cap
+through the sleep, and redundancy buys past it.** It needs a **claim per
+(day, target)** — two in-door jobs for one target would both capture, and a
+per-job cap cannot express that.
+
+### B. DECEMBER FAILS ON FIXTURE SUPPLY, AND 12-01..12-08 IS THE WORST WEEK
+
+**The external calendar, from named sources.** No men's FIFA window in
+December 2026; the next is **22–30 March 2027**, and 24 Nov – 5 Dec is the
+**women's** window
+([FIFA International Match Calendar](https://en.wikipedia.org/wiki/FIFA_International_Match_Calendar)).
+**UCL Matchday 6 is 8–9 December 2026** and is the **only** UEFA league-phase
+round in December; Matchday 5 is 24–25 November, Matchday 7 is 19–20 January
+2027 ([UEFA](https://www.uefa.com/uefachampionsleague/news/02a6-20d57cfcd03e-407c22a7f465-1000--2026-27-champions-league-teams-dates-draws-format-final/)).
+
+> **AND THE REGISTERED PROJECTION SCORES A CONFIGURATION NO CRON CAN
+> EXPRESS.** `project_band_density` takes the **densest `per_day` leagues PER
+> DATE**. The workflow pins a **fixed union**, because a cron cannot pass
+> inputs. So the registered `n=70` is an upper bound nothing deployable
+> reaches. **Third defect in the same projection**, after the start time and
+> the spread constraint.
+
+`measured` 2026-11-03, grain=FIXTURE, the **deployed** pinned set
+(england/championship + the three UEFA competitions), kickoff ≥ 18:30:
+
+| window | n | dates | verdict |
+|---|---|---|---|
+| NOV proxy 11-01..11-09 | 49 | **4** | n ok, **dates FAIL** |
+| **DEC proxy 12-01..12-09** | **3** | 3 | **catastrophically below** |
+
+**UEFA supply arrives in 3-date clusters** and is 1/day between them: 25/26/27
+Nov at 16/15/17, 9/10/11 Dec at 18/12/18, 18 Dec at 18. **`12-01..12-08` sits
+exactly between two clusters** — the worst available position.
+
+Sliding every 8-day window over the proxy at the deployed pinned set, the
+windows that clear `n≥33 and dates≥5`: **11-25..12-03 (n=51, 6 dates)**,
+12-05..12-13 (50, 5), **12-08..12-16 (50, 5)**, 12-09..12-17 (50, 5).
+
+**So a December window is viable only if it is UEFA-ALIGNED.** For 2026 that
+means containing **8–10 December** (UCL Tue/Wed + UEL/UECL Thu), e.g.
+`2026-12-06..2026-12-14`. **The window must be positioned by the matchday
+cluster, not by the credit reset** — the reset chooses the month, the cluster
+chooses the week. November's position was never checked against this and
+produced 4 dates against a 5-date constraint.
+
+**Credits:** 4 leagues × 2 × 3 captures × 8 days = **192, overdrawing 168 by
+24**. But n=1 on non-cluster days, so spending 24 credits there is waste:
+3 cluster days + 2 single-fixture days for the spread constraint = **120
+credits for n≈50 on 5 dates**, fitting 168 with 48 spare. That needs a
+**minimum-fixtures threshold**, which does not exist — the precondition
+refuses on `in_band_pinned == 0`, and 1 is not 0.
+
+### C. THE REMAINING DAYS
+
+`measured` 2026-11-03: today's card holds **23 rows, 19 of them pinned** —
+UCL Matchday 4 at 17:45 and 20:00 plus Championship at 19:45. **The densest
+day of the window.** At 15:32 UTC the H1 run had **not fired** (362 min late);
+for a 20:00 kickoff the start must land before **16:00**.
+
+> **Day 1 missed by nine minutes of band edge.** A 16:09 start puts a 20:00
+> kickoff at **T+231** against a band of (240, 360] — out by **9 minutes**.
+
+Current state: `n=0 of 39`, floor 33, `0 of 168` credits spent. The
+precondition and the corrected alarm keep running; they cost nothing and are
+the only instruments that worked. The reservation stays until 11-09 and
+nothing is deleted inside the window.
+
+### DISCIPLINE
+
+Nothing shipped but this record; no code changed, no statistic amended, no
+revision pin touched. **Fingerprint unmoved at s5.19 / cdec29.**
+
+*Recorded 2026-11-03. No source files changed.*
