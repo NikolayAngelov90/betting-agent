@@ -4652,6 +4652,22 @@ async def main():
 
     _configure_cli_runtime()
 
+    # --resend IS READ-ONLY, AND THE CONSTRUCTOR IS NOT.
+    #
+    # `FootballBettingAgent()` calls `init_db` -> `create_tables`, which runs
+    # `create_all`, two column/index migrations AND `_drop_removed_tables`.
+    # That is DDL, including a DROP, and it happens BEFORE any command is
+    # dispatched - so a resend that merely reads rows would still have issued
+    # it, and the row census taken inside the branch could not see it because
+    # the census starts after construction.
+    #
+    # Suppressing it here, before the agent exists, is the only place the
+    # suppression can work. The same env var the CI workflow sets after its
+    # first invocation; this is that mechanism, used for its stated purpose.
+    if len(sys.argv) > 1 and sys.argv[1] == "--resend":
+        import os as _os
+        _os.environ["TABLES_CREATED"] = "1"
+
     agent = FootballBettingAgent()
 
     if len(sys.argv) < 2:
@@ -4663,6 +4679,9 @@ async def main():
         print("  --picks             Show today's value picks")
         print("  --settle            Settle pending picks with actual results")
         print("  --report            Send comprehensive performance report to Telegram")
+        print("  --resend <date>     Re-send a saved card to Telegram. READ-ONLY; refuses")
+        print("                      unless the stored card reproduces exactly")
+        print("                      (--accept-reconstructed sends a labelled copy)")
         print("  --stats             Show prediction statistics")
         print("  --train             Train ML models on historical data")
         print("  --tune              Tune ensemble weights from recent results")
@@ -5127,6 +5146,55 @@ async def main():
                         print(f"  Model-vs-market divergence: {divergence:+.4f} "
                               f"(how far the model sits from the price it took — "
                               f"NOT edge, and NOT CLV)")
+
+        elif command == "--resend":
+            # READ-ONLY. No credit claim, no provider request, no pick
+            # created or modified, no picks-sent marker, no disposition or
+            # evidence_status touched. The census either side of the send is
+            # the PROOF of that, and it is printed rather than described.
+            from src.reporting.pick_resend import (certify, format_verdict,
+                                                   load_card, row_census)
+            if len(sys.argv) < 3:
+                print("Usage: --resend <YYYY-MM-DD> [--accept-reconstructed]")
+                return
+            try:
+                day = datetime.strptime(sys.argv[2], "%Y-%m-%d").date()
+            except ValueError:
+                print(f"Not a date: {sys.argv[2]!r} (expected YYYY-MM-DD)")
+                return
+            accept = "--accept-reconstructed" in sys.argv
+
+            with agent.db.get_session() as _s:
+                before = row_census(_s)
+            picks, meta = load_card(agent.db, day)
+            if not picks:
+                # NOT "nothing to do": a date with no saved picks and a date
+                # read from the wrong database look the same from here, and
+                # the dialect assertion in load_card is what tells them apart.
+                print(f"NO SAVED PICKS for {day} (dialect asserted "
+                      f"postgres; this is a measured zero, not a fallback)")
+                return
+            cert = certify(picks, meta)
+            print(f"stored card for {day}: {meta['n']} pick(s), "
+                  f"{meta['matches']} match(es), max {meta['max_per_match']} "
+                  f"per match, paper={meta['paper']}")
+            if not cert["reproducible"] and not accept:
+                print(format_verdict(cert, day))
+                return
+            sent = await agent.telegram.resend_daily_picks(
+                picks, paper_mode=bool(meta["paper"]),
+                reconstructed=not cert["reproducible"])
+            with agent.db.get_session() as _s:
+                after = row_census(_s)
+            drift = {t: (before[t], after[t])
+                     for t in before if before[t] != after[t]}
+            print(f"sent={sent}  labelled_reconstruction="
+                  f"{not cert['reproducible']}")
+            print(f"ROW CENSUS over {len(before)} tables: "
+                  f"{'UNCHANGED - nothing was written' if not drift else drift}")
+            if drift:
+                print("WROTE SOMETHING - this path is supposed to be "
+                      "read-only. Report it; do not re-run.")
 
         elif command == "--report":
             print("Generating performance report...")

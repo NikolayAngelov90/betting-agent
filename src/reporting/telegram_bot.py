@@ -37,6 +37,11 @@ class ChunkOutcome:
 
 
 # State file tracking whether picks were already sent today (Story 8.2)
+# A NAMED NEWLINE. Every heredoc and generator that has touched this file
+# has at some point turned an escaped newline into a real one mid-string;
+# a named constant cannot be mangled that way.
+NL = chr(10)
+
 _PICKS_SENT_STATE = Path("data/models/picks_sent_date.txt")
 
 
@@ -159,6 +164,79 @@ class TelegramNotifier:
             await self._send_message("No value picks found for today.")
             return
 
+        message, header = self._build_daily_picks_message(
+            picks, dropped_picks=dropped_picks, no_injury_data=no_injury_data,
+            injury_data_stale=injury_data_stale,
+            injury_budget_exhausted=injury_budget_exhausted, force=force,
+            paper_mode=paper_mode, experiment=experiment)
+
+        await self._send_chunked(message, header, report="daily picks")
+        try:
+            _mark_picks_sent_today()
+        except Exception as _mse:
+            logger.warning(f"Could not write picks-sent state file: {_mse}")
+
+    async def resend_daily_picks(self, picks: List[BetRecommendation], *,
+                                 paper_mode: bool = False,
+                                 reconstructed: bool = False):
+        """Re-send a card Telegram ALREADY received. WRITES NOTHING.
+
+        Deliberately NOT a thin wrapper over `send_daily_picks`: that one ends
+        by writing the picks-sent marker, and a resend that moved the marker
+        could unfreeze the review path. The shared formatter is called
+        directly instead, so the card is identical by construction while the
+        marker is never touched.
+
+        `force=True` is passed so the header is the ordinary one rather than
+        "Supplement to today's picks". The original send used the ordinary
+        header, and a resend relabelled as a supplement would read as three
+        extra picks arriving - the opposite of what a resend means.
+
+        `experiment` is NOT passed. Its figures move with settlement, so
+        recomputing them now would put a DIFFERENT number on a message whose
+        whole purpose is to be the same message.
+        """
+        if not self.enabled:
+            return False
+        if not self._get_bot():
+            return False
+        if not picks:
+            logger.warning("resend: nothing to send - 0 picks for that date")
+            return False
+        message, header = self._build_daily_picks_message(
+            picks, force=True, paper_mode=paper_mode)
+        if reconstructed:
+            # THE LABEL GOES ON THE MESSAGE, NOT ONLY IN THE LOG. A
+            # reconstruction that looks like the original is the one failure
+            # mode worse than refusing to send: the reader cannot tell a copy
+            # with lines missing from a correction that dropped them.
+            banner = (
+                "<b>RECONSTRUCTED COPY - not byte-identical to the original "
+                "card.</b>" + NL +
+                "<i>Rebuilt from saved picks. Per-model agreement lists, xG "
+                "lines and line-movement annotations are absent because they "
+                "were never stored.</i>" + NL + NL)
+            header = banner + header
+            message = banner + message
+        await self._send_chunked(message, header, report="daily picks (resend)")
+        return True
+
+    def _build_daily_picks_message(
+            self, picks: List[BetRecommendation], *, dropped_picks: list = None,
+            no_injury_data: bool = False, injury_data_stale: bool = False,
+            injury_budget_exhausted: bool = False, force: bool = False,
+            paper_mode: bool = False, experiment=None):
+        """Build the daily-picks card. Returns ``(message, header)``.
+
+        EXTRACTED SO THE RESEND CANNOT DRIFT FROM THE SEND. `--resend` has to
+        reproduce the card Telegram already received; a second copy of this
+        formatting would become a second card the first time either side
+        changed. Identity is therefore STRUCTURAL - one formatter, two
+        callers - not an assertion that two paths still agree.
+
+        WRITES NOTHING AND SENDS NOTHING. The marker write stays in
+        `send_daily_picks`: a resend that moved it could unfreeze reviews.
+        """
         # Supplement header when picks were already sent earlier today (AC1/AC2 — Story 8.2).
         # Skipped when force=True (--picks --force always uses the normal header).
         try:
@@ -330,11 +408,8 @@ class TelegramNotifier:
 
         # Send (split if needed)
         message = "\n".join(lines)
-        await self._send_chunked(message, header, report="daily picks")
-        try:
-            _mark_picks_sent_today()
-        except Exception as _mse:
-            logger.warning(f"Could not write picks-sent state file: {_mse}")
+        return message, header
+
 
     async def send_settlement_report(
         self,

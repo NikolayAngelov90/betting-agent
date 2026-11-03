@@ -77,7 +77,13 @@ from scripts.capture_critical import (
 #: it is correctly non-critical: a test about the gate does not import the
 #: write path, so it must not be able to stop capture. `capture_critical`
 #: is unchanged at 69.
-CENSUS = {"files": 134, "capture_critical": 72, "not_critical": 62}
+#: 134 -> 135 files and 72 -> 73 capture_critical on 2026-11-03, when
+#: `test_resend_is_read_only.py` arrived. It is correctly CRITICAL: it
+#: exercises the saved-pick read and the Telegram send path, and the thing it
+#: proves is that `--resend` writes NO ROW TO ANY TABLE. A resend that wrote
+#: would corrupt the pick record, so a regression there must be able to stop
+#: capture rather than merely redden a later job.
+CENSUS = {"files": 135, "capture_critical": 73, "not_critical": 62}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -288,9 +294,27 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     906 tests left the gate, and 16 more arrived in the non-gating
     selection with this file, for 923.
     """
+    # RE-MEASURED 2026-11-03: gate 1680 -> 1696. Non-gating is UNCHANGED at
+    # 911, and the first attempt at this update said 909 because a pytest
+    # summary line reports tests PASSED while this assertion counts tests
+    # COLLECTED -- 909 passed plus the 2 failures that prompted the update.
+    # The two numbers coincide only on a green run, which is exactly when
+    # nobody is reading them.
+    #
+    # +15 gating, all of them new tests rather than re-marked ones:
+    #   11  test_resend_is_read_only.py -- the no-write row census, its
+    #       injected-write positive control, the marker pair (resend does not
+    #       move it, the ordinary send does) and the refusal with its
+    #       known-wrong input
+    #    5  test_h1_precondition.py -- the silent-zero alarm's controls: that
+    #       a day WITH real trajectories reports them, that an out-of-window
+    #       day is excluded by the window bound, and the streak pair (a zero
+    #       day counts whatever its reason; a day that COLLECTED ends it).
+    #       Net +1 against the test it replaced, which pinned the exemption
+    #       that was truncating a real 3-day streak to 1.
     gate, nong = _ids(GATE_EXPR), _ids(NON_GATING_EXPR)
-    assert len(gate) == 1680, (
-        f"the gating selection is {len(gate)}, recorded 1680 — say what moved")
+    assert len(gate) == 1696, (
+        f"the gating selection is {len(gate)}, recorded 1696 — say what moved")
     assert len(nong) == 911, (
         f"the non-gating selection is {len(nong)}, recorded 911")
     # and the gate must never grow back to everything
