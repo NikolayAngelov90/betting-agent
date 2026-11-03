@@ -104,6 +104,18 @@ def iso() -> Tuple[str, str]:
     return FROM.isoformat(), UNTIL.isoformat()
 
 
+def days_list() -> Tuple[_date, ...]:
+    """Every DAY of the window, in order. The derivation lives here too.
+
+    A consumer that needs to ask a per-day question -- "is a reservation
+    declared for this day?" -- was otherwise building the range itself from
+    FROM and UNTIL, which is the computing-a-date-from-the-window defect the
+    one-source rule exists to stop.
+    """
+    return tuple(_date.fromordinal(o)
+                 for o in range(FROM.toordinal(), UNTIL.toordinal()))
+
+
 def month_keys() -> Tuple[_date, ...]:
     """Every credit-ledger month key the window touches, in order.
 

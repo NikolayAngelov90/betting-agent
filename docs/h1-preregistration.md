@@ -497,3 +497,134 @@ on the first of them:
 
 **Whether to re-run at all is Niki's**, at a cost of **168 TheOddsAPI
 credits** over eight days, earliest start **2026-11-01**.
+
+
+---
+
+# AMENDMENT 2 — appended 2026-11-03, BEFORE anything ships. The statistics are UNCHANGED.
+
+The second window (2026-11-01..11-09) collected **nothing on days 1–3** and
+`n = 0` of 39 stands. The cause is not the pipeline this time — the card was
+written on day 2 and day 3 — but **placement**: the job never started inside
+the two-and-a-half-hour span from which the band reaches a European evening
+kickoff.
+
+## WHAT IS NOT AMENDED
+
+**The statistics are untouched.** ρ=0.42, σ=5.937%, `TARGET_N` 39, floor 33,
+the n=33–39 band from `((z_a+z_b)/z_r)² + 3`, the null's interpretation, the
+168-credit reservation and the eight-day window all stand exactly as
+registered. `n = 0` is **not** a reduced-power result and **`NO DATA` is not a
+null**, so there is nothing to update them against.
+
+## WHAT IS AMENDED — ONE ITEM: HOW A CAPTURE IS PLACED IN TIME
+
+**Several cron nominals per day, each sleeping to an absolute wall-clock
+target, one capture per job**, replacing one cron per day with in-job waits.
+
+### The mechanical justification, which is a mechanism and not a result
+
+The GitHub scheduler's delivery time is a **distribution**, and its spread
+exceeds the width of the target the band presents:
+
+* `measured` 2026-11-03, grain=RUN, provider=GitHub scheduler, **borrowed
+  population n=723** (every cron in this repo but `h1-collect`): p5 **13.5
+  min**, p95 **805.4 min** — a **791.9-minute** span.
+* The viable **start** span is **[13:00, 15:30] UTC** — 150 minutes — because
+  the band `(T+240, T+360]` must reach a 19:45–20:00 kickoff cluster.
+* **The spread is 5.3× the target.** One draw per day therefore cannot place a
+  capture; this is arithmetic about the scheduler, not a finding about prices.
+
+Both firings of the deployed cron land outside it: **399.7 min** late
+(start 16:09, which misses a 20:00 kickoff by **9 minutes of band edge**) and
+**608.6 min** late (start 19:38). The nominal cannot be fixed by moving it: to
+catch the first draw it must sit in [06:20, 08:50], to catch the second in
+[02:51, 05:21], and **those intervals are disjoint by 59 minutes.**
+
+### Why sleep-to-target, and what bounds it
+
+A job delivered at `D` can wait until target `T` if `D ≤ T` and
+`T − D ≤ MAX_SLEEP`. With one capture per job
+`MAX_SLEEP = 360 − 3 − 2 = 355 min`, because GitHub documents "Each job in a
+workflow can run for up to 6 hours of execution time" and `timeout-minutes`
+"Maximum: 360 for both GitHub-hosted and self-hosted runners" (fetched
+2026-11-03). **The cap binds the sleep**, so each target gets a 355-minute
+door against a 791.9-minute spread — still short, which is why redundancy is
+needed as well as sleeping.
+
+**Redundancy costs nothing in credits.** A job delivered outside its door makes
+**no request** — the refusal the precondition already performs. `measured`
+live 2026-11-03: the day-3 dispatch spent **4 credits** on round 1, not 8,
+because two of four pinned leagues had no in-band fixture and were skipped at
+zero cost.
+
+### The count is derived, not fitted
+
+The bar `P ≥ 0.95` was set before this requirement was known. The requirement
+is `n ≥ 33` trajectories, which for the candidate window's measured day sizes
+`[18, 12, 18, 1, 1]` is satisfied **iff both 18-fixture days place**, since
+`18+12+1+1 = 32 < 33`. So `P(n≥33) = P_day²` and the bar requires
+`P_day ≥ √0.95 = 0.9747`.
+
+Sweeping the nominal count against the measured lateness series, with every
+plan **constrained to cover both of h1-collect's own observed draws**:
+
+| k per target | crons | P/target | P_day | P(n≥33) |
+|---|---|---|---|---|
+| 5 | 15 | 0.9726 | 0.9201 | 0.8466 |
+| 6 | 18 | 0.9862 | 0.9592 | 0.9201 |
+| **7** | **21** | **0.9928** | **0.9785** | **0.9574** |
+
+**k = 7 is the smallest value satisfying the inequality.** Nothing was raised
+until it cleared: every k that fails is listed. `P` stays `simulated` on a
+borrowed population; h1-collect's own series is **n = 2** and cannot confirm it
+before the window runs.
+
+Concurrency, `simulated` 2,000 one-day trials: peak concurrent H1 jobs p50=8,
+**p95=12** against a documented 20 on the Free plan, leaving 8 slots — because
+most jobs refuse immediately and only in-door jobs sleep.
+
+### One mechanism this requires, which does not exist yet
+
+**A claim per (day, target).** `simulated`: on **100%** of days at k=7, at
+least one target receives two in-door jobs, and both would capture. A per-job
+credit cap cannot express this; the claim must be keyed on the pair.
+
+## WHAT IS NOT AN AMENDMENT, AND WHY — the date constraint
+
+`dates ≥ 5` gated the go/no-go and **is not in this registration**. It appears
+only in `project_from_proxy`, introduced 2026-10-30, with the comment
+"rho = 0.42 clusters on fixture". **That misreads ρ**: this document records
+ρ=0.42 as the *effect size under test* — "derived 2026-09-16 from δ=+2% and
+the policy", decision table `r ≥ 0.42 → SIGNAL, and actionable`. It is the
+autocorrelation being measured, not an intracluster correlation, and no
+design-effect term appears anywhere here. The registered decision rule keys on
+**trajectories** alone: day 3 <8, day 5 <18, day 8 ≥33.
+
+So removing the gate restores the registered requirement rather than changing
+it. A date requirement would need a **within-date ICC**, which is neither
+registered nor measured, and cannot be measured before the window because
+zero trajectories exist. Conditional on an `assumed` ICC, at n=50:
+
+| dates | m | ICC at which n_eff falls to 33 |
+|---|---|---|
+| 3 | 16.7 | 0.033 |
+| 4 | 12.5 | 0.045 |
+| 5 | 10.0 | 0.057 |
+
+4 and 5 dates differ by 0.012 of an unmeasured quantity. **The defensible form
+is a reported design-effect penalty, not a gate**: date count, m and n_eff at
+a stated ICC are reported beside n, and the reader sees the spread.
+
+## AND A CORRECTNESS FIX, WHICH CHANGES NO SELECTION RULE
+
+The attributed counter is written per claim under the claim's own month, so
+**attribution was always right**; the **read** took one row. A window crossing
+a credit reset touches two keys, and reading one understated the spend —
+silently, in the direction that keeps collecting. `h1_credits_used` now sums
+every month key the window touches, and the stop refuses only when the
+**reservation** cannot be carved (a day with none declared), not when the
+accounting merely spans two months. That distinction is what the old refusal
+collapsed, and it was discarding the only candidate window with a date margin.
+
+*Recorded 2026-11-03, before any cron is added. No statistic amended.*

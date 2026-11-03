@@ -495,15 +495,29 @@ def collection_stop(*, n_fixtures: int, credits_spent: Optional[int],
     # The window does not straddle today (FROM is itself a reset), which is
     # exactly why this is worth asserting rather than assuming: the property
     # holds by construction now and nothing would notice if it stopped.
-    if _h1_window.straddles_a_month():
+    # THE REFUSAL NOW NAMES THE RIGHT FACT, 2026-11-03.
+    #
+    # It used to refuse ANY window touching two month keys, on the grounds
+    # that the attributed counter is keyed by one month. That conflated two
+    # different things:
+    #
+    #   ACCOUNTING SPANS TWO KEYS. The claims already write under their own
+    #   month; only the READ took one row. `h1_credits_used` now SUMS every
+    #   key the window touches, so this is expressible and is not refused. A
+    #   window with margin was being thrown away for a read bug.
+    #
+    #   THE RESERVATION CANNOT BE CARVED. Some day of the window has no
+    #   declared reservation, or a month's pool cannot carry it. Then the
+    #   bound does not exist for part of the window and a stop compared
+    #   against it can never fire. THAT is still refused, and it is the
+    #   original concern stated correctly.
+    _ok, _why = reservation_is_expressible()
+    if not _ok:
         return CollectionStop(
             True, "BUDGET_UNREADABLE",
-            f"the collection window {_h1_window.iso()} CROSSES a credit "
-            f"reset, touching ledger months "
-            f"{[str(k) for k in _h1_window.month_keys()]}. The attributed "
-            f"counter is keyed by one month, so the spend read against the "
-            f"bound is incomplete and this stop would not fire when it "
-            f"should. This is the bound being UNKNOWABLE, not reached.")
+            f"the collection window {_h1_window.iso()} has no expressible "
+            f"reservation: {_why} This is the bound being UNKNOWABLE, not "
+            f"reached.")
 
     bound = effective_bound(reservation)
     #: Which of the two supplied the bound. The registered ceiling binds only
@@ -651,16 +665,100 @@ def h1_credits_used(session, today=None) -> Optional[int]:
     attribute. Without that refusal this zero would be the silent kind — a
     bound compared against an unwritten counter never binds. An exception
     still returns None and the stop fails closed.
+
+    IT SUMS EVERY MONTH KEY THE WINDOW TOUCHES, added 2026-11-03. Each claim
+    already writes under its OWN month (`month_key(today)` at claim time), so
+    ATTRIBUTION was never wrong; the READ was. A window spanning a reset
+    touches two rows and this returned one of them, which understates the
+    spend — silently, and in the direction that keeps collecting. That made a
+    straddling window unusable and it was refused outright instead, which is
+    the wrong remedy: the accounting spans two keys, and a sum expresses that.
+
+    `keys` is an injection point for the controls; the default is the window's
+    own months, so no caller computes a month from the window.
     """
     try:
-        from src.data.odds_quota import PROVIDER_H1, month_key
         from sqlalchemy import text
-        row = session.execute(text(
-            "SELECT used FROM api_budget WHERE day = :d AND provider = :p"),
-            {"d": month_key(today), "p": PROVIDER_H1}).fetchone()
-        return int(row[0]) if row else 0
+
+        from src.data import h1_window as _hw
+        from src.data.odds_quota import PROVIDER_H1, month_key
+        keys = tuple(_hw.month_keys()) or (month_key(today),)
+        total = 0
+        for k in keys:
+            row = session.execute(text(
+                "SELECT used FROM api_budget WHERE day = :d AND provider = :p"),
+                {"d": k, "p": PROVIDER_H1}).fetchone()
+            total += int(row[0]) if row else 0
+        return total
     except Exception:
         return None
+
+
+def h1_spend_by_month(session) -> Optional[dict]:
+    """The attributed spend PER MONTH KEY the window touches.
+
+    The sum alone cannot show a straddling window's two halves, and the
+    report has to state which month each claim fell in rather than implying
+    one. Returns `None` on an unreadable ledger, as its caller fails closed.
+    """
+    try:
+        from sqlalchemy import text
+
+        from src.data import h1_window as _hw
+        from src.data.odds_quota import PROVIDER_H1
+        out = {}
+        for k in _hw.month_keys():
+            row = session.execute(text(
+                "SELECT used FROM api_budget WHERE day = :d AND provider = :p"),
+                {"d": k, "p": PROVIDER_H1}).fetchone()
+            out[str(k)] = int(row[0]) if row else 0
+        return out
+    except Exception:
+        return None
+
+
+def reservation_is_expressible() -> tuple:
+    """Can the window's reservation be carved in EVERY month it touches?
+
+    THIS IS THE DISTINCTION THE OLD REFUSAL COLLAPSED. Two different things
+    were both reported as `BUDGET_UNREADABLE`:
+
+      ACCOUNTING SPANS TWO KEYS — the window crosses a reset, so the spend
+      lives in two rows. That is now simply SUMMED. It is not a defect and
+      must not be refused.
+
+      THE RESERVATION CANNOT BE CARVED — some day of the window has no
+      reservation declared (`h1_reservation` returns 0 outside
+      FROM..UNTIL), or a touched month's pool cannot carry it. Then the
+      bound genuinely does not exist for part of the window, and a stop
+      compared against it would never fire. THAT is still refused.
+
+    Returns `(ok, why)`; `why` is empty when ok.
+    """
+    from src.data import h1_window as _hw
+    from src.data.odds_quota import (DEFAULT_MONTHLY_BUDGET,
+                                     DEFAULT_SAFETY_MARGIN,
+                                     H1_RESERVED_CREDITS, allocate,
+                                     h1_reservation)
+    undeclared = [str(d) for d in _hw.days_list() if h1_reservation(d) <= 0]
+    if undeclared:
+        return (False,
+                f"{len(undeclared)} day(s) of the window carry NO declared "
+                f"reservation ({undeclared[:3]}{'...' if len(undeclared) > 3 else ''}). "
+                f"`h1_reservation` returns 0 outside "
+                f"{_hw.FROM}..{_hw.UNTIL}, so for those days the bound does "
+                f"not exist and a stop compared against it can never fire. "
+                f"This is the RESERVATION being unexpressible, which is not "
+                f"the same as its accounting spanning two months.")
+    for k in _hw.month_keys():
+        a = allocate(DEFAULT_MONTHLY_BUDGET, DEFAULT_SAFETY_MARGIN,
+                     today=_hw.days_list()[0])
+        if a["pool"] < H1_RESERVED_CREDITS:
+            return (False,
+                    f"month {k} has pool {a['pool']} against a reservation of "
+                    f"{H1_RESERVED_CREDITS}; the reservation cannot be carved "
+                    f"from it.")
+    return (True, "")
 
 
 def credits_used(session, today=None) -> Optional[int]:

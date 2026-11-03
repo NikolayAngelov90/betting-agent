@@ -83,7 +83,13 @@ from scripts.capture_critical import (
 #: proves is that `--resend` writes NO ROW TO ANY TABLE. A resend that wrote
 #: would corrupt the pick record, so a regression there must be able to stop
 #: capture rather than merely redden a later job.
-CENSUS = {"files": 135, "capture_critical": 73, "not_critical": 62}
+#: 135 -> 137 files and 73 -> 75 capture_critical on 2026-11-03, with
+#: `test_two_month_counter.py` and `test_five_mechanisms_fire.py`. Both are
+#: correctly CRITICAL: one guards the credit counter that bounds spending, the
+#: other proves the five H1 mechanisms actually fire. A regression in either
+#: lets the subsystem spend or collect wrongly, so it must be able to stop
+#: capture rather than merely redden a later job.
+CENSUS = {"files": 137, "capture_critical": 75, "not_critical": 62}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -294,7 +300,7 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     906 tests left the gate, and 16 more arrived in the non-gating
     selection with this file, for 923.
     """
-    # RE-MEASURED 2026-11-03: gate 1680 -> 1696. Non-gating is UNCHANGED at
+    # RE-MEASURED 2026-11-03: gate 1680 -> 1696 -> 1710. Non-gating is UNCHANGED at
     # 911, and the first attempt at this update said 909 because a pytest
     # summary line reports tests PASSED while this assertion counts tests
     # COLLECTED -- 909 passed plus the 2 failures that prompted the update.
@@ -312,9 +318,11 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       day counts whatever its reason; a day that COLLECTED ends it).
     #       Net +1 against the test it replaced, which pinned the exemption
     #       that was truncating a real 3-day streak to 1.
+    #   +14  the two-month counter's both-controls pair (7) and the five
+    #        mechanisms' firings (7), added the same day
     gate, nong = _ids(GATE_EXPR), _ids(NON_GATING_EXPR)
-    assert len(gate) == 1696, (
-        f"the gating selection is {len(gate)}, recorded 1696 — say what moved")
+    assert len(gate) == 1710, (
+        f"the gating selection is {len(gate)}, recorded 1710 — say what moved")
     assert len(nong) == 911, (
         f"the non-gating selection is {len(nong)}, recorded 911")
     # and the gate must never grow back to everything
