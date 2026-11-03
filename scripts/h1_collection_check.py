@@ -770,7 +770,8 @@ def render(n_fixtures: int, by_provider: Dict[str, set],
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--since", help="ISO date; default 2026-10-01, the reset")
+    ap.add_argument("--since",
+                    help="ISO date; defaults to the collection window's start")
     ap.add_argument("--days", type=int,
                     help="look back this many days instead of --since")
     ap.add_argument("--allow-sqlite", action="store_true",
@@ -795,7 +796,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     elif args.since:
         since = datetime.fromisoformat(args.since)
     else:
-        since = datetime(2026, 10, 1)
+        # ── DERIVED, AND IT WAS A SEVENTH COPY. 2026-11-02. ───────────────
+        #
+        # `datetime(2026, 10, 1)` was October's credit reset. With the window
+        # at 2026-11-01..11-09 this default reported against five weeks of
+        # normal-pricing snapshots, exactly as `h1_analysis`'s did until it
+        # was fixed on 10-28 -- the same literal, in the sibling script,
+        # missed in the same sweep.
+        since = _h1_window.as_datetimes()[0]
 
     from src.data.database import get_db
     from src.data.odds_quota import month_key

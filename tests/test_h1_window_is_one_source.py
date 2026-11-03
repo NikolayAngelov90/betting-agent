@@ -129,17 +129,55 @@ RE_EXPORTERS = ("src/data/odds_quota.py", "scripts/h1_collection_check.py")
 #:
 #: CAPPED AT TWO. A third would mean the edge values are load-bearing in more
 #: places than this mechanism can reason about.
+#: KEYED ON A SYMBOL, NOT A LINE NUMBER. 2026-11-02: it was keyed on line 552
+#: and the line moved to 601 the moment a block was inserted above it, so the
+#: stale-allowance guard fired on an edit that changed nothing about the fact.
+#: A line number is an anchor every unrelated edit invalidates; the NAME beside
+#: the date is the thing that means something, and it is resolved from the same
+#: parsed source each run — so a moved line is fine and a CHANGED FACT is not.
 INDEPENDENT_FACTS = {
     "scripts/h1_precondition.py": {
-        552: "FIFA_WINDOW_NOV_2026's first day. It equals the H1 window's "
-             "exclusive end BY COINCIDENCE -- that coincidence is the "
-             "one-day margin -- and the published FIFA calendar must be able "
-             "to move without dragging the collection window with it.",
+        "FIFA_WINDOW_NOV_2026":
+            "its first day equals the H1 window's exclusive end BY "
+            "COINCIDENCE -- that coincidence IS the one-day margin -- and the "
+            "published FIFA calendar must be able to move without dragging "
+            "the collection window with it.",
     },
 }
+
+
+def _allowed_linenos(path: str):
+    """Line numbers of the allowed symbols' ASSIGNMENTS in `path`.
+
+    Resolved from source every run, so an edit above an allowance does not
+    invalidate it while a change to the FACT still does.
+    """
+    syms = set(INDEPENDENT_FACTS.get(path, {}))
+    if not syms:
+        return set()
+    try:
+        tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (SyntaxError, UnicodeDecodeError):
+        return set()
+    out = set()
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for t in targets:
+            if isinstance(t, ast.Name) and t.id in syms:
+                for sub in ast.walk(node):
+                    if hasattr(sub, "lineno"):
+                        out.add(sub.lineno)
+    return out
 INDEPENDENT_FACTS_CAP = 2
 
 ROOTS = ("src", "scripts", "tests")
+#: Workflows are scanned too, from 2026-11-02, because the sixth half-moved
+#: site was a `run:` command and not Python.
+WORKFLOWS = ".github/workflows"
 
 
 def _code_date_sites(path: pathlib.Path):
@@ -179,6 +217,44 @@ def _code_date_sites(path: pathlib.Path):
     return hits
 
 
+def _yaml_date_sites(path: pathlib.Path):
+    """`[(lineno, what)]` for window edges in a workflow's RUN COMMANDS.
+
+    ── THE SIXTH HALF-MOVED SITE WAS HERE. 2026-11-02. ───────────────────
+    `h1-collect.yml` ran `h1_collection_check --since 2026-10-09` in TWO
+    steps, so from 2026-11-01 both the BEFORE and the AFTER report described
+    the October population every day. This scan covered `.py` only, and a
+    date in a workflow is a consumer too.
+
+    COMMANDS, NOT THE WHOLE FILE: the comment above those steps now QUOTES
+    the stale flag to record what it was, and a text scan over the raw YAML
+    would match the record of the fix as though it were the defect. That is
+    the seventeen-instance class, and the parsed `run:` is the equivalent of
+    asking the AST.
+    """
+    import yaml
+
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return []
+    raw = path.read_text(encoding="utf-8").splitlines()
+    hits = []
+    for job in (doc.get("jobs") or {}).values():
+        for step in (job.get("steps") or []):
+            run = str(step.get("run") or "")
+            for line in run.splitlines():
+                bare = line.strip()
+                if not bare or bare.startswith("#"):
+                    continue
+                for iso in EDGE_ISO:
+                    if iso in bare:
+                        lineno = next((i + 1 for i, l in enumerate(raw)
+                                       if bare in l), 0)
+                        hits.append((lineno, f"run: ...{iso}..."))
+    return hits
+
+
 def _scan():
     out = {}
     for root in ROOTS:
@@ -188,6 +264,10 @@ def _scan():
             hits = _code_date_sites(p)
             if hits:
                 out[str(p).replace("\\", "/")] = hits
+    for p in sorted(pathlib.Path(".github/workflows").glob("*.yml")):
+        hits = _yaml_date_sites(p)
+        if hits:
+            out[str(p).replace("\\", "/")] = hits
     return out
 
 
@@ -221,7 +301,7 @@ def test_every_H1_DATE_SITE_IMPORTS_rather_than_RESTATES():
             f"{path} reads an H1 date for {why} and references none of the "
             f"window's published names {sorted(PUBLISHED_NAMES)} — so where "
             f"does it get the date from?")
-        allowed = INDEPENDENT_FACTS.get(path, {})
+        allowed = _allowed_linenos(path)
         restated = [h for h in sites.get(path, []) if h[0] not in allowed]
         assert not restated, (
             f"{path} RESTATES a window edge at line(s) "
@@ -251,16 +331,21 @@ def test_the_INDEPENDENT_FACTS_are_CAPPED_and_REALLY_COINCIDE():
         f"{len(INDEPENDENT_FACTS)} files hold an edge value for another "
         f"reason, against a cap of {INDEPENDENT_FACTS_CAP}")
     sites = _scan()
-    for path, lines in INDEPENDENT_FACTS.items():
+    for path, syms in INDEPENDENT_FACTS.items():
         found = {l for l, _ in sites.get(path, [])}
-        for lineno, why in lines.items():
-            assert len(why) > 60, f"{path}:{lineno} allowed without a reason"
-            assert lineno in found, (
-                f"{path}:{lineno} is allowed to restate an edge and the scan "
-                f"finds no edge there (it finds {sorted(found)}). The "
-                f"allowance is STALE: either the line moved, or the "
-                f"coincidence ended and the two facts have diverged — which "
-                f"is the case this exists to make visible.")
+        allowed = _allowed_linenos(path)
+        for sym, why in syms.items():
+            assert len(why) > 60, f"{path}:{sym} allowed without a reason"
+            assert sym in pathlib.Path(path).read_text(encoding="utf-8"), (
+                f"{path} no longer defines {sym}, so the allowance names "
+                f"nothing")
+            assert allowed & found, (
+                f"{path}:{sym} is allowed to restate an edge and the scan "
+                f"finds no edge on its assignment — it finds {sorted(found)} "
+                f"and the symbol resolves to {sorted(allowed)}. The "
+                f"allowance is STALE: the COINCIDENCE HAS ENDED and the two "
+                f"facts have diverged, which is the case this exists to make "
+                f"visible.")
     # and the coincidence itself is asserted by value somewhere else
     pre = pathlib.Path("scripts/h1_precondition.py").read_text(
         encoding="utf-8")

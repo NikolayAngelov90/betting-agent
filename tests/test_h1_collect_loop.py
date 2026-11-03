@@ -432,13 +432,26 @@ def test_the_H1_SCHEDULE_IS_DISABLED_and_the_cron_rationale_is_HISTORY():
         "a dispatch-only trigger means someone must remember to fire it on "
         "eight consecutive mornings.")
     crons = [c["cron"] for c in on["schedule"]]
+    # ── HELD AT `30 9`, AND THE PIN RECORDS WHY NOT MOVING IT IS THE ──────
+    # ── DECISION. ────────────────────────────────────────────────────────
+    #
+    # A move to `0 10` was prepared on 2026-11-02 and withdrawn the same
+    # night, before shipping, when day 2 fired at 608.7 min late and showed
+    # that no nominal works. Both firings this cron has ever had landed PAST
+    # the viable [13:00, 15:30] start window -- 16:09 and 19:38 -- and the
+    # nominal intervals that would have fixed each are DISJOINT by 59 min.
+    # The nominal is therefore not the binding variable, and a change here
+    # would spend a registered quantity to buy nothing measurable.
     assert crons == ["30 9 1-8 11 *"], (
-        f"the H1 cron is {crons}, not the derived `30 9 1-8 11 *`. The "
-        f"nominal is the TARGET MINUS THE MEASURED LATENESS (14:00 - 281.6 "
-        f"min), and `30 9` scored P(n>=33)=0.999 against 0.891 for `0 9` in "
-        f"a 20,000-trial resample of the measured n=6 lateness series. The "
-        f"day-of-month and month fields scope it to the window so it cannot "
-        f"fire past it, which is how 8 credits leaked in October.")
+        f"the H1 cron is {crons}, not `30 9 1-8 11 *`. It is HELD at the "
+        f"deployed value: with n=2 firings (399.7 and 608.7 min late) no "
+        f"lateness distribution is supported, and the two nominals that "
+        f"would have landed each draw in band -- [06:20, 08:50] and "
+        f"[02:51, 05:21] -- do not intersect, so there is no value to move "
+        f"to. The fix is several nominals a day, which is an AMENDMENT and "
+        f"is registered before it ships. The day-of-month and month fields "
+        f"scope it to the window so it cannot fire past it, which is how 8 "
+        f"TheOddsAPI credits leaked in October.")
     assert "workflow_dispatch" in on, (
         "dispatch was removed too, so the re-run decision cannot be executed "
         "without a push")
@@ -449,7 +462,11 @@ def test_the_H1_SCHEDULE_IS_DISABLED_and_the_cron_rationale_is_HISTORY():
     for part in ("SCHEDULE DISABLED 2026-10-20", "8 TheOddsAPI CREDITS",
                  "normal_ceiling: 350", "39435238427"):
         assert part in src, f"the disable no longer records {part!r}"
-    for part in ("30 9 1-8 11 *", "P(n>=33)", "281.6"):
+    # The withdrawn move is recorded by its EVIDENCE, not by its conclusion:
+    # both realised latenesses, the disjointness that killed it, and the
+    # amendment it defers to.
+    for part in ("30 9 1-8 11 *", "399.7", "608.7", "DISJOINT BY 59 MINUTES",
+                 "NOT THE BINDING VARIABLE", "AMENDMENT"):
         assert part in src, f"the derivation no longer records {part!r}"
 
 

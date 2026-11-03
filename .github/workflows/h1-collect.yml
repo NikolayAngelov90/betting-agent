@@ -171,6 +171,61 @@ on:
   # a cron that fires every day for ever and is stopped by a guard is how this
   # workflow came to run three days past its last window. The calendar is the
   # on/off switch on both sides.
+  # ── NOT REPOSITIONED, AND THE MEASUREMENT IS WHY. ─────────────────────
+  #
+  # This cron was changed to `0 10` on 2026-11-02 and changed BACK the same
+  # night, unshipped, when day 2 fired and disproved the argument for it. The
+  # derivation stays here because the negative result is the useful part.
+  #
+  # BOTH FIRINGS THIS CRON HAS EVER HAD, measured 2026-11-03 (grain=RUN,
+  # provider=GitHub scheduler, nominal 09:30 UTC):
+  #     2026-11-01  started 16:09  lateness 399.7 min -> NO_CARD
+  #     2026-11-02  started 19:38  lateness 608.7 min -> NO_FIXTURE_IN_BAND
+  # n = 2, so NO DISTRIBUTION IS SUPPORTED: neither `mean+3sd` nor the p95
+  # successor is available, and the earlier n=5 belongs to a different cron.
+  #
+  # THE TWO DAYS FAILED FOR DIFFERENT REASONS, which is why one fix covers
+  # neither. Day 1 had no card at all: `Run tests` failed, which SKIPPED
+  # `--update`, so `matches` was empty. Day 2 HAD the card -- `card=28
+  # fixtures=18`, written by a manual dispatch at 17:44:37Z, 1h54m before the
+  # run -- and still refused, on `in_band=0`, because by 19:38 no kickoff that
+  # evening was 4-6h away. Both refusals were correct and cost nothing.
+  #
+  # THE VIABLE START WINDOW IS [13:00, 15:30] UTC. Measured 2026-11-03 over
+  # the proxy week with the two lost days excluded and leagues/day=4
+  # (168 credits / 6 remaining days), band (T+240, T+360]:
+  #     start 12:00  n=30 dates=5     start 14:00  n=66 dates=6
+  #     start 13:00  n=38 dates=6     start 15:30  n=60 dates=6
+  #     start 16:00  n= 4 dates=3     start 17:00  n= 0 dates=0
+  # The floor is `n>=33 and dates>=5`. The collapse after 15:30 is a CLIFF,
+  # not a slope, and both realised starts were past it.
+  #
+  # NO SINGLE NOMINAL SATISFIES BOTH OBSERVED LATENESSES:
+  #     to land in band under day 1's 399.7 min -> nominal in [06:20, 08:50]
+  #     to land in band under day 2's 608.7 min -> nominal in [02:51, 05:21]
+  # Those intervals are DISJOINT BY 59 MINUTES. There is no value to move
+  # this cron to, so "derive from the pessimistic end" has no solution and
+  # THE NOMINAL IS NOT THE BINDING VARIABLE. That is the finding.
+  #
+  # AND THE REGISTERED `--project` VERDICT IS READ AT A START TIME THIS CRON
+  # NEVER USES. It reports `BEST T=14:00 n=70 VERDICT: GO`, but at the
+  # deployed nominal it is n=38 dates=4 over 8 days and n=16 dates=2 over the
+  # remaining 6 -- below the floor on the SPREAD constraint in both. A GO that
+  # is true of a configuration nothing runs is the vacuous shape one level up.
+  #
+  # THE FIX IS SEVERAL NOMINALS A DAY, WHICH IS AN AMENDMENT AND IS NOT
+  # SHIPPED HERE. It changes how many chances exist to collect, so it is
+  # registered before it ships. Measured support, 2026-11-03: `closing-lines`
+  # fires 8 nominals/day, and across the 4 days with >=5 observed firings the
+  # within-day lateness spread is 92.8 min while the sd of day MEANS is 10.1
+  # against a pooled sd of 32.9 -- only 0.09 of the variance sits BETWEEN
+  # days. Lateness is per-firing, not a property of the day, so extra
+  # nominals buy near-independent draws rather than the same draw twice.
+  # THE COST THAT MUST LAND WITH IT: `--max-credits 24` caps ONE job, and
+  # 168/6 = 28 credits a day, so two in-band firings on one day overdraw that
+  # day and starve a later one. This reservation has already been overdrawn
+  # once (288 against 168), so the amendment needs a PER-DAY ceiling and not
+  # only a per-job one.
   schedule:
     - cron: '30 9 1-8 11 *'
 
@@ -267,7 +322,13 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
           TABLES_CREATED: '1'
-        run: python -m scripts.h1_collection_check --since 2026-10-09
+        # ── THE STALE `--since 2026-10-09` IS GONE. 2026-11-02. ──────────
+        # It pinned the OCTOBER window, so from 11-01 this report described
+        # the wrong population every day. The SIXTH half-moved copy, and the
+        # one the consolidation could not see: that test scanned `.py` files
+        # only, and a date in a workflow is a consumer too. No flag now --
+        # the default is derived from `h1_window`.
+        run: python -m scripts.h1_collection_check
 
       - name: Collect
         env:
@@ -306,7 +367,47 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
           TABLES_CREATED: '1'
-        run: python -m scripts.h1_collection_check --since 2026-10-09
+        # ── THE STALE `--since 2026-10-09` IS GONE. 2026-11-02. ──────────
+        # It pinned the OCTOBER window, so from 11-01 this report described
+        # the wrong population every day. The SIXTH half-moved copy, and the
+        # one the consolidation could not see: that test scanned `.py` files
+        # only, and a date in a workflow is a consumer too. No flag now --
+        # the default is derived from `h1_window`.
+        run: python -m scripts.h1_collection_check
+
+      # ── THE SILENT-ZERO ALARM, WIRED. 2026-11-02. ──────────────────────
+      #
+      # FIFTH UNWIRED MECHANISM IN THIS SUBSYSTEM, and the only one that would
+      # have announced SUCCESS: it printed `n=118 of 39` on a day with zero,
+      # because its count lacked the window, the provider and the series
+      # grain. CORRECTED BEFORE BEING WIRED -- wiring a wrong alarm is worse
+      # than no alarm -- and it now reports `0 of 39` with the grain, the
+      # provider and the window printed beside the number.
+      #
+      # HERE, AND WHY THIS WORKFLOW. It must run whether or not collection ran
+      # and whether or not `daily-picks` succeeded:
+      #   * `if: always()` means a halted or failed Collect step does not skip
+      #     it -- and a halt is exactly when it matters, because NO_CARD is
+      #     the state it exists to escalate;
+      #   * this workflow's cron `30 9 1-8 11 *` is independent of
+      #     `daily-picks`, so a failed card cannot take the alarm with it.
+      #     That is precisely what the last two days were: the card failed and
+      #     nothing said the window was burning.
+      #
+      # NOT `reminders`, whose exit 1 means A REMINDER IS DUE, and not
+      # `non-gating-tests`, which is a test run. One meaning per run.
+      #
+      # REPORTING ONLY: `main()` returns 0 regardless and `continue-on-error`
+      # says so. An alarm that could fail the job would make the escalation
+      # compete with the collection it reports on.
+      - name: The daily check and the silent-zero alarm
+        if: always()
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+          H1_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python -m scripts.h1_precondition
 
       # ── THE TELEGRAM FAILURE ALERT WAS REMOVED HERE. 2026-10-22. ──────────
       #

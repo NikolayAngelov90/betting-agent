@@ -183,11 +183,39 @@ def test_a_day_that_COLLECTED_ends_the_streak():
     assert [r.day.day for r in pre.zero_collection_streak(rows)] == [15]
 
 
-def test_a_day_with_NO_FIXTURES_AT_ALL_and_no_NO_CARD_state_ends_it():
-    """A day football does not play is not H1's failure."""
-    rows = [_day(13, 0, 0, state=pre.STATE_NO_FIXTURE_IN_BAND),
-            _day(14, 4, 0)]
-    assert len(pre.zero_collection_streak(rows)) == 1
+def test_a_ZERO_DAY_COUNTS_WHATEVER_ITS_REASON_including_UNEVALUATED():
+    """REPLACES a test that pinned an exemption which truncated the alarm.
+
+    The old rule ended the streak on a day with `card_as_fixture == 0` whose
+    state was not `NO_CARD`, so that "a day football does not play is not
+    H1's failure". It was wrong twice over, and both were observed:
+
+    `is_fixture` FLIPS AT KICKOFF, so EVERY past day reads as zero fixtures.
+    2026-11-02 carried 18 and reads 0 now, so the exemption fired on an
+    ordinary past day and cut a real 3-day streak down to 1 - reporting
+    "COLLECTED NOTHING TODAY" on the third consecutive empty day.
+
+    AND THE EXEMPTION WAS WRONG EVEN WHEN MEASURABLE: the window is a fixed
+    eight days, so a day without football is still a day spent, and the
+    target is no nearer for the reason being blameless.
+
+    The streak therefore keys on `trajectories == 0` alone.
+    """
+    rows = [_day(13, 0, 0, state=pre.STATE_UNEVALUATED),
+            _day(14, 0, 0, state=pre.STATE_NO_FIXTURE_IN_BAND),
+            _day(15, 4, 0)]
+    assert len(pre.zero_collection_streak(rows)) == 3, (
+        "a zero day was excused by its reason; the streak must rest on the "
+        "count, which is always known, not on a label that may be UNEVALUATED")
+
+
+def test_KNOWN_WRONG_a_COLLECTED_day_still_ENDS_the_streak():
+    """The complement: the streak must not be unconditional either."""
+    rows = [_day(13, 8, 0), _day(14, 8, 2), _day(15, 8, 0)]
+    streak = pre.zero_collection_streak(rows)
+    assert len(streak) == 1 and streak[0].trajectories == 0, (
+        "a day that COLLECTED did not end the streak, so the streak counts "
+        "days rather than empty days")
 
 
 def test_POSITIVE_CONTROL_the_alarm_ESCALATES_and_N2_N3_DIFFER():
@@ -487,3 +515,157 @@ def test_the_START_TIME_and_BOTH_CLEARANCES_are_pinned():
     assert "series grain" in _pre2.H1_OVERLAP_PROVENANCE, (
         "the overlap finding no longer states the grain it was settled at — "
         "fixture-day grain said 67-103 instants and series grain said 1")
+
+
+# ══════ THE SILENT-ZERO ALARM: CORRECTED, THEN WIRED — 2026-11-02 ══════════
+#
+# FIFTH UNWIRED MECHANISM IN THIS SUBSYSTEM, and the only one that would have
+# announced SUCCESS. Run by hand on day 2 of the window it printed
+#
+#     !! H1 COLLECTED NOTHING FOR 2 DAYS ... n=118 of 39, floor 33.
+#
+# while both per-day rows showed `trajectories=0`. 118 was wrong THREE ways
+# and every one of them favourable:
+#
+#   WINDOW    `rows` spanned the last SEVEN DAYS, so October's normal-pricing
+#             days counted toward a November experiment. Unbounded the same
+#             query gives 1,478.
+#   PROVIDER  no filter, so API-Football's snapshots counted as H1's.
+#             Measured: API-Football has touched 1,243 fixtures with 3+
+#             instants, TheOddsAPI 876.
+#   GRAIN     three distinct instants of ANY series on a fixture. A trajectory
+#             is three instants of ONE (book, market, selection) series at
+#             >=30-minute separation.
+#
+#       Five unwired mechanisms in this subsystem, every one failing toward
+#       "keep collecting" or "apparent success". Mechanisms written while
+#       expecting success inherit the expectation; the ones that would
+#       contradict it are the ones left unwired.
+#
+# A FIX IS WIRED ONLY AFTER IT IS CORRECT: wiring a wrong alarm is worse than
+# no alarm, so the count was repaired first and both controls driven.
+
+def test_the_ALARM_COUNT_uses_the_REAL_trajectory_definition():
+    """It must not carry its own query. A third definition of "a trajectory"
+    is how 118 happened."""
+    import inspect
+
+    from tests.conftest import code_of
+
+    src = code_of(inspect.getsource(_pre2.main))
+    for must in ("load_observations", "count_qualifying_fixtures",
+                 "h1_credits_used"):
+        assert must in src, (
+            f"the daily check no longer calls `{must}`; it is back to its own "
+            f"SQL and the count can drift from the stop and the analysis")
+    assert "HAVING count(DISTINCT observed_at)" not in src, (
+        "the bespoke trajectory query is back — that is the one that counted "
+        "three instants of three DIFFERENT series as a trajectory")
+    assert "credits_spent=6" not in src, (
+        "`credits_spent` is a literal again; a literal cannot be right twice")
+
+
+def test_the_GRAIN_PROVIDER_and_WINDOW_are_PRINTED_beside_the_number():
+    """The standing rule: every H1 figure states its grain before its value.
+
+    118 was not a arithmetic error — it was a correct count of the wrong
+    thing, and the only way a reader could have known is if the count said
+    what it was counting.
+    """
+    import inspect
+
+    from tests.conftest import code_of
+
+    src = code_of(inspect.getsource(_pre2.main))
+    assert "grain=FIXTURE" in src and "provider=TheOddsAPI" in src, (
+        "the figure no longer names its grain and provider")
+    assert "window=" in src, "the figure no longer names its window"
+    assert "source=attributed_counter" in src, (
+        "the credit figure no longer names where it came from")
+
+
+def test_CONTROL_a_day_with_REAL_trajectories_REPORTS_THEM(tmp_path):
+    """POSITIVE CONTROL: the fix must not have replaced one constant with
+    another. A synthetic collection of five fixtures must report FIVE.
+
+    And it must NOT report the series count: the builder puts several
+    (book, market, selection) series on each fixture on purpose, so the two
+    grains differ by an order of magnitude and the test can say which it
+    means.
+    """
+    import src.data.database as db_mod
+    from src.data import h1_window as hw
+    from src.data.models import Base
+    from scripts.h1_collection_check import (attach_fixture_identity,
+                                             count_qualifying_fixtures,
+                                             load_observations)
+    from tests.h1_synthetic import build
+
+    mgr = db_mod.DatabaseManager(config=type("C", (), {
+        "database": {"sqlite_path": str(tmp_path / "alarm.db")}})())
+    Base.metadata.create_all(mgr.engine)
+    assert not mgr.is_postgres
+    with mgr.get_session() as s:
+        info = build(s, n_fixtures=5, first_day=hw.FROM, days=2)
+
+    lo, hi = hw.as_datetimes()
+    with mgr.get_session() as s:
+        obs, _ = load_observations(s, lo, until=hi)
+        attach_fixture_identity(s, obs)
+        series, by_provider = count_qualifying_fixtures(obs)
+
+    fixtures = len(by_provider.get("TheOddsAPI", ()))
+    assert fixtures == 5, (
+        f"a day with five real trajectories reported {fixtures}; the fix has "
+        f"replaced 118 with a different wrong constant")
+    assert series["TheOddsAPI"] == info["series"], (
+        "the series count moved, so the two grains can no longer be compared")
+    assert series["TheOddsAPI"] >= 10 * fixtures, (
+        f"the grains must differ visibly for this control to mean anything: "
+        f"{series['TheOddsAPI']} series on {fixtures} fixtures")
+
+
+def test_CONTROL_the_WINDOW_BOUND_excludes_an_OUT_OF_WINDOW_day(tmp_path):
+    """KNOWN-WRONG CONTROL for the filter that produced 118.
+
+    Observations outside the window must not count. Without the bound the
+    same seven-day lookback swept October's normal pricing into a November
+    experiment.
+    """
+    import datetime as _dt
+
+    import src.data.database as db_mod
+    from src.data import h1_window as hw
+    from src.data.models import Base
+    from scripts.h1_collection_check import (attach_fixture_identity,
+                                             count_qualifying_fixtures,
+                                             load_observations)
+    from tests.h1_synthetic import build
+
+    mgr = db_mod.DatabaseManager(config=type("C", (), {
+        "database": {"sqlite_path": str(tmp_path / "bound.db")}})())
+    Base.metadata.create_all(mgr.engine)
+    with mgr.get_session() as s:
+        build(s, n_fixtures=2, first_day=hw.FROM, days=1)
+    with mgr.get_session() as s:
+        build(s, n_fixtures=4, first_day=hw.RETIRED[0], days=1,
+              league="spain/laliga")          # OCTOBER, outside the window
+
+    lo, hi = hw.as_datetimes()
+    with mgr.get_session() as s:
+        inside, _ = load_observations(s, lo, until=hi)
+        allrows, _ = load_observations(
+            s, _dt.datetime(2026, 1, 1), until=None)
+        attach_fixture_identity(s, inside)
+        attach_fixture_identity(s, allrows)
+        _si, in_by = count_qualifying_fixtures(inside)
+        _sa, all_by = count_qualifying_fixtures(allrows)
+
+    n_in = len(in_by.get("TheOddsAPI", ()))
+    n_all = len(all_by.get("TheOddsAPI", ()))
+    assert n_in == 2, f"the window bound dropped in-window fixtures: {n_in}"
+    assert n_all == 6, (
+        f"THE CONTROL FAILED: without the bound the October fixtures were not "
+        f"counted either ({n_all}), so this cannot show the bound does "
+        f"anything")
+    assert n_all > n_in, "the window bound excluded nothing"

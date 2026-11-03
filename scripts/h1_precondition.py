@@ -201,17 +201,30 @@ ESCALATE_WINDOW_AT_RISK = 3
 
 
 def zero_collection_streak(rows: List[ZeroDay]) -> List[ZeroDay]:
-    """Trailing days that HAD a card and collected nothing.
+    """Trailing days that collected nothing. KEYED ON THE MEASURED FACT.
 
-    A `NO_CARD` day still counts: not having a card is the failure, and it was
-    the actual failure on 10-13..10-15. A day with no fixtures anywhere is not
-    H1's problem and ends the streak.
+    THE STREAK COUNTS `trajectories == 0` AND NOTHING ELSE. It used to also
+    break on `card_as_fixture == 0` unless the state was `NO_CARD`, to let a
+    day with no football anywhere end the streak. Two things were wrong with
+    that:
+
+    FIRST, `card_as_fixture` CANNOT CARRY THAT TEST. `is_fixture` flips at
+    kickoff, so every past day reads as zero fixtures whatever its card held -
+    2026-11-02 had 18 and reads as 0 now. The guard therefore fired on
+    ordinary past days and silently truncated the streak to one, turning
+    "nothing for 3 days, the window is at risk" into "nothing today".
+
+    SECOND, THE EXEMPTION WAS WRONG EVEN WHEN MEASURABLE. The window has a
+    FIXED number of days. A day with no football is still a day of the eight
+    gone, and the target is no more reachable for the reason being excusable.
+    An alarm about the window's risk must count it.
+
+    So the reason per day is reported separately and may be `UNEVALUATED`;
+    the streak itself rests only on the count, which is always known.
     """
     out: List[ZeroDay] = []
     for r in reversed(rows):
         if r.trajectories > 0:
-            break
-        if r.card_as_fixture == 0 and r.state != STATE_NO_CARD:
             break
         out.append(r)
     return list(reversed(out))
@@ -361,33 +374,104 @@ def main() -> int:
         # that detector, in `scripts/pnc_scan.py --list`, before this shipped.
         # So it has a consumer: this entry point, which a person runs and the
         # H1 workflow can call before collecting.
+        # ── THE COUNT, WITH ITS THREE MISSING FILTERS. 2026-11-02. ────────
+        #
+        # IT REPORTED `n=118 of 39` ON A DAY WITH ZERO, and 118 was wrong
+        # three ways, every one of them favourable:
+        #
+        #   WINDOW    `rows` spanned the last SEVEN DAYS, so October's
+        #             normal-pricing days counted toward a November
+        #             experiment. Unbounded the same query gives 1,478.
+        #   PROVIDER  no filter at all, so API-Football's snapshots counted
+        #             as H1's. Measured: API-Football has touched 1,243
+        #             fixtures with 3+ instants, TheOddsAPI 876.
+        #   GRAIN     it asked for three distinct instants of ANY series on a
+        #             fixture. A trajectory is three instants of ONE
+        #             (book, market, selection) series, at >=30-minute
+        #             separation. Three snapshots of three DIFFERENT series
+        #             is not a trajectory, and counting it as one is the
+        #             key-against-fixture error inverted.
+        #
+        # SO IT NO LONGER HAS ITS OWN QUERY. It calls the same three
+        # functions the stop and the analysis call, which removes a THIRD
+        # definition of "a trajectory" rather than correcting it.
+        from src.data import h1_window as _hw
+        from scripts.h1_collection_check import (attach_fixture_identity,
+                                                 count_qualifying_fixtures,
+                                                 h1_credits_used,
+                                                 load_observations)
+
         rows: List[ZeroDay] = []
         today = _dt.date.today()
-        for back in range(6, -1, -1):
-            d = today - _dt.timedelta(days=back)
+        lo_dt, hi_dt = _hw.as_datetimes()
+        for back in range((_hw.DAYS - 1), -1, -1):
+            d = _hw.LAST_DAY - _dt.timedelta(days=back)
+            if d > today:
+                continue                      # a future day is not a zero day
             nxt = d + _dt.timedelta(days=1)
             fx = s.execute(text(
                 "SELECT count(*) FROM matches WHERE match_date >= :a "
                 "AND match_date < :b AND is_fixture"),
                 {"a": d, "b": nxt}).scalar() or 0
-            traj = s.execute(text(
-                "SELECT count(*) FROM ("
-                "  SELECT match_id FROM odds_snapshots "
-                "  WHERE observed_at >= :a AND observed_at < :b "
-                "  GROUP BY match_id HAVING count(DISTINCT observed_at) >= 3"
-                ") t"), {"a": d, "b": nxt}).scalar() or 0
-            state = STATE_READY if traj else (
-                STATE_NO_CARD if fx == 0 else STATE_NO_FIXTURE_IN_BAND)
-            rows.append(ZeroDay(d, int(fx), int(traj), state,
-                                p.reason if d == today else
-                                "historical; the reason was not captured"))
+            # THE WINDOW clamps the day too: a day outside it contributes
+            # nothing to this experiment even if snapshots exist.
+            day_lo = max(_dt.datetime.combine(d, _dt.datetime.min.time()),
+                         lo_dt)
+            day_hi = min(_dt.datetime.combine(nxt, _dt.datetime.min.time()),
+                         hi_dt)
+            traj = 0
+            if day_hi > day_lo:
+                obs, _dropped = load_observations(s, day_lo, until=day_hi)
+                attach_fixture_identity(s, obs)
+                _series, by_provider = count_qualifying_fixtures(obs)
+                # PROVIDER and GRAIN: fixtures, TheOddsAPI only.
+                traj = len(by_provider.get("TheOddsAPI", ()))
+            # A PAST DAY'S STATE IS NOT DERIVABLE FROM `is_fixture`, AND
+            # DERIVING IT ANYWAY NAMED THE WRONG FAILURE.
+            #
+            # `is_fixture` FLIPS once a match kicks off, so `fx` is 0 for
+            # every past day whatever happened on it. The first version of
+            # this read that 0 as `NO_CARD` and labelled 2026-11-02 NO_CARD --
+            # but that run's own log says `NO_FIXTURE_IN_BAND` with
+            # `card=28 fixtures=18`. The card was there; the BAND was empty.
+            #
+            # Those two states call for opposite repairs - fix the card
+            # writer, or move the collection window - so a wrong label here
+            # sends the next reader at the wrong one. The honest value is the
+            # third state: the reason was not captured, and nothing in the
+            # database now can recover it.
+            #
+            # Today is different: today's row carries the LIVE precondition,
+            # so it takes that evaluation's state rather than re-deriving one.
+            if d == today:
+                state, why = p.state, p.reason
+            elif traj:
+                state, why = STATE_READY, "collected"
+            else:
+                state = STATE_UNEVALUATED
+                why = ("zero collected, and WHY is unrecoverable: `is_fixture` "
+                       "flips at kickoff, so a past day reads as 0 fixtures "
+                       "whatever its card held. Read that run's log.")
+            rows.append(ZeroDay(d, int(fx), int(traj), state, why))
+
+        # `credits_spent` READS THE ATTRIBUTED COUNTER. It was the literal 6,
+        # which was wrong by 6 on a day H1 had claimed nothing -- and a
+        # literal cannot ever be right twice.
+        _spent = h1_credits_used(s)
+        print()
+        print(f"h1_collected grain=FIXTURE provider=TheOddsAPI "
+              f"window={_hw.iso()[0]}..{_hw.iso()[1]} value={sum(r.trajectories for r in rows)}")
+        print(f"h1_credits   source=attributed_counter value="
+              f"{'UNEVALUATED' if _spent is None else _spent} of "
+              f"{_hw and 168} reserved")
 
     streak = zero_collection_streak(rows)
     if streak:
         print()
         print(format_zero_alarm(streak, target_n=39, floor_n=33,
                                 collected_n=sum(r.trajectories for r in rows),
-                                credits_spent=6, credits_reserved=168,
+                                credits_spent=(0 if _spent is None else _spent),
+                                credits_reserved=168,
                                 run_url=_os.environ.get("H1_RUN_URL", "")))
     else:
         print("h1_zero_collection[0 consecutive days with a card and no "
