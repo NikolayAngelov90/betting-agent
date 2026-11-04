@@ -89,7 +89,11 @@ from scripts.capture_critical import (
 #: other proves the five H1 mechanisms actually fire. A regression in either
 #: lets the subsystem spend or collect wrongly, so it must be able to stop
 #: capture rather than merely redden a later job.
-CENSUS = {"files": 137, "capture_critical": 75, "not_critical": 62}
+#: 137 -> 138 files and 62 -> 63 NOT-critical on 2026-11-04, with
+#: `test_client_channel.py`. Correctly NON-critical: `telegram_bot` reports,
+#: it does not write prices or picks, so a notification regression must not be
+#: able to stop capture. The gate count is unchanged at 1710.
+CENSUS = {"files": 138, "capture_critical": 75, "not_critical": 63}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -323,8 +327,12 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     gate, nong = _ids(GATE_EXPR), _ids(NON_GATING_EXPR)
     assert len(gate) == 1710, (
         f"the gating selection is {len(gate)}, recorded 1710 — say what moved")
-    assert len(nong) == 911, (
-        f"the non-gating selection is {len(nong)}, recorded 911")
+    #   +7  test_client_channel.py: the sender census, the operator-channel
+    #       routing pair, and the three known-wrong controls (failed run sends
+    #       nothing / pick run sends the card / settlement sends the
+    #       settlement) plus the population assertion
+    assert len(nong) == 918, (
+        f"the non-gating selection is {len(nong)}, recorded 918")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

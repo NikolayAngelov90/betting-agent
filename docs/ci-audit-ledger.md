@@ -34903,3 +34903,220 @@ Nothing shipped but this record; no code changed, no statistic amended, no
 revision pin touched. **Fingerprint unmoved at s5.19 / cdec29.**
 
 *Recorded 2026-11-03. No source files changed.*
+
+---
+
+## 2026-11-04 — CLIENT CHANNEL, AND THE RECORD SHOWS NO IMPROVEMENT
+
+`CLIENT CHANNEL` · `PROGRESS` · `FLB TESTED` · `FOOTIQO SIZED` ·
+`MARKETS TABLED` · `FIRST TRAJECTORIES`
+
+### FIRST TRAJECTORIES — two of three instants, one round short
+
+| round | time | leagues | matches | credits |
+|---|---|---|---|---|
+| 1 | 15:40 + 15:42 | UCL + Championship | 9 + 8 | 4 |
+| 2 | 17:43 | UCL only | 9 | 2 |
+| 3 | — | never ran | — | — |
+
+**Nine UCL fixtures reached two instants at an actual gap of 123 minutes.**
+
+> **Revealed by clearing the blocker:** the run printed `max_credits=6`, the
+> **`workflow_dispatch` input default**, where the scheduled path uses 24.
+> Three rounds × 2 leagues × 2 credits = **12 minimum**, so a manual dispatch
+> is *structurally incapable* of completing a trajectory. It halts one round
+> short every time, and the Championship got a single instant because the cap
+> cut round 2 off mid-sweep.
+
+This confirms the amendment's design: with one capture per job, a per-job
+credit cap cannot truncate a sequence no single job holds. `n = 0 of 39`,
+**6 of 168** credits.
+
+### CLIENT CHANNEL
+
+Three senders may reach it: the picks card, the settlement, the performance
+report. **All 13 `send_alert` call sites are operator content** and now
+address `operator_chat_id`; when that is unset `deliver_alert` writes an
+`::error::` annotation and a GitHub step-summary entry, so the content keeps a
+carrier that does not depend on Telegram. Not the client channel, and not
+nothing, without a silent redirect.
+
+| sender | class | destination |
+|---|---|---|
+| `send_daily_picks` | CLIENT | client chat |
+| `send_settlement_report` | CLIENT | client chat |
+| `send_performance_report` | CLIENT | client chat |
+| `send_alert` (13 sites) | OPERATOR | operator chat → GitHub annotation |
+| `send_welcome_message` | OPERATOR | manual command only |
+
+**A control caught a real defect:** `send_daily_picks([])` sent *"No value
+picks found for today."* to the client channel. A reader there cannot tell a
+quiet day from a broken pipeline, so it is now an operator alert. The agent
+itself only `print`s that case, so nothing in production loses a message.
+
+**And the population now travels with the number:** the performance block says
+`n=… PAPER picks in k cohorts` and states that no live wager has ever been
+placed, because `is_paper` is collinear with time.
+
+**Measured, and not flattering:** the three client senders produce **1.95
+msgs/day** and that is **unchanged**. Alert firings in three sampled runs:
+**zero** — every `/alert/i` hit in those logs was a **pytest test id**, the
+third time a detector in this project has matched one. **The split removes
+0.00 messages/day.** It is structural insurance against the 13 sites firing,
+not a measured reduction, exactly as the last split silenced 0 of 30 runs.
+
+### PROGRESS — no improvement, and the loss is real
+
+`measured` 2026-11-04, grain=PICK for rates and FIXTURE for intervals,
+population **PAPER settled, `disposition IS NULL`**, 2026-08-11 → 2026-11-03,
+**n=1,583 picks over 1,573 fixtures across 15 `model_version` cohorts**.
+
+| | |
+|---|---|
+| ROI | **−5.68%**, 95% CI over fixtures **[−9.69%, −1.74%]** |
+| win rate | 58.4% |
+| average taken odds | 1.63 |
+
+**The interval excludes zero: the loss is a measured fact, not noise.**
+
+Per-cohort ROI, chronological: −10.9, −9.3, +6.6, −6.6, **+31.0**, +0.0, −3.6,
+−17.1, −18.3, −5.4, −10.2, +0.3, −5.2, −16.6, −4.0 (%). **Neither monotone
+increasing nor decreasing.** Last cohort minus first: **+6.90%**, CI
+**[−6.69%, +20.91%]** — **does not exclude zero.**
+
+**Brier against the market, paired, n=572 over 572 fixtures: model 0.2424,
+market 0.2424, difference +0.0000, CI [−0.0029, +0.0027].** Identical to the
+price to four decimal places.
+
+CLV per cohort: no cohort has a positive mean whose interval excludes zero;
+two have **negative** means that do (`51fbcb` model −1.85% [−3.88, −0.03],
+`818026` model −1.46% [−2.67, −0.31]).
+
+> **VERDICT: the measured record shows NO improvement.** Fifteen cohorts over
+> 85 days, no trend in either direction, a loss whose interval excludes zero,
+> and a Brier indistinguishable from the market's. The n supports the
+> no-improvement answer: it is large enough to exclude zero on the level, and
+> the first-vs-last interval is wide enough that a real trend of the size
+> hoped for would not yet be visible.
+
+**And the external comparison does not survive being made comparable.** Our
+58.4% is over Over/Under, Team Goals, BTTS, Double Chance and Draw No Bet.
+Restricted to **1X2 only** — the three-way call the benchmark measures, with
+Double Chance excluded because a two-way draw-inclusive bet is a different
+question, as the API-Football Home/Away trap already taught this project:
+
+**n=190 picks / 190 fixtures, win 56.32%, CI [49.47%, 63.68%], ROI −6.62%,
+avg odds 1.69.** The benchmark is **53.21%** `external, Footiqo, 2025/26,
+1,727 Big Five fixtures, one bookmaker, fetched 2026-11-04`. **Our interval
+includes it**, and the fixture list still differs — theirs is Big Five only.
+
+### FLB TESTED — insufficient, as pre-registered
+
+Pre-registration committed at **`11fde2f`** *before* our record was queried.
+`market_probability` coverage is **36.1%** (572 of 1,583), measured.
+
+| band | n | fx | gap (pp) | 90% lower | overround | verdict |
+|---|---|---|---|---|---|---|
+| 40–49% | 32 | 32 | −1.10 | −16.47 | +8.04 | **INSUFFICIENT** |
+| 50–59% | 425 | 425 | +0.59 | −3.20 | +3.59 | not present |
+| 60–69% | 115 | 115 | **+2.90** | −4.82 | +3.59 | not present |
+| 70–79% | **0** | 0 | — | — | — | **INSUFFICIENT** |
+| 80–89% | **0** | 0 | — | — | — | **INSUFFICIENT** |
+
+Three of five bands are untestable and **the two upper bands are empty** —
+the pre-registration said this would be the likely answer before looking. The
+60–69% point estimate (+2.90pp) sits close to the external +3.21pp, and its
+interval establishes nothing.
+
+> **The economic bar is the finding.** Our **measured** overround at the
+> prices actually taken in the testable bands is **+3.59pp**. The largest
+> externally documented gap below the empty bands is **+3.74pp at n=134**. So
+> even if the external pattern held exactly on our fixtures, it would clear
+> the reachable price by **0.15 points**. A gap against a de-vigged price is
+> not money.
+
+### MARKETS TABLED — the markets of interest do not exist for us
+
+`measured` from the `odds` rows actually received, not from provider docs:
+
+| market | rows | matches | books | median overround at best line |
+|---|---|---|---|---|
+| 1X2 | 197,175 | 4,763 | 54 | **1.10%** |
+| over_under | 157,439 | 4,714 | 45 | 1.01% |
+| btts | 22,718 | 4,110 | 12 | **6.19%** |
+| team_goals | 155,247 | 4,061 | 10 | n/a (14 selections) |
+| double_chance | 9,549 | 1,594 | 2 | n/a — its three selections overlap, so Σ1/odds ≈ 2 by construction and is not an overround |
+| draw_no_bet | 2,944 | 1,472 | 1 | n/a |
+
+**Corners, cards, 1H/2H, Asian handicap, possession: ZERO rows ever
+received.** The markets the external site covers are not offered by our
+providers at all, so no test of them is available at any price.
+
+And **BTTS fails economically on our own prices**: a 6.19% overround against
+the external benchmark's edge of **+2.64pp** (closing-price rule 57.08% vs
+"always Yes" 54.44%). Their own per-league table already contradicts the rule
+— Bundesliga "always Yes" 61.77% beat it at 60.41%, Serie A "always No" 55.38%
+beat it at 51.38%.
+
+> **A league-market cell that looks strong in a browsable ROI table is a
+> multiplicity artefact until it is pre-registered and tested out of sample.**
+
+### FOOTIQO SIZED — licensed for exactly this, and scraping is not
+
+`external, Footiqo, fetched 2026-11-04`. Free tier: **three samples**
+(Historical Football Database, Corners & Cards Odds, Advanced Football
+Statistics), email required, "Real match data — not artificial demo rows",
+"Ready for Excel, Python, R & AI/ML". Paid: €49.99 historical with **opening
+and closing odds**, €39.99 corners/cards odds, €39.99 advanced FT/1H/2H,
+€99.99 for all three. **Nothing bought.** The page does not publish a field
+list, per-league seasons, row counts, or which bookmaker stands behind the
+odds; the study used 1xBet opening/closing.
+
+**The licence permits our use and forbids the obvious shortcut.** Permitted:
+"personal, non-commercial research and internal analytical purposes",
+"Developing and testing predictive models", "Conducting backtesting and
+machine-learning experiments". Prohibited without written authorisation:
+"Sell, resell, sublicense or redistribute Footiqo datasets", and
+"Automated scraping or crawling of football statistics pages". No attribution
+requirement. It disclaims any guarantee the data is "suitable for any
+particular research, modelling or betting strategy".
+
+So an **official export** is usable and a **scraper is not** — and the only
+honest next step is to request the free samples and count their rows, because
+the sizing question cannot be answered from the sales page.
+
+### THE TARGET IS NOW ROI — registered at `11fde2f`
+
+`ROI = p·o − 1`, so naming a win rate and a price names the edge. "70% at
+1.70" is **+19% ROI** and a **+12.3-point** edge — two to three times the
+largest documented FLB gap, in the most liquid part of the market. The
+operating target is **+3% ROI** (66.5% at 1.55, 60.6% at 1.70, 54.2% at 1.90),
+chosen because ~2.9 points at 1.70 is the size of the one anomaly anybody has
+documented. **+10% is recorded for reporting only and sizes nothing.**
+
+Current position: **−5.68% ROI, 58.4%, 1.63** → the distance is **8.7 points
+of ROI**, or 4.8 points of win rate at constant price.
+
+**How long it takes to confirm**, derived from the measured per-pick P&L
+sd of **0.8021** at 1.006 picks/fixture and the measured rate of **18.6
+settled picks/day**:
+
+* **+3% vs zero** at 80% power, α=0.05 one-sided: **n = 4,419 picks = 237
+  days = 7.8 months**
+* **−5.68% → +3%** (detecting the 8.7-point move): **n = 525 picks = 28 days**
+
+The second number is the manageable one: a real improvement of the size
+targeted would be visible in about a month. Confirming that +3% differs from
+zero takes nearly eight.
+
+### DISCIPLINE
+
+Gate **1,710 passed**, 928 deselected; non-gating **918 passed**; invariants
+26; census 138 files / 75 `capture_critical` / 63 not. Nothing bought, no
+market adopted, no model changed, no threshold moved. **Fingerprint unmoved at
+s5.19 / cdec29.**
+
+*Recorded 2026-11-04. `src/reporting/telegram_bot.py`,
+`src/reporting/experiment_record.py`, `tests/test_client_channel.py` (new),
+`docs/flb-preregistration.md` (new), `docs/roi-target.md` (new),
+`tests/test_gate_is_opt_in.py`.*

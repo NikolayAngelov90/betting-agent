@@ -280,9 +280,21 @@ def format_block(rec: Optional[ExperimentRecord], html: bool = True) -> List[str
     if rec.flat_roi is not None:
         econ = (f" · flat ROI {rec.flat_roi:+.2%} · {rec.pl_units:+.1f}u"
                 f" · avg odds {rec.avg_odds:.2f}")
+    # THE POPULATION IS NAMED IN THE MESSAGE, not just in the query.
+    #
+    # Every figure in this block comes from `is_paper IS TRUE AND disposition
+    # IS NULL`. A client-facing percentage whose population lives only in the
+    # SQL is the mixed-population ratio again, and now other people read it.
+    # `is_paper` is collinear with TIME here — live ends 2026-08-10, paper
+    # starts 08-11 — so "paper" is also what makes the date span meaningful.
     out.append(
         f"{rec.wins}W-{rec.losses}L ({rec.win_rate:.1%}) "
-        f"across n={rec.settled} picks in {rec.cohorts} cohorts{span}{econ}")
+        f"across n={rec.settled} PAPER picks in {rec.cohorts} cohorts{span}"
+        f"{econ}")
+    out.append(i("Population: PAPER TRADING ONLY — no live wager has ever "
+                 "been placed. Live picks ended 2026-08-10 and are excluded, "
+                 "so this series is not comparable to the pre-paper record "
+                 "above it."))
     if rec.current_n:
         cwr = (f"{rec.current_win_rate:.1%}" if rec.current_win_rate is not None
                else "n/a")

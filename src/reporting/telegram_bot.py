@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import date, timezone, timedelta
 from html import escape as html_escape
+import os as _os
 from pathlib import Path
 from typing import List, Dict
 from itertools import groupby
@@ -127,6 +128,21 @@ class TelegramNotifier:
         self.enabled = notifications.get("telegram_enabled", False)
         self.bot_token = notifications.get("telegram_bot_token", "")
         self.chat_id = notifications.get("telegram_chat_id", "")
+        #: THE OPERATOR CHANNEL, separate from the client one.
+        #:
+        #: `self.chat_id` is now a CLIENT channel: only the picks card, the
+        #: settlement and the performance report go there, because other
+        #: people read it. Everything operational — a suspended provider, a
+        #: below-threshold model, a credit warning — goes here instead.
+        #:
+        #: WHEN THIS IS UNSET THE ALERT DOES NOT FALL BACK TO THE CLIENT
+        #: CHANNEL. `deliver_alert` annotates `::error::` and the GitHub step
+        #: summary when it has no chat id, so the content still has a carrier
+        #: that does not depend on Telegram. "Not to the client channel" and
+        #: "not to nothing" are both satisfied without a silent redirect.
+        self.operator_chat_id = (
+            notifications.get("telegram_operator_chat_id", "")
+            or _os.environ.get("TELEGRAM_OPERATOR_CHAT_ID", ""))
         self._bot = None
         #: Why the last `_send_message` returned None. Read by `_send_one` to
         #: tell "not attempted" from "attempted and failed" — see ChunkOutcome.
@@ -161,7 +177,18 @@ class TelegramNotifier:
             return
 
         if not picks:
-            await self._send_message("No value picks found for today.")
+            # AN EMPTY CARD IS OPERATOR CONTENT, NOT CLIENT CONTENT.
+            #
+            # "No value picks found for today" cannot tell a reader a QUIET
+            # DAY from a BROKEN PIPELINE, and the client channel is read by
+            # people who cannot check. The agent itself only prints this case
+            # (`betting_agent.py`: `if not picks: print(...)`), so nothing in
+            # production loses a message; this branch is reachable directly
+            # and must not put a run-status line in front of clients.
+            await self.send_alert("No value picks today (empty card). This is "
+                                  "operator information: a quiet day and a "
+                                  "broken pipeline look identical from the "
+                                  "card alone.")
             return
 
         message, header = self._build_daily_picks_message(
@@ -779,8 +806,12 @@ class TelegramNotifier:
 
         from src.reporting.alert_delivery import deliver_alert
 
+        # TO THE OPERATOR CHANNEL, never the client one. An empty
+        # operator id makes `deliver_alert` annotate GitHub instead,
+        # which is a carrier that does not depend on Telegram.
         result = await asyncio.to_thread(
-            deliver_alert, text, token=self.bot_token, chat_id=self.chat_id)
+            deliver_alert, text, token=self.bot_token,
+            chat_id=self.operator_chat_id)
         if not result.ok:
             logger.error(
                 f"ALERT NOT DELIVERED after {result.attempts} attempt(s): "
