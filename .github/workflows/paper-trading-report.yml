@@ -122,7 +122,7 @@ jobs:
           # are what `--telegram` needs; the report still succeeds if the send
           # fails, and says so rather than swallowing it.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_OPERATOR_CHAT_ID: ${{ secrets.TELEGRAM_OPERATOR_CHAT_ID }}
         run: |
           DAYS="${{ inputs.days }}"
           MV="${{ inputs.model_version }}"

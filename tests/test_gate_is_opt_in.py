@@ -99,7 +99,12 @@ from scripts.capture_critical import (
 #: first guards the helper whose version-sensitivity cost the 11-04 card, the
 #: second guards the dispatch form that truncated the window's only in-band
 #: day. A regression in either loses a card or a collection day.
-CENSUS = {"files": 140, "capture_critical": 77, "not_critical": 63}
+#: 140 -> 141 files and 63 -> 64 NOT-critical on 2026-11-04, with
+#: `test_client_chat_is_sealed.py`. Correctly NON-critical, like
+#: `test_client_channel.py`: it guards WHICH CHAT a message reaches, which is
+#: a notification concern. A regression there is serious -- operator traffic
+#: in front of clients -- but it must not stop price capture.
+CENSUS = {"files": 141, "capture_critical": 77, "not_critical": 64}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -342,8 +347,13 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the
     #       settlement) plus the population assertion
-    assert len(nong) == 918, (
-        f"the non-gating selection is {len(nong)}, recorded 918")
+    #   +11 on 2026-11-04: test_client_chat_is_sealed.py -- the two
+    #       destination-resolution checks, the AST seal and its known-wrong
+    #       control, the two workflow-env assertions, and the FIVE DRIVES
+    #       (ci-audit, reminders as verdict and as failure, a crash with no
+    #       finding, a picks run, a settlement).
+    assert len(nong) == 929, (
+        f"the non-gating selection is {len(nong)}, recorded 929")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

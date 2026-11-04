@@ -364,11 +364,26 @@ jobs:
           # three. The window's only in-band day was spent proving that the
           # form cannot fund what its own `rounds` field promises.
           #
-          # CREDITS_PER_REQUEST is 2 (src/data/odds_quota). The floor is
-          # rounds x leagues x 2. A league with no in-band fixture is skipped
-          # at zero cost, so this is a CEILING and not a forecast.
+          # AND THE FIRST VERSION OF THIS FLOOR WAS ITSELF TOO LOW, caught
+          # mid-flight on 2026-11-04. It read `rounds x leagues x 2`, taking
+          # the 2 to be credits per league. MEASURED on run 41844876727:
+          # three leagues priced in round 1 cost TWELVE credits, i.e. FOUR
+          # per league. The ledger charges per (LEAGUE, MARKET) and the
+          # scraper asks for `markets=h2h,totals` -- two markets -- at
+          # CREDITS_PER_REQUEST=2. So the real unit is
+          #
+          #     rounds x leagues x MARKETS x CREDITS_PER_REQUEST
+          #     = 3 x 4 x 2 x 2 = 48
+          #
+          # The old 24 funded two rounds of three leagues and would have
+          # truncated round 3 exactly as the 11-03 default did. A derivation
+          # with the wrong unit is still a literal.
+          #
+          # A league with no in-band fixture is skipped at zero cost, so this
+          # is a CEILING and not a forecast.
           LEAGUE_N=$(printf '%s' "$LEAGUES" | tr ',' '\n' | grep -c '[^[:space:]]')
-          NEED=$(( ROUNDS * LEAGUE_N * 2 ))
+          MARKETS=2
+          NEED=$(( ROUNDS * LEAGUE_N * MARKETS * 2 ))
           if [ -z "$MAXC" ]; then
             MAXC=$NEED
             echo "max_credits DERIVED: $ROUNDS rounds x $LEAGUE_N leagues x 2 = $NEED"

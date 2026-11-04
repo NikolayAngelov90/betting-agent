@@ -35,14 +35,19 @@ INPUTS = (DOC.get("on") or DOC.get(True))["workflow_dispatch"]["inputs"]
 #: equal rather than assumed.
 CPR = 2
 
+#: Markets per league request: the scraper asks `markets=h2h,totals`, and
+#: the ledger charges per (league, market). MEASURED on run 41844876727:
+#: three leagues cost 12 credits in one round, i.e. 4 per league.
+MARKETS = 2
+
 
 def test_the_CREDIT_FACTOR_MATCHES_THE_CODE():
     from src.data.odds_quota import CREDITS_PER_REQUEST
     assert CREDITS_PER_REQUEST == CPR, (
         f"the workflow multiplies by {CPR} and the code charges "
         f"{CREDITS_PER_REQUEST}; the derived ceiling would be wrong")
-    assert f"* {CPR} ))" in SRC or f"* {CPR} )" in SRC, (
-        "the workflow no longer multiplies by the credit factor")
+    assert f"MARKETS * {CPR} ))" in SRC, (
+        "the workflow no longer multiplies by markets and the credit factor")
 
 
 def test_max_credits_DEFAULT_IS_EMPTY_so_it_can_be_DERIVED():
@@ -80,14 +85,14 @@ def _decide(max_credits, rounds, leagues):
         assert frag in SRC, (
             f"the league count no longer derives via {frag!r}; this "
             f"mirror of the shell arithmetic would be wrong")
-    assert f"NEED=$(( ROUNDS * LEAGUE_N * {CPR} ))" in SRC, (
+    assert f"NEED=$(( ROUNDS * LEAGUE_N * MARKETS * {CPR} ))" in SRC, (
         "the floor formula changed; this mirror is now wrong")
     assert 'if [ -z "$MAXC" ]; then' in SRC, "the empty-derives branch is gone"
     assert 'elif [ "$MAXC" -lt "$NEED" ]; then' in SRC, (
         "the below-floor refusal branch is gone")
 
     league_n = len([x for x in leagues.split(",") if x.strip()])
-    need = rounds * league_n * CPR
+    need = rounds * league_n * MARKETS * CPR
     if max_credits == "":
         return f"DERIVED {need}"
     if int(max_credits) < need:
@@ -116,27 +121,27 @@ def test_KNOWN_WRONG_twelve_is_ALSO_refused_against_the_PINNED_set():
 
 
 def test_an_EMPTY_VALUE_DERIVES_the_pinned_set_floor():
-    assert _decide("", 3, PINNED) == "DERIVED 24"
-    assert _decide("", 1, PINNED) == "DERIVED 8"
+    assert _decide("", 3, PINNED) == "DERIVED 48"
+    assert _decide("", 1, PINNED) == "DERIVED 16"
 
 
 def test_CONTROL_a_SUFFICIENT_VALUE_IS_ACCEPTED():
     """Without this, 'refuses' could be 'refuses everything'."""
-    out = _decide("24", 3, PINNED)
+    out = _decide("48", 3, PINNED)
     assert out.startswith("ACCEPTED"), out
     assert _decide("100", 3, PINNED).startswith("ACCEPTED")
 
 
 def test_the_FLOOR_SCALES_WITH_BOTH_TERMS():
     """It is derived, so changing either field changes it."""
-    assert _decide("", 3, "a/b") == "DERIVED 6"
-    assert _decide("", 3, "a/b,c/d") == "DERIVED 12"
-    assert _decide("", 2, PINNED) == "DERIVED 16"
+    assert _decide("", 3, "a/b") == "DERIVED 12"
+    assert _decide("", 3, "a/b,c/d") == "DERIVED 24"
+    assert _decide("", 2, PINNED) == "DERIVED 32"
 
 
 def test_the_SCHEDULED_PATH_STILL_GETS_A_CEILING():
     """A cron passes no inputs, so every value arrives empty and derived."""
-    assert _decide("", 3, PINNED) == "DERIVED 24", (
+    assert _decide("", 3, PINNED) == "DERIVED 48", (
         "the scheduled path would run with no ceiling at all")
     # and the old hard-coded 24 must be gone, or it can drift from the
     # derivation. A NEGATIVE scan needs its haystack anchored: "MAXC=24 is

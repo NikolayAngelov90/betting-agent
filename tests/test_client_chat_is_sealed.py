@@ -1,0 +1,366 @@
+"""The client chat is reachable from TWO senders, by construction.
+
+THE FIRST FIX MISSED FIVE PATHS BECAUSE ITS CENSUS LOOKED AT `src/`.
+`scripts/ci_alert.py` calls `deliver_alert(text)` with no destination, and
+`deliver_alert` fell back to `TELEGRAM_CHAT_ID` — the CLIENT chat. Five
+callers reach it:
+
+    ci-audit.yml                    CI audit findings
+    reminders.yml                   reminder verdicts and failures
+    daily-picks.yml                 the no-picks loss alert
+    fixture-horizon-probe.yml       the probe message
+    scripts/paper_trading_report.py --telegram  (via ci_alert.send)
+
+    A CENSUS'S POPULATION IS THE REPOSITORY, NOT A DIRECTORY.
+
+THE SEAL IS STRUCTURAL, NOT AN INSTRUCTION. `deliver_alert` now defaults to
+`TELEGRAM_OPERATOR_CHAT_ID`, and `_send_message` / `_send_one` /
+`_send_chunked` take the destination as an argument whose default is the
+operator id. The client id is obtainable only where it is passed explicitly,
+so a sixth caller added tomorrow cannot reach it by omission.
+
+PART C IS DRIVEN, NOT SAMPLED. The previous measurement said 1.95 msgs/day
+before and after with alerts firing zero times — which cannot distinguish "no
+longer sends" from "did not send during the sample". Each drive below runs the
+real path with a recording transport and reads the destination it addressed.
+"""
+
+import asyncio
+import datetime as dt
+import glob
+import os
+
+import pytest
+import yaml
+
+CLIENT = "CLIENT-CHAT-9999"
+OPERATOR = "OPERATOR-CHAT-1111"
+
+
+# ═══════════════════ A. the destination each path resolves ══════════════════
+
+@pytest.fixture
+def recorder(monkeypatch):
+    """Records every (destination, text) the delivery layer is handed."""
+    sent = []
+
+    def _fake_post(url, data=None, timeout=None, **_k):
+        sent.append((str((data or {}).get("chat_id")), (data or {}).get("text")))
+
+        class _R:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"ok": True, "result": {"message_id": 1}}
+        return _R()
+
+    import src.reporting.alert_delivery as ad
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", CLIENT)
+    monkeypatch.setenv("TELEGRAM_OPERATOR_CHAT_ID", OPERATOR)
+    for name in ("requests", "urllib"):
+        if hasattr(ad, name):
+            pass
+    monkeypatch.setattr(ad, "_post", _fake_post, raising=False)
+    return sent
+
+
+def test_DELIVER_ALERT_DEFAULTS_TO_THE_OPERATOR_not_the_client(monkeypatch):
+    """The one line that was the leak, read directly."""
+    import inspect
+
+    import ast
+    import textwrap
+
+    import src.reporting.alert_delivery as ad
+
+    # THE AST, NOT RAW TEXT AND NOT `code_of`.
+    #
+    # Raw text is wrong: the comment beside the fixed line QUOTES
+    # `TELEGRAM_CHAT_ID` to explain what the leak was, so a negative
+    # assertion would match the explanation rather than the code.
+    #
+    # `code_of` would strip that comment, but importing `tests.conftest`
+    # drags this file into the CAPTURE GATE -- a test about which chat a
+    # message reaches would then be able to stop price capture. That has
+    # happened twice before.
+    #
+    # Reading the environment lookups out of the parse tree is exact, needs
+    # no helper, and cannot match a comment at all.
+    tree = ast.parse(textwrap.dedent(inspect.getsource(ad.deliver_alert)))
+    env_keys = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "environ"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)):
+            env_keys.add(node.args[0].value)
+    assert "TELEGRAM_OPERATOR_CHAT_ID" in env_keys, (
+        f"deliver_alert reads {sorted(env_keys)} and no longer defaults to "
+        f"the operator chat; every ci_alert caller would reach the client "
+        f"chat again")
+    assert "TELEGRAM_CHAT_ID" not in env_keys, (
+        f"deliver_alert can still resolve the CLIENT chat id from the "
+        f"environment ({sorted(env_keys)}). That is the leak, not a "
+        f"fallback.")
+
+
+def test_THE_CLIENT_ID_IS_READ_BY_EXACTLY_THE_TWO_CLIENT_SENDERS():
+    """`self.chat_id` is passed from the card, its resend, and the settlement.
+
+    Read from the AST so a new sender cannot quietly join them.
+    """
+    import ast
+    import io
+    src = io.open("src/reporting/telegram_bot.py", encoding="utf-8").read()
+    tree = ast.parse(src)
+    holders = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Attribute) and node.attr == "chat_id"
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "self"):
+                holders.add(fn.name)
+    allowed = {"__init__",            # defines it
+               "send_daily_picks",    # the card
+               "resend_daily_picks",  # the same card again
+               "send_settlement_report",
+               "_send_message"}       # migration bookkeeping only
+    assert holders <= allowed, (
+        f"these functions read the CLIENT chat id and must not: "
+        f"{sorted(holders - allowed)}")
+    for required in ("send_daily_picks", "send_settlement_report"):
+        assert required in holders, (
+            f"{required} no longer names the client chat, so the card or the "
+            f"settlement is going somewhere else")
+
+
+def test_KNOWN_WRONG_a_SEND_FROM_AN_ALERT_PATH_IS_CAUGHT():
+    """Prove the test above can fail.
+
+    Simulates reintroducing `to=self.chat_id` inside `send_alert` and
+    confirms the AST check names it.
+    """
+    import ast
+    src = (
+        "class N:\n"
+        "    def __init__(self):\n"
+        "        self.chat_id = ''\n"
+        "    async def send_alert(self, t):\n"
+        "        await self._send_chunked(t, to=self.chat_id)\n")
+    tree = ast.parse(src)
+    holders = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Attribute) and node.attr == "chat_id"
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "self"):
+                holders.add(fn.name)
+    allowed = {"__init__", "send_daily_picks", "resend_daily_picks",
+               "send_settlement_report", "_send_message"}
+    assert "send_alert" in holders - allowed, (
+        "the AST check would NOT notice an alert path taking the client id, "
+        "so the test above proves nothing")
+
+
+# ═══════════════════ the workflow env, asserted from YAML ═══════════════════
+
+def test_THE_CLIENT_ID_IS_IN_ONE_WORKFLOW_ENV_ONLY():
+    """A workflow step that never sends a card must not hold the client id."""
+    holders = {}
+    for f in sorted(glob.glob(".github/workflows/*.yml")):
+        raw = open(f, encoding="utf-8").read()
+        for i, line in enumerate(raw.split("\n"), 1):
+            st = line.strip()
+            if st.startswith("TELEGRAM_CHAT_ID:"):
+                holders.setdefault(os.path.basename(f), []).append(i)
+    assert set(holders) <= {"daily-picks.yml"}, (
+        f"the CLIENT chat id is in the env of workflows that do not send a "
+        f"card: {holders}. Those steps call `scripts.ci_alert`, which is how "
+        f"ci-audit and reminders reached the client chat.")
+    assert "daily-picks.yml" in holders, (
+        "no workflow holds the client id, so the card cannot be sent at all")
+    assert len(holders["daily-picks.yml"]) == 1, (
+        f"the client id appears {len(holders['daily-picks.yml'])} times in "
+        f"daily-picks.yml; it belongs at the job level only, where the picks "
+        f"and settlement steps run")
+
+
+def test_EVERY_ci_alert_STEP_CARRIES_THE_OPERATOR_ID():
+    """The five alert paths must have a destination, or they send nothing."""
+    found = 0
+    for f in sorted(glob.glob(".github/workflows/*.yml")):
+        raw = open(f, encoding="utf-8").read()
+        if "scripts.ci_alert" not in raw:
+            continue
+        found += 1
+        assert "TELEGRAM_OPERATOR_CHAT_ID" in raw, (
+            f"{os.path.basename(f)} invokes scripts.ci_alert but carries no "
+            f"operator chat id, so its alerts go nowhere silently")
+    assert found >= 3, (
+        f"only {found} workflow(s) reference scripts.ci_alert; the census "
+        f"found four, so one has been renamed and may be unguarded")
+
+
+# ═══════════════════ C. FIVE DRIVES ════════════════════════════════════════
+
+from src.reporting.telegram_bot import TelegramNotifier
+
+
+class _N(TelegramNotifier):
+    """A notifier whose transport is recorded, with both ids configured.
+
+    A REAL SUBCLASS, declared here. The first version built the class with
+    `type(...)` and reassigned `__class__`, which resolved `_send_chunked` to
+    the BASE implementation and attempted a real send -- the overrides were
+    never reached and both client drives reported nothing delivered.
+    """
+
+    def __init__(self):
+        self.config = None
+        self.enabled = True
+        self.bot_token = "tok"
+        self.chat_id = CLIENT
+        self.operator_chat_id = OPERATOR
+        self._bot = None
+        self._last_send_error = ""
+        self.seen = []
+
+    def _get_bot(self):
+        return object()
+
+    async def _send_chunked(self, message, header="", *, to=None, report=""):
+        self.seen.append((to, report, message))
+        return type("M", (), {"message_id": 1})()
+
+    async def _send_message(self, text, to=None):
+        self.seen.append((to, "message", text))
+        return type("M", (), {"message_id": 1})()
+
+
+def _run(c):
+    return asyncio.new_event_loop().run_until_complete(c)
+
+
+def _pick():
+    from src.betting.value_calculator import BetRecommendation
+    return BetRecommendation(
+        match="A vs B", match_id=1, market="Over 2.5",
+        selection="Over 2.5 Goals", odds=1.8, predicted_probability=0.6,
+        expected_value=0.08, confidence=0.65, kelly_stake_percentage=1.5,
+        recommended_stake=1.5, reasoning="", risk_level="low",
+        league="england/premier-league", model_agreement="solo",
+        match_date=dt.datetime(2026, 11, 4, 20, 0))
+
+
+def _client_msgs(n):
+    return [x for x in n.seen if x[0] == CLIENT]
+
+
+def test_DRIVE_1_a_CI_AUDIT_FAILURE_reaches_the_operator_only(monkeypatch):
+    """The path that was actually leaking."""
+    seen = {}
+
+    def _fake(text, *, token=None, chat_id=None, sleep=None):
+        from src.reporting.alert_delivery import DeliveryResult
+        seen["chat_id"] = chat_id
+        return DeliveryResult(True, 1, "", False)
+
+    import src.reporting.alert_delivery as ad
+    monkeypatch.setattr(ad, "deliver_alert", _fake)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", CLIENT)
+    monkeypatch.setenv("TELEGRAM_OPERATOR_CHAT_ID", OPERATOR)
+    import importlib
+    ca = importlib.import_module("scripts.ci_alert")
+    importlib.reload(ca)
+    ca.send("(!) ci-audit found 3 NEW findings")
+    assert seen.get("chat_id") != CLIENT, (
+        f"a ci-audit finding addressed {seen.get('chat_id')!r} — the client "
+        f"chat. This is the exact message Niki was still receiving.")
+
+
+@pytest.mark.parametrize("kind,body", [
+    ("VERDICT", "REMINDER DUE: the H1 acknowledgement expired"),
+    ("FAILURE", "reminders step FAILED — pytest exit 1"),
+])
+def test_DRIVE_2_reminders_reach_the_operator_only(monkeypatch, kind, body):
+    """Both halves: a dated verdict and a real failure."""
+    seen = {}
+
+    def _fake(text, *, token=None, chat_id=None, sleep=None):
+        from src.reporting.alert_delivery import DeliveryResult
+        seen["chat_id"] = chat_id
+        return DeliveryResult(True, 1, "", False)
+
+    import src.reporting.alert_delivery as ad
+    monkeypatch.setattr(ad, "deliver_alert", _fake)
+    import importlib
+    ca = importlib.reload(importlib.import_module("scripts.ci_alert"))
+    ca.send(body)
+    assert seen.get("chat_id") != CLIENT, f"{kind} reached the client chat"
+
+
+def test_DRIVE_3_a_CRASH_WITH_NO_FINDING_reaches_the_operator_only(monkeypatch):
+    seen = {}
+
+    def _fake(text, *, token=None, chat_id=None, sleep=None):
+        from src.reporting.alert_delivery import DeliveryResult
+        seen["chat_id"] = chat_id
+        return DeliveryResult(True, 1, "", False)
+
+    import src.reporting.alert_delivery as ad
+    monkeypatch.setattr(ad, "deliver_alert", _fake)
+    import importlib
+    ca = importlib.reload(importlib.import_module("scripts.ci_alert"))
+    ca.send("step(s) FAILED — update; no finding produced")
+    assert seen.get("chat_id") != CLIENT
+
+
+def test_DRIVE_4_a_SUCCESSFUL_PICKS_RUN_reaches_the_client(monkeypatch):
+    from src.reporting import telegram_bot as tb
+    monkeypatch.setattr(tb, "_picks_sent_today", lambda: False)
+    monkeypatch.setattr(tb, "_mark_picks_sent_today", lambda: None)
+    n = _N()
+    _run(n.send_daily_picks([_pick()], force=True, paper_mode=True))
+    msgs = _client_msgs(n)
+    assert len(msgs) == 1, f"the card did not reach the client chat: {n.seen}"
+    assert "A vs B" in msgs[0][2]
+
+
+def test_DRIVE_5_a_SETTLEMENT_reaches_the_client_WITH_its_population():
+    from src.reporting.experiment_record import ExperimentRecord
+    import inspect
+    sig = inspect.signature(ExperimentRecord)
+    kw = {k: v for k, v in (
+        ("wins", 30), ("losses", 20), ("settled", 50), ("cohorts", 3),
+        ("win_rate", 0.60), ("flat_roi", -0.055), ("avg_odds", 1.70),
+        ("pl_units", -2.8), ("first_date", "2026-08-11"),
+        ("last_date", "2026-11-03")) if k in sig.parameters}
+    rec = ExperimentRecord(**kw)
+    n = _N()
+    settled = [{
+        "match_name": "A vs B", "match": "A vs B",
+        "league": "england/premier-league", "market": "Over 2.5",
+        "selection": "Over 2.5 Goals", "odds": 1.8, "result": "win",
+        "score": "2-1", "stake": 1.5, "kelly_stake_percentage": 1.5,
+        "expected_value": 0.08, "confidence": 0.65,
+        "predicted_probability": 0.6, "model_agreement": "solo",
+        "review_action": "KEEP", "is_paper": True,
+        "pick_date": dt.date(2026, 11, 3)}]
+    _run(n.send_settlement_report(settled, stats={}, experiment=rec))
+    msgs = _client_msgs(n)
+    assert msgs, f"the settlement did not reach the client chat: {n.seen}"
+    body = msgs[0][2]
+    # the performance figure rides INSIDE the settlement, with its population
+    assert "PAPER" in body, "the settlement carries no population label"
+    assert "3 cohorts" in body and "2026-08-11" in body, body[:400]
+    assert "60.0%" in body and "ROI" in body and "avg odds" in body, (
+        "win rate appears without ROI and average odds")

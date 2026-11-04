@@ -135,14 +135,38 @@ def deliver_alert(
     """Deliver one alert, or say loudly and specifically why it did not arrive."""
     token = (token if token is not None
              else os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
+    # ── THE DEFAULT DESTINATION IS THE OPERATOR CHAT. 2026-11-04. ──────────
+    #
+    # THIS LINE WAS THE LEAK. It fell back to `TELEGRAM_CHAT_ID` — the CLIENT
+    # chat — so every caller that did not pass a destination sent to the
+    # people Niki shares the channel with. `scripts/ci_alert.py` calls
+    # `deliver_alert(text)` with no chat_id, and FIVE paths reach it:
+    #
+    #   ci-audit.yml            CI audit findings
+    #   reminders.yml           reminder verdicts and failures
+    #   daily-picks.yml         the no-picks loss alert
+    #   fixture-horizon-probe.yml   the probe message
+    #   scripts/paper_trading_report.py --telegram  (via ci_alert.send)
+    #
+    # The first sender census looked at `src/` and `ci_alert.py` lives in
+    # `scripts/`, so none of the five appeared in it. A CENSUS'S POPULATION IS
+    # THE REPOSITORY.
+    #
+    # Sealing it HERE rather than at each call site is the point: the client
+    # id is now unobtainable by default, so a sixth caller added tomorrow
+    # cannot reach it by omission. A caller that genuinely needs the client
+    # chat must pass it explicitly, and only two do.
     chat_id = (chat_id if chat_id is not None
-               else os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
+               else os.environ.get("TELEGRAM_OPERATOR_CHAT_ID", "")).strip()
 
     if not token or not chat_id:
         # Never print which is missing beyond the name — no values.
         surfaced = _annotate(
-            "alert NOT sent: TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID is "
-            "not set on this step. The step needs both in its `env:` block.")
+            "alert NOT sent: TELEGRAM_BOT_TOKEN and/or "
+            "TELEGRAM_OPERATOR_CHAT_ID is not set on this step. The step "
+            "needs both in its `env:` block. NOTE: the OPERATOR id, not "
+            "TELEGRAM_CHAT_ID -- that one is the client chat and is "
+            "deliberately unreachable from here.")
         return DeliveryResult(False, 0, "not configured", surfaced)
 
     detail: dict = {}

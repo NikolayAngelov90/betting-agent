@@ -93,6 +93,24 @@ EXEMPT = {
     "test_KNOWN_WRONG_the_ELEVENTH_INSTANCE_verbatim_is_REFUSED":
         "it builds the eleventh instance on purpose, as the control that "
         "proves the refusal works.",
+    # ── 2026-11-04. It reads source and compares against a PARSE TREE. ─────
+    #
+    # The classifier pairs `inspect.getsource` with a nearby `not in` and
+    # flags the site. Here the `not in` is against `env_keys`, a set of
+    # `os.environ.get` argument CONSTANTS walked out of the AST -- so no
+    # comment or docstring can enter it and the raw-text concern does not
+    # apply. A FALSE POSITIVE of the heuristic, declared rather than worked
+    # around.
+    #
+    # `code_of` is the usual remedy and is WRONG here: importing
+    # `tests.conftest` drags this file into the CAPTURE GATE, and a test
+    # about which chat a message reaches must not be able to stop price
+    # capture. That has happened twice.
+    "test_client_chat_is_sealed.py::"
+    "test_DELIVER_ALERT_DEFAULTS_TO_THE_OPERATOR_not_the_client":
+        "it asserts over an AST-derived set of os.environ keys, not over "
+        "source text, so comments cannot reach the comparison; and `code_of` "
+        "would pull a notification test into the capture gate.",
 }
 
 #: MEASURED 2026-10-23. The ratchet: these may fall, never rise.

@@ -32,7 +32,15 @@ from src.reporting import alert_delivery as _ad
 @pytest.fixture(autouse=True)
 def _secrets(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100999")
+    # THE OPERATOR ID, 2026-11-04. `ci_alert` calls `deliver_alert(text)` with
+    # no destination, and that default was `TELEGRAM_CHAT_ID` -- the CLIENT
+    # chat -- which is how ci-audit and reminders reached the people Niki
+    # shares the channel with. The default is now the operator id, so these
+    # tests configure that one. `TELEGRAM_CHAT_ID` is deliberately left UNSET
+    # here: if a future change made `ci_alert` able to resolve it again, every
+    # test in this file would still pass while the leak returned.
+    monkeypatch.setenv("TELEGRAM_OPERATOR_CHAT_ID", "-100999")
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
 
 
 def _ok(*_a, **_k):
@@ -204,8 +212,18 @@ def test_every_workflow_alert_goes_through_this_script():
             for st in job.get("steps", []):
                 if "scripts.ci_alert" in (st.get("run", "") or ""):
                     env = st.get("env", {}) or {}
-                    assert "TELEGRAM_BOT_TOKEN" in env and "TELEGRAM_CHAT_ID" in env, (
-                        f"{f.name} / {st.get('name')} does not pass the secrets")
+                    assert "TELEGRAM_BOT_TOKEN" in env, (
+                        f"{f.name} / {st.get('name')} does not pass the token")
+                    # THE OPERATOR ID, NOT THE CLIENT ONE. An alert step that
+                    # carried TELEGRAM_CHAT_ID is how five paths reached the
+                    # client chat; the step must not even hold it.
+                    assert "TELEGRAM_OPERATOR_CHAT_ID" in env, (
+                        f"{f.name} / {st.get('name')} passes no operator chat "
+                        f"id, so its alert goes nowhere silently")
+                    assert "TELEGRAM_CHAT_ID" not in env, (
+                        f"{f.name} / {st.get('name')} still carries the "
+                        f"CLIENT chat id; an alert step must not be able to "
+                        f"reach it")
 
 
 def test_a_failing_test_suite_fails_the_workflow():

@@ -259,7 +259,7 @@ jobs:
         if: always()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_OPERATOR_CHAT_ID: ${{ secrets.TELEGRAM_OPERATOR_CHAT_ID }}
           # THE CODE AND THE COUNT, not the outcome. `steps.reminders.outcome`
           # is deliberately NOT read any more: it is the single word that
           # collapsed "a reminder is due" into "pytest could not run".

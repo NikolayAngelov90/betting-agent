@@ -523,7 +523,7 @@ jobs:
         continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_OPERATOR_CHAT_ID: ${{ secrets.TELEGRAM_OPERATOR_CHAT_ID }}
           PYTHONIOENCODING: utf-8
         run: |
           # EXIT 1 IS A FINDING AND IT DOES NOT REDDEN THE RUN
@@ -653,7 +653,7 @@ jobs:
           BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
           TABLES_CREATED: '1'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_OPERATOR_CHAT_ID: ${{ secrets.TELEGRAM_OPERATOR_CHAT_ID }}
           LOSS_ALERT_BODY: ${{ runner.temp }}/loss_alert.txt
           LOSS_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

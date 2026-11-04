@@ -122,6 +122,21 @@ def _result_icon(result: str | None) -> str:
 class TelegramNotifier:
     """Sends betting picks and alerts via Telegram."""
 
+    # ── CLASS-LEVEL DEFAULTS, 2026-11-04. ─────────────────────────────────
+    #
+    # Several tests build a notifier with `__new__` and set only the
+    # attributes the code needed at the time. Threading an explicit
+    # destination added reads of both ids, and seven of those stubs raised
+    # `AttributeError: no attribute 'chat_id'` -- a test-only failure for a
+    # production-correct change.
+    #
+    # Declaring them on the CLASS means every instance has them however it
+    # was built, and `__init__` still overwrites with the configured values.
+    # The empty default is also the safe one: an unset destination sends
+    # NOTHING rather than falling back to the client chat.
+    chat_id: str = ""
+    operator_chat_id: str = ""
+
     def __init__(self, config=None):
         self.config = config or get_config()
         notifications = self.config.notifications
@@ -197,7 +212,8 @@ class TelegramNotifier:
             injury_budget_exhausted=injury_budget_exhausted, force=force,
             paper_mode=paper_mode, experiment=experiment)
 
-        await self._send_chunked(message, header, report="daily picks")
+        await self._send_chunked(message, header, report="daily picks",
+                                 to=self.chat_id)
         try:
             _mark_picks_sent_today()
         except Exception as _mse:
@@ -245,7 +261,9 @@ class TelegramNotifier:
                 "were never stored.</i>" + NL + NL)
             header = banner + header
             message = banner + message
-        await self._send_chunked(message, header, report="daily picks (resend)")
+        await self._send_chunked(message, header,
+                                 report="daily picks (resend)",
+                                 to=self.chat_id)
         return True
 
     def _build_daily_picks_message(
@@ -585,7 +603,8 @@ class TelegramNotifier:
                 lines.append(f"\n⏳ {leftover} other picks still pending")
 
         message = "\n".join(lines)
-        await self._send_chunked(message, report="settlement report")
+        await self._send_chunked(message, report="settlement report",
+                                 to=self.chat_id)
 
     async def send_performance_report(self, stats: dict, experiment=None):
         """Send a comprehensive performance report via Telegram.
@@ -718,10 +737,10 @@ class TelegramNotifier:
 
         # Pin the report so it stays visible at the top of the group
         bot = self._get_bot()
-        if bot and self.chat_id and sent:
+        if bot and self.operator_chat_id and sent:
             try:
                 await bot.pin_chat_message(
-                    chat_id=self.chat_id,
+                    chat_id=self.operator_chat_id,
                     message_id=sent.message_id,
                     disable_notification=True,
                 )
@@ -841,7 +860,8 @@ class TelegramNotifier:
             parts.append(chunk)
         return parts
 
-    async def _send_chunked(self, message: str, header: str = "",
+    async def _send_chunked(self, message: str, header: str = "", *,
+                            to: str = None,
                             report: str = "report"):
         """Send a report, with the SEQUENCE made verifiable. DEL-3.
 
@@ -887,7 +907,7 @@ class TelegramNotifier:
                     # message: a separate terminator costs an extra send and,
                     # worse, could itself fail and fake a truncation.
                     text = f"{text}\n\n<i>— end of {html_escape(report)} · {n}/{n} —</i>"
-            out = await self._send_one(text)
+            out = await self._send_one(text, to=to)
             results.append(out)
             if out.ok:
                 last_msg = out.message
@@ -917,7 +937,7 @@ class TelegramNotifier:
                 f"report that ends normally.")
         return last_msg
 
-    async def _send_one(self, text: str) -> "ChunkOutcome":
+    async def _send_one(self, text: str, to: str = None) -> "ChunkOutcome":
         """One send, WITH retry, and with the three states kept apart.
 
         `_send_message` returned None for BOTH "Telegram is not configured, so
@@ -934,13 +954,15 @@ class TelegramNotifier:
         from src.reporting.alert_delivery import BACKOFF, MAX_ATTEMPTS, _annotate
 
         bot = self._get_bot()
-        if not bot or not self.chat_id:
+        # the destination comes from the caller; default OPERATOR
+        dest = (to or self.operator_chat_id or "").strip()
+        if not bot or not dest:
             logger.warning("Telegram not configured, skipping message")
             return ChunkOutcome(ok=False, attempted=False, detail="not configured")
 
         detail = ""
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            msg = await self._send_message(text)
+            msg = await self._send_message(text, to=to)
             if msg is not None:
                 return ChunkOutcome(ok=True, attempted=True, message=msg,
                                     attempts=attempt)
@@ -952,7 +974,7 @@ class TelegramNotifier:
         return ChunkOutcome(ok=False, attempted=True, attempts=MAX_ATTEMPTS,
                             detail=detail)
 
-    async def _send_message(self, text: str):
+    async def _send_message(self, text: str, to: str = None):
         """Send a message via Telegram using HTML parse mode. Returns the sent Message object.
 
         Kept returning Message-or-None so existing callers are unchanged. The
@@ -962,14 +984,19 @@ class TelegramNotifier:
         """
         self._last_send_error = ""
         bot = self._get_bot()
-        if not bot or not self.chat_id:
+        # THE DESTINATION IS THE ARGUMENT, AND THE DEFAULT IS THE
+        # OPERATOR. Only the three client senders pass
+        # `to=self.chat_id`; everything else lands in the operator
+        # chat, or nowhere when that is unset.
+        dest = (to or self.operator_chat_id or "").strip()
+        if not bot or not dest:
             logger.warning("Telegram not configured, skipping message")
             self._last_send_error = "not configured"
             return None
 
         try:
             msg = await bot.send_message(
-                chat_id=self.chat_id,
+                chat_id=dest,
                 text=text,
                 parse_mode="HTML",
             )
@@ -982,14 +1009,16 @@ class TelegramNotifier:
             new_id = getattr(e, "new_chat_id", None)
             if new_id:
                 logger.warning(
-                    f"Telegram group migrated: chat id {self.chat_id} -> {new_id}. "
+                    f"Telegram group migrated: chat id {dest} -> {new_id}. "
                     f"Retrying with the new id — UPDATE TELEGRAM_CHAT_ID in the "
                     f"config/secrets to silence this warning."
                 )
-                self.chat_id = str(new_id)
+                if dest == self.chat_id:
+                    self.chat_id = str(new_id)
+                dest = str(new_id)
                 try:
                     msg = await bot.send_message(
-                        chat_id=self.chat_id, text=text, parse_mode="HTML",
+                        chat_id=dest, text=text, parse_mode="HTML",
                     )
                     logger.info("Telegram message sent (after chat migration)")
                     return msg

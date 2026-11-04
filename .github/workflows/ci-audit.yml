@@ -142,7 +142,7 @@ jobs:
         if: always() && steps.audit.outcome != 'success'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_OPERATOR_CHAT_ID: ${{ secrets.TELEGRAM_OPERATOR_CHAT_ID }}
           PYTHONIOENCODING: utf-8
           BODY_FILE: ${{ runner.temp }}/audit_alert.txt
         # THE REASONS, NOT A GUESS AT THEM. The fixed sentence that stood here

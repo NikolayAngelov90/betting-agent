@@ -160,7 +160,7 @@ def test_the_RESEND_DOES_NOT_TOUCH_THE_PICKS_SENT_MARKER(tmp_path, monkeypatch):
     n.enabled = True
     monkeypatch.setattr(n, "_get_bot", lambda: object(), raising=False)
 
-    async def _chunked(message, header, report=""):
+    async def _chunked(message, header=None, report="", **_k):
         sent_bodies.append(message)
     monkeypatch.setattr(n, "_send_chunked", _chunked, raising=False)
 
@@ -194,7 +194,7 @@ def test_the_KNOWN_WRONG_send_daily_picks_DOES_move_the_marker(tmp_path, monkeyp
     n.enabled = True
     monkeypatch.setattr(n, "_get_bot", lambda: object(), raising=False)
 
-    async def _chunked(message, header, report=""):
+    async def _chunked(message, header=None, report="", **_k):
         return None
     monkeypatch.setattr(n, "_send_chunked", _chunked, raising=False)
 
