@@ -35120,3 +35120,180 @@ s5.19 / cdec29.**
 `src/reporting/experiment_record.py`, `tests/test_client_channel.py` (new),
 `docs/flb-preregistration.md` (new), `docs/roi-target.md` (new),
 `tests/test_gate_is_opt_in.py`.*
+
+---
+
+## 2026-11-05 — THE 2.49 POINTS WERE A MARKET-MIX ARTEFACT, NOT AN EXECUTION GAP
+
+`EXECUTION GAP` · `BEST LINE TAKEABLE` · `ARITHMETIC` · `DOUBLE CHANCE`
+
+Measurement only. **No code changed, no threshold moved.**
+
+### EXECUTION GAP — the mechanism, stated rather than suspected
+
+The taken price is the **cross-book MEDIAN of real (non-Flashscore)
+bookmakers**, computed in `value_calculator._find_best_odds`. Confirmed by
+reconstruction: **683 of 683 picks = 100.0%** match the median within 0.01;
+only 46.4% match the max.
+
+> **The function is named `_find_best_odds` and its docstring says "Find the
+> best (highest) odds". It returns neither.** The aggregation comment three
+> screens below says what it does, and why: *"`max()` produces a positive
+> bias because an inflated price from a single bookie always passes
+> through."* The name and the docstring are the stale part, not the policy.
+
+`_consensus()` in `feature_engineer` is a **feature producer** — it writes
+`*_implied_prob` — and does **not** set the taken price. Ruled out, not
+assumed.
+
+**The measured gap**, `measured` 2026-11-05, grain=PICK for means and
+FIXTURE for intervals, population PAPER settled, n=683 picks with book-level
+prices:
+
+| | |
+|---|---|
+| best − taken | mean **+0.786pp**, median +0.614pp, p90 +1.832pp |
+| 95% CI over fixtures | **[+0.724, +0.850]pp** |
+| as a price ratio | mean +1.302% |
+| picks already at the best | **182 (26.6%)** |
+
+By book count: **119 picks have ONE book** (gap 0 by construction), 564 have
+**2–3**, and **none has 4 or more**. By market: Team Goals +1.161pp, Double
+Chance +0.715pp, Draw No Bet +0.000pp.
+
+> **COVERAGE LIMIT, stated: 683 of 1,583 settled paper picks joined.** The
+> join needs `odds.selection = saved_picks.selection`, and 1X2 and
+> over_under store selections differently (team names, suffix variants), so
+> **those two markets are absent from this measurement.**
+
+### WHY 2.49 POINTS WAS THE WRONG NUMBER
+
+The premise compared the **taken-price overround of +3.59pp**, measured
+inside the FLB bands — whose picks are mostly Team Goals, Double Chance and
+BTTS — against the **1X2 best-line overround of 1.10%**. Those are
+**different markets at different grains**, and the second one is not a price
+anyone can take.
+
+**The execution term is worth at most +1.10% of ROI, not 2.49 points.**
+
+### BEST LINE TAKEABLE — no
+
+| band (quote spread within a match) | matches | **arb-shaped** | best | 2nd-best | median |
+|---|---|---|---|---|---|
+| **< 30 min** | 4,236 | **16.8%** | +1.41% | **+2.89%** | +7.13% |
+| 30 m – 2 h | 112 | 27.7% | +0.40% | +1.02% | +7.16% |
+| 2 – 24 h | 345 | **73.6%** | **−0.84%** | +0.09% | +6.42% |
+| > 24 h | 10 | 50.0% | +0.03% | +1.68% | +13.81% |
+
+**21.28% of all 1X2 best lines imply under 100%.** Genuine arbitrage in a
+liquid three-way market is rare; one in five is the signature of a line
+**assembled from prices quoted at different times**. The 2–24 h band settles
+it: 73.6% arb-shaped and a **negative** median overround. Time-mixing
+manufactures value that was never on offer.
+
+**And it does not go away when the quotes are close together: 16.8% in the
+tightest band**, which holds 90% of the data.
+
+`'54 books'` is a **historical union, not a panel**: the median number of
+books pricing one (match, selection) is **2–3**. Three books supply every
+maximum — **Bet365 37.2%, 1xBet 33.4%, Pinnacle 29.4%** — and those are the
+sharp books, which is the opposite of the "small book mis-prices a minor
+league" story. The maxima are not coming from where the policy's comment
+feared.
+
+**Freshness cannot be established per pick.** `saved_picks` has no `taken_at`
+column and `pick_date` is a DATE, so the best available measure is the quote
+age at that date's midnight: p10 −13.5 h, median −8.0 h, p90 −5.1 h.
+**Reported as a limit, not as a result.**
+
+### ARITHMETIC — execution and edge, separately
+
+**Execution alone**, selections unchanged, no edge assumed (n=683):
+
+| price policy | ROI | delta vs taken | 95% CI of delta |
+|---|---|---|---|
+| **TAKEN** (cross-book median) | **−7.47%** | — | — |
+| BEST (**not takeable**) | −6.37% | **+1.10%** | [+0.96%, +1.24%] |
+| SECOND-BEST | −7.87% | **−0.40%** | [−0.47%, −0.32%] |
+
+> **SECOND-BEST IS WORSE THAN WHAT WE ALREADY TAKE, and it is arithmetic
+> rather than luck.** With two books the median is their average, which beats
+> the lower of the two; with three the median *is* the second-best. At a
+> measured 2–3 books per selection, **the median policy is already at or
+> above second-best by construction.**
+>
+> **So there is no safe execution recovery.** The only improvement is +1.10%,
+> and it requires taking a maximum that is arbitrage-shaped one time in six.
+
+**The edge term, kept separate.** The FLB gap is
+`external, Footiqo, 2025/26, ONE bookmaker (1xBet), five leagues, n=134 at
+70–79%` **= +3.74pp**, and **our 70–79% and 80–89% bands are EMPTY**, so it is
+untestable on our record. Net of each cost figure:
+
+| cost figure | overround | gap net |
+|---|---|---|
+| taken (median), 1X2 | 7.13% | **−3.39pp** |
+| second-best, 1X2 | 2.89% | +0.85pp |
+| best, 1X2 (not takeable) | 1.41% | +2.33pp |
+
+**Position on the registered curve after execution alone**: ROI −7.47% →
+−6.37% on this subset, i.e. **+1.10 of the 8.7 points needed — 12.6% of the
+move**. At the measured dispersion that fraction needs **n ≈ 33,000 picks**
+to distinguish from zero, against 525 for the full move. **Execution is not a
+route to the target; it is a rounding correction.**
+
+### DOUBLE CHANCE — the overround, derived correctly
+
+Its legs **overlap and are not exhaustive**, so `Σ1/odds` across the three
+selections is ≈2 **by construction** and is not an overround. The fair price
+of `1X` is `1/(p_home + p_draw)`, so the margin is derived from the de-vigged
+1X2 prices:
+
+| selection | n | median margin | p25 | p75 |
+|---|---|---|---|---|
+| 12 | 1,594 | 5.64% | 4.59% | 6.49% |
+| X2 | 1,594 | 5.94% | 4.52% | 7.33% |
+| 1X | 1,591 | 5.95% | 4.53% | 7.12% |
+| **pooled** | **4,779** | **+5.80%** | | |
+
+Against 1X2's taken +7.07% and BTTS's +6.19%. **Double chance is the market
+whose shape is closest to the stated target — high win rate at short odds —
+and its margin alone (+5.80%) is nearly twice the +3% ROI target.** Our record
+on it: win 60.0%, ROI −5.51%, avg odds 1.58, n=265.
+
+### THE REACHABLE-SET QUESTION — for Niki, with the list
+
+`paper_trading_mode` is `true` and **no live wager has ever been placed**, so
+"take the best line" is free here and constrained in reality. Every maximum in
+our data comes from one of three books:
+
+* **Bet365** — 37.2% of maxima
+* **1xBet** — 33.4%
+* **Pinnacle** — 29.4%
+
+**This is a question, not a measurement.** Which of those three Niki can
+actually use — account open, not restricted, reachable from his jurisdiction —
+decides the planning cost figure. If the reachable set is narrower than all
+three, the planning overround is **that set's**, not 1.41% and not 2.89%.
+
+> **A paper result built on best lines that cannot be taken is a measurement
+> of a strategy nobody can execute.**
+
+### FOOTIQO — the request, left with Niki
+
+The licence permits "personal, non-commercial research", "Developing and
+testing predictive models" and "backtesting and machine-learning
+experiments"; it prohibits resale/redistribution and **"Automated scraping or
+crawling of football statistics pages"**. So the free samples must be
+**requested by email**, not fetched. The request should ask for: the three
+free samples, and for each — **the leagues and seasons covered, the full field
+list, the row count, and which bookmaker stands behind the opening/closing
+odds** (their study used 1xBet). Without those four the sizing question cannot
+be answered, and the sales page publishes none of them.
+
+### DISCIPLINE
+
+Nothing changed: no code, no threshold, no market adopted, nothing bought.
+**Fingerprint unmoved at s5.19 / cdec29.**
+
+*Recorded 2026-11-05. No source files changed.*
