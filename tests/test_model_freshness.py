@@ -298,8 +298,16 @@ def test_it_is_WIRED_and_does_NOT_key_on_the_RETRAIN_STEPS_OUTCOME():
         "red for 'the day produced no picks', and a stale model still "
         "produced picks")
     env = step.get("env") or {}
-    for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+    # THE OPERATOR ID, 2026-11-04. This step delivers through
+    # `scripts.ci_alert` -> `deliver_alert`, whose default destination moved
+    # from the CLIENT chat to the operator chat. Five such steps were putting
+    # ci-audit and reminder traffic in front of the people Niki shares the
+    # client channel with. The step must carry the operator id and must NOT
+    # carry the client one.
+    for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_OPERATOR_CHAT_ID"):
         assert key in env, f"{key} is not available, so it cannot deliver"
+    assert "TELEGRAM_CHAT_ID" not in env, (
+        "the delivering step still carries the CLIENT chat id")
 
 
 def test_the_SIDECAR_is_GITIGNORED_like_its_siblings():

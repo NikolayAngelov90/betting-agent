@@ -310,8 +310,16 @@ def test_the_report_delivers_on_success_not_only_on_failure():
     run_step = next(s for s in steps if s.get("name") == "Paper trading report")
     assert "--telegram" in run_step["run"], "the success delivery is not wired"
     env = run_step.get("env") or {}
-    for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+    # THE OPERATOR ID, 2026-11-04. This step delivers through
+    # `scripts.ci_alert` -> `deliver_alert`, whose default destination moved
+    # from the CLIENT chat to the operator chat. Five such steps were putting
+    # ci-audit and reminder traffic in front of the people Niki shares the
+    # client channel with. The step must carry the operator id and must NOT
+    # carry the client one.
+    for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_OPERATOR_CHAT_ID"):
         assert key in env, f"{key} is not available to the delivering step"
+    assert "TELEGRAM_CHAT_ID" not in env, (
+        "the delivering step still carries the CLIENT chat id")
     # ── AND THE FAILURE ALERT IS NOW GONE, DELIBERATELY. 2026-10-22. ─────
     #
     # This asserted the failure alert still existed, on the reasoning that

@@ -55,6 +55,12 @@ def _notifier(bot):
     n.enabled = True
     n.bot_token = "t"
     n.chat_id = "1"
+    # THE DESTINATION IS NOW PART OF THE CONTRACT, 2026-11-04. `_send_chunked`
+    # takes `to` and defaults to the OPERATOR id, so a stub that sets only
+    # `chat_id` has no destination and delivers nothing. These tests exercise
+    # the CHUNKING machinery, not the routing, so the operator id is the right
+    # one to give them: it is what every non-client sender resolves.
+    n.operator_chat_id = "1"
     n._bot = bot
     n._last_send_error = ""
     return n
