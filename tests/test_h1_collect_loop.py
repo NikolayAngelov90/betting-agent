@@ -481,8 +481,17 @@ def test_the_scheduled_path_pins_the_MEASURED_league_set():
     for lg in ("england/championship", "europe/champions-league",
                "europe/europa-league", "europe/europa-conference-league"):
         assert lg in run, f"{lg} is no longer pinned on the scheduled path"
-    assert "--max-credits $MAXC" in run and "MAXC=24" in run, (
+    # THE CEILING IS DERIVED, NOT A LITERAL, since 2026-11-04. `MAXC=24` was
+    # a literal that could not follow a change to `rounds` -- and on the
+    # DISPATCH path the form's own `max_credits=6` met `rounds=3`, funding two
+    # of three rounds and leaving nine fixtures at two instants. The floor is
+    # now `rounds x leagues x CREDITS_PER_REQUEST`, which is 24 for this
+    # pinned set at three rounds and moves with either term.
+    assert "--max-credits $MAXC" in run, (
         "the scheduled path lost its per-job credit ceiling")
+    assert "NEED=$(( ROUNDS * LEAGUE_N" in run and "MAXC=$NEED" in run, (
+        "the ceiling is no longer derived from rounds and the league count; "
+        "a literal cannot follow a change to either")
 
 
 def test_the_collector_is_only_reached_WITH_a_credit_ceiling():

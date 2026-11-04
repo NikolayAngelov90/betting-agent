@@ -528,6 +528,7 @@ def code_of(source: str) -> str:
     # A STRING is a docstring when it is the whole statement. Tracked by the
     # token before it: NEWLINE/INDENT/DEDENT/start means "statement begins".
     at_stmt_start = True
+    depth = 0          # bracket nesting; NL inside brackets is not a boundary
     for tok in toks:
         ttype, tstr, start, end, _line = tok
         if start[0] > prev_end[0]:
@@ -535,16 +536,53 @@ def code_of(source: str) -> str:
             prev_end = (start[0], 0)
         if start[1] > prev_end[1]:
             out.append(" " * (start[1] - prev_end[1]))
+        # ── TWO CORRECTIONS, 2026-11-04, AFTER THIS COST A CARD. ───────────
+        #
+        # 1. `tokenize.NL` IS NOT A STATEMENT BOUNDARY INSIDE BRACKETS.
+        #
+        #    NL is emitted both for a blank line between statements AND for a
+        #    line break inside ( ) [ ] { }. Treating it as "a statement
+        #    begins" meant the SECOND piece of a multi-line string literal
+        #    looked like a whole-statement string, i.e. a docstring, and was
+        #    DROPPED:
+        #
+        #        print("alpha "
+        #              "window=X")      <- "window=X" deleted
+        #
+        #    `at_stmt_start` now follows NL only at bracket depth 0, where a
+        #    blank line really is between statements.
+        #
+        # 2. AN F-STRING IS NEVER A DOCSTRING, ON ANY VERSION.
+        #
+        #    Before Python 3.12 an f-string is a single STRING token; from
+        #    3.12 (PEP 701) it is FSTRING_START/MIDDLE/END and never reaches
+        #    the STRING branch at all. So the same source gave DIFFERENT
+        #    answers on 3.11 and 3.13, and the version that mattered was the
+        #    one this repo does not develop on.
+        #
+        #    THAT ASYMMETRY IS WHY THIS WAS INVISIBLE. A local gate of 1,710
+        #    passing tests could not fail; CI on 3.11 lost the card. The
+        #    prefix check below makes the two versions agree.
+        is_fstring = (ttype == tokenize.STRING
+                      and "f" in tstr[:3].split('"')[0].split("'")[0].lower())
         drop = (ttype == tokenize.COMMENT
-                or (ttype == tokenize.STRING and at_stmt_start))
+                or (ttype == tokenize.STRING and at_stmt_start
+                    and not is_fstring))
         if drop:
             # keep the line count, drop the content
             out.append("\n" * (end[0] - start[0]))
         else:
             out.append(tstr)
-        if ttype in (tokenize.NEWLINE, tokenize.NL, tokenize.INDENT,
-                     tokenize.DEDENT):
+        if ttype == tokenize.OP:
+            if tstr in "([{":
+                depth += 1
+            elif tstr in ")]}":
+                depth = max(0, depth - 1)
+        if ttype in (tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT):
             at_stmt_start = True
+        elif ttype == tokenize.NL:
+            # only a blank line BETWEEN statements starts one
+            at_stmt_start = depth == 0
         elif ttype not in (tokenize.COMMENT,):
             at_stmt_start = False
         prev_end = end

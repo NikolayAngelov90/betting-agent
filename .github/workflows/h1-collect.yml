@@ -232,9 +232,9 @@ on:
   workflow_dispatch:
     inputs:
       max_credits:
-        description: 'Per-job credit ceiling. The trial is 6.'
-        required: true
-        default: '6'
+        description: 'Per-job credit ceiling. LEAVE EMPTY to derive it as rounds x leagues x 2; a value below that floor is REFUSED.'
+        required: false
+        default: ''
       leagues:
         description: 'Comma-separated league keys to PIN (e.g. spain/laliga). Empty = all.'
         default: ''
@@ -349,15 +349,40 @@ jobs:
           LEAGUES="${{ inputs.leagues }}"
           ROUNDS="${{ inputs.rounds }}"
           GAP="${{ inputs.gap_minutes }}"
-          if [ -z "$MAXC" ]; then MAXC=24; fi
           if [ -z "$ROUNDS" ]; then ROUNDS=3; fi
           if [ -z "$GAP" ]; then GAP=120; fi
           if [ -z "$LEAGUES" ]; then
             LEAGUES="england/championship,europe/champions-league,europe/europa-league,europe/europa-conference-league"
           fi
+          # ── THE CREDIT CEILING IS DERIVED FROM ROUNDS AND LEAGUES. ───────
+          #
+          # On 2026-11-03 a manual dispatch ran with the form's default
+          # `max_credits=6` and `rounds=3`. Three rounds over the two pinned
+          # leagues that had fixtures costs 3 x 2 x 2 = 12 credits, so the
+          # job spent 6, completed TWO rounds, and left nine fixtures holding
+          # TWO instants at a 123-minute gap. A qualifying triple needs
+          # three. The window's only in-band day was spent proving that the
+          # form cannot fund what its own `rounds` field promises.
+          #
+          # CREDITS_PER_REQUEST is 2 (src/data/odds_quota). The floor is
+          # rounds x leagues x 2. A league with no in-band fixture is skipped
+          # at zero cost, so this is a CEILING and not a forecast.
+          LEAGUE_N=$(printf '%s' "$LEAGUES" | tr ',' '\n' | grep -c '[^[:space:]]')
+          NEED=$(( ROUNDS * LEAGUE_N * 2 ))
+          if [ -z "$MAXC" ]; then
+            MAXC=$NEED
+            echo "max_credits DERIVED: $ROUNDS rounds x $LEAGUE_N leagues x 2 = $NEED"
+          elif [ "$MAXC" -lt "$NEED" ]; then
+            echo "::error::REFUSING TO START UNDER-FUNDED. max_credits=$MAXC but"
+            echo "::error::$ROUNDS rounds over $LEAGUE_N leagues needs $NEED."
+            echo "::error::A truncated run leaves fixtures at TWO instants, which"
+            echo "::error::is not a trajectory, and spends the day to do it."
+            echo "::error::Raise max_credits to >= $NEED or lower rounds."
+            exit 1
+          fi
           ARGS="--max-credits $MAXC --leagues $LEAGUES"
           ARGS="$ARGS --rounds $ROUNDS --gap-minutes $GAP"
-          echo "max_credits=$MAXC rounds=$ROUNDS gap=$GAP"
+          echo "max_credits=$MAXC rounds=$ROUNDS gap=$GAP leagues=$LEAGUE_N need=$NEED"
           echo "pinned: $LEAGUES"
           python -m scripts.h1_collect $ARGS
           exit $?

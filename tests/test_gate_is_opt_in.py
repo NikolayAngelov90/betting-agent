@@ -93,7 +93,13 @@ from scripts.capture_critical import (
 #: `test_client_channel.py`. Correctly NON-critical: `telegram_bot` reports,
 #: it does not write prices or picks, so a notification regression must not be
 #: able to stop capture. The gate count is unchanged at 1710.
-CENSUS = {"files": 138, "capture_critical": 75, "not_critical": 63}
+#: 138 -> 140 files and 75 -> 77 capture_critical on 2026-11-04, with
+#: `test_code_of_is_version_independent.py` and
+#: `test_dispatch_defaults_are_fundable.py`. Both correctly CRITICAL: the
+#: first guards the helper whose version-sensitivity cost the 11-04 card, the
+#: second guards the dispatch form that truncated the window's only in-band
+#: day. A regression in either loses a card or a collection day.
+CENSUS = {"files": 140, "capture_critical": 77, "not_critical": 63}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -304,7 +310,7 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     906 tests left the gate, and 16 more arrived in the non-gating
     selection with this file, for 923.
     """
-    # RE-MEASURED 2026-11-03: gate 1680 -> 1696 -> 1710. Non-gating is UNCHANGED at
+    # RE-MEASURED: gate 1680 -> 1696 -> 1710 (11-03) -> 1729 (11-04). Non-gating is UNCHANGED at
     # 911, and the first attempt at this update said 909 because a pytest
     # summary line reports tests PASSED while this assertion counts tests
     # COLLECTED -- 909 passed plus the 2 failures that prompted the update.
@@ -324,9 +330,14 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       that was truncating a real 3-day streak to 1.
     #   +14  the two-month counter's both-controls pair (7) and the five
     #        mechanisms' firings (7), added the same day
+    #   +19 on 2026-11-04: 10 for `code_of`'s version-independence (the
+    #       continuation-string known-wrong case, the two-forms equivalence,
+    #       the four still-dropped docstring forms, comments, the workflow
+    #       python pin and the recorded local-interpreter gap) and 9 for the
+    #       dispatch form being mutually fundable.
     gate, nong = _ids(GATE_EXPR), _ids(NON_GATING_EXPR)
-    assert len(gate) == 1710, (
-        f"the gating selection is {len(gate)}, recorded 1710 — say what moved")
+    assert len(gate) == 1729, (
+        f"the gating selection is {len(gate)}, recorded 1729 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the

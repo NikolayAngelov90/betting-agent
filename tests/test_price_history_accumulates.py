@@ -159,6 +159,25 @@ _SNAPSHOT_READERS = {
     # collection days produced zero rows and reported RUNNING_AND_FINE. It
     # MEASURES the history and feeds no prediction, so it is not a cohort
     # event — the same standing as h1_collection_check.
+    # THE RESEND, declared 2026-11-04 — AND IT WAS HIDDEN BY A BUG, NOT NEW.
+    #
+    # `pick_resend.py` names `odds_snapshots` only inside `CENSUS_TABLES`, the
+    # list of every table its row census counts to prove `--resend` writes
+    # nothing. It never reads a price and feeds no prediction: the opposite of
+    # a snapshot reader, since the table appears there to be checked for
+    # ABSENCE of change.
+    #
+    # It went undeclared from 2026-11-03 because `code_of` deleted the line.
+    # The name sits first on a continuation line inside parentheses, and
+    # `code_of` treated the newline inside brackets as a statement boundary,
+    # so the string looked like a docstring and was dropped. Fixing that on
+    # 11-04 made this reference visible for the first time.
+    #
+    # THAT IS THE SILENT DIRECTION OF THE SAME BUG: an over-dropping stripper
+    # makes `in` assertions fail loudly and `not in` detectors pass quietly.
+    # This detector is the second kind.
+    "pick_resend.py": (
+        "names the table in CENSUS_TABLES to prove the resend writes nothing"),
     "h1_precondition.py": (
         "H1's zero-collection alarm. Counts trajectories per day from "
         "odds_snapshots to tell a silent zero from a real one; no session is "
