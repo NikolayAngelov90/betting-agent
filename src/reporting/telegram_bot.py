@@ -510,8 +510,21 @@ class TelegramNotifier:
         # though it were current. It now lives in the README with its
         # measurement date; this message counts from the experiment instead.
         lines = [header]
-        from src.reporting.experiment_record import format_block
-        lines.extend(format_block(experiment))
+        # CLIENT LANGUAGE, NOT `format_block`. 2026-11-04.
+        #
+        # `format_block` is written for this project: "Experiment: CLV",
+        # "MODEL", "FINAL", "Stage 16: ... p > 0.15", "3 cohorts are 3
+        # different configurations". THIS MESSAGE IS READ BY PEOPLE WHO ARE
+        # NOT NIKI. They learn nothing from any of it and could reasonably
+        # conclude money is at stake.
+        #
+        # `client_block` carries the same figure with the paper statement
+        # plain and unhedged, plus the start date and the settled count so
+        # the number is interpretable. The cohort count is deliberately
+        # absent: a client cannot act on it. `format_block` is unchanged and
+        # still serves the operator path.
+        from src.reporting.experiment_record import client_block
+        lines.extend(client_block(experiment))
 
         # Group settled picks by league
         by_league: Dict[str, list] = {}

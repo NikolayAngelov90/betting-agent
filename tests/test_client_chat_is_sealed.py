@@ -359,8 +359,162 @@ def test_DRIVE_5_a_SETTLEMENT_reaches_the_client_WITH_its_population():
     msgs = _client_msgs(n)
     assert msgs, f"the settlement did not reach the client chat: {n.seen}"
     body = msgs[0][2]
-    # the performance figure rides INSIDE the settlement, with its population
-    assert "PAPER" in body, "the settlement carries no population label"
-    assert "3 cohorts" in body and "2026-08-11" in body, body[:400]
-    assert "60.0%" in body and "ROI" in body and "avg odds" in body, (
-        "win rate appears without ROI and average odds")
+    # THE PERFORMANCE FIGURE RIDES INSIDE THE SETTLEMENT, IN CLIENT LANGUAGE.
+    # This test first asserted "PAPER", "3 cohorts" and "avg odds" -- the
+    # OPERATOR wording, which is exactly what was removed on 2026-11-04. The
+    # population is still named, in words a client can read.
+    assert "no real money has been staked" in body.lower(), (
+        "the settlement does not say money is not at stake")
+    assert "11 Aug 2026" in body, "no start date in client form"
+    assert "50 settled picks" in body, "no settled count"
+    assert "60.0%" in body and "level stakes" in body and "average price" in body, (
+        "win rate appears without its return and its price")
+    assert "cohort" not in body.lower(), (
+        "the cohort count reached the client settlement")
+
+
+# ══════════ A. the settlement carries the figure, in CLIENT language ════════
+
+def _rec():
+    from src.reporting.experiment_record import ExperimentRecord
+    import inspect
+    sig = inspect.signature(ExperimentRecord)
+    kw = {k: v for k, v in (
+        ("wins", 30), ("losses", 20), ("settled", 50), ("cohorts", 3),
+        ("win_rate", 0.60), ("flat_roi", -0.055), ("avg_odds", 1.70),
+        ("pl_units", -2.8), ("first_date", "2026-08-11"),
+        ("last_date", "2026-11-03")) if k in sig.parameters}
+    return ExperimentRecord(**kw)
+
+
+def _settlement_body():
+    n = _N()
+    settled = [{
+        "match_name": "A vs B", "match": "A vs B",
+        "league": "england/premier-league", "market": "Over 2.5",
+        "selection": "Over 2.5 Goals", "odds": 1.8, "result": "win",
+        "score": "2-1", "stake": 1.5, "kelly_stake_percentage": 1.5,
+        "expected_value": 0.08, "confidence": 0.65,
+        "predicted_probability": 0.6, "model_agreement": "solo",
+        "review_action": "KEEP", "is_paper": True,
+        "pick_date": dt.date(2026, 11, 3)}]
+    _run(n.send_settlement_report(settled, stats={}, experiment=_rec()))
+    msgs = [x for x in n.seen if x[0] == CLIENT]
+    assert msgs, f"the settlement did not reach the client chat: {n.seen}"
+    return msgs[0][2]
+
+
+def test_THE_SETTLEMENT_CARRIES_THE_OVERALL_FIGURE_AND_THE_PERIOD():
+    """One message, both things: the day's results and the running total."""
+    body = _settlement_body()
+    assert "30 wins" in body and "20 losses" in body, body[:500]
+    assert "60.0%" in body, "the win rate is missing"
+    assert "50 settled picks" in body, "the settled count is missing"
+    # a win rate never appears without its price and its return
+    assert "-5.6%" in body and "level stakes" in body, "no return figure"
+    assert "average price 1.70" in body, "no average price"
+    assert "11 Aug 2026" in body, f"no start date in client form: {body[:400]}"
+
+
+def test_THE_SETTLEMENT_SAYS_PLAINLY_THAT_NO_MONEY_IS_STAKED():
+    """A reader who is not Niki must be able to tell these are simulated."""
+    body = _settlement_body()
+    assert "no real money has been staked" in body.lower(), (
+        f"the settlement does not say money is not at stake: {body[:500]}")
+    assert "simulated" in body.lower()
+
+
+def test_KNOWN_WRONG_THE_SETTLEMENT_CARRIES_NO_OPERATOR_VOCABULARY():
+    """The control. `format_block` would fail every one of these.
+
+    It renders "Experiment: CLV", "MODEL:", "FINAL:", "Stage 16", "p > 0.15"
+    and "3 cohorts are 3 different configurations" — which is what the client
+    settlement contained until 2026-11-04.
+    """
+    from src.reporting.experiment_record import (OPERATOR_VOCABULARY,
+                                                 format_block)
+    body = _settlement_body()
+    leaked = [w for w in OPERATOR_VOCABULARY if w.lower() in body.lower()]
+    assert not leaked, (
+        f"operator vocabulary reached the client settlement: {leaked}")
+    # and prove the check discriminates: the OPERATOR block trips it
+    operator = "\n".join(format_block(_rec(), html=False))
+    tripped = [w for w in OPERATOR_VOCABULARY if w.lower() in operator.lower()]
+    assert len(tripped) >= 4, (
+        f"the operator block only tripped {tripped}; the vocabulary list is "
+        f"too weak to have caught the old settlement")
+
+
+# ══════════ B. the operator channel is unset BY DECISION ════════════════════
+
+def test_AN_UNSET_OPERATOR_ID_ANNOTATES_AND_NEVER_REACHES_THE_CLIENT(monkeypatch):
+    """The decision: GitHub carries operator information, not Telegram.
+
+    `TELEGRAM_OPERATOR_CHAT_ID` is deliberately not configured. With no
+    destination `deliver_alert` must take the ANNOTATION path and must not
+    reach the client chat.
+    """
+    import src.reporting.alert_delivery as ad
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", CLIENT)
+    monkeypatch.delenv("TELEGRAM_OPERATOR_CHAT_ID", raising=False)
+    posted = []
+    monkeypatch.setattr(ad, "_post", lambda *a, **k: posted.append(a),
+                        raising=False)
+    annotated = []
+    monkeypatch.setattr(ad, "_annotate",
+                        lambda m: (annotated.append(m), True)[1])
+    res = ad.deliver_alert("a model-freshness finding")
+    assert posted == [], (
+        "an alert was POSTED with no operator id configured; the only "
+        "destination available was the client chat")
+    assert annotated, "nothing was annotated, so the finding has NO carrier"
+    assert res.ok is False and "not configured" in res.detail
+    assert res.surfaced is True, (
+        "the annotation path did not report that it surfaced the "
+        "message, so nothing proves it has a carrier")
+
+
+def test_KNOWN_WRONG_a_REINTRODUCED_CLIENT_FALLBACK_IS_CAUGHT(monkeypatch):
+    """Prove the test above can fail.
+
+    Simulates the defect that produced this whole exchange: an
+    `or os.environ["TELEGRAM_CHAT_ID"]` fallback behind the operator id.
+    """
+    import os
+    posted = []
+
+    def _leaky_deliver(text, *, token=None, chat_id=None, sleep=None):
+        dest = (chat_id or os.environ.get("TELEGRAM_OPERATOR_CHAT_ID", "")
+                or os.environ.get("TELEGRAM_CHAT_ID", ""))   # the old defect
+        if dest:
+            posted.append(dest)
+        return None
+
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", CLIENT)
+    monkeypatch.delenv("TELEGRAM_OPERATOR_CHAT_ID", raising=False)
+    _leaky_deliver("a model-freshness finding")
+    assert posted == [CLIENT], (
+        "the simulated fallback did NOT reach the client chat, so the test "
+        "above is not demonstrably catching anything")
+
+
+def test_NO_CODE_PATH_FALLS_BACK_TO_THE_CLIENT_ID():
+    """Read every environment lookup in the delivery layer from the AST."""
+    import ast
+    import io
+    src = io.open("src/reporting/alert_delivery.py", encoding="utf-8").read()
+    keys = set()
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "environ"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)):
+            keys.add(node.args[0].value)
+    assert "TELEGRAM_CHAT_ID" not in keys, (
+        f"the delivery layer can still resolve the CLIENT chat id from the "
+        f"environment ({sorted(keys)}). That is the defect this stage ended.")
+    assert "TELEGRAM_OPERATOR_CHAT_ID" in keys

@@ -5202,12 +5202,26 @@ async def main():
             if not no_settle:
                 await agent.settle_predictions()
             stats = agent.get_stats()
-            if agent.telegram.enabled:
-                await agent.telegram.send_performance_report(
-                    stats, experiment=_experiment_record(agent))
-                print("Performance report sent to Telegram!")
-            else:
-                print("Telegram not enabled — printing to console:")
+            # ── NO SEPARATE CLIENT SEND. 2026-11-04. ──────────────────────
+            #
+            # `--report` used to send `send_performance_report` to the chat
+            # Niki shares with other people, making the overall figure a
+            # THIRD client message. By decision the client chat carries TWO:
+            # the picks card and the settlement.
+            #
+            # WHAT REPLACED IT: the same figure now rides INSIDE the
+            # settlement, rendered by `experiment_record.client_block` — in
+            # client language, with the paper statement plain, and without
+            # the cohort count a client cannot act on. `--report` is an
+            # operator command and prints to the console.
+            #
+            # `send_performance_report` itself is unchanged and still
+            # addresses the OPERATOR chat; nothing calls it on this path.
+            if True:
+                print("Performance report — console only. The client-facing "
+                      "figure rides inside the settlement message "
+                      "(experiment_record.client_block); this command does "
+                      "not send to Telegram.")
                 at = stats.get("all_time", {})
                 print(f"  All time: {at.get('total', 0)} picks, "
                       f"{at.get('wins', 0)}W-{at.get('losses', 0)}L "

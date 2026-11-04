@@ -35123,7 +35123,15 @@ s5.19 / cdec29.**
 
 ---
 
-## 2026-11-05 — THE 2.49 POINTS WERE A MARKET-MIX ARTEFACT, NOT AN EXECUTION GAP
+## 2026-11-04 — THE 2.49 POINTS WERE A MARKET-MIX ARTEFACT, NOT AN EXECUTION GAP
+
+> **DATE CORRECTED IN PLACE.** This entry was first headed 2026-11-05. The
+> measurements were taken on **2026-11-04**; `date -u` read
+> `2026-11-04T09:02Z` while this was being written. The figures are
+> unchanged — only the date was wrong, and a wrong date in the ledger is
+> stale provenance that will be cited. Fixed here rather than noted in a
+> later entry, because the later entry is not what a reader quoting this
+> one will have open.
 
 `EXECUTION GAP` · `BEST LINE TAKEABLE` · `ARITHMETIC` · `DOUBLE CHANCE`
 
@@ -35146,7 +35154,7 @@ only 46.4% match the max.
 `*_implied_prob` — and does **not** set the taken price. Ruled out, not
 assumed.
 
-**The measured gap**, `measured` 2026-11-05, grain=PICK for means and
+**The measured gap**, `measured` 2026-11-04, grain=PICK for means and
 FIXTURE for intervals, population PAPER settled, n=683 picks with book-level
 prices:
 
@@ -35296,4 +35304,5 @@ be answered, and the sales page publishes none of them.
 Nothing changed: no code, no threshold, no market adopted, nothing bought.
 **Fingerprint unmoved at s5.19 / cdec29.**
 
-*Recorded 2026-11-05. No source files changed.*
+*Recorded 2026-11-04 (header corrected in place 2026-11-04; it first read
+2026-11-05). No source files changed.*

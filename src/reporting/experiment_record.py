@@ -243,6 +243,70 @@ def build(db, current_model_version: str = "") -> Optional[ExperimentRecord]:
         return None
 
 
+#: Words that belong to the project and not to a client. The settlement is
+#: read by people who are not Niki, so the block below is checked against
+#: this list rather than against a reviewer's memory.
+NL = chr(10)
+
+OPERATOR_VOCABULARY = (
+    "cohort", "CLV", "MODEL:", "FINAL:", "Stage", "p >", "p &gt;",
+    "fingerprint", "population", "gate", "capture", "configuration",
+    "pre-paper", "is_paper", "experiment",
+)
+
+
+def client_block(rec, html: bool = True):
+    """The overall record, in client language, for the SETTLEMENT message.
+
+    TWO CLIENT MESSAGES, BY DECISION: the picks card and the settlement. The
+    overall figure used to be a THIRD send (`send_performance_report`); it is
+    a block in the settlement now, so a reader gets the day's results and the
+    running total in one place.
+
+    AND IT IS NOT `format_block`. That one is written for this project --
+    "Experiment: CLV", "MODEL", "FINAL", "Stage 16", "p > 0.15", "3 cohorts
+    are 3 different configurations". A client reading those learns nothing
+    and may reasonably conclude money is at stake. `format_block` stays for
+    the operator path.
+
+    WHAT A NON-NIKI READER MUST BE ABLE TO TELL: that these are simulated
+    bets. So the paper statement is plain, unhedged, and not a parenthetical:
+    the start date and the settled count are there to make the figure
+    interpretable, and the cohort count is NOT, because a client cannot act
+    on it.
+    """
+    b = (lambda t: f"<b>{t}</b>") if html else (lambda t: t)
+    i = (lambda t: f"<i>{t}</i>") if html else (lambda t: t)
+
+    if rec is None or rec.win_rate is None:
+        return [f"{NL}{b('─── Overall record ───')}",
+                i("No settled results yet.")]
+
+    out = [f"{NL}{b('─── Overall record ───')}"]
+    out.append(
+        f"{rec.wins} wins – {rec.losses} losses ({rec.win_rate:.1%}) "
+        f"from {rec.settled} settled picks")
+    # A WIN RATE NEVER APPEARS WITHOUT ITS PRICE AND ITS RETURN.
+    if rec.flat_roi is not None:
+        out.append(
+            f"Return {rec.flat_roi:+.1%} on level stakes · "
+            f"average price {rec.avg_odds:.2f}")
+    since = _pretty_date(rec.first_date) if rec.first_date else None
+    out.append(i(
+        f"Simulated results{f' since {since}' if since else ''} — "
+        f"no real money has been staked."))
+    return out
+
+
+def _pretty_date(iso: str) -> str:
+    """`2026-08-11` as `11 Aug 2026`. A client is not reading ISO dates."""
+    try:
+        import datetime as _dt
+        return _dt.date.fromisoformat(str(iso)).strftime("%d %b %Y").lstrip("0")
+    except Exception:
+        return str(iso)
+
+
 def format_block(rec: Optional[ExperimentRecord], html: bool = True) -> List[str]:
     """Render the block. CLV first, the settled record below it as context."""
     b = (lambda t: f"<b>{t}</b>") if html else (lambda t: t)
