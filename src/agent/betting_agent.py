@@ -5217,11 +5217,23 @@ async def main():
             #
             # `send_performance_report` itself is unchanged and still
             # addresses the OPERATOR chat; nothing calls it on this path.
-            if True:
+            # `--operator` sends it to the OPERATOR chat, never the client
+            # one. Without the flag this is a console command. The flag
+            # exists so `send_performance_report` has a real consumer rather
+            # than a declared exemption: a renderer kept alive "for later" is
+            # how a Telegram path survives unexamined, which is precisely
+            # what produced the five-path leak.
+            if "--operator" in sys.argv and agent.telegram.enabled:
+                await agent.telegram.send_performance_report(
+                    stats, experiment=_experiment_record(agent))
+                print("Performance report sent to the OPERATOR chat. With no "
+                      "operator id configured it annotates GitHub and sends "
+                      "nothing — by decision.")
+            else:
                 print("Performance report — console only. The client-facing "
                       "figure rides inside the settlement message "
-                      "(experiment_record.client_block); this command does "
-                      "not send to Telegram.")
+                      "(experiment_record.client_block). Pass --operator to "
+                      "send the full operator version.")
                 at = stats.get("all_time", {})
                 print(f"  All time: {at.get('total', 0)} picks, "
                       f"{at.get('wins', 0)}W-{at.get('losses', 0)}L "

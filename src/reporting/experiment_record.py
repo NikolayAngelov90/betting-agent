@@ -295,6 +295,21 @@ def client_block(rec, html: bool = True):
     out.append(i(
         f"Simulated results{f' since {since}' if since else ''} — "
         f"no real money has been staked."))
+
+    # THE RENDERER CHECKS ITS OWN OUTPUT, and this is also what consumes
+    # `OPERATOR_VOCABULARY` in production rather than only in a test.
+    #
+    # It LOGS rather than raises: a settlement that refuses to send because
+    # one word slipped through leaves the client with nothing, which is worse
+    # than the word. The test asserts the absence; this catches a path the
+    # test does not render.
+    leaked = [w for w in OPERATOR_VOCABULARY
+              if w.lower() in " ".join(out).lower()]
+    if leaked:
+        logger.error(
+            f"CLIENT BLOCK LEAKED OPERATOR VOCABULARY: {leaked}. This "
+            f"message is read by people who are not the operator; those "
+            f"words tell them nothing and may imply money is at stake.")
     return out
 
 
