@@ -352,8 +352,13 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       control, the two workflow-env assertions, and the FIVE DRIVES
     #       (ci-audit, reminders as verdict and as failure, a crash with no
     #       finding, a picks run, a settlement).
-    assert len(nong) == 929, (
-        f"the non-gating selection is {len(nong)}, recorded 929")
+    #   +6 later the same day: the settlement's client-language controls
+    #      (figure+period, the plain money statement, the known-wrong
+    #      operator-vocabulary check) and the operator-channel trio (unset
+    #      id annotates, the reintroduced fallback is caught, and no code
+    #      path can resolve the client id).
+    assert len(nong) == 935, (
+        f"the non-gating selection is {len(nong)}, recorded 935")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

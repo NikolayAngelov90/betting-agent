@@ -134,7 +134,22 @@ def build(db, current_model_version: str = "") -> Optional[ExperimentRecord]:
                        count(*) FILTER (WHERE result = 'win')  w,
                        count(*) FILTER (WHERE result = 'loss') l,
                        count(DISTINCT model_version)           cohorts,
-                       min(pick_date), max(pick_date),
+                       -- THE PERIOD IS FILTERED TO THE SAME POPULATION AS
+                       -- THE COUNT. 2026-11-04.
+                       --
+                       -- These two were `min(pick_date), max(pick_date)`,
+                       -- UNFILTERED, while `settled` above filters to
+                       -- `result IS NOT NULL`. So the message paired a
+                       -- SETTLED count with an ALL-PAPER period: measured
+                       -- today, 1,645 settled picks against a period ending
+                       -- 2026-11-04, which 13 UNSETTLED picks had widened by
+                       -- a day without entering the count.
+                       --
+                       -- A client cannot check that and will not know to
+                       -- ask, which is why the mixed-population rule bites
+                       -- harder in client-facing text than anywhere else.
+                       min(pick_date) FILTER (WHERE result IS NOT NULL),
+                       max(pick_date) FILTER (WHERE result IS NOT NULL),
                        avg(odds) FILTER (WHERE result IS NOT NULL),
                        sum(CASE WHEN result='win'  THEN odds - 1
                                 WHEN result='loss' THEN -1 ELSE 0 END)
@@ -283,18 +298,41 @@ def client_block(rec, html: bool = True):
                 i("No settled results yet.")]
 
     out = [f"{NL}{b('─── Overall record ───')}"]
+    # EVERY NUMBER RECONCILES. `settled` counts `result IS NOT NULL`, which
+    # includes VOIDS -- 53 of 1,645 measured 2026-11-04 -- so "929 wins, 663
+    # losses from 1,645 settled" left 53 unaccounted for anyone who added the
+    # two. A client cannot ask what the difference is, so it is shown.
+    #
+    # The percentage is of DECIDED picks, which is the right convention (a
+    # void returns the stake) and is now stated rather than implied.
+    voids = max(0, rec.settled - rec.wins - rec.losses)
+    decided = rec.wins + rec.losses
+    tail = f" – {voids} void" if voids else ""
     out.append(
-        f"{rec.wins} wins – {rec.losses} losses ({rec.win_rate:.1%}) "
+        f"{rec.wins} wins – {rec.losses} losses{tail}, "
         f"from {rec.settled} settled picks")
     # A WIN RATE NEVER APPEARS WITHOUT ITS PRICE AND ITS RETURN.
+    rate = f"{rec.win_rate:.1%} of the {decided} decided"
     if rec.flat_roi is not None:
         out.append(
-            f"Return {rec.flat_roi:+.1%} on level stakes · "
+            f"{rate} · return {rec.flat_roi:+.1%} on level stakes · "
             f"average price {rec.avg_odds:.2f}")
-    since = _pretty_date(rec.first_date) if rec.first_date else None
+    else:
+        out.append(rate)
+    # BOTH ENDS, FROM THE SAME POPULATION AS THE COUNT. A single "since"
+    # left the end implied as "now", which is not what the figure covers:
+    # the last SETTLED pick can be a day or more behind today. Naming both
+    # makes the pairing checkable by the reader and by a test.
+    a = _pretty_date(rec.first_date) if rec.first_date else None
+    b = _pretty_date(rec.last_date) if rec.last_date else None
+    if a and b and a != b:
+        span = f", {a} – {b}"
+    elif a:
+        span = f", {a}"
+    else:
+        span = ""
     out.append(i(
-        f"Simulated results{f' since {since}' if since else ''} — "
-        f"no real money has been staked."))
+        f"Simulated results{span} — no real money has been staked."))
 
     # THE RENDERER CHECKS ITS OWN OUTPUT, and this is also what consumes
     # `OPERATOR_VOCABULARY` in production rather than only in a test.
