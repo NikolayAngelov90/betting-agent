@@ -35645,6 +35645,47 @@ recorded on 10-20 — an inverted assertion awaiting re-statement; and the **H1
 reservation acknowledgement expired 2026-11-01**, whose clearing action is the
 deletion stage and its 31 assertions.
 
+### THE DRIVES — one pair, differing in the token alone
+
+Both on real CI runs, same commit, same selection; the only difference is
+whether the step carries a token.
+
+| | run | FAILED | SKIPPED | the two `gh` callers |
+|---|---|---|---|---|
+| **positive** (token + `actions: read`) | `42022239292` | 1 | 2 | **both PASSED** |
+| **known-wrong** (no token in the env) | `42022279541` | **4** | 1 | **both FAILED, reported** |
+
+The positive control's single failure is the H1 acknowledgement, which is due
+on its own date and unrelated. **The delta is +3 failed and -1 skipped**: the
+two converted callers plus the third site's token-absent branch, all three
+moving from invisible to reported. Verbatim, from the known-wrong run:
+
+```
+UNEVALUATED, not clear: `gh run list --workflow daily-picks.yml --limit 120
+--json createdAt,event` exited 4, so daily-picks' run list could not be read.
+This is 'could not look', NOT 'nothing there', and it is exactly the state a
+DELETED OR DEAD token produces. CLEARING ACTION: give the job a live token
+and, for `gh run`, the `actions: read` permission.
+(GH_TOKEN set: False, GITHUB_TOKEN set: False) stderr: 'gh: To use GitHub CLI
+in a GitHub Actions workflow, set the GH_TOKEN environment variable...'
+```
+
+**Before this stage both of those were a green `pytest.skip`.** The branch was
+deleted after the drive.
+
+`ci-audit` (`42022243484`) on the new HEAD: **12 log-derived findings, 0 auth
+failures**, traceback counts per run — so it still reads run logs, which is the
+only thing a token was ever needed for here.
+
+`daily-picks`: its token feeds `camoufox fetch`, whose step concluded
+**success** in today's scheduled run `41987611677`. Whether it reached the API
+is **UNEVALUATED** — the binary cache was warm, so the download was
+short-circuited. The card was not re-dispatched to force it: today's card has
+already been produced, and a second run would consume provider quota and send
+a second message to prove a release-asset download, which `continue-on-error`
+already makes non-fatal. It cannot be affected by the PAT in any case, because
+`secrets.GITHUB_TOKEN` is minted per run.
+
 *Recorded 2026-11-05. `tests/gh_support.py` and
 `tests/test_unreadable_is_unevaluated.py` (new),
 `tests/test_absent_run_and_unparseable.py`,
