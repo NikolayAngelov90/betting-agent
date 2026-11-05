@@ -104,7 +104,17 @@ from scripts.capture_critical import (
 #: `test_client_channel.py`: it guards WHICH CHAT a message reaches, which is
 #: a notification concern. A regression there is serious -- operator traffic
 #: in front of clients -- but it must not stop price capture.
-CENSUS = {"files": 141, "capture_critical": 77, "not_critical": 64}
+#: 141 -> 142 files and 77 -> 78 capture_critical on 2026-11-04, with
+#: `test_settlement_population_is_one.py`. Correctly CRITICAL: it seeds a
+#: database and drives `experiment_record.build`, so it guards whether a
+#: REPORTED population is the one that was COUNTED — data correctness.
+#:
+#: It was SPLIT OUT of `test_client_chat_is_sealed.py`, which stays
+#: NON-critical. Adding a DB-backed helper there had pulled the whole file,
+#: including the five send drives, into the gate: the
+#: import-pulls-a-file-into-the-gate trap, third occurrence. A test about
+#: WHICH CHAT a message reaches must not be able to stop price capture.
+CENSUS = {"files": 142, "capture_critical": 78, "not_critical": 64}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -341,8 +351,8 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       python pin and the recorded local-interpreter gap) and 9 for the
     #       dispatch form being mutually fundable.
     gate, nong = _ids(GATE_EXPR), _ids(NON_GATING_EXPR)
-    assert len(gate) == 1729, (
-        f"the gating selection is {len(gate)}, recorded 1729 — say what moved")
+    assert len(gate) == 1732, (
+        f"the gating selection is {len(gate)}, recorded 1732 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the
@@ -357,8 +367,8 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #      operator-vocabulary check) and the operator-channel trio (unset
     #      id annotates, the reintroduced fallback is caught, and no code
     #      path can resolve the client id).
-    assert len(nong) == 935, (
-        f"the non-gating selection is {len(nong)}, recorded 935")
+    assert len(nong) == 947, (
+        f"the non-gating selection is {len(nong)}, recorded 947")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

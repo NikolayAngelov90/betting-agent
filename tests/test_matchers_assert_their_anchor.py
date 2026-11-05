@@ -67,7 +67,34 @@ BASELINE_UNGUARDED = 39
 #: counts). It named a site the mechanism could never have counted. A vacuous
 #: exemption inside the mechanism built to refuse vacuous checks, so it is
 #: removed rather than reworded. Zero of four is the honest figure.
-EXEMPT: dict = {}
+EXEMPT: dict = {
+    # ── 2026-11-04. Two sites whose SUBJECT is a zero-hit scan. ──────────
+    #
+    # "No secret-shaped literal appears here" is a claim whose pass condition
+    # IS zero hits, so there is no anchor the needle could share. The usual
+    # remedy (wrap the haystack in `anchored`) does not apply: the haystack is
+    # the whole of `docs/` plus the memory directory, and what proves the
+    # matcher can fire is a PLANTED EXAMPLE, which both already have.
+    #
+    # `test_patterns_discriminate` drives every pattern against seven
+    # samples, and `test_KNOWN_WRONG_the_payload_drive_output_IS_REFUSED`
+    # plants the exact line that printed a chat id on 2026-11-04 and requires
+    # it to be caught. The memory scan also asserts it READ files, so an
+    # empty haystack fails rather than passing.
+    #
+    # These are not quiet exemptions: the memory scan found six live
+    # credentials in `memory/github_token.md` the first time it ran.
+    "test_no_secrets_in_repo.py::"
+    "test_MEMORY_AND_DOCS_CARRY_NO_SECRET_SHAPED_LITERAL":
+        "its subject IS a zero-hit scan over docs/ and the memory directory; "
+        "the patterns are proven by planted examples in the same file, and "
+        "it asserts it read files so an empty haystack cannot pass.",
+    "test_no_secrets_in_repo.py::"
+    "test_the_REAL_ID_IS_IN_NO_LEDGER_MEMORY_OR_FIXTURE":
+        "same shape, for one specific value read from the environment; it "
+        "cannot name the needle in an anchor without writing the value into "
+        "the test, which is the exposure it guards against.",
+}
 EXEMPT_CAP = 4
 
 
