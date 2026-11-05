@@ -124,7 +124,15 @@ from scripts.capture_critical import (
 #: OF THE FOUR LOSSES. `FOUR_LOSSES` caught it. Fourth occurrence of
 #: the import-pulls-a-file-into-the-gate trap, and the first that a
 #: guard rather than a card reported.
-CENSUS = {"files": 143, "capture_critical": 78, "not_critical": 65}
+#: RE-MEASURED 2026-11-05 (vocabulary extraction): files 143 -> 144,
+#: not_critical 65 -> 66, `capture_critical` UNCHANGED AT 78 for the
+#: second time today. `test_market_vocabulary.py` is non-critical BY
+#: CONSTRUCTION: `src.data.market_vocabulary` imports the standard
+#: library only and is not on CAPTURE_PATH, and the file reads
+#: `capture_closing_lines.SELECTION_SPEC` BY AST rather than importing
+#: it, because that module IS on the capture path. Declining the fifth
+#: opportunity for the import-pulls-a-file-into-the-gate trap.
+CENSUS = {"files": 144, "capture_critical": 78, "not_critical": 66}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -387,8 +395,19 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       three message-content checks, the source-shape check, the
     #       no-skip ratchet over both callers, and the two permissions
     #       assertions. GATE UNCHANGED at 1732 -- see CENSUS.
-    assert len(nong) == 958, (
-        f"the non-gating selection is {len(nong)}, recorded 958")
+    #   +16 on 2026-11-05: test_market_vocabulary.py -- the market/selection
+    #       vocabulary left `value_calculator`, where it lived in two
+    #       AST-identical copies. The zero-copies scan WITH ITS ANCHOR
+    #       ASSERTED and its planted-positive control, the known-wrong pair
+    #       that matched 0 of 1,120 trajectories, the market-axis case
+    #       (`team_goals` vs `Team Goals`), the twelve production pairings,
+    #       the positive control over six genuinely-different bets, the
+    #       `Home` collision across two families, the fixed-point check, four
+    #       refusal cases, the two expansion helpers' fall-through and
+    #       empty-filter behaviour, and the SELECTION_SPEC agreement.
+    #       GATE UNCHANGED at 1732, verified as NODE IDS -- see CENSUS.
+    assert len(nong) == 974, (
+        f"the non-gating selection is {len(nong)}, recorded 974")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

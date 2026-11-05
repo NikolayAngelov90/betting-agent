@@ -341,15 +341,43 @@ def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
     dm, dsd = statistics.mean(du), statistics.pstdev(du)
     ready = max(max(lag) + max(du), (lm + 3 * lsd) + (dm + 3 * dsd))
     binding = deadline - ready
-    assert binding < MIN_ACCEPTABLE_MARGIN, (
-        f"the weekday margin is {binding:+.0f}m and now CLEARS the "
-        f"{MIN_ACCEPTABLE_MARGIN}-minute minimum. That is better than the "
-        f"state recorded on 2026-10-20 (+40m) -- re-measure and re-state the "
-        f"finding rather than leaving this inverted assertion in place.")
-    assert -20 <= binding <= 55, (
-        f"the weekday margin moved to {binding:+.0f}m, outside the range this "
-        f"finding was recorded over. Re-measure before quoting 19.8 minutes "
-        f"as the shortfall.")
+    # ── RESTATED 2026-11-05: THE MARGIN CLEARS, AND THIS NOW SAYS SO. ──────
+    #
+    #   measured 2026-10-20  n=8   weekday margin  +40m   BREACH of 60m
+    #   measured 2026-11-05  n=10  weekday margin  +90m   CLEARS 60m
+    #
+    # The assertion here was `binding < MIN_ACCEPTABLE_MARGIN`: it asserted
+    # the BREACH, so it went red on the day the breach ended and its message
+    # asked to be restated. That is the right direction for a breach to
+    # surprise someone in, and the wrong state to leave a test in once the
+    # surprise has happened -- a red that means "the news is good" is a red
+    # nobody can triage.
+    #
+    # WHAT MOVED, and it is not the deadline. Both are derived, not chosen:
+    #
+    #   lag series      n=8  -> n=10, mean 332.3  sd 40.7  max 389.75  UNIMODAL
+    #   run durations   n=79       mean  29.7  sd 18.6  max  76.7
+    #   weekday deadline                   630 (derived floor, unchanged)
+    #   ready = max(max+max, mean+3sd)  540.08  ->  margin +89.92
+    #
+    # The cron moved to `0 1` on 2026-10-22, which is what bought the
+    # headroom; the duration term's instrumentation error was corrected on
+    # 2026-10-21, which is what stopped it being overstated.
+    assert binding >= MIN_ACCEPTABLE_MARGIN, (
+        f"the weekday margin is {binding:+.0f}m and NO LONGER clears the "
+        f"{MIN_ACCEPTABLE_MARGIN}-minute minimum. It cleared at +90m when "
+        f"this was measured on 2026-11-05 (n=10), against +40m on 2026-10-20 "
+        f"(n=8). A DETERIORATION is a finding: say which term moved -- the "
+        f"lag series, the duration series or the derived deadline.")
+    # The band, with both endpoints derived rather than taste: the lower edge
+    # IS the registered minimum (below it the finding reverts to a breach),
+    # and the upper edge is the measurement plus one lag sd (89.92 + 40.7),
+    # rounded to 130 -- a jump past that is a regime change, not drift.
+    assert MIN_ACCEPTABLE_MARGIN <= binding <= 130, (
+        f"the weekday margin moved to {binding:+.0f}m, outside the "
+        f"{MIN_ACCEPTABLE_MARGIN}..130m band this finding was measured over "
+        f"on 2026-11-05 (+89.92m, lag n=10 sd 40.7). Re-measure before "
+        f"quoting either figure.")
     # THE CLEARING ACTION IS NOT A DEADLINE CHOICE
     from scripts.ci_audit import MARGIN_REMEDY
 

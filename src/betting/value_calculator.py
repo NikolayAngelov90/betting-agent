@@ -5,6 +5,10 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from src.betting.gate_registry import is_enabled as _gate_enabled
+from src.data.market_vocabulary import (
+    market_aliases,
+    selection_aliases,
+)
 from src.utils.config import get_config
 from src.utils.logger import get_logger
 
@@ -779,59 +783,22 @@ class ValueBettingCalculator:
         """Find the best (highest) odds for a given market and selection."""
         best = 0.0
 
-        # Map our selection names to what's stored in the odds table
-        # Odds API stores team names for 1X2, so include them
-        selection_map = {
-            # "Home Win" / "Away Win" are stored by Flashscore scraper;
-            # legacy Odds-API records use "1"/"2" or team names.
-            "Home Win": ["1", "Home", "home_win", "Home Win", home_team_name],
-            "Draw": ["X", "Draw", "draw", "Draw"],
-            "Away Win": ["2", "Away", "away_win", "Away Win", away_team_name],
-            # Flashscore O/U stored without " Goals" suffix ("Over 2.5", etc.)
-            "Over 2.5 Goals": ["Over 2.5", "Over", "Over 2.5 Goals"],
-            "Under 2.5 Goals": ["Under 2.5", "Under", "Under 2.5 Goals"],
-            "Over 1.5 Goals": ["Over 1.5", "Over 1.5 Goals"],
-            "Under 1.5 Goals": ["Under 1.5", "Under 1.5 Goals"],
-            "Over 3.5 Goals": ["Over 3.5", "Over 3.5 Goals"],
-            "Under 3.5 Goals": ["Under 3.5", "Under 3.5 Goals"],
-            "Over 4.5 Goals": ["Over 4.5", "Over 4.5 Goals"],
-            "Under 4.5 Goals": ["Under 4.5", "Under 4.5 Goals"],
-            "BTTS Yes": ["Yes", "BTTS Yes"],
-            "BTTS No": ["No", "BTTS No"],
-            # Team goal line markets (stored via API-Football team_goals market)
-            "Home Over 0.5": ["Home Over 0.5", "Home Team Over 0.5", "Home - Over 0.5"],
-            "Away Over 0.5": ["Away Over 0.5", "Away Team Over 0.5", "Away - Over 0.5"],
-            "Home Over 1.5": ["Home Over 1.5", "Home Team Over 1.5", "Home - Over 1.5"],
-            "Away Over 1.5": ["Away Over 1.5", "Away Team Over 1.5", "Away - Over 1.5"],
-            # Double Chance / Draw No Bet (stored via API-Football)
-            "Double Chance 1X": ["Double Chance 1X", "1X", "Home/Draw"],
-            "Double Chance 12": ["Double Chance 12", "12", "Home/Away"],
-            "Double Chance X2": ["Double Chance X2", "X2", "Draw/Away"],
-            "DNB Home": ["DNB Home", "Home"],
-            "DNB Away": ["DNB Away", "Away"],
-        }
-
-        valid_selections = selection_map.get(selection, [selection])
-        # Filter out empty strings
-        valid_selections = [s for s in valid_selections if s]
-
-        market_map = {
-            "1X2": ["1X2", "h2h"],
-            "Over 2.5": ["over_under", "totals"],
-            "Under 2.5": ["over_under", "totals"],
-            "Over 1.5": ["over_under", "totals"],
-            "Under 1.5": ["over_under", "totals"],
-            "Over 3.5": ["over_under", "totals"],
-            "Under 3.5": ["over_under", "totals"],
-            "Over 4.5": ["over_under", "totals"],
-            "Under 4.5": ["over_under", "totals"],
-            "BTTS": ["btts"],
-            "Team Goals": ["team_goals", "team_over_under"],
-            "Double Chance": ["double_chance"],
-            "Draw No Bet": ["draw_no_bet"],
-        }
-
-        valid_markets = market_map.get(market, [market])
+        # ONE VOCABULARY, READ FROM OUTSIDE THE PRICING PATH. 2026-11-05.
+        #
+        # These two maps lived here, in two AST-identical copies (22 selection
+        # keys, 13 market keys), where nothing outside this file could read
+        # them. `h1_analysis` step 4 therefore compared the two vocabularies
+        # with raw tuple equality and matched 0 of 1,120 trajectories, and the
+        # market-mix join dropped 900 of 1,583 picks. The pre-registration had
+        # to describe reading the mapping by PARSING THIS FILE's source.
+        #
+        # `selection_aliases` and `market_aliases` are byte-equivalent to the
+        # expressions they replace, including the fall-through for an unknown
+        # key and the empty-string filter that stops an absent team name from
+        # matching an empty `selection` column.
+        valid_selections = selection_aliases(
+            selection, home_team_name, away_team_name)
+        valid_markets = market_aliases(market)
 
         # Flashscore 1X2 odds are composite/display prices — exclude from EV.
         # Flashscore over_under odds ARE real bookmaker prices (best available
@@ -901,47 +868,9 @@ class ValueBettingCalculator:
         the opening_odds field instead of odds_value.  Returns 0.0 when no
         opening odds are recorded (feature is populated gradually).
         """
-        selection_map = {
-            "Home Win": ["1", "Home", "home_win", "Home Win", home_team_name],
-            "Draw": ["X", "Draw", "draw", "Draw"],
-            "Away Win": ["2", "Away", "away_win", "Away Win", away_team_name],
-            "Over 2.5 Goals": ["Over 2.5", "Over", "Over 2.5 Goals"],
-            "Under 2.5 Goals": ["Under 2.5", "Under", "Under 2.5 Goals"],
-            "Over 1.5 Goals": ["Over 1.5", "Over 1.5 Goals"],
-            "Under 1.5 Goals": ["Under 1.5", "Under 1.5 Goals"],
-            "Over 3.5 Goals": ["Over 3.5", "Over 3.5 Goals"],
-            "Under 3.5 Goals": ["Under 3.5", "Under 3.5 Goals"],
-            "Over 4.5 Goals": ["Over 4.5", "Over 4.5 Goals"],
-            "Under 4.5 Goals": ["Under 4.5", "Under 4.5 Goals"],
-            "BTTS Yes": ["Yes", "BTTS Yes"],
-            "BTTS No": ["No", "BTTS No"],
-            "Home Over 0.5": ["Home Over 0.5", "Home Team Over 0.5", "Home - Over 0.5"],
-            "Away Over 0.5": ["Away Over 0.5", "Away Team Over 0.5", "Away - Over 0.5"],
-            "Home Over 1.5": ["Home Over 1.5", "Home Team Over 1.5", "Home - Over 1.5"],
-            "Away Over 1.5": ["Away Over 1.5", "Away Team Over 1.5", "Away - Over 1.5"],
-            "Double Chance 1X": ["Double Chance 1X", "1X", "Home/Draw"],
-            "Double Chance 12": ["Double Chance 12", "12", "Home/Away"],
-            "Double Chance X2": ["Double Chance X2", "X2", "Draw/Away"],
-            "DNB Home": ["DNB Home", "Home"],
-            "DNB Away": ["DNB Away", "Away"],
-        }
-        market_map = {
-            "1X2": ["1X2", "h2h"],
-            "Over 2.5": ["over_under", "totals"],
-            "Under 2.5": ["over_under", "totals"],
-            "Over 1.5": ["over_under", "totals"],
-            "Under 1.5": ["over_under", "totals"],
-            "Over 3.5": ["over_under", "totals"],
-            "Under 3.5": ["over_under", "totals"],
-            "Over 4.5": ["over_under", "totals"],
-            "Under 4.5": ["over_under", "totals"],
-            "BTTS": ["btts"],
-            "Team Goals": ["team_goals", "team_over_under"],
-            "Double Chance": ["double_chance"],
-            "Draw No Bet": ["draw_no_bet"],
-        }
-        valid_selections = [s for s in selection_map.get(selection, [selection]) if s]
-        valid_markets = market_map.get(market, [market])
+        valid_selections = selection_aliases(
+            selection, home_team_name, away_team_name)
+        valid_markets = market_aliases(market)
 
         prices = []
         for rec in odds_data:

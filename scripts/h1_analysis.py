@@ -46,6 +46,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from src.data.market_vocabulary import canonical
 from scripts.h1_collection_check import (
     MAX_INTERVAL_RATIO,
     MIN_GAP_MINUTES,
@@ -148,8 +149,22 @@ def series_keys_with(observations: Iterable[dict], n: int) -> List[tuple]:
             if separated_points(v) == n]
 
 
+def _as_picks(want) -> List[Tuple[str, str]]:
+    """One `(market, selection)` pair, or many. Accepts both shapes.
+
+    `picked_selections` returns a LIST per fixture (the per-match cap is 2, and
+    the old dict comprehension silently kept whichever row came last). Older
+    callers and fixtures pass a bare 2-tuple, which stays valid.
+    """
+    if (isinstance(want, tuple) and len(want) == 2
+            and all(isinstance(x, str) for x in want)):
+        return [want]
+    return [tuple(w) for w in want]
+
+
 def one_price_per_fixture(trajectories: List[dict],
-                          picked: Dict[int, Tuple[str, str]]) -> List[dict]:
+                          picked: Dict[int, object],
+                          diagnostics: Optional[dict] = None) -> List[dict]:
     """Collapse to ONE trajectory per fixture — never the mean across books.
 
     THE RULE, from the registration: the best available line for the selection
@@ -166,26 +181,80 @@ def one_price_per_fixture(trajectories: List[dict],
     existing separated series were picked), so dropping them is the registered
     scope, not a convenience.
     """
+    # ── CANONICAL-TO-CANONICAL, NEVER RAW TUPLE EQUALITY. 2026-11-05. ───────
+    #
+    # This was `if (t["market"], t["selection"]) != want`, and it matched
+    # 0 of 1,120 trajectories against 2,587 picks on 11 of 12 overlapping
+    # fixtures. The two sides speak different vocabularies on BOTH axes --
+    # measured in the H1 window itself:
+    #
+    #     odds_snapshots   ('over_under', 'Under 3.5')    ('1X2', 'Home')
+    #     saved_picks      ('Under 3.5', 'Under 3.5 Goals')  ('1X2', 'Home Win')
+    #
+    # `team_goals` vs `Team Goals` differs on the market axis even where the
+    # selection string is identical, so no amount of selection-only
+    # normalisation would have saved it.
+    #
+    # `canonical()` returns None when it cannot tell, and those are COUNTED
+    # rather than dropped silently: "no actionable price" and "I could not
+    # name this bet" are different findings.
+    if diagnostics is None:
+        diagnostics = {}
+    diagnostics.setdefault("trajectories_in", 0)
+    diagnostics.setdefault("no_pick_on_fixture", 0)
+    diagnostics.setdefault("trajectory_uncanonicalisable", 0)
+    diagnostics.setdefault("pick_uncanonicalisable", 0)
+    diagnostics.setdefault("selection_not_picked", 0)
+    diagnostics.setdefault("matched", 0)
+
     by_fixture: Dict[int, List[dict]] = defaultdict(list)
     for t in trajectories:
+        diagnostics["trajectories_in"] += 1
         want = picked.get(t["fixture"])
-        if want is None:
+        if not want:
+            diagnostics["no_pick_on_fixture"] += 1
             continue
-        if (t["market"], t["selection"]) != want:
+        mine = canonical(t["market"], t["selection"])
+        if mine is None:
+            diagnostics["trajectory_uncanonicalisable"] += 1
             continue
+        theirs = set()
+        unnameable = 0
+        for market, selection in _as_picks(want):
+            c = canonical(market, selection)
+            if c is None:
+                unnameable += 1
+            else:
+                theirs.add(c)
+        if unnameable and not theirs:
+            diagnostics["pick_uncanonicalisable"] += 1
+            continue
+        if mine not in theirs:
+            diagnostics["selection_not_picked"] += 1
+            continue
+        diagnostics["matched"] += 1
         by_fixture[t["fixture"]].append(t)
     return [max(v, key=lambda t: t["p0"]) for v in by_fixture.values()]
 
 
 def picked_selections(session) -> Dict[int, Tuple[str, str]]:
-    """`{fixture_group: (market, selection)}` for picks that were taken."""
+    """`{fixture_group: [(market, selection), ...]}` for picks that were taken."""
     from sqlalchemy import text
     rows = session.execute(text("""
         SELECT match_id, market, selection FROM saved_picks
         WHERE market IS NOT NULL AND selection IS NOT NULL
           AND (disposition IS NULL OR disposition <> 'consolidated')
     """)).fetchall()
-    return {r[0]: (r[1], r[2]) for r in rows}
+    # ── ALL of a fixture's picks, not the last one seen. 2026-11-05. ────────
+    # This was `{r[0]: (r[1], r[2]) for r in rows}`, which OVERWRITES: the
+    # per-match cap is 2, so every fixture with two picks silently lost one
+    # and half its actionable prices became "not picked".
+    out: Dict[int, List[Tuple[str, str]]] = defaultdict(list)
+    for r in rows:
+        pair = (r[1], r[2])
+        if pair not in out[r[0]]:
+            out[r[0]].append(pair)
+    return dict(out)
 
 
 # ── STATISTICS ───────────────────────────────────────────────────────────────
@@ -379,7 +448,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         attach_fixture_identity(session, observations)
         picked = picked_selections(session)
         trajectories = build_trajectories(observations)
-        actionable = one_price_per_fixture(trajectories, picked)
+        step4 = {}
+        actionable = one_price_per_fixture(trajectories, picked,
+                                           diagnostics=step4)
 
     print(f"H1 ANALYSIS DRY RUN — observations in the REGISTERED WINDOW "
           f"{since:%Y-%m-%d} .. {H1_WINDOW_TO} (exclusive)")
@@ -432,10 +503,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     print("")
     print("STEP 4  aggregation — ONE actionable price per fixture")
-    print(f"   picks available to match against     : {len(picked)}")
+    print(f"   fixtures carrying at least one pick  : {len(picked)}")
+    print(f"   picks available to match against     : "
+          f"{sum(len(_as_picks(v)) for v in picked.values())}")
     print(f"   trajectories on a PICKED (market, selection) : {len(actionable)}")
     print("   rule: best available line (max p0) for the selection actually")
     print("   picked; the mean across books is never taken")
+    # EVERY TRAJECTORY IS ACCOUNTED FOR. A bare count of matches cannot
+    # distinguish "no actionable price existed" from "the comparison could
+    # never have matched", which is the state this step was in until
+    # 2026-11-05 — canonical-to-canonical now, and the residue is named.
+    print(f"   trajectories in                      : "
+          f"{step4.get('trajectories_in', 0)}")
+    print(f"     matched a pick                     : "
+          f"{step4.get('matched', 0)}")
+    print(f"     fixture carried no pick            : "
+          f"{step4.get('no_pick_on_fixture', 0)}")
+    print(f"     picked, but a DIFFERENT selection  : "
+          f"{step4.get('selection_not_picked', 0)}")
+    print(f"     trajectory UNCANONICALISABLE       : "
+          f"{step4.get('trajectory_uncanonicalisable', 0)}  "
+          f"(this is 'could not name the bet', not 'not picked')")
+    print(f"     pick UNCANONICALISABLE             : "
+          f"{step4.get('pick_uncanonicalisable', 0)}")
 
     print("")
     print("STEP 5  the estimator and the decision rule")

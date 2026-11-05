@@ -35691,3 +35691,213 @@ already makes non-fatal. It cannot be affected by the PAT in any case, because
 `tests/test_absent_run_and_unparseable.py`,
 `tests/test_fixture_horizon_probe.py`, `tests/test_cron_split_by_daytype.py`,
 `tests/test_gate_is_opt_in.py`, `.github/workflows/reminders.yml`.*
+
+---
+
+## 2026-11-05 — `VOCABULARY EXTRACTED`, AND STEP 4 HAS INPUT FOR THE FIRST TIME
+
+`VOCABULARY EXTRACTED` · `ASSERTION RESTATED` · `ABSENCE SWEEP REGISTERED`
+
+### THE TWO COPIES ARE ZERO
+
+`selection_map` and `market_map` lived in two copies inside two methods of
+`value_calculator`, where nothing outside that file could read them. **They
+are AST-identical** — 22 selection keys, 13 market keys, **zero symmetric
+difference**, measured 2026-11-05 — which is what made the extraction
+price-neutral by construction rather than by hope.
+
+They now live in `src/data/market_vocabulary.py`, which imports **the standard
+library only**. The pricer imports `selection_aliases`/`market_aliases`, whose
+behaviour is identical to the expressions they replace: the fall-through for
+an unknown key, and the empty-string filter that stops an absent team name
+from matching an empty `selection` column.
+
+Above the aliases sits the layer the analyses needed: **`canonical()` maps
+EITHER vocabulary onto one identity, and returns `None` when it cannot tell.**
+
+```
+odds_snapshots   ('over_under', 'Under 3.5')      -> ('over_under', 'Under 3.5 Goals')
+saved_picks      ('Under 3.5',  'Under 3.5 Goals') -> ('over_under', 'Under 3.5 Goals')
+```
+
+> **THE MARKET AXIS MATTERS TOO, AND SELECTION-ONLY NORMALISATION MISSES IT.**
+> `team_goals` vs `Team Goals` differ where the selection string is identical.
+> And `"Home"` is an alias of `Home Win` (1X2) *and* of `DNB Home`
+> (draw_no_bet) — the market is the only thing that separates them, so
+> `canonical(None, "Home")` **refuses**. A vocabulary that guesses is worse
+> than the split it replaces.
+
+### THE PRICE IS BYTE-IDENTICAL, AND THE COMPARATOR HAS POWER
+
+`measured` 2026-11-05, grain=PICK, against the production database:
+
+| | |
+|---|---|
+| picks sampled | **400** over 311 matches |
+| non-zero taken prices | **400** |
+| non-zero opening prices | **274** |
+| **differences, before vs after** | **0** |
+
+**DISCRIMINATION CONTROL:** perturbing one taken price by 0.01
+(Team Goals/Home Over 1.5, 2.5 → 2.51) made the comparator report **exactly 1**
+difference. Zero differences would otherwise be indistinguishable from a
+comparator returning a constant — which is instance 5 of the absence class.
+
+`cohort_status.py`: **`s5.19` / `stage5_baseline_20260807.cdec29`, 338 picks
+stamped — UNMOVED.** Nothing here is a cohort event.
+
+**Gate, as node ids against a worktree at HEAD `eeb7cc2`: 1732 → 1732,
+0 ENTERED, 0 LEFT.** The fifth opportunity for the
+import-pulls-a-file-into-the-gate trap, declined by construction:
+`market_vocabulary` is not on `CAPTURE_PATH`, and the test file reads
+`capture_closing_lines.SELECTION_SPEC` **by AST rather than importing it**,
+because that module is.
+
+### EVERY OTHER COMPARISON SITE — a census, and my own false positives
+
+AST census of comparisons touching `market`/`selection`/`market_type`/
+`bet_type`: **65 sites** — 30 comparing single-vocabulary literals, 28
+field-to-field with no literal, **7 flagged as crossing vocabularies.**
+
+**All 7 are false positives of my own classifier, and the reason is
+instructive.** `'Over 2.5'` is simultaneously a pick-side MARKET key and an
+odds-side SELECTION alias, so any site naming it trips a string-membership
+test. Checked by hand:
+
+* `betting_agent.py:1567` — `Odds.selection == 'Over 1.5'` is a correct
+  odds-side comparison;
+* `test_market_separation.py:71` — maps a pick market to an odds `market_type`
+  deliberately, which is the scraper's own mapping;
+* the four `test_pick_*` sites compare pick-side pairs to pick-side literals.
+
+**So exactly one genuine cross-vocabulary comparison existed in committed
+code — `h1_analysis` step 4 — and it is fixed.** The 7 are not a backlog; they
+are the measured demonstration that **neither string alone identifies a bet**,
+which is why `canonical()` is keyed on the pair and refuses when the market is
+absent. My first classifier was the one that needed the market, too.
+
+### THE MARKET-MIX JOIN — 912 PICKS RECOVERED
+
+Population `measured` 2026-11-05, grain=PICK: **1,603** settled paper picks
+(`pick_date >= 2026-08-11`, `disposition IS NULL`,
+`result IN ('win','loss')`) over 1,593 matches.
+
+| predicate | matched | dropped |
+|---|---|---|
+| raw `(market, selection)` equality | **0** | 1,603 |
+| **selection-only equality** — what the join used | **691** | **912** |
+| selection via the pricer's alias list | 1,603 | 0 |
+| **canonical-to-canonical** — shipped | **1,603** | **0** |
+
+**RECOVERED: 912.** The earlier "900 of 1,583" was selection-only matching on
+a smaller population; raw tuple equality would have matched **nothing at
+all**. Alias matching reaches the same coverage as canonical matching but
+would also match ACROSS families, which is exactly what the positive control
+forbids — coverage alone is not correctness.
+
+### H1 STEP 4 — THE FIRST TIME THE PATH HAS HAD INPUT
+
+Two defects, both only visible once the first one was cleared:
+
+* `one_price_per_fixture` compared with raw tuple equality — **0 of 1,120**;
+* `picked_selections` built `{match_id: (market, selection)}`, which
+  **OVERWRITES**. The per-match cap is 2, and the measurement says it bound:
+  **2,587 fixtures carry a pick but 2,767 picks exist**, so **180 fixtures had
+  one of their two picks silently discarded**.
+
+Run end to end on the 12 real trajectories:
+
+```
+STEP 4  aggregation — ONE actionable price per fixture
+   fixtures carrying at least one pick  : 2587
+   picks available to match against     : 2767
+   trajectories on a PICKED pair        : 5
+   trajectories in                      : 1120
+     matched a pick                     : 52
+     fixture carried no pick            : 93
+     picked, but a DIFFERENT selection  : 939
+     trajectory UNCANONICALISABLE       : 36
+     pick UNCANONICALISABLE             : 0
+```
+
+**52 + 93 + 939 + 36 = 1120. Every trajectory is accounted for**, which a bare
+match count never was.
+
+> **THE 36 REFUSALS ARE CORRECT, AND THAT IS MEASURABLE.** They are quarter
+> and half goal lines (`Over 2.25`, `Under 3.0`, …) and team-goals Unders:
+> **26 of the 48 distinct pairs in the window are refused, and every one of
+> those 26 appears in `saved_picks` ZERO times.** They are real prices for
+> bets this pipeline cannot produce, so they have no canonical name and must
+> not acquire one by accident.
+
+`STATE: NO DATA` → **`STATE: INSUFFICIENT — 5 of 33`.** r = **-0.5178** is
+computed and **NOT interpreted**: the decision rule is registered at n ≥ 33
+and reading it earlier is the optional-stopping error the registration exists
+to prevent. Leave-one-out on the most influential fixture (53789) moves it to
+-0.0371, a shift of +0.4807 — which at n=5 is the whole estimate, and is why
+the floor is 33.
+
+### `ASSERTION RESTATED` — the margin cleared and the test was the stale half
+
+| | weekday margin | verdict |
+|---|---|---|
+| `measured` 2026-10-20, n=8 | **+40m** | BREACH of the 60m minimum |
+| `measured` 2026-11-05, n=10 | **+89.92m** | **CLEARS** |
+
+Components, grain=RUN: lag n=10 mean 332.3 sd 40.7 max 389.75 (**UNIMODAL**
+under `0 1`); durations n=79 mean 29.7 sd 18.6 max 76.7; weekday deadline 630
+(derived floor, unchanged); `ready = max(max+max, mean+3sd) = 540.08`.
+
+The assertion was `binding < MIN_ACCEPTABLE_MARGIN` — **it asserted the
+breach**, so it went red on the day the breach ended. A red that means "the
+news is good" is a red nobody can triage. The band is now
+`60 <= binding <= 130`, both edges derived: the lower edge IS the registered
+minimum, the upper is the measurement plus one lag sd (89.92 + 40.7).
+
+What moved is not the deadline: the cron went to `0 1` on 2026-10-22, and the
+duration term's instrumentation error was corrected on 2026-10-21.
+
+### `ABSENCE SWEEP REGISTERED` — not performed
+
+`docs/absence-sweep-registration.md`. Ten instances of one defect wearing ten
+syntaxes, each previously found by paying for it. The entry carries the
+AST predicate (two clauses, hand triage into REACHABLE / UNREACHABLE-with-a-
+reason / BY DESIGN, on `falsy_zero_scan`'s precedent of refusing to decide
+reachability syntactically), the **three outcomes** every such site must have
+(PRESENT / ABSENT / **UNEVALUATED, which is reported and never returned as a
+value**), a known-wrong input for each of the ten, and the rule that **the
+sweep's own scan is subject to its own rule** — zero findings is UNEVALUATED
+until the predicate is proved against a planted positive.
+
+**Instance 1 is registered and deliberately NOT fixed:** `ci_audit._sh`
+returns `r.stdout or ""` across **15 call sites, 10 of them `gh`**. It is why
+a present-but-dead token still reaches the cron-split skip. The fix is not
+local — several callers already carry their own third-state vocabulary
+(`_unevaluated`, `PROVISIONAL_VERDICTS`, `cluster_state`) and merging two
+third-state vocabularies inside the sweep would make both unverifiable.
+
+### THE THIRD TABLE AGREES, AND IS ASSERTED TO KEEP AGREEING
+
+`capture_closing_lines.SELECTION_SPEC` holds the same selection → market_type
+relation (plus the line, side and leg index it needs besides): **22 keys,
+identical key sets, the same six families**, measured 2026-11-05. Consolidating
+it is registered rather than done — it is on the capture path, and this stage
+had a price-identity proof to keep narrow.
+
+### DISCIPLINE
+
+Gate **1732 passed**, membership identical to HEAD as node ids. Non-gating
+958 -> **974** (+16, all of them this stage's controls); census files 143 ->
+144, `capture_critical` **UNCHANGED at 78** for the second time today.
+
+Two reds left standing, both **pre-existing at HEAD** and confirmed so in a
+worktree rather than assumed: `test_margin_acknowledged`'s `DRIVEN` pair. They
+are the STRUCTURAL margin's acknowledgement, which `ci-audit` already reports
+as `DETERIORATED` (-30.1m against the acknowledged -7.4m, review 2026-11-21) —
+a different quantity from the weekday schedule margin restated above, and a
+measurement stage of its own. Not touched here.
+
+*Recorded 2026-11-05. `src/data/market_vocabulary.py` and
+`tests/test_market_vocabulary.py` (new), `docs/absence-sweep-registration.md`
+(new), `src/betting/value_calculator.py`, `scripts/h1_analysis.py`,
+`tests/test_cron_split_by_daytype.py`.*
