@@ -69,7 +69,7 @@ jobs:
       - name: Audit unaudited runs
         id: audit
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONIOENCODING: utf-8
           AUDIT_ALERT_BODY: ${{ runner.temp }}/audit_alert.txt
           # THE DAY-AHEAD DEADLINE, AND IT IS STILL stdlib-ONLY.
