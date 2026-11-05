@@ -35306,3 +35306,193 @@ Nothing changed: no code, no threshold, no market adopted, nothing bought.
 
 *Recorded 2026-11-04 (header corrected in place 2026-11-04; it first read
 2026-11-05). No source files changed.*
+
+---
+
+## 2026-11-05 — `H1 WINDOW FAILED`, AND THE ANALYSIS COULD NEVER HAVE RUN
+
+`FIRST TRAJECTORIES` · `H1 WINDOW FAILED` · `FIVE DRIVES` ·
+`CREDENTIALS AT REST`
+
+### FIRST TRAJECTORIES — the apparatus works, measured
+
+**On 2026-11-04 this project produced its first qualifying price
+trajectories.** `grain=FIXTURE provider=TheOddsAPI
+window=2026-11-01..2026-11-09`, **n = 12**, credits **26 of 168**.
+
+Capture instants (grain=INSTANT): 14:11 / 14:32 / 16:35 / 18:38 for the
+Champions League sweep and 14:12 / 14:34 / 16:36 / 18:37 for the
+Championship. **Actual gaps: 123, 123 and 122, 121 minutes** against a
+nominal 120 — the drift is the wait plus the request time, as predicted.
+
+| fixture | instants | actual gaps (min) | |
+|---|---|---|---|
+| 7 × UCL, KO 20:00 | 4 | 21, **123**, **123** | qualifies |
+| 3 × Championship, KO 19:45–20:00 | 4 | 22, **122**, **121** | qualifies |
+| 2 × UCL, KO 17:45 | 3 | 21, **123** | qualifies only with a foreign instant |
+| 1 × League One | 1 | — | — |
+| 1 × Europa League, KO 15:30 | 2 | 22 | — |
+
+**THE GRAIN CONFIRMATION, three counts of the same data:**
+
+| grain | n | note |
+|---|---|---|
+| **FIXTURE** | **12** | the registered unit |
+| SERIES — (book, market, selection) | **1,120** | **93×** the fixture count |
+| pooled distinct minutes per `match_id` | 10 | a *third* grain, and my first answer |
+
+My own first count said **10**, because pooling every book's timestamps per
+match put a 21-minute first gap in front of two fixtures that qualify on an
+*individual* series. `qualifying_triple` is exhaustive over subsets and needs
+two gaps ≥30 min whose ratio is <2.0, so a series missing the 14:32 sweep has
+gaps of 144 and 123 and passes. **Three grains, three answers, and only one is
+registered.**
+
+> **THE RESIDUAL MATERIALISED.** Recorded 2026-10-28: *"if H1 completes only 2
+> of 3 rounds, a foreign instant could supply the third."* Measured now: **10
+> of 12 fixtures qualify on H1's own instants alone; 2 need the daily
+> `--update` write at 10:08.** Those two are the 17:45 kickoffs, whose band
+> closed before H1's round 3. The registration measures prices and times, not
+> writers, so a mixed triple is valid as registered — but it is not what the
+> apparatus produced by itself.
+
+### AND THE ANALYSIS COULD NEVER HAVE RUN — revealed by clearing the blocker
+
+The dry run executed end to end for the first time on real trajectories.
+Steps 1–3 behaved: 15,276 in-band observations, 5,914 market-instants kept,
+1,120 qualifying series, one provider stratum reported alone.
+
+**STEP 4 RETURNED ZERO, AND ALWAYS WOULD HAVE.**
+
+```
+STEP 4  aggregation — ONE actionable price per fixture
+   picks available to match against             : 2587
+   trajectories on a PICKED (market, selection) : 0
+```
+
+`one_price_per_fixture` compares with a raw tuple equality:
+
+```python
+if (t["market"], t["selection"]) != want:
+    continue
+```
+
+and the two sides speak different vocabularies:
+
+| | market | selection |
+|---|---|---|
+| `odds` says | `over_under` | `Under 3.5` |
+| `saved_picks` says | `Under 3.5` | `Under 3.5 Goals` |
+
+**The same bet, named differently on both axes.** Measured: 1,120
+trajectories, 2,587 picks, identifier spaces overlapping on **11 of 12**
+fixtures — and **0** matches. So `STATE: NO DATA`, not `n=12`.
+
+> **THIS IS THE SAME VOCABULARY SPLIT THAT DROPPED 900 OF 1,583 PICKS FROM THE
+> MARKET-MIX JOIN ON 2026-11-04.** It has now cost two analyses. The mapping
+> exists — `selection_map` and `market_map` in `value_calculator` — in **two
+> identical copies inside two methods**, where nothing outside that file can
+> read it. The extraction was declined as too risky on a pricing file; that
+> judgement is now the proximate cause of an unrunnable analysis.
+
+Two further defects in the same step, both revealed only by running it:
+
+* **`picked_selections` keeps one pick per `match_id`.** `{r[0]: (r[1], r[2])}`
+  overwrites, so a fixture with two picks loses one. The per-match cap is 2.
+* **The market sets barely intersect.** H1 requests `markets=h2h,totals`;
+  the pipeline picks Team Goals, Double Chance, BTTS, Draw No Bet and totals.
+  Even with the vocabulary fixed, **1X2 trajectories can match only the 2
+  `1X2` picks in the window**.
+
+### THE `H1_WINDOW_TO` CLAMP — one bound exercised, one not
+
+* **lower bound: exercised.** 197,942 `odds_snapshots` rows predate the window
+  and are excluded; window-bounding takes in-band observations from 125,309 to
+  **15,276**, removing **110,033**. That is the October pilot — the data a
+  stale `--since` once reported as this window's result.
+* **upper bound: NOT exercisable.** `0` rows exist after 2026-11-09, so there
+  is nothing real to clamp. **Reporting it as exercised would be a claim about
+  data that is not there.** It becomes testable on 2026-11-09.
+
+### `H1 WINDOW FAILED`
+
+The registered rule, written before collection: *"day 5 — trajectories < 18 →
+STOP and report."* Today is day 5 and **n = 12**.
+
+| day | state | cause |
+|---|---|---|
+| 11-01 | `NO_CARD` | `Run tests` failed → `--update` skipped → no card |
+| 11-02 | `NO_FIXTURE_IN_BAND` | started 19:38 (608.7 min late); card present, band empty |
+| 11-03 | 2 of 3 instants | `max_credits=6` default against `rounds=3`; truncated |
+| 11-04 | `NO_CARD`, then recovered | `code_of` version bug failed the gate; manual dispatch at 14:31 produced the 12 |
+| 11-05 | `NO_FIXTURE_IN_BAND` | 35 fixtures on the card, **0** in band, 0 in the pinned leagues |
+
+**Three of five days lost to a red `daily-picks`, one to a late start, one to
+a credit default that could not fund its own `rounds` field.**
+
+> **THE WINDOW IS NOT EXTENDED.** A pre-registered stop that is extended is not
+> a stop, and this is the second attempt. ρ=0.42, σ=5.937%, `TARGET_N` 39, the
+> floor of 33 and the 168-credit reservation all stand untouched; 142 of 168
+> credits are unspent.
+
+**THE SUPPLY MISS, recorded.** The FIFA calendar was checked and **the UEFA
+matchday calendar was not**, for a window whose entire density is UEFA midweek
+rounds. UCL Matchday 4 ended 11-04; Matchday 5 is 24–25 November. Band-eligible
+pinned fixtures remaining when the window was sized: **10 on 11-04, then 0, 1,
+0, 0.** The window's only real day was its fourth, and it was the day the gate
+lost the card.
+
+### FIVE DRIVES — all five on real runs
+
+| # | drive | run | result |
+|---|---|---|---|
+| 1 | ci-audit forced to fail | `41862884532` | `alert NOT sent … TELEGRAM_OPERATOR_CHAT_ID is not set`; step carries no client id → **nothing to client** |
+| 2 | reminders as `VERDICT` | `41862889431` | `::error::REMINDER DUE … This red is a VERDICT, not a failure` + `alert NOT sent` → **nothing** |
+| 3 | reminders as `FAILURE` | `41862889431` | `ModuleNotFoundError` failed the run; same refusal path → **nothing** |
+| 4 | crash with **no finding** | `41866888761` | forced import error on a throwaway branch: `No actionable alarm body: NOTHING SENT to Telegram`, crash surfaced as `::error::` → **nothing** |
+| 5 | card + settlement | — | **payload** drive confirmed against the real database, API intercepted; **delivery** confirmed by today's scheduled settlement |
+
+Drive 4 was forced rather than waited for, because a drive that depends on the
+system's state is not a drive. The branch is deleted.
+
+### CREDENTIALS AT REST — the guard found six
+
+The chat id joined the secrets guard as a `STANDALONE` shape — not because it
+is a credential, but because **it addresses a channel other people read**.
+False-positive rate measured **before** wiring: 2 matches in 1 of 875 files
+(**0.11%**), both `-100` plus an ascending digit run in the
+supergroup-migration fixture, handled by a scoped placeholder rule rather than
+by exempting the file.
+
+> **Then the guard was extended to `docs/` and the memory directory, and
+> `memory/github_token.md` held SIX LIVE CREDENTIALS IN PLAINTEXT** — in a
+> file that was not even indexed in `MEMORY.md`. The repository guard could
+> never have seen it: memory is outside the repo. It is also **loaded into
+> context every session**, so a credential there is published to every future
+> conversation — wider exposure than a commit, not narrower.
+
+Measured over history with `git log -S`, values never printed:
+
+| secret | commits containing it |
+|---|---|
+| **`DATABASE_URL` password** | **3** |
+| `TELEGRAM_BOT_TOKEN` | 0 |
+| `TELEGRAM_CHAT_ID` | 0 |
+| `FOOTBALL_DATA_ORG_KEY` | 0 |
+
+The file now carries no values, only where each one lives. **Rotation is
+Niki's and it is not optional for the database password.**
+
+### DISCIPLINE
+
+Gate **1,732 passed**, 957 deselected. Census 142 files / 78
+`capture_critical` / 64 not — the sealed test file was **split**, because
+adding a DB-backed helper had pulled the five send drives into the capture
+gate (the import-pulls-a-file-into-the-gate trap, third occurrence). A test
+about which chat a message reaches must not be able to stop price capture; a
+test about whether a reported population is the one counted should.
+**Fingerprint unmoved at s5.19 / cdec29.**
+
+*Recorded 2026-11-05. `scripts/h1_precondition.py`, `src/reporting/*`,
+`tests/test_no_secrets_in_repo.py`, `tests/test_settlement_population_is_one.py`
+(new), `tests/test_matchers_assert_their_anchor.py`, six workflows.*
