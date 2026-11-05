@@ -35496,3 +35496,157 @@ test about whether a reported population is the one counted should.
 *Recorded 2026-11-05. `scripts/h1_precondition.py`, `src/reporting/*`,
 `tests/test_no_secrets_in_repo.py`, `tests/test_settlement_population_is_one.py`
 (new), `tests/test_matchers_assert_their_anchor.py`, six workflows.*
+
+---
+
+## 2026-11-05 — THE PAT HAD NO CONSUMER, AND THE SKIP THAT WOULD HAVE HIDDEN ONE
+
+`GH_TOKEN CENSUS` · `NOTHING TO REPOINT` · `UNEVALUATED NOT SKIPPED` ·
+`SECRET ALREADY ABSENT` · `GATE TRAP, FOURTH OCCURRENCE`
+
+### GH_TOKEN CENSUS — three assignments, and none of them is the PAT
+
+| file:line | assignment | resolves to | needs a token |
+|---|---|---|---|
+| `ci-audit.yml:72` | `GITHUB_TOKEN:` | **`secrets.GITHUB_TOKEN`** | yes — 10 `gh` calls |
+| `daily-picks.yml:346` | `GITHUB_TOKEN:` | **`secrets.GITHUB_TOKEN`** | yes — `camoufox fetch` |
+| `reminders.yml:152` | `GH_TOKEN:` | **`secrets.GITHUB_TOKEN`** | yes — 2 `gh run list` |
+
+Every other hit is prose: four clearing-action strings in `ci_audit.py`, seven
+test assertions ABOUT the wiring, five ledger entries.
+
+**`git log -S 'secrets.GH_TOKEN' --all`, every ref and every path: ZERO
+COMMITS.** The string has never existed in this repository. The env var was
+merely NAMED `GH_TOKEN` at two sites while always drawing on the built-in
+token, so **the deleted PAT had no CI consumer and nothing was broken by its
+deletion**. It lived in `gh`'s keyring and in `memory/github_token.md`, which
+is how it came to be one of the six.
+
+`1a71f97` is name-only — `GH_TOKEN:` to `GITHUB_TOKEN:`, value unchanged. Per
+`gh help environment` both names are read, in that order of precedence, so it
+changed clarity and not capability: ci-audit was reading logs before it
+(`41885371330`, 11-04 18:15, CLEAN with log-derived `disc[...]`).
+
+> **AN AST CENSUS, BECAUSE THE GREP LIED.** Genuine `gh` invocations —
+> argv[0] == "gh" — are **10** in `ci_audit.py`, **2** in `tests/`, **0** in
+> `src/`. My first grep implied ten test files call `gh`; **eight of the ten
+> were comments and expected-message strings.** Same trap as *a date literal
+> is not a window reference*, and I walked into it first.
+
+### `contents: read` IS CORRECT — ci-audit commits and pushes nothing
+
+`git push`, `git commit`, `git add`, `git-auto-commit` and `add-and-commit`:
+**no hits in any of the eight workflows.** `ci_audit.py`'s only git calls are
+reads — `rev-list` (1921) and `show` (2343, 2372). The lines that decide it
+both only read: `actions/checkout@v5` with `fetch-depth: 0` (50, 59), and the
+`git show <sha>:<path>` that the depth exists for. `contents: write` would
+widen a public repository whose history already carries a leaked database
+password, for no consumer.
+
+### THE PERMISSION IS NOT LOAD-BEARING TODAY, AND THAT IS THE FINDING
+
+My first reading was that `reminders.yml`, having no permissions block, would
+be getting 403s. **The log refuted it.**
+
+* the repository is **PUBLIC** (`private: false`), so Actions run metadata is
+  publicly readable and `gh run list` needs no scope;
+* `reminders.yml` had **NO `permissions:` block**, so it inherited the measured
+  `default_workflow_permissions: "read"` — `contents` and `packages` read, and
+  **no `actions` scope at all**;
+* and run **42011987381 EVALUATED** the probe reminder anyway. That test
+  `skip`s when the list is unreadable, so a pass proves the call answered.
+
+**Proved from a run, not inferred from a permissions table.** So the
+dependency was real and invisible: if this repository is ever made private —
+which the leaked password makes a live option — `ci-audit` keeps working
+because it declares `actions: read`, and these two reminders would have gone
+QUIET rather than red. `reminders.yml` now declares the scope.
+
+### UNEVALUATED, NOT SKIPPED — three sites, two of them fully
+
+`pytest.skip` on an unreadable run list is the defect in pytest's own
+vocabulary: **a skip and a pass are indistinguishable in a green run**, so a
+consumer whose API access had died would be broken AND green — exactly the
+state a deleted PAT would have produced had anything consumed it.
+
+Two callers now route through `tests/gh_support.gh_json_or_unevaluated`, which
+RAISES with a message led by `UNEVALUATED`, the way `anchored` and
+`must_match` already do. It reads **`returncode` and `stderr`**, not
+`stdout or ""`: `ci_audit._sh` returns the latter and so turns a 401, a 403
+and a rate limit alike into an empty string that `json.loads` reads as zero
+rows. Three entries in this register have that shape.
+
+The third site, `test_cron_split_by_daytype`, is **split rather than
+converted**, because its one empty was two:
+
+| state | reading | verdict |
+|---|---|---|
+| no token at all | COULD NOT LOOK | **reported** — an action clears it |
+| token set, series empty | looked, nothing yet | still skips — the cron move of 10-22 emptied it by design and no action clears it |
+
+> **RESIDUAL, NAMED RATHER THAN PAPERED OVER: a token that is PRESENT AND DEAD
+> still reaches that skip**, because `lag` is built through `ci_audit._sh`.
+> The two converted callers DO catch it. Closing the third needs `_sh` to
+> report its own returncode, which is 10 call sites and a separate stage.
+
+### GATE TRAP, FOURTH OCCURRENCE — and the first a guard caught
+
+The helper went into `conftest.py` first. **That pulled 25 tests into the
+capture gate: its own 11, plus every static test in
+`test_absent_run_and_unparseable.py` — ONE OF THE FOUR LOSSES (2026-10-13,
+six cards).**
+
+`tests.conftest` is a HELPER under `capture_critical.classify` and it reaches
+`src.data.odds_quota`, so **any file importing it becomes
+`capture_critical`**; `_modules_imported` walks the whole AST, so hiding the
+import inside a function does not help.
+
+**`FOUR_LOSSES` caught it** —
+`test_KNOWN_WRONG_each_of_the_FOUR_LOSSES_CANNOT_GATE[2026-10-13-6-test_absent_run_and_unparseable.py]`
+failed, which is the first time this shape was reported by a guard instead of
+by a lost card. The helper moved to `tests/gh_support.py`, which imports the
+standard library only, so `_on_capture_path` of its imports is empty by
+construction.
+
+Gate **1732 -> 1757 -> 1732**, measured as node ids against a worktree at
+HEAD: **0 entered, 0 left.** Census files 142 -> 143, `capture_critical`
+UNCHANGED at **78**, not_critical 64 -> 65. Non-gating 947 -> **958**.
+
+### SECRET ALREADY ABSENT — step 4 was a no-op
+
+`GH_TOKEN` exists in **no store**: Actions secrets (8, none of them it),
+Dependabot (empty), Codespaces (empty), variables (empty), environments (0),
+and a direct `GET .../actions/secrets/GH_TOKEN` returns **404**. There was
+nothing to delete, so the ordering the stage was built around never bound.
+
+### THE NON-GATING SUITE HAD NEVER BEEN RUN GREEN, AND IT HELD ONE OF MINE
+
+The non-gating selection has not completed since before this stage — the last
+attempt stopped at 38%. Run to the end it was **3 red, and all three pre-exist
+at HEAD**, confirmed in a worktree rather than assumed:
+
+| red | mine | action |
+|---|---|---|
+| `test_every_subprocess_capture_declares_utf8` | **yes** — the chat-id history guard | **FIXED HERE** |
+| `test_margin_acknowledged` x2 (`DRIVEN` pair) | no | the margin deterioration; a measurement stage |
+
+> **MY OWN DEFECT, IN THE CLASS THIS PROJECT KEEPS PAYING FOR.** The chat-id
+> history guard captured `git log --all -S<id>` with `capture_output=True,
+> text=True` and no encoding. The platform codec here is cp1251, so one
+> undecodable commit subject makes `.stdout` None, which reads as NO COMMITS,
+> which reads as *the chat id is not in history*. **The guard written to prove
+> a credential is absent would have reported clean because it could not
+> read.** Fourth instance of the stdout-or-empty family in this register, and
+> it was in the fix for the previous one.
+
+Also surfaced, not fixed: `test_cron_split_by_daytype` reports **the weekday
+margin is +90m and now CLEARS the 60-minute minimum** against the +40m
+recorded on 10-20 — an inverted assertion awaiting re-statement; and the **H1
+reservation acknowledgement expired 2026-11-01**, whose clearing action is the
+deletion stage and its 31 assertions.
+
+*Recorded 2026-11-05. `tests/gh_support.py` and
+`tests/test_unreadable_is_unevaluated.py` (new),
+`tests/test_absent_run_and_unparseable.py`,
+`tests/test_fixture_horizon_probe.py`, `tests/test_cron_split_by_daytype.py`,
+`tests/test_gate_is_opt_in.py`, `.github/workflows/reminders.yml`.*

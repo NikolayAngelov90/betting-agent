@@ -851,19 +851,16 @@ def test_the_SIX_HOUR_control_reports_the_MEASURED_gap_per_run():
     separate column, not a tenth inversion. If `below_6h` becomes non-zero
     the intermittency has started, and THAT is the finding.
     """
-    import json
-    import subprocess
+    from tests.gh_support import gh_json_or_unevaluated
 
     def _runs(wf):
-        o = subprocess.run(
-            ["gh", "run", "list", "--workflow", wf, "--limit", "40", "--json",
+        # REPORTED, NOT SWALLOWED. 2026-11-05. This returned `[]` on an
+        # unparseable body and the caller then skipped, so an unreadable run
+        # list and a quiet week were the same observation.
+        return gh_json_or_unevaluated(
+            ["run", "list", "--workflow", wf, "--limit", "40", "--json",
              "createdAt,updatedAt,event"],
-            capture_output=True, encoding="utf-8", errors="replace",
-            timeout=180)
-        try:
-            return json.loads(o.stdout or "[]")
-        except json.JSONDecodeError:
-            return []
+            what=f"{wf}'s run list")
 
     def _ts(x):
         return dt.datetime.fromisoformat(
@@ -871,8 +868,6 @@ def test_the_SIX_HOUR_control_reports_the_MEASURED_gap_per_run():
 
     probes = _runs("fixture-horizon-probe.yml")
     picks = _runs("daily-picks.yml")
-    if not probes or not picks:
-        pytest.skip("run history unreadable here")
 
     below, inverted, no_counterpart, seps = 0, 0, 0, []
     for p in probes:

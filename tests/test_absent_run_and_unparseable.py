@@ -215,18 +215,20 @@ def test_the_detector_does_not_call_a_day_with_a_RUN_missing():
     """
     m = ci.missing_scheduled_runs()
     if m.get("state") != "CHECKED":
-        pytest.skip(f"detector unevaluated here: {m.get('reason')}")
+        # REPORTED, NOT SKIPPED. 2026-11-05. This was `pytest.skip`, and a
+        # skip is indistinguishable from a pass in a green run -- so a
+        # detector that had stopped evaluating looked exactly like one that
+        # had nothing to report.
+        raise AssertionError(
+            f"UNEVALUATED, not clear: the detector did not evaluate, so this "
+            f"control verifies nothing about whether a day with a run is "
+            f"reported missing. reason: {m.get('reason')}")
 
-    import json
-    import subprocess
-    raw = subprocess.run(
-        ["gh", "run", "list", "--workflow", "daily-picks.yml", "--limit",
-         "120", "--json", "createdAt,event"],
-        capture_output=True, encoding="utf-8", errors="replace", timeout=120)
-    try:
-        runs = json.loads(raw.stdout or "[]")
-    except json.JSONDecodeError:
-        pytest.skip("run list unreadable here")
+    from tests.gh_support import gh_json_or_unevaluated
+    runs = gh_json_or_unevaluated(
+        ["run", "list", "--workflow", "daily-picks.yml", "--limit", "120",
+         "--json", "createdAt,event"],
+        what="daily-picks' run list")
     have = {dt.datetime.fromisoformat(
         r["createdAt"].replace("Z", "+00:00")).date()
         for r in runs if r.get("event") == "schedule"}

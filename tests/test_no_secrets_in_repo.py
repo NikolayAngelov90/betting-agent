@@ -300,8 +300,15 @@ def test_the_REAL_ID_APPEARS_IN_NO_COMMIT_measured_over_history():
     cid = _chat_id_from_env_file()
     if not cid:
         pytest.skip("no TELEGRAM_CHAT_ID available to search for")
+    # `encoding="utf-8", errors="replace"`, not bare `text=True`. The platform
+    # codec is cp1251 on this machine's console, and a commit subject carrying
+    # one byte outside it kills the reader thread: `.stdout` becomes None,
+    # which reads as NO COMMITS, which reads as "the chat id is not in
+    # history". A guard that reports clean when it could not read is the
+    # shape this file exists to prevent.
     r = subprocess.run(["git", "log", "--all", "--oneline", f"-S{cid}"],
-                       capture_output=True, text=True)
+                       capture_output=True, encoding="utf-8",
+                       errors="replace")
     if r.returncode != 0:
         pytest.skip(f"git log unavailable: {r.stderr[:80]}")
     commits = [ln for ln in r.stdout.splitlines() if ln.strip()]

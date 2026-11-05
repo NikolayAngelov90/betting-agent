@@ -275,12 +275,43 @@ def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
     # So: refuse to measure, and SAY which it is.
     if not lag:
         import os
+        token = bool(os.environ.get("GH_TOKEN")
+                     or os.environ.get("GITHUB_TOKEN"))
+        # ── THE TWO EMPTIES ARE NOT THE SAME EMPTY. 2026-11-05. ──────────
+        #
+        # This was ONE `pytest.skip` for both, and a skip is indistinguishable
+        # from a pass in a green run -- so "nobody gave this job a token"
+        # looked exactly like "the series is refilling as planned".
+        #
+        #   no token      -> COULD NOT LOOK. Reported, because an action
+        #                    clears it: give the job a credential.
+        #   token, empty  -> LOOKED, NOTHING THERE YET. Still a skip: the
+        #                    cron move of 2026-10-22 emptied this series by
+        #                    design and no action clears it, and a daily red
+        #                    that no action clears is an alarm that always
+        #                    fires.
+        #
+        # RESIDUAL, NAMED RATHER THAN PAPERED OVER: a token that is PRESENT
+        # AND DEAD still reaches the skip below, because `lag` is built
+        # through `ci_audit._sh`, which returns `stdout or ""` and so turns a
+        # 401 into an empty series. The two callers that route through
+        # `tests.conftest.gh_json_or_unevaluated` DO catch that; this one
+        # cannot until `_sh` reports its own returncode.
+        if not token:
+            raise AssertionError(
+                "UNEVALUATED, not clear: the weekday lag series is empty and "
+                "NO TOKEN IS SET (GH_TOKEN and GITHUB_TOKEN both absent), so "
+                "the series could not be read at all. n=0 here is 'could not "
+                "look', NOT a fact about the schedule -- which is precisely "
+                "the reading that reported a football finding from a missing "
+                "credential on 2026-10-21. CLEARING ACTION: give this job a "
+                "live token, and `actions: read` if this repository is ever "
+                "made private.")
         pytest.skip(
-            "UNEVALUATED, not clear: the weekday lag series is empty and "
-            "there is no way to ask here (GH_TOKEN present: "
-            f"{bool(os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN'))}). "
-            "n=0 is not a measurement, and the absence of a credential is not "
-            "a fact about the schedule.")
+            "UNEVALUATED, not clear: the weekday lag series is empty WITH a "
+            "token set, so this is a series that is refilling rather than one "
+            "that could not be read. n=0 is not a measurement, and no action "
+            "clears it.")
     # ── A SERIES TOO THIN TO MEASURE IS UNEVALUATED, NOT FAILED. ─────────
     #
     # The cron move of 2026-10-22 emptied this series by design, and it is

@@ -114,7 +114,17 @@ from scripts.capture_critical import (
 #: including the five send drives, into the gate: the
 #: import-pulls-a-file-into-the-gate trap, third occurrence. A test about
 #: WHICH CHAT a message reaches must not be able to stop price capture.
-CENSUS = {"files": 142, "capture_critical": 78, "not_critical": 64}
+#: RE-MEASURED 2026-11-05: files 142 -> 143, not_critical 64 -> 65,
+#: `capture_critical` UNCHANGED AT 78. The new file is
+#: `test_unreadable_is_unevaluated.py`, and it is non-critical BY
+#: CONSTRUCTION: its helper lives in `tests/gh_support.py`, which
+#: imports the standard library only. Written into `conftest.py`
+#: first, it pulled 25 tests into the gate -- its own 11 plus every
+#: static test in `test_absent_run_and_unparseable.py`, which is ONE
+#: OF THE FOUR LOSSES. `FOUR_LOSSES` caught it. Fourth occurrence of
+#: the import-pulls-a-file-into-the-gate trap, and the first that a
+#: guard rather than a card reported.
+CENSUS = {"files": 143, "capture_critical": 78, "not_critical": 65}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -367,8 +377,18 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #      operator-vocabulary check) and the operator-channel trio (unset
     #      id annotates, the reintroduced fallback is caught, and no code
     #      path can resolve the client id).
-    assert len(nong) == 947, (
-        f"the non-gating selection is {len(nong)}, recorded 947")
+    #   +11 on 2026-11-05: test_unreadable_is_unevaluated.py -- an unreadable
+    #       run list is now a REPORTED UNEVALUATED rather than a
+    #       `pytest.skip`, because a skip and a pass are the same thing in a
+    #       green run, which is how a deleted PAT could leave a consumer
+    #       broken AND green. The known-wrong control (a dead token must
+    #       report, not skip, not pass), the positive control (a readable
+    #       list still reaches a verdict), the empty and non-JSON shapes,
+    #       three message-content checks, the source-shape check, the
+    #       no-skip ratchet over both callers, and the two permissions
+    #       assertions. GATE UNCHANGED at 1732 -- see CENSUS.
+    assert len(nong) == 958, (
+        f"the non-gating selection is {len(nong)}, recorded 958")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

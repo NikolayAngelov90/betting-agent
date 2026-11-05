@@ -47,6 +47,28 @@ concurrency:
   group: reminders
   cancel-in-progress: false
 
+# DECLARED, NOT INHERITED. 2026-11-05.
+#
+# Two reminders call `gh run list`, and `gh run` is the Actions API, which
+# needs `actions: read`. This job had NO permissions block, so it inherited
+# the repository default -- measured `default_workflow_permissions: "read"`,
+# which grants `contents` and `packages` read and NO `actions` scope at all.
+#
+# IT WORKED ANYWAY, AND THAT IS THE POINT. This repository is PUBLIC, so run
+# metadata is publicly readable and the call needs no scope. Measured, not
+# inferred: run 42011987381 EVALUATED the probe reminder with no `actions`
+# permission in force, which is why this was a forward item and not a defect.
+#
+# So the dependency was real and invisible. If this repository is ever made
+# private -- which the leaked database password makes a live option -- the
+# public-read fallback disappears, `ci-audit` keeps working because it declares
+# the scope, and these two reminders would have gone QUIET rather than red.
+# They now report UNEVALUATED instead of skipping, and the scope is declared,
+# so there would be nothing to report.
+permissions:
+  contents: read
+  actions: read          # two reminders call `gh run list`
+
 jobs:
   reminders:
     runs-on: ubuntu-latest
