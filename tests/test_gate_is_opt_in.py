@@ -143,7 +143,13 @@ from scripts.capture_critical import (
 #:   test_two_consumers_read_one_input.py -- the standing cross-read
 #:     check. It measures gate membership, so it must not be IN the
 #:     gate it measures.
-CENSUS = {"files": 146, "capture_critical": 78, "not_critical": 68}
+#: RE-MEASURED 2026-11-06 (III), market mix: files 146 -> 147,
+#: not_critical 68 -> 69, `capture_critical` UNCHANGED AT 78 for the
+#: FOURTH time in two days. `test_market_mix_part_a.py` is non-critical
+#: because `scripts/market_mix.py` keeps every database and
+#: `market_spec` import INSIDE its functions, so importing it reaches
+#: nothing on the capture path.
+CENSUS = {"files": 147, "capture_critical": 78, "not_critical": 69}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -448,8 +454,18 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #           stubbed caller must NOT be counted
     #         test_cron_split_by_daytype.py                   +1  the consumer
     #           of HEADROOM_NOT_SPENT, with the n and the projected date
-    assert len(nong) == 997, (
-        f"the non-gating selection is {len(nong)}, recorded 997")
+    #   +9 on 2026-11-06 (III): test_market_mix_part_a.py. Part A recomputed
+    #       on the whole 1,639-pick population (the 683-pick join could not
+    #       reach 1X2 or over_under, 775 picks and the largest market).
+    #       H-MIX is REFUTED AT PART A: no market is within 3.8x of the 1.5%
+    #       cut, so the restricted population is empty. These pin the cut
+    #       AGAINST BEING WIDENED to fit the result, which is the
+    #       pre-registration's hardest line, with the widening itself as the
+    #       known-wrong control; and they pin which figure moved when the
+    #       population tripled (btts +1.48pp) and which held (double_chance
+    #       -0.06pp). GATE UNCHANGED at 1732.
+    assert len(nong) == 1006, (
+        f"the non-gating selection is {len(nong)}, recorded 1006")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

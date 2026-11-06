@@ -36465,3 +36465,182 @@ never run before the card (4h43m–11h10m after it), and a pick-following band i
 a loosening. **Market coverage is the only one of the three that caps the result
 regardless of what else is chosen, so it is the first thing a December design
 must settle.**
+
+---
+
+## 2026-11-06 (III) — MARKET MIX: `H-MIX REFUTED AT PART A`
+
+The stage resumes from its held state. The vocabulary extraction closed the
+blocker, so Part A is recomputed on the whole population. **Nothing is
+adopted.** `scripts/market_mix.py` is committed so every figure is
+reproducible.
+
+### THE POPULATION, AND WHAT THE 683 VERSION WAS MISSING
+
+`measured` 2026-11-06, grain=PICK: **1,639** settled paper picks
+(`pick_date >= 2026-08-11`, `disposition IS NULL`, `result IN ('win','loss')`),
+and the canonical join reaches **1,639 of 1,639 — 100.0%, zero unnameable.**
+
+> **The 683-pick version was missing the largest market entirely.** Its
+> selection-only join could not reach `1X2` or `over_under`, which are
+> **775 of the 1,639 picks (47.3%)** — and `over_under` alone is **583
+> (35.6%)**, the biggest single market in the record.
+
+### PART A — THE COST OF EACH MARKET, WITH ITS REQUIRED EDGE
+
+Two cost quantities, and only one is what we pay. **TAKEN** is the overround
+of the price set the pricer actually takes — the cross-book median per leg,
+assembled leg by leg. **Per-book** is each bookmaker's own overround over its
+complete leg set. The hypothesis turns on the first.
+
+| market | n | win% | ROI | odds | **TAKEN cost** | **required edge** | per-book |
+|---|---|---|---|---|---|---|---|
+| `over_under` | 583 | 58.0% | −4.88% | 1.65 | **6.09%** | **5.74%** | 6.16% |
+| `team_goals` | 317 | 57.7% | −7.61% | 1.61 | **6.67%** | **6.25%** | 6.67% |
+| `double_chance` | 271 | 59.4% | −6.41% | 1.58 | **5.74%** | **5.43%** | 5.81% |
+| `1X2` | 192 | 56.8% | −5.89% | 1.69 | **6.32%** | **5.95%** | 6.72% |
+| `btts` | 153 | 60.8% | −1.36% | 1.63 | **7.67%** | **7.12%** | 7.80% |
+| `draw_no_bet` | 123 | 59.3% | −7.07% | 1.57 | **7.18%** | **6.70%** | 7.18% |
+
+**`required edge` is derived, not chosen.** A bettor with no edge pays the
+margin, so their ROI is `1/(1+cost) − 1`; the edge required to break even is
+therefore `cost/(1+cost)` **in ROI points**, directly comparable to the
+registered +3% target.
+
+**Double chance is derived differently and that is not a choice.** Its three
+legs OVERLAP and are not exhaustive, so `Σ1/o` over them is ≈2 by construction
+and is not a margin — `market_spec.devig` refuses them outright. The fair price
+of `1X` is `1/(p_home + p_draw)` from the DE-VIGGED 1X2 prices of the same
+book, which is the derivation already in this ledger.
+
+### THE COST QUANTITY I FIRST COMPUTED WAS THE WRONG ONE
+
+My first run reported each **bookmaker's own** overround and would have
+compared it against the prior's `1X2` figure of **7.13%**, which is the
+overround of the **taken** price set — the cross-book median, assembled leg by
+leg. Two different quantities read as a movement.
+
+Both are now reported, and they turn out to agree within **0.4pp** on every
+market (largest divergence `1X2`: taken 6.32% against per-book 6.72%). **That
+agreement is itself a result**: the median assembly is not materially cheaper
+than a typical single book, which is the same arithmetic as
+[[the-taken-price-is-a-median]] — with 2–3 books the median *is* at or above
+second-best, so there is no hidden discount in how the price is assembled.
+
+### THE REGISTERED CUT, APPLIED — AND IT SELECTS NOTHING
+
+> **No market is within 3.8× of the 1.5% cut. The restricted population is
+> 0 of 1,639.**
+
+The cheapest market in the record costs **5.74%**. The cut was fixed in the
+pre-registration before any of these numbers were read, and it is not
+re-chosen on where our markets fall — so the correct report is that the
+restriction is **empty**, not that the threshold should move.
+
+| | |
+|---|---|
+| cheapest | `double_chance` **5.74%** (n=271) |
+| dearest | `btts` **7.67%** (n=153) |
+| **spread** | **1.93pp** |
+| current mix, n-weighted mean cost | **6.40%** |
+| all-cheapest-market mix | 5.74% |
+| **maximum saving available from ANY market-mix restriction** | **0.66pp** |
+| **H-MIX predicted** | **~5.00pp** |
+
+**The whole hypothesis is worth at most 0.66 points, which is 7.6× smaller
+than it predicted** — and that upper bound assumes every pick moves to the
+single cheapest market, which no selection process would produce.
+
+### WHY THE HYPOTHESIS ASSUMED 1.1%, AND WHY THAT WAS THE ERROR
+
+H-MIX said *"if the cheap markets cost ~1.1% and the expensive ones 6–7%"*.
+The 1.1% was the **1X2 BEST-LINE** overround — and this project's own
+execution stage had already established that the best line **is not
+takeable**: 21.28% of 1X2 best lines imply under 100%, 16.8% even in the
+tightest quote band, because a maximum assembled across books and times
+manufactures a price nobody can take.
+
+> **The cheap stratum was a measurement of the best line, and the best line is
+> not a market. H-MIX was refuted by a figure that was already in the record
+> before it was written.**
+
+At takeable prices the markets are not cheap and expensive; they are **all
+expensive, within 1.93 points of each other.**
+
+### PART B — THE DECISION RULE DOES NOT FIRE, AND THAT IS A FOURTH OUTCOME
+
+The registered rule has three rows: improvement ≥ half the cost difference;
+positive but smaller, or CI includes zero; not better or worse. **None
+applies, because all three presuppose a non-empty restricted population and
+there is none.** Reporting this as "refuted as stated" would be wrong in the
+same way as forcing it into "supported": the ROI comparison the rule reads was
+never computable.
+
+So, stated plainly: **H-MIX is refuted at Part A, on the cost distribution
+alone, before any outcome is consulted.** That is the stronger form of
+refutation — it needs no result at all, and it could have been reached on
+2026-11-05 had the join been whole.
+
+**AND THE PER-MARKET ROI COLUMN CANNOT SUPPORT A SELECTION ANYWAY.** Fixture
+bootstrap, 4,000 draws, 95%:
+
+| market | ROI | 95% CI | |
+|---|---|---|---|
+| `over_under` | −4.88% | [−11.41%, +1.80%] | includes 0 |
+| `team_goals` | −7.61% | [−16.23%, +1.13%] | includes 0 |
+| `double_chance` | −6.41% | [−15.37%, +2.83%] | includes 0 |
+| `1X2` | −5.89% | [−17.59%, +5.96%] | includes 0 |
+| `btts` | −1.36% | [−14.10%, +10.93%] | includes 0 |
+| `draw_no_bet` | −7.07% | [−20.72%, +6.57%] | includes 0 |
+
+**Six markets, six intervals, every one spanning zero**, widths 13 to 27
+points. Which is exactly what [[settled-pick-segments-are-noise]] records —
+and it is why the pre-registration insisted the market be chosen by its cost
+and never by its return. The cost column separates the markets by 1.93pp; the
+ROI column separates nothing.
+
+### WHICH FIGURES MOVED WHEN THE POPULATION TRIPLED
+
+> **A figure that changes when the population triples is a figure the smaller
+> population could not support.**
+
+| figure | 683-pick version | full population | moved |
+|---|---|---|---|
+| `double_chance` cost | 5.80% | **5.74%** | **−0.06pp** — stable |
+| `btts` overround | 6.19% | **7.67%** | **+1.48pp** (+24% relative) |
+| `1X2` taken cost | 7.13%† | **6.32%** | −0.81pp† |
+| `double_chance` n | 265 | **271** | +6 |
+| `double_chance` win rate | 60.0% | **59.4%** | −0.6pp |
+| `double_chance` ROI | −5.51% | **−6.41%** | **−0.90pp on SIX extra picks** |
+| `over_under`, `team_goals`, `draw_no_bet` cost | — | 6.09 / 6.67 / 7.18% | **first measurement** |
+
+† not a like-for-like movement: the prior 1X2 figure was measured on the
+FLB-band subset, and 1X2 was absent from the 683-pick join altogether.
+
+**What this says about the smaller population:**
+
+* `double_chance` was **sound at 683** — its cost moved 0.06pp, which is
+  within any reasonable reading. The smaller sample supported it.
+* `btts` was **not** — a 1.48pp move, 24% relative, on the thinnest market
+  (n=153, and only 2,741 cost observations against `over_under`'s 30,205).
+  **Any conclusion resting on BTTS's 6.19% was resting on a figure that has
+  since moved by a quarter of itself.** The economic-bar entry compared it to
+  an external +2.64pp benchmark; at 7.67% that comparison gets worse, not
+  better, so its conclusion survives — but it survives for a different reason
+  than the one recorded.
+* `double_chance`'s ROI moving **0.90pp on six picks** is the noise term made
+  visible, and it is the same fact the CI table states formally.
+
+### WHAT THIS STAGE DID NOT DO
+
+Adopted nothing, changed no config, moved no threshold, spent no credits,
+touched no registered statistic. ρ=0.42, σ, `TARGET_N`, the floor and the
+168-credit reservation are untouched. `CODE_REVISION` stays `s5.19`.
+
+**And the counterfactual limitation is moot rather than satisfied.** The
+pre-registration listed four conditions that would have to hold for a
+restricted-population result to transfer, two of which are known false in
+detail. None of them was reached: there is no restricted population to
+transfer.
+
+*Recorded 2026-11-06. `scripts/market_mix.py` (new).*
