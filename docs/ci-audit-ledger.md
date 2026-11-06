@@ -36240,6 +36240,46 @@ Gate **1732**, membership and census **unchanged** (144 files / 78
 capture_critical / 66 not) — every control added today landed outside the
 capture path. Non-gating 974 -> **983**. `s5.19 / cdec29` unmoved.
 
+
+### ADDENDUM — `reminders` HAD BEEN READING THE LAG SERIES AS n=0
+
+Found by driving the prediction instead of reasoning it. The three workflows
+were dispatched on `23f0510`: non-gating **green**, ci-audit **red on ONE
+component** (the schedule margin alone — the structural half and both
+consequence-runs gone), and reminders red on **a different test than it failed
+locally**.
+
+That disagreement was the finding. `measured` 2026-11-06:
+
+| workflow | weekday lag series |
+|---|---|
+| `ci-audit` (`fetch-depth: 0` since 2026-10-11) | **n = 11** |
+| `reminders` (bare checkout, depth 1) | **n = 0** |
+
+Same commit, same minute, same API. The series' membership rule reads the cron
+**from each run's own `headSha`** via `git show <sha>:...`, so a shallow
+checkout makes every sha but HEAD unreadable and the rule silently
+over-excludes. `ci-audit.yml` carries a comment recording exactly this
+("measured 2026-10-11, the whole series read `UNEVALUATED: no runs under the
+current cron yet`"). **`reminders.yml` never got the fix.**
+
+> **So every series-dependent reminder in that workflow has been evaluating an
+> EMPTY series since it was created on 2026-10-21** — sixteen days — and the
+> answer it gave was `n=0`, which is "could not look" wearing the clothes of a
+> measurement.
+>
+> **IT WAS A `pytest.skip` THAT HID IT.** `test_cron_split_by_daytype`
+> reported `UNEVALUATED: the weekday lag series is empty` and SKIPPED, which
+> is indistinguishable from a pass in a green run. Converting that skip to a
+> reported state on 2026-11-05 is what made this measurable, and an assertion
+> written the next day surfaced it. The absence class paid for itself inside
+> twenty-four hours.
+
+Driven after the fix (run `42224949029`): reminders reads **n=12**, skips fall
+2 → 1, and its single remaining failure is now the SAME one as locally — the
+picks-bound decision awaiting authorisation. Local and CI agree for the first
+time in this stage.
+
 *Recorded 2026-11-06. `src/data/h1_window.py`, `src/data/odds_quota.py`,
 `scripts/ci_audit.py`, `scripts/schedule_deadline.py`,
 `tests/experiment_pins.py`, `tests/test_calendar_separation.py`,
