@@ -216,22 +216,74 @@ def test_fetch_log_STRIPS_ANSI_which_is_why_the_COLOUR_fix_did_nothing():
 #: on any of the 156 logs -- so the strip removed the noise and kept the
 #: signal. The figures are recorded here because `ci_logs/` is a local cache
 #: and is not committed.
+#: ── RE-MEASURED 2026-11-06, AND THE ECHO-ONLY CASE IS NOW 1. ─────────────
+#:
+#: The cache grew 156 -> 206 logs and three `h1-collect` runs of 2026-11-04
+#: arrived carrying a shape the earlier window never held. The `credits`
+#: pattern is `= (\d+) credits`, and in those three logs its ONLY match is a
+#: workflow COMMENT echoed into the log:
+#:
+#:     # leagues that had fixtures costs 3 x 2 x 2 = 12 credits, so the
+#:
+#: THE STRIP IS RIGHT AND THE PATTERN WAS WRONG. Before stripping the
+#: detector reported `credits = 12`; after, `None`. The 12 it reported was a
+#: comment's arithmetic -- and it happened to EQUAL the real attributed
+#: figure, which is worse than being wrong, because agreeing by accident is
+#: indistinguishable from working.
+#:
+#: NAMED EXPLICITLY, as this record's own instruction requires: the pattern is
+#: `credits`, the case is those three h1-collect runs, and `None` after the
+#: strip is the correct answer -- the real line reads
+#: `H1 ATTRIBUTED credits: 12 / bound 168`, which `= (\d+) credits` does not
+#: match. That gap is a SEPARATE finding and is registered, not fixed here:
+#: widening a detector pattern has its own blast radius, and H1 is stopped.
+#:
+#: SCOPE, measured: 96 of 206 cached logs mention credits; the pattern matches
+#: 48 raw and 45 stripped, so the echo-only case is 3 of 96 and the strip
+#: keeps the signal in the other 45.
 STRIP_EFFECT_MEASURED = {
-    "logs_examined": 156,
-    "facts_changed": {"tracebacks": 2, "steps_failed": 1},
-    "patterns_matching_only_inside_the_echo": 0,
+    "logs_examined": 206,
+    "facts_changed": {"tracebacks": 10, "steps_failed": 8, "credits": 3},
+    "patterns_matching_only_inside_the_echo": 1,
+    "echo_only_patterns": {
+        "credits": ("3 of 96 credit-mentioning logs, all h1-collect of "
+                    "2026-11-04. The only match is an echoed workflow comment "
+                    "(`costs 3 x 2 x 2 = 12 credits`); the real line is "
+                    "`H1 ATTRIBUTED credits: 12 / bound 168`, which the "
+                    "pattern does not match. None after the strip is correct."),
+    },
+    "pattern_gap_registered": ("`= (\\d+) credits` does not read "
+                               "h1-collect's `ATTRIBUTED credits: N` form, so "
+                               "that figure reports as not-present rather "
+                               "than being misread -- the safe direction"),
 }
 
 
 def test_the_MEASURED_EFFECT_is_recorded_with_its_window():
     m = STRIP_EFFECT_MEASURED
-    assert m["logs_examined"] == 156
-    assert sum(m["facts_changed"].values()) == 3, (
+    assert m["logs_examined"] == 206
+    assert sum(m["facts_changed"].values()) == 21, (
         "the recorded effect changed; re-measure over ci_logs/ rather than "
         "editing the number")
-    assert m["patterns_matching_only_inside_the_echo"] == 0, (
-        "a pattern now matches ONLY inside the echo, so the strip is "
-        "removing signal; name that pattern and keep its case explicitly")
+    # ── THE ECHO-ONLY CASE IS ALLOWED, BUT ONLY IF IT IS NAMED. ──────────
+    #
+    # This asserted zero. It is 1 from 2026-11-06, and the record's own
+    # instruction was "name that pattern and keep its case explicitly" --
+    # so the count may rise only in step with a named, reasoned entry.
+    n = m["patterns_matching_only_inside_the_echo"]
+    named = m.get("echo_only_patterns") or {}
+    assert n == len(named), (
+        f"{n} pattern(s) match ONLY inside the echo but {len(named)} are "
+        f"named. Name the pattern and its case, or the strip is removing "
+        f"signal nobody has looked at.")
+    for pat, why in named.items():
+        assert len(why) > 80, f"{pat} is named without its case"
+        assert "correct" in why or "signal" in why, (
+            f"{pat}'s entry does not say whether the post-strip value is the "
+            f"right answer, which is the whole question")
+    assert m.get("pattern_gap_registered"), (
+        "an echo-only pattern implies the real line is unmatched; that gap "
+        "must be registered rather than left implicit")
 
 
 # ── THE OTHER DIRECTION: does the audit match a file it also writes? ─────
@@ -329,6 +381,12 @@ def test_LIVE_the_strip_still_removes_only_NOISE_on_the_real_cache():
             if before.get(k) != after.get(k):
                 moved.setdefault(k, 0)
                 moved[k] += 1
-    assert set(moved) <= {"tracebacks", "steps_failed", "steps_not_run"}, (
+    # `credits` ADDED 2026-11-06, having been investigated rather than waved
+    # through: in 3 of 96 credit-mentioning logs the pattern's only match is
+    # an echoed workflow comment, and `None` after the strip is the correct
+    # answer. See `STRIP_EFFECT_MEASURED["echo_only_patterns"]`.
+    allowed = set(STRIP_EFFECT_MEASURED["facts_changed"]) | {"steps_not_run"}
+    assert set(moved) <= allowed, (
         f"the strip changed a fact it was not expected to: {moved}. Either a "
-        f"new false positive was removed (record it) or SIGNAL is being lost.")
+        f"new false positive was removed (record it in "
+        f"STRIP_EFFECT_MEASURED, with the case) or SIGNAL is being lost.")
