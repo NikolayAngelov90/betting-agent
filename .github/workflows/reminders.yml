@@ -77,6 +77,27 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # ── FULL HISTORY, FOR THE SAME REASON ci-audit NEEDS IT. 2026-11-06.
+          #
+          # The lag series' membership rule reads the cron FROM EACH RUN'S OWN
+          # headSha (`git show <sha>:...`), which is how two schedule regimes
+          # are kept from pooling. The DEFAULT `fetch-depth: 1` makes every
+          # sha but HEAD unreadable, and the rule then silently OVER-EXCLUDES.
+          #
+          # MEASURED 2026-11-06: this workflow read the weekday series as
+          # **n=0** while `ci-audit` -- which has carried `fetch-depth: 0`
+          # since 2026-10-11 for this exact reason -- read **n=11** on the
+          # same commit, the same minute, from the same API. Every
+          # series-dependent reminder here has therefore been evaluating an
+          # EMPTY series since this workflow was created on 2026-10-21.
+          #
+          # IT WAS INVISIBLE BECAUSE A SKIP HID IT. `test_cron_split_by_daytype`
+          # reported `UNEVALUATED: the weekday lag series is empty` and
+          # SKIPPED, which is indistinguishable from a pass in a green run.
+          # Converting that skip to a reported state on 2026-11-05 is what
+          # made this measurable, and a new assertion surfaced it the next day.
+          fetch-depth: 0
 
       - name: Report the UPSTREAM state, before anything else
         # PRINTED, NEVER INFERRED. `workflow_run` carries the upstream
