@@ -36643,4 +36643,33 @@ restricted-population result to transfer, two of which are known false in
 detail. None of them was reached: there is no restricted population to
 transfer.
 
+
+### ADDENDUM — THE 3.59pp AND THE 6.40% ARE THE SAME MEASUREMENT
+
+They look like a contradiction and are not. **The economic bar's `+3.59pp` is
+in PROBABILITY PERCENTAGE POINTS; Part A's `6.40%` is a RELATIVE margin**
+(`Σ1/o − 1`). Converted at our own n-weighted average taken odds of 1.628:
+
+| | |
+|---|---|
+| n-weighted TAKEN cost (relative) | **6.40%** |
+| quoted implied probability | 0.6144 |
+| fair probability after de-vig | 0.5775 |
+| **margin in probability points** | **3.70pp** |
+| the recorded economic-bar figure | **3.59pp** |
+| **difference** | **0.11pp** |
+
+> **Two independent measurements of our own cost — different populations
+> (band-restricted n≈683 against the whole 1,639), different methods, different
+> units — agree to 0.11 of a percentage point.** That corroborates the economic
+> bar rather than disturbing it: the gap against the largest documented
+> external FLB edge (+3.74pp at n=134) is **+0.04pp** on this figure instead of
+> +0.15pp, which is the same conclusion with one less decimal of comfort.
+
+**THE GRAIN RULE APPLIES TO UNITS, NOT ONLY TO GRAIN.** Every overround in
+this ledger must now say whether it is relative or in probability points,
+because the two differ by a factor of the odds and both are written as a
+percentage. `6.40%` and `3.70pp` are the same fact; `6.40pp` would be a
+different and wrong one.
+
 *Recorded 2026-11-06. `scripts/market_mix.py` (new).*
