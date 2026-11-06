@@ -149,7 +149,7 @@ from scripts.capture_critical import (
 #: because `scripts/market_mix.py` keeps every database and
 #: `market_spec` import INSIDE its functions, so importing it reaches
 #: nothing on the capture path.
-CENSUS = {"files": 147, "capture_critical": 78, "not_critical": 69}
+CENSUS = {"files": 149, "capture_critical": 78, "not_critical": 71}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -464,8 +464,30 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       known-wrong control; and they pin which figure moved when the
     #       population tripled (btts +1.48pp) and which held (double_chance
     #       -0.06pp). GATE UNCHANGED at 1732.
-    assert len(nong) == 1006, (
-        f"the non-gating selection is {len(nong)}, recorded 1006")
+    #   +17 on 2026-11-06 (IV): test_cost_by_book.py. The per-book cost
+    #       stage. These pin three things that fail silently: the UNIT (a
+    #       band-specific margin converted at the population's average odds
+    #       inverts the sign of the netting -- I made that error here, so the
+    #       wrong conversion is kept as the known-wrong control); that the two
+    #       CHEAPEST books are EXCHANGES whose commission is not in the
+    #       quoted price, so 0.59pp must never become a planning cost; and
+    #       that every cost figure has a COVERAGE figure beside it.
+    #       GATE UNCHANGED at 1732: `scripts.cost_by_book` keeps every
+    #       database and market_spec import INSIDE its functions, so importing
+    #       it reaches nothing on the capture path. Verified through
+    #       `classify()`, which returns critical=False via=[] for the file.
+    #   +17 on 2026-11-06 (V): test_exchange_terms.py. The three unmeasured
+    #       terms behind the exchange result. These pin that SIZE is
+    #       UNAVAILABLE and that the consequence is UNESTABLISHED and NOT
+    #       REFUTED -- only one of those ends the profitability question --
+    #       and they DERIVE from `config/config.yaml` that the anomaly's
+    #       70-79% band lies below our own 66.7% ceiling, so 0 of 1,639
+    #       picks sit in it and none can while `betting.min_odds` is 1.50.
+    #       The config read is live, so moving the floor fails the test
+    #       rather than silently invalidating the finding.
+    #       GATE UNCHANGED at 1732, for the same reason as (IV).
+    assert len(nong) == 1040, (
+        f"the non-gating selection is {len(nong)}, recorded 1040")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

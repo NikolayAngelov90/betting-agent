@@ -509,6 +509,15 @@ EXTERNAL_HOSTS = {
     "www.flashscore.com",
     "www.football-data.co.uk",
     "www.football-data.org",      # the human sign-up page, in a docstring
+    # ADDED 2026-11-06, and NEITHER IS A REQUEST TARGET. Both are published
+    # commission schedules CITED as provenance in
+    # `scripts/exchange_terms.py::COMMISSION_PUBLISHED`, because hard rule 1
+    # of that stage is that a commission comes from a published schedule with
+    # its URL and the date fetched. No code issues a request to either host:
+    # the pages were read once, by hand, and only the citation is stored.
+    # Same standing as the football-data.org sign-up page above.
+    "www.betfair.com.au",         # Betfair's charges page, cited in a constant
+    "insights.matchbook.com",     # Matchbook's commission page, cited likewise
 }
 
 #: SHRANK 2026-10-20, and that is a measurement rather than housekeeping:

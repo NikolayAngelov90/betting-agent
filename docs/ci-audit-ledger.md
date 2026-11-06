@@ -36673,3 +36673,508 @@ percentage. `6.40%` and `3.70pp` are the same fact; `6.40pp` would be a
 different and wrong one.
 
 *Recorded 2026-11-06. `scripts/market_mix.py` (new).*
+
+---
+
+## 2026-11-06 (IV) — THE COST OF THE SHARPEST BOOK: measured, nothing adopted
+
+The last unmeasured term. **Measurement only** — no config changed, no book
+adopted, no threshold moved, `CODE_REVISION` stays `s5.19 / cdec29`.
+`scripts/cost_by_book.py` (new) makes every figure reproducible.
+
+Population, `measured` 2026-11-06, grain=PICK: **1,639** settled paper picks
+over **1,629** fixtures (`pick_date >= 2026-08-11`, `disposition IS NULL`,
+`result IN ('win','loss')`). **29 books** carry enough prices to have an own
+overround. Our n-weighted average taken odds: **1.627**.
+
+### `COST BY BOOK` — with coverage beside every figure
+
+`cost rel` is each book's **own** overround over its complete leg sets
+(grain=LEG SET). `avg pp` converts it at our average odds; `band pp` converts
+it at the odds of the anomaly's own band. **The two pp figures are not
+interchangeable and differ by about 3 points.**
+
+| book | cost rel | avg pp | p25 | p75 | obs | **picks covered** | **= share** |
+|---|---|---|---|---|---|---|---|
+| `TheOddsAPI-matchbook` ᴱ | **1.00%** | 0.61 | 0.74% | 1.32% | 1,489 | 371 | **22.6%** |
+| `TheOddsAPI-betfair_ex_eu` ᴱ | **1.03%** | 0.63 | 0.75% | 1.41% | 878 | 137 | **8.4%** |
+| `TheOddsAPI-pinnacle` | **3.36%** | 2.00 | 2.91% | 3.81% | 2,078 | 227 | **13.8%** |
+| `Pinnacle` | 4.57% | 2.69 | 4.05% | 5.28% | 11,668 | 835 | **50.9%** |
+| `TheOddsAPI-onexbet` | 4.85% | 2.84 | 2.89% | 6.83% | 1,916 | 420 | 25.6% |
+| `Bet365` | 6.57% | 3.79 | 5.47% | 7.38% | 18,928 | 1,381 | **84.3%** |
+| `1xBet` | 8.07% | 4.59 | 6.78% | 9.46% | 16,543 | 1,258 | 76.8% |
+| `TheOddsAPI-pmu_fr` (dearest) | 12.88% | 7.02 | 12.00% | 13.73% | 1,530 | 351 | 21.4% |
+
+ᴱ **exchange.** The distribution, not just the mean: the p25–p75 spread is
+0.6pp at the exchanges and 1.9–3.9pp at the bookmakers, so a single book's
+cost is itself a distribution and `onexbet`'s (2.89–6.83%) is wider than the
+gap between the three cheapest books.
+
+> **THE THREE CHEAPEST ARE THE THREE THINNEST.** 22.6%, 8.4%, 13.8% of picks.
+> `Bet365` covers 84.3% at **6.57%**. Cost and coverage move against each
+> other across the whole table, which is why neither figure is reportable
+> alone.
+
+### THE TWO CHEAPEST ARE NOT BOOKS, AND 1.00% IS NOT A COST
+
+`Matchbook` and `Betfair Exchange` are **exchanges**. Their commission is
+charged on **net winnings** and is **not in the quoted price**. So 1.00% is
+not Matchbook's cost; it is Matchbook's cost **with a term missing**.
+
+> **This is the same shape as the 1.1% that H-MIX was built on** — a figure
+> measured on something that is not a price anyone pays, promoted to a
+> planning cost. Second instance, caught before it was used rather than
+> after. Their true cost is **UNMEASURED**, not 1.00%.
+
+Rather than assume a commission rate, the stage reports the rate that would
+**exactly erase** the documented anomaly: **15.6%** at Matchbook, **15.5%** at
+Betfair. Published exchange rates are far below that, but *that* comparison is
+Niki's and uses a number this record does not contain.
+
+### `SINGLE-BOOK COUNTERFACTUAL` — and its stated limitation
+
+**This is a counterfactual: the same picks at a different price.** Three
+things must hold for it to transfer, and only the first is measured.
+
+1. the book quoted that price **at pick time** — **MEASURED**, below;
+2. it was available in the **size** wanted — **NOT MEASURED**, at all;
+3. the selection process is unchanged by reading one book instead of a
+   cross-book median — **NOT MEASURED, and known false in direction**: the
+   pricer takes the median of the books, so with one book there is no median
+   to take and the picks themselves would differ.
+
+Uncovered picks are **counted, never dropped**. Fixture bootstrap, 4,000
+draws, 95%.
+
+| book | n | **uncovered** | cover | ROI@book | ROI@taken, **same picks** | **DELTA** | 95% CI on ROI | edge for +3% |
+|---|---|---|---|---|---|---|---|---|
+| `matchbook` ᴱ | 371 | **1,268** | 22.6% | −0.96% | −5.21% | **+4.25pp** | [−9.60, +7.90] | 3.99% |
+| `betfair_ex_eu` ᴱ | 137 | **1,502** | 8.4% | −1.75% | −4.62% | +2.87pp | [−15.97, +12.27] | 4.02% |
+| `TheOddsAPI-pinnacle` | 227 | 1,412 | 13.8% | −7.80% | −9.40% | +1.60pp | [−19.22, +3.20] | 6.25% |
+| `Pinnacle` | 835 | 804 | 50.9% | −4.74% | −5.72% | **+0.98pp** | [−10.23, +0.63] | 7.37% |
+| `Bet365` | 1,381 | 258 | 84.3% | −5.56% | −5.42% | −0.14pp | [−9.93, −1.37] | 9.16% |
+| `1xBet` | 1,258 | 381 | 76.8% | −5.42% | −5.39% | −0.04pp | [−9.75, −0.99] | 10.46% |
+
+**`ROI@book` is not comparable across rows** — each is a different subset of
+picks. The comparable quantity is the **paired delta**: the same picks priced
+twice. That isolates the price effect from the selection effect, and it is the
+only column in this table worth reading.
+
+**Restricted to prices that existed at pick time** (the later writes dropped):
+
+| book | n | dropped | cover | ROI@book | **DELTA** | 95% CI |
+|---|---|---|---|---|---|---|
+| `matchbook` ᴱ | 218 | −153 | 13.3% | −1.68% | **+4.32pp** | [−13.43, +9.69] |
+| `betfair_ex_eu` ᴱ | 80 | −57 | 4.9% | −8.04% | +2.99pp | [−26.94, +10.71] |
+| `TheOddsAPI-pinnacle` | 135 | −92 | 8.2% | −11.74% | +1.86pp | [−26.21, +2.75] |
+| `Pinnacle` | 835 | **0** | 50.9% | −4.74% | +0.98pp | [−10.23, +0.63] |
+
+> **The absolute ROIs move by up to 6 points under the restriction; the
+> paired deltas move by at most 0.26pp.** That is what makes the delta the
+> reportable quantity and the ROI not — and every CI here is 20 to 38 points
+> wide, so no row's ROI is distinguishable from any other's.
+
+### `TAKEABLE` — per book, and the answer is not uniform
+
+Quote age is measured at `pick_observations.taken_at`. **This corrects a
+recorded limitation**: that column is **100% populated** on all 1,639 picks,
+so freshness *is* measurable per pick. The earlier entry's "`saved_picks` has
+no `taken_at` and `pick_date` is a DATE" was true of the table it named and
+wrong about the record as a whole.
+
+`odds` is written **in place**, so a matched row whose `timestamp` is after
+the pick is a price from a **later scrape** — not a price we could have taken.
+
+| book | quote age at pick | **price existed at pick** | **later write** | 1X2 sub-100% | **TAKEABLE?** |
+|---|---|---|---|---|---|
+| `Bet365` | median **20 min**, max 42 | 1,381 / 1,381 | **0.0%** | 0.00% (n=1,372) | **YES** |
+| `1xBet` | median 20 min, max 42 | 1,258 / 1,258 | **0.0%** | 0.00% (n=1,371) | **YES** |
+| `Pinnacle` | median 20 min, max 42 | 835 / 835 | **0.0%** | 0.00% (n=1,367) | **YES** |
+| `TheOddsAPI-pinnacle` | median 22 min | 135 / 227 | **40.5%**, median **6.4 h** late | 0.00% (n=992) | **PARTLY** — 8.2% of picks |
+| `matchbook` ᴱ | median 22 min | 218 / 371 | **41.2%**, median 6.7 h late | 0.54% (n=927) | **PARTLY** + commission UNMEASURED |
+| `betfair_ex_eu` ᴱ | median 18 min | 80 / 137 | **41.6%**, median 6.4 h late | 0.00% (n=992) | **PARTLY** + commission UNMEASURED |
+
+`UNEVALUATED` is 0 on every row: every covered pick had both a `taken_at` and
+a row timestamp. Nothing here is a "nothing" that could not be looked at.
+
+> **A NAMED BOOK'S OWN PRICES ARE COHERENT; THE BEST LINE'S WERE NOT.**
+> 0.00–0.54% of single-book 1X2 leg sets imply under 100%, against the best
+> line's **21.28%**. A single book's three prices come from one book at one
+> instant; the best line was a maximum assembled across books *and* times.
+> **So the single-book price passes the one takeability test the best line
+> failed** — and that is a real difference between this stage and the
+> execution stage, not a restatement of it.
+>
+> **But the three cheapest books fail a test the best line never faced**: 41%
+> of their matched prices were written a median **6.4 hours after the pick**.
+> The lateness is bimodal by feed, not by book — the three API-Football books
+> are at 0.0% and the three TheOddsAPI books at 40.5–41.6%, because that feed
+> is scraped again in the afternoon.
+
+**THE REACHABLE SET IS NIKI'S ANSWER, NOT A MEASUREMENT.** The books above
+are those this record can price a counterfactual at. Which of them he can
+hold an account with, at what stake, under what restriction, is not in this
+database. **Listed, and stopped.**
+
+### `ARITHMETIC` — three lines, and the unit error that nearly inverted them
+
+Every line is in **probability points**, in the anomaly's **own 70–79% band**
+(implied 0.70–0.79 = decimal odds 1.266–1.429, derived from the anomaly's own
+statement), converted at **the in-band leg's own price**.
+
+the anomaly: **3.74pp** — *external, Footiqo, 2025/26, ONE bookmaker (1xBet),
+five leagues, n=134 at 70–79%*
+
+| | cost in band | coverage | **anomaly net** |
+|---|---|---|---|
+| **1.** current median policy | **4.70pp** (n=3,403 leg sets) | 100% by construction | **−0.96pp** |
+| **2.** cheapest book whose price existed at pick time, ≥20% of picks, not an exchange — **`Pinnacle`** | **3.69pp** | **50.9% of picks** | **+0.05pp** |
+| **3.** cheapest book of any kind — **`matchbook`** | 0.59pp | 22.6% of picks | **+3.15pp** ᴱ |
+
+**Line 3 is an exchange and 0.59pp is not its cost.** Break-even commission:
+**15.6%**.
+
+> **AND AT THE ANOMALY'S OWN SOURCE: `1xBet` charges 5.77pp in that band, so
+> the anomaly nets −2.03pp at the one book where it was documented.**
+
+**WHY THE NETTING FAILS, MEASURED.** A bookmaker's margin **rises** in the
+favourites band; an exchange's does not move:
+
+| | avg pp | band pp | **band premium** |
+|---|---|---|---|
+| `1xBet` | 4.59 | 5.77 | **+1.18** |
+| `Pinnacle` | 2.69 | 3.69 | **+1.00** |
+| `Bet365` | 3.79 | 4.72 | **+0.93** |
+| `TheOddsAPI-pinnacle` | 2.00 | 2.77 | **+0.77** |
+| `betfair_ex_eu` ᴱ | 0.63 | 0.67 | +0.04 |
+| `matchbook` ᴱ | 0.61 | 0.59 | **−0.02** |
+
+> **The band premium is the measurable signature of bookmaker shading, and it
+> lands exactly on the band the documented anomaly sits in.** An order of
+> magnitude separates the bookmakers (+0.77 to +1.18pp) from the exchanges
+> (±0.04pp) — nobody is shading an exchange price. **The inefficiency lives
+> where the price is dearest, and it is dearest *because* that is where the
+> inefficiency is.** That is not a coincidence to be arbitraged; it is the
+> book charging for the thing we hoped to collect.
+
+**THE UNIT ERROR, RECORDED BECAUSE I MADE IT.** I first converted the band
+margin as `cost/(1+cost) × avg_odds × 100` — multiplying by the price instead
+of dividing, and using 1.627 against a band of 1.33. That produced
+`Pinnacle −4.24pp` where the correct conversion gives **+0.05pp**: the same
+measurement, the opposite conclusion. Caught before reporting and pinned with
+the wrong conversion as its known-wrong control
+(`test_KNOWN_WRONG_CONVERTING_THE_BAND_AT_AVERAGE_ODDS_FLIPS_THE_SIGN`).
+
+### SO WHICH IS IT
+
+Stated as the directive asks, with nothing adjusted to make it come out:
+
+> **At every price established as takeable, the required edge exceeds the
+> largest documented inefficiency.** Line 2 — the cheapest book whose prices
+> demonstrably existed at pick time, on half the population — leaves the
+> anomaly at **+0.05pp**. Not positive by a margin: positive by a twentieth
+> of a point, against a **7.37%** edge needed for the +3% target. Line 1, what
+> we pay today, is **negative**. The book where the anomaly was documented is
+> **negative by 2.03pp**.
+
+**That closes the profitability question on everything measured.** It does not
+close it on the one thing that is not: **the exchanges**. Their arithmetic is
+the only positive one by a margin (+3.15pp, break-even commission 15.6%), and
+it is positive *because* an exchange does not shade the favourites band. What
+stands between that and a path is three unmeasured terms — **commission,
+available size, and whether the price is reachable at pick time** (41% of
+theirs were not) — and one structural fact: they covered **22.6% and 8.4%** of
+our picks.
+
+**That is a pricing question, not a model question**, and it is the first
+candidate in this program whose arithmetic has not already been refuted. It is
+**UNMEASURED, not promising** — and 0.59pp must not become a planning figure
+on the strength of this entry.
+
+### WHAT THIS STAGE DID NOT DO
+
+Adopted nothing. No book selected, no config touched, no threshold moved, no
+credits spent, no registered statistic altered. ρ=0.42, σ, `TARGET_N`, the
+derived floor, the 168-credit reservation, `FULL_CARD_PICKS_MAX = 40.35` and
+`PICKS_BOUND_AT_S519_DECISION = 88.1` all unchanged. `cohort_status.py` reads
+`s5.19 / cdec29`. Invariant 6b untouched.
+
+*Recorded 2026-11-06. `scripts/cost_by_book.py`, `tests/test_cost_by_book.py`
+(both new, 17 tests).*
+
+---
+
+## 2026-11-06 (V) — EXCHANGE TERMS: `UNESTABLISHED`, and the band we never bet
+
+Three terms stood between the exchange result and a plan. Two are unmeasurable
+from this record and the third turns out to be decisive on its own.
+**Measurement only** — no venue selected, no config changed, no threshold
+moved, `CODE_REVISION` stays `s5.19 / cdec29`. `scripts/exchange_terms.py`
+(new) makes every figure reproducible.
+
+Population: **1,639** settled paper picks over **70 days**, `measured`
+2026-11-06, grain=PICK unless a figure says otherwise.
+
+### `COMMISSION` — one schedule reached, one not, and neither is decisive
+
+| venue | rate | basis | provenance |
+|---|---|---|---|
+| **Betfair Exchange** | **6%** (sport) | net winnings per market, deducted at settlement | **published, DIRECTLY FETCHED** 2026-11-06 — [betfair.com.au/hub/help/commissions-charges](https://www.betfair.com.au/hub/help/commissions-charges/) |
+| **Matchbook** | **2%** | net winnings per market, winning bets only | published on Matchbook's **own** domain but **NOT directly fetched** — read via search of [insights.matchbook.com](https://insights.matchbook.com/education/what-is-commission/), 2026-11-06 |
+
+**NOT OBTAINED, and not assumed in its place.** Every `matchbook.com` host
+fails TLS verification from this environment (self-signed certificate on the
+intercepting proxy) and every `betfair.com` / `support.betfair.com` page
+returns **HTTP 403**. So:
+
+* the **EU/UK Market Base Rate** is not established — the 6% above is the
+  **Australian** schedule, which is the jurisdiction that page covers;
+* Betfair's **Points discount** scheme (reported elsewhere as capped at 20%)
+  is not established — it only *reduces* the rate, so omitting it errs in the
+  safe direction;
+* **no Matchbook page by direct fetch**;
+* **no volume tier or rebate** for either venue.
+
+Matchbook's own figures also include a **0% promotional rate for 110 days**
+and **"2% or 4% Net Win Commission"** for residents of non-accepted countries,
+so 2% is the standard rate and not the only one.
+
+**So the arithmetic is run across the whole range rather than at a point** —
+and the verdict does not turn anywhere inside it:
+
+| rate | effective odds | cost pp | cost ROI | band cost + commission | anomaly net |
+|---|---|---|---|---|---|
+| 2.0% | 1.355 | 0.40 | +0.54% | 1.06 | **+2.68** |
+| 4.0% | 1.348 | 0.80 | +1.08% | 1.46 | +2.28 |
+| 6.0% | 1.341 | 1.20 | +1.62% | 1.87 | +1.87 |
+| **15.6%** (break-even) | 1.312 | 3.21 | +4.21% | 3.88 | **−0.14** |
+
+**AND THE TWO UNITS DISAGREE ABOUT WHICH PRICE COMMISSION HURTS MOST.** In
+ROI it is `win_rate · c · (o−1)`, strictly increasing in the price. In
+probability points it is about `c(o−1)/o²`, which **peaks at o = 2** at exactly
+`c/4` and falls away on both sides. So commission is worst, *in the unit every
+cost here is in*, at even money — not at long odds. Both are asserted, with
+the even-money peak pinned at 0.50pp.
+
+### `SIZE` — UNAVAILABLE, and that is the stage
+
+> **There is no size, depth, liquidity or available-amount field anywhere in
+> the record.** Measured, not read from documentation:
+>
+> * `odds` carries exactly `match_id, bookmaker, market_type, selection,`
+>   `odds_value, opening_odds, timestamp, first_seen_at`
+> * `odds_snapshots` carries `odds_value, observed_at`
+> * the TheOddsAPI parse reads `outcome["name"]` and `outcome["price"]` **and
+>   nothing else** — so no size is dropped on the way in; **none arrives**
+
+**CONSEQUENCE.** An exchange price exists only while someone offers it at
+size, and we cannot see the size. So:
+
+> **The exchange price has NO MEASURABLE DEPTH. Its 0.59pp cost is NOT
+> ESTABLISHED AS TAKEABLE — the same status the best line has, for the same
+> reason. THIRD INSTANCE of that error class.**
+>
+> **UNESTABLISHED is not REFUTED.** Only one of those ends the profitability
+> question, and collapsing them is exactly how a missing measurement becomes
+> a conclusion. A later reader must find neither "the exchange was negative"
+> nor "the exchange was +3.15pp".
+
+**And the cost on prices that existed at `taken_at` only** — the whole leg
+set required to predate the instant we priced that fixture, not just the one
+matched leg:
+
+| book | n | dropped | coverage | band pp | band n | ROI | anomaly net |
+|---|---|---|---|---|---|---|---|
+| `matchbook` ᴱ | 218 | −153 | **13.3%** | 0.67 | 23 | −1.68% | +3.07 |
+| `betfair_ex_eu` ᴱ | 80 | −57 | **4.9%** | 0.70 | 28 | −8.04% | +3.04 |
+| `TheOddsAPI-pinnacle` | 135 | −92 | 8.2% | 2.77 | 31 | −11.74% | +0.97 |
+| `Pinnacle` | 835 | **0** | 50.9% | 3.69 | 3,006 | −4.74% | +0.05 |
+| `Bet365` | 1,110 | −271 | 67.7% | 4.72 | 3,368 | −5.28% | −0.98 |
+| `1xBet` | 987 | −271 | 60.2% | 5.77 | 2,972 | −5.23% | −2.03 |
+
+The stricter whole-leg-set rule now drops 271 from `Bet365` and `1xBet`,
+which the previous stage's single-leg check did not. Their band costs are
+unchanged, so the figures hold on the narrower set.
+
+### THE FINDING THAT DECIDES IT: THE ANOMALY'S BAND IS ONE WE CANNOT BET
+
+> **0 of 1,639 picks sit in the anomaly's 70–79% band, and none can.**
+
+| | |
+|---|---|
+| our picks | min **1.50**, median 1.58, max 3.49 |
+| our highest implied probability | **66.7%** |
+| the anomaly's band | **70–79% implied** (odds 1.266–1.429) |
+| picks in it | **0 of 1,639** |
+| the mechanism | **`betting.min_odds: 1.50`** in `config/config.yaml` |
+
+**THE EMPTINESS WAS ALREADY KNOWN. THE MECHANISM IS WHAT IS NEW.** The FLB
+pre-registration (`docs/flb-preregistration.md`, committed `11fde2f` before
+looking) recorded the 70–79% and 80–89% bands as **`n=0, INSUFFICIENT`** and
+**predicted it before the query**, attributing it to *"our avg taken odds of
+~1.6 put the mass in the middle"*. That reading makes the emptiness a
+property of where our prices happen to fall — a thin sample, which more data
+could fill.
+
+> **It is not a thin sample. It is a gate.** `min_odds` is a **registered
+> gate** — `gate_registry.py`: *"removes selections priced below
+> betting.min_odds (1.50)"* — with the stated reason *"Skip very short prices
+> — too little margin for model error"*. A price floor is a **ceiling on
+> implied probability**: 1/1.50 = 66.7%, and the anomaly starts at 70%. The
+> two are **disjoint by 3.3 points of implied probability**, by design, and
+> the design predates every stage that has measured against that band.
+>
+> So the band is not under-populated, it is **unreachable**: no amount of
+> further collection and no change of venue can put a pick in it. That is the
+> difference between "we need more data" and "this is out of scope by
+> configuration", and only the second one closes the line of work.
+
+> **So harvesting the documented anomaly is NOT a pricing change. It needs a
+> different SELECTION — a lower `min_odds` and whatever follows from betting
+> prices the config was set up to refuse — and nothing measured here says
+> anything about whether that would work.**
+
+The test derives this from the **live config file**, so moving the floor fails
+the assertion rather than silently invalidating the finding.
+
+**THIS DOES NOT RETRACT THE PREVIOUS ENTRY, IT LOCATES IT.** Yesterday's three
+lines were internally consistent: a band-specific inefficiency netted against
+band-specific costs, correctly converted at the band's own odds. They answer
+*"could someone harvest this at these venues"*. They do not answer *"can we"*,
+and the second question has a different answer because of a config key neither
+entry had looked at.
+
+### `COVERAGE` — and what the covered subset is ABOUT
+
+Current pick rate: **23.41 picks/day** (1,639 over 70 days, measured). The
+recorded power figure is `n = 525 picks = 28 days` to detect the −5.68% → +3%
+move, i.e. 18.75 picks/day, rescaled here by coverage:
+
+| policy | coverage | picks/day | **days to n=525** |
+|---|---|---|---|
+| `Bet365` | 84.3% | 19.73 | **27** |
+| `Pinnacle` | 50.9% | 11.93 | **44** |
+| `matchbook`, all | 22.6% | 5.30 | 99 |
+| `matchbook`, **takeable only** | **13.3%** | 3.11 | **169** |
+| `betfair_ex_eu`, all | 8.4% | 1.96 | 268 |
+| `betfair_ex_eu`, **takeable only** | **4.9%** | 1.14 | **459** |
+
+**IS THE COVERED SUBSET A RANDOM FIFTH? NO — IT IS A DIFFERENT POPULATION.**
+
+| market | full record | `matchbook` | `betfair_ex_eu` |
+|---|---|---|---|
+| `over_under` | 35.6% | **64.7%** | — |
+| `team_goals` | 19.3% | **ABSENT** | **ABSENT** |
+| `double_chance` | 16.5% | **ABSENT** | **ABSENT** |
+| `1X2` | 11.7% | 35.3% | **100%** |
+| `btts` | 9.3% | **ABSENT** | **ABSENT** |
+| `draw_no_bet` | 7.5% | **ABSENT** | **ABSENT** |
+
+> **The four markets no exchange quotes hold 52.6% of our picks.** Matchbook
+> prices only `over_under` and `1X2`, and over-weights `over_under` by 1.8×;
+> Betfair Exchange prices **nothing but `1X2`**. So an exchange-only policy is
+> not our strategy at a better price — it is a **different, narrower strategy**,
+> and any ROI measured on it would be about that strategy.
+
+Leagues are closer: 25 of 30 present, with Europa/Conference League
+under-represented (5.3% → 1.3%, 4.8% → 1.1%) and England League Two
+over-represented (4.6% → 9.7%).
+
+Band composition of the covered subsets: **0.0% in the anomaly's band**,
+everywhere, before and after the takeability restriction — because the floor
+excludes it globally.
+
+### `ARITHMETIC` — three lines, then the fourth that is about us
+
+the anomaly: **3.74pp** — *external, Footiqo, 2025/26, ONE bookmaker (1xBet),
+five leagues, n=134 at 70–79%*
+
+| | cost | coverage | commission | **net** |
+|---|---|---|---|---|
+| **1.** current policy | 4.70pp | 100% | none | **−0.96pp** |
+| **2.** cheapest takeable bookmaker — `Pinnacle` | 3.69pp | 50.9% | none | **+0.05pp** |
+| **3.** exchange — `matchbook`, takeable prices only | 0.67pp | **13.3%** | +0.40pp @2% | **+2.68pp** |
+| | | | +1.20pp @6% | +1.87pp |
+
+**All three lines are in a band we hold zero picks in.** So the fourth line is
+the only one about prices we actually take — and it has **no documented
+inefficiency to net against**, because none exists for our band:
+
+| venue | our cost pp | +comm @2% | all-in | coverage | **vs policy** |
+|---|---|---|---|---|---|
+| `matchbook` ᴱ | 0.65 | 0.50 | **1.15** | 13.3% | **+2.55pp** |
+| `betfair_ex_eu` ᴱ | 0.73 | 0.49 | 1.22 | 4.9% | +2.48pp |
+| `TheOddsAPI-pinnacle` | 1.98 | — | 1.98 | 8.2% | +1.72pp |
+| **`Pinnacle`** | **2.53** | — | **2.53** | **50.9%** | **+1.17pp** |
+| **CURRENT POLICY** | **3.70** | — | 3.70 | 100% | — |
+| `Bet365` | 4.17 | — | 4.17 | 67.7% | −0.47pp |
+| `1xBet` | 4.32 | — | 4.32 | 60.2% | −0.62pp |
+
+> **A COST SAVING IS NOT AN EDGE.** These are reductions in what we pay, not
+> inefficiencies we collect. **The largest one that is ESTABLISHED is
+> Pinnacle's 1.17pp on 50.9% of picks** — no commission, no later writes,
+> prices that existed when we priced the fixture, and 835 picks behind it.
+> It is also smaller than the +3% target needs, so it is a cost result and
+> not a profitability result.
+>
+> And the current policy is **not** the worst available: `Bet365` and `1xBet`,
+> the two best-covered books, are **dearer** than the median we take. So
+> "switch to one book" is a trade, not a free win.
+
+### THE VENUES — Niki's question. Listed, and stopped.
+
+Whether each is licensed and usable from Bulgaria is **his** determination,
+not a measurement, and nothing here researches it. What each would require:
+
+| venue | what it would require |
+|---|---|
+| **Matchbook** | an account; 2% on net winnings per market (standard rate, not directly verified); it prices **only `over_under` and `1X2`**, so 52.6% of our picks are unpriceable there; **depth unknown** |
+| **Betfair Exchange** | an account; commission = winnings × Market Base Rate, **EU rate not established** (6% is the AU schedule); it prices **`1X2` only**; **depth unknown**; a Points discount would reduce the rate |
+| **Pinnacle** | an account; **no commission**; 50.9% coverage with 0 later writes; the only option here whose **1.17pp saving is established** on prices that existed at pick time |
+
+> **A cost from a venue he cannot reach would be the best-line error for the
+> third time.** So the reachable set is the input, not the output, and the
+> arithmetic above is laid out per venue so that his answer selects a line
+> rather than needing a new measurement.
+
+### WHAT THIS STAGE DID NOT DO
+
+Adopted nothing. No venue selected, no account opened, no config touched —
+**`betting.min_odds` stays 1.50** and is read live by the test rather than
+copied. No threshold moved, no credits spent, no registered statistic altered.
+ρ=0.42, σ, `TARGET_N`, the derived floor, the 168-credit reservation,
+`FULL_CARD_PICKS_MAX = 40.35` and `PICKS_BOUND_AT_S519_DECISION = 88.1` all
+unchanged. `cohort_status.py` reads `s5.19 / cdec29`. Invariant 6b untouched.
+
+### THREE RATCHETS FIRED ON THIS STAGE'S OWN WORK, ALL FIXED NOT RAISED
+
+* **raw-match backlog 48→49.** My schema control asserted `"liquidity" not
+  in body` over the raw text of `models.py` — a negative raw-text assertion,
+  which is the class the ratchet exists to refuse, because a comment
+  mentioning the word would satisfy it. Rewritten to **parse** the `Odds`
+  class and enumerate its `Column` names. `code_of` is the register's usual
+  instrument but importing it from `tests.conftest` would recruit this file
+  into the **capture gate**, and parsing is immune to both problems. Backlog
+  back to 48.
+* **external host set grew by two.** `www.betfair.com.au` and
+  `insights.matchbook.com` now appear in `src/`-or-`scripts/` text — as
+  **citations in a constant**, because hard rule 1 requires a commission to
+  carry its URL. **Neither is a request target**: the pages were read once,
+  by hand. Declared with that reason, the same standing as the
+  `football-data.org` sign-up page already in the set.
+* **a script reaching `get_db()` without `.env` in its own text.**
+  `exchange_terms.py` loads the environment correctly — `measure()` calls the
+  shared `_load_env`, inside the function, never at import. But
+  `test_dialect_is_asserted` looks for `.env` in **the file's own text** and
+  **cannot see a loader behind an import**.
+
+> **A REGISTERED BLIND SPOT, not a cleared one.** That predicate passes any
+> script whose loader is imported and would pass one that imported nothing at
+> all under a different name. It is textual by design and cheap, and the
+> incident it guards (an import-time `load_dotenv` reaching production) is
+> real. Recorded here rather than loosened; the module docstring now states
+> the precondition, which a reader of that file needed anyway.
+
+*Recorded 2026-11-06. `scripts/exchange_terms.py`,
+`tests/test_exchange_terms.py` (both new, 17 tests). Census 148→149,
+non-gating 1023→1040, gate unchanged at 1732.*

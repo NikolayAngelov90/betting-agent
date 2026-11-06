@@ -191,6 +191,31 @@ _SNAPSHOT_READERS = {
         "the PNC-1 detector. It records `odds_snapshots` as the KIND T "
         "instance it was built to find - 47 days written and unread - and "
         "reads the SCHEMA, never the rows. No session, no prediction"),
+    # the COST STAGE, 2026-11-06. It names the table in ONE printed f-string,
+    # to tell the reader that its freshness measurement does NOT come from the
+    # snapshot history -- it comes from `pick_observations.taken_at` against
+    # `odds.timestamp`. So the mention exists to state a NON-dependency.
+    #
+    # EIGHTEENTH INSTANCE of the comment-blind class, in a variant neither
+    # `_code_lines` nor `code_of` can reach: prose inside a STRING LITERAL in
+    # executable code. `code_of` correctly strips comments and docstrings, and
+    # correctly keeps string literals -- a raw-SQL reader hides there -- so
+    # this is not a stripper bug and the predicate is not loosened for it.
+    # Declared instead, which is exactly how `pick_resend.py` was handled.
+    "cost_by_book.py": (
+        "names the table in one print, to say its freshness figures come "
+        "from pick_observations.taken_at and NOT from the snapshot history; "
+        "issues no query against it, opens no session, feeds no prediction"),
+    # the EXCHANGE-TERMS stage, 2026-11-06. It names the table in
+    # `SIZE_FIELDS_SEARCHED`, the list of every place it looked for an
+    # available-size field before reporting there is none. The mention is
+    # there to make an ABSENCE claim checkable: "no size field" is
+    # unfalsifiable unless the search says where it looked. Same standing as
+    # `pick_resend.py`'s CENSUS_TABLES -- the table is named to be checked,
+    # not read. No query, no session, no prediction.
+    "exchange_terms.py": (
+        "names the table in SIZE_FIELDS_SEARCHED, to record that it was "
+        "searched for an available-size column and has none"),
     # the RESEARCH consumer, wired 2026-10-10
     "h1_collection_check.py": (
         "H1's analysis. It MEASURES the price path; it does not feed a "
