@@ -290,15 +290,45 @@ def test_the_PROJECTION_RESOLVED_and_its_FIT_IS_STILL_RECORDED():
     P = PICKS_SERIES_PROJECTION
     assert P["r_squared"] == 0.451, "the fit that produced the date is gone"
     assert P["measured_n"] >= 10 and P["verdict"] == "REACHED", P
-    # the outcome must be checkable against the live series, not just stored
+    assert P["projected"].startswith("n >= 10") and P["measured_on"] == P[
+        "projected"].split("by ")[1], (
+        "the projection and its measurement date disagree, so 'REACHED' is "
+        "not a statement about the date that was projected")
+    # NO LIVE READ HERE -- see the `live` test below for why.
+
+
+@pytest.mark.live
+def test_LIVE_the_PROJECTION_OUTCOME_still_holds_against_the_series():
+    """SPLIT OUT OF THE GATE 2026-11-06, and that split is the whole point.
+
+    The assertion below calls `parallel_regime_picks_series()`, which reads
+    LIVE run history through `gh run list` and per-run `git show <sha>`. The
+    test above is `capture_critical` and carries no marker, so for the few
+    minutes this call lived in it, **it ran inside the capture gate** --
+    where `daily-picks` checks out at the DEFAULT `fetch-depth: 1`, every sha
+    but HEAD is unreadable, the series reads n=0, and the gate FAILS.
+
+        A live-reading test in the capture gate loses the day card.
+        Three occurrences before this one; this would have been the fourth,
+        and I wrote it.
+
+    It was caught by measuring which selections reach a per-run-history
+    reader, not by a run -- see
+    `tests/test_two_consumers_read_one_input.py`, which now makes that a
+    standing check.
+    """
     import scripts.ci_audit as _ci
+
+    P = PICKS_SERIES_PROJECTION
     live = _ci.parallel_regime_picks_series()
-    assert live["n"] >= _ci.MIN_N_TO_REDERIVE_PICKS_BOUND, (
-        f"the series is n={live['n']}, below "
-        f"{_ci.MIN_N_TO_REDERIVE_PICKS_BOUND}. A series that SHRANK after "
-        f"being recorded as REACHED is a different event -- say which")
-    assert live["n"] >= P["measured_n"], (
-        f"the series fell from the recorded {P['measured_n']} to {live['n']}")
+    n = live.get("n")
+    assert n is not None and n >= _ci.MIN_N_TO_REDERIVE_PICKS_BOUND, (
+        f"the series is n={n}, below {_ci.MIN_N_TO_REDERIVE_PICKS_BOUND}. A "
+        f"series that SHRANK after being recorded as REACHED is a different "
+        f"event from one that never filled -- say which. If this is running "
+        f"somewhere with a shallow checkout, n=0 is 'could not look'")
+    assert n >= P["measured_n"], (
+        f"the series fell from the recorded {P['measured_n']} to {n}")
 
 
 # ── C: the tool and the documented rule cannot diverge again ────────────────

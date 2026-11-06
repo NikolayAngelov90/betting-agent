@@ -38,6 +38,23 @@ CLUSTERS = {
                          "mean_plus_3sd": 342.3},
 }
 
+#: ── THE DECISION RECORD, AND IT IS NOT THE LIVE CONSTANT. 2026-11-06. ─────
+#:
+#: Every assertion in this file that records WHY the weekday cron moved to
+#: `0 1` reads THIS, not `ci.FULL_CARD_PICKS_MAX`. The live constant was
+#: substituted forward on 2026-11-06 (88.1 -> 40.35, parallel regime, n=12);
+#: these assertions keep the figures the decision was actually made on
+#: (serial regime, n=4, measured 2026-10-01).
+#:
+#:     A DECISION'S RECORD KEEPS THE FIGURES THE DECISION WAS MADE ON.
+#:
+#: Re-pointing them at the live constant would make them assert an argument
+#: that was never made -- that `0 1` was chosen against a 40.35 bound, which
+#: would have implied a different cron. `tests/test_decision_record_is_not_a_
+#: live_constant.py` asserts the separation in both directions and swaps them
+#: as its known-wrong control.
+_S519 = ci.PICKS_BOUND_AT_S519_DECISION
+
 EXPECTED_CRON = {"weekday": 60, "weekend": 30}
 
 
@@ -66,14 +83,14 @@ def test_the_CRON_is_the_LATEST_that_clears_60_on_BOTH_pairings():
         floor = sd.observed_earliest_min(dtype, SUMMER)
         cap = min(
             floor - sd.MIN_ACCEPTABLE_MARGIN_MIN - c["max"]
-            - ci.FULL_CARD_PICKS_MAX,
+            - _S519["max"],
             floor - sd.MIN_ACCEPTABLE_MARGIN_MIN - c["mean_plus_3sd"]
-            - ci.FULL_CARD_PICKS_3SD)
+            - _S519["mean_plus_3sd"])
         assert EXPECTED_CRON[dtype] == int(math.floor(cap / 15) * 15), (
             dtype, cap)
         # and the NEXT boundary up must FAIL, or it is not the latest
         assert floor - (EXPECTED_CRON[dtype] + 15 + c["mean_plus_3sd"]
-                        + ci.FULL_CARD_PICKS_3SD) < \
+                        + _S519["mean_plus_3sd"]) < \
             sd.MIN_ACCEPTABLE_MARGIN_MIN, (
             f"{dtype}: a cron 15 minutes later also clears, so this is not "
             f"the latest")
@@ -151,9 +168,9 @@ def test_the_MARGIN_at_BOTH_FLOORS_clears_the_registered_minimum(key, expect):
     day = SUMMER if season == "summer" else WINTER
     c = CLUSTERS.get((dtype, "slow")) or CLUSTERS[(dtype, "all")]
     floor = sd.observed_earliest_min(dtype, day)
-    m_max = floor - (EXPECTED_CRON[dtype] + c["max"] + ci.FULL_CARD_PICKS_MAX)
+    m_max = floor - (EXPECTED_CRON[dtype] + c["max"] + _S519["max"])
     m_3sd = floor - (EXPECTED_CRON[dtype] + c["mean_plus_3sd"]
-                     + ci.FULL_CARD_PICKS_3SD)
+                     + _S519["mean_plus_3sd"])
     assert m_max == pytest.approx(expect[0], abs=0.1), (key, m_max)
     assert m_3sd == pytest.approx(expect[1], abs=0.1), (key, m_3sd)
     assert min(m_max, m_3sd) >= sd.MIN_ACCEPTABLE_MARGIN_MIN, (
@@ -185,9 +202,9 @@ def test_the_MOVE_SPENDS_REAL_MARGIN_and_is_NOT_a_repair():
     floor = sd.observed_earliest_min("weekday", SUMMER)
 
     def binding(cron):
-        return min(floor - (cron + c["max"] + ci.FULL_CARD_PICKS_MAX),
+        return min(floor - (cron + c["max"] + _S519["max"]),
                    floor - (cron + c["mean_plus_3sd"]
-                            + ci.FULL_CARD_PICKS_3SD))
+                            + _S519["mean_plus_3sd"]))
 
     old, new_ = binding(0), binding(EXPECTED_CRON["weekday"])
     assert old == pytest.approx(130.4, abs=0.1), old
@@ -207,11 +224,11 @@ def test_the_POOLED_reading_is_the_ARTEFACT_that_made_it_look_like_a_repair():
     whole reason the per-cluster report exists.
     """
     floor = sd.observed_earliest_min("weekday", SUMMER)
-    pooled = floor - (0 + 442.3 + ci.FULL_CARD_PICKS_3SD)
+    pooled = floor - (0 + 442.3 + _S519["mean_plus_3sd"])
     assert pooled == pytest.approx(20.7, abs=0.3), pooled
     assert pooled < ci.MARGIN_ALARM_MIN
     slow = floor - (0 + CLUSTERS[("weekday", "slow")]["mean_plus_3sd"]
-                    + ci.FULL_CARD_PICKS_3SD)
+                    + _S519["mean_plus_3sd"])
     assert slow == pytest.approx(130.4, abs=0.1)
     assert slow - pooled == pytest.approx(109.7, abs=0.5), (
         "the pooled-versus-slow gap moved; it is the size of the artefact")
@@ -244,64 +261,63 @@ def test_the_REJECTED_CRON_is_a_BREACH_by_the_projects_OWN_instrument():
     floor = sd.observed_earliest_min("weekday", SUMMER)
     c = CLUSTERS[("weekday", "slow")]
     retained = floor - (REJECTED_CRON["weekday"] + c["mean_plus_3sd"]
-                        + ci.FULL_CARD_PICKS_3SD)
+                        + _S519["mean_plus_3sd"])
     assert retained == pytest.approx(10.4, abs=0.1), retained
     assert retained < ci.MARGIN_ALARM_MIN, (
         "the rejection's premise is gone: `0 2` no longer breaches, so "
         "re-open the decision rather than leaving it refused")
-    assert ci.FULL_CARD_PICKS_3SD == 107.0, (
+    assert _S519["mean_plus_3sd"] == 107.0, (
         "the retained picks constant moved; the rejection was argued against "
         "107.0 and must be re-argued")
 
 
 @pytest.mark.live
-def test_the_PARALLEL_bound_carries_its_n_which_is_ONE():
-    """The weakest input in the whole derivation, stated rather than buried."""
+def test_the_PARALLEL_bound_WAS_RE_DERIVED_and_the_RECORD_WAS_NOT():
+    """SATISFIED 2026-11-06. This was the reminder asking for the derivation.
+
+    It fired correctly at n=12 against `MIN_N_TO_REDERIVE_PICKS_BOUND`=10,
+    the substitution was authorised, and it is done -- FORWARD ONLY:
+
+        LIVE      max 40.35  mean+3sd 64.59  parallel, ALL-CARD, n=12,
+                  measured 2026-11-06
+        RECORD    max 88.1   mean+3sd 107.0  serial, FULL-CARD, n=4,
+                  measured 2026-10-01, used for the s5.19 cron decision
+
+    WHAT THIS NOW GUARDS is the pair, not the trigger: the live bound must be
+    the parallel one, the decision record must still hold the serial one, and
+    the series must not have shrunk below the n the substitution was made at.
+
+    THE EARLIER OVER-EAGER THRESHOLDS ARE KEPT IN THE RECORD. The first
+    version asserted `n in (None, 0, 1)` and failed the next day at n=2 -- a
+    reminder reporting that one more run had happened, which is not a
+    decision. The threshold became `MIN_N_TO_REDERIVE_PICKS_BOUND`, which is
+    the n at which the series can actually be re-derived.
+    """
     s = ci.parallel_regime_picks_series()
-    # ── IT FIRES AT n=10, NOT AT n=2. ────────────────────────────────────
-    #
-    # The first version asserted `n in (None, 0, 1)` and failed the next day
-    # at n=2 — a reminder reporting that one more run had happened, which is
-    # not a decision. The decision is due when the series can actually be
-    # RE-DERIVED, which is `MIN_N_TO_REDERIVE_PICKS_BOUND`. Same over-eager
-    # threshold as the series-reset reminder, made twice in two days.
-    # ── THE WORK IS DONE AND THE DECISION IS NOT MINE. 2026-11-06. ────────
-    #
-    # This reminder is LEFT RED on purpose. It fired correctly at n=12, the
-    # re-derivation was performed, measured, and then REVERTED, and the
-    # figures are recorded in `ci_audit.PREPARED_PICKS_BOUND` so the red is
-    # actionable rather than a request to start over.
-    #
-    # WHY IT WAS REVERTED. Substituting the bound is arithmetic on every
-    # margin (+47.75 on the max pairing), and it was checked against
-    # `schedule_deadline.py`, which references neither constant. That check
-    # was too narrow: the constants also feed the CRON DERIVATION, and the
-    # latest 15-minute boundary clearing the registered 60 moves 60 -> 105 on
-    # weekdays and 30 -> 60 at the weekend. TEN assertions in this file encode
-    # the ARGUMENT for the authorised `s5.19` move -- that it spends real
-    # margin, that the pooled reading was an artefact, that the rejected cron
-    # was a breach.
-    #
-    #     Re-deriving a bound is a MEASUREMENT.
-    #     Rewriting the recorded argument for an AUTHORISED decision is not.
-    #
-    # So it waits, and it waits VISIBLY: `reminders` red means a decision is
-    # due, and one is.
     n = s.get("n")
-    prepared = ci.PREPARED_PICKS_BOUND
-    assert n is None or n < ci.MIN_N_TO_REDERIVE_PICKS_BOUND, (
-        f"the parallel series has reached n={n} of "
-        f"{ci.MIN_N_TO_REDERIVE_PICKS_BOUND}. THE RE-DERIVATION IS ALREADY "
-        f"MEASURED AND PREPARED -- `ci_audit.PREPARED_PICKS_BOUND`: max "
-        f"{prepared['max']} (was {prepared['replaces']['max']}), mean+3sd "
-        f"{prepared['mean_plus_3sd']} (was "
-        f"{prepared['replaces']['mean_plus_3sd']}), n={prepared['n']} "
-        f"measured {prepared['measured']}. Applying it adds "
-        f"{prepared['margin_delta']['max_pairing']}m to every max-pairing "
-        f"margin and opens "
-        f"{prepared['cron_headroom_it_opens']['weekday']}m of weekday cron "
-        f"headroom. BLOCKED ON: {prepared['blocked_on']}. This red clears "
-        f"when that decision is taken, not by a measurement.")
+    assert n is not None and n >= ci.MIN_N_TO_REDERIVE_PICKS_BOUND, (
+        f"the parallel series is n={n}, below the "
+        f"{ci.MIN_N_TO_REDERIVE_PICKS_BOUND} the live bound was derived from "
+        f"on 2026-11-06 at n=12. A series that SHRANK after a substitution "
+        f"was made on it is a different event from one that never filled -- "
+        f"say which, and re-derive or revert")
+
+    # the LIVE bound is the parallel one, and it tracks the live series
+    assert ci.FULL_CARD_PICKS_MAX == pytest.approx(40.35), (
+        f"the live picks bound is {ci.FULL_CARD_PICKS_MAX}, not the 40.35 "
+        f"substituted on 2026-11-06")
+    assert ci.FULL_CARD_PICKS_MAX == pytest.approx(s["max"], abs=0.01), (
+        f"the live bound {ci.FULL_CARD_PICKS_MAX} has drifted from the live "
+        f"series max {s['max']:.2f}; re-derive it or say why it is pinned")
+
+    # and the DECISION RECORD is untouched by any of that
+    assert _S519["max"] == 88.1 and _S519["mean_plus_3sd"] == 107.0, (
+        "the s5.19 decision record moved. It records the inputs to a decision "
+        "taken on 2026-10-22 and cannot be re-taken retroactively")
+    assert _S519["superseded_by"]["max"] == pytest.approx(
+        ci.FULL_CARD_PICKS_MAX), (
+        "the record's `superseded_by` no longer names the live bound, so a "
+        "reader cannot get from the historical figure to the current one")
 
 
 # ── PART C: the series reset, as a COST ──────────────────────────────────
@@ -463,9 +479,9 @@ def test_the_BREACH_CLEARED_BY_A_MEASUREMENT_CORRECTION_not_the_pipeline():
     """
     pooled_3sd = 442.3           # the series the old margin used
     before = sd.RETIRED_OBSERVED_EARLIEST_UTC_MIN["weekday"] - (
-        0 + pooled_3sd + ci.FULL_CARD_PICKS_3SD)
+        0 + pooled_3sd + _S519["mean_plus_3sd"])
     after = sd.observed_earliest_min("weekday", WINTER) - (
-        0 + pooled_3sd + ci.FULL_CARD_PICKS_3SD)
+        0 + pooled_3sd + _S519["mean_plus_3sd"])
     assert before == pytest.approx(20.7, abs=0.3)
     assert after == pytest.approx(80.7, abs=0.3)
     assert after - before == pytest.approx(60.0, abs=0.1), (

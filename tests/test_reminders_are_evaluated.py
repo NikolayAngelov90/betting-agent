@@ -78,7 +78,14 @@ REMINDERS = {
     # adding reminders without raising it. The registry is the selection, not
     # a subset of it.
     "tests/test_cron_moved.py": [
-        "test_the_PARALLEL_bound_carries_its_n_which_is_ONE",
+        # RENAMED 2026-11-06: the reminder was SATISFIED. It asked for the
+        # picks-bound re-derivation, the substitution was authorised and
+        # made FORWARD ONLY, and the test now guards the pair -- the live
+        # bound is the parallel one, the s5.19 decision record still holds
+        # the serial one. Both this entry and the marker scan FAILED on
+        # the rename before being updated, which is how a name-keyed
+        # registry is shown not to be vacuous.
+        "test_the_PARALLEL_bound_WAS_RE_DERIVED_and_the_RECORD_WAS_NOT",
         "test_the_SERIES_RESET_is_recorded_as_a_COST_with_the_new_date"],
     # ── 9 -> 10 ON 2026-10-23, THE SECOND TIME IN TWO DAYS. ──────────────
     #

@@ -84,6 +84,16 @@ def _classify():
 #: The shape the dialect and marker exemptions already use: a site that must
 #: match RAW text declares it here and says why. Prose is in scope for these.
 EXEMPT = {
+    # ── ADDED 2026-11-06, SAME SHAPE AS THE CHAT-SEAL EXEMPTION ABOVE ────
+    "test_decision_record_is_not_a_live_constant.py::"
+    "test_DIRECTION_2_the_LIVE_MARGIN_PATH_READS_ONLY_THE_LIVE_CONSTANT":
+        "it asserts over an AST-derived set of Name/Attribute identifiers "
+        "from `schedule_deadline`, not over source text, so comments and "
+        "docstrings cannot reach the comparison -- which matters because "
+        "this file's own commentary names both constants. `code_of` is the "
+        "usual remedy and is WRONG here: importing `tests.conftest` drags "
+        "the file into the CAPTURE GATE, and a test about a decision record "
+        "must not be able to stop price capture.",
     "test_source_echo_is_stripped.py::"
     "test_CONTROL_3_a_digit_run_inside_a_longer_one_is_not_a_literal":
         "its subject IS a raw-text scan: it asserts the word boundary that "

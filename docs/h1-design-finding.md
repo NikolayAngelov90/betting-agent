@@ -126,3 +126,78 @@ of 33 are untouched. `H1 WINDOW FAILED` stands and is not extended.
 *The next window's pre-registration must state, before collection: which
 market families it requests, why, and the measured (league, family) cost of
 that choice.*
+
+---
+
+# H1 COVERAGE REGISTERED — the binding constraint is MARKET COVERAGE
+
+**Registered 2026-11-06.** The first thing a December-or-later design must
+settle. Not timing, not the band.
+
+## The four families, named
+
+`measured` 2026-11-06, grain=PICK over 2,795 non-consolidated picks, and
+grain=SERIES over the closed window 2026-11-01..11-09:
+
+| family | picks | share | series in window | **series with >=3 instants** | max instants |
+|---|---|---|---|---|---|
+| `team_goals` | 460 | 16.5% | 3,880 | **0** | **1** |
+| `double_chance` | 289 | 10.3% | 674 | **0** | **1** |
+| `btts` | 280 | 10.0% | 452 | **0** | **1** |
+| `draw_no_bet` | 171 | 6.1% | 226 | **0** | **1** |
+| — | | | | | |
+| `over_under` *(requested)* | 1,068 | 38.2% | 5,766 | 644 | 5 |
+| `1X2` *(requested)* | 527 | 18.9% | 7,458 | 1,446 | 5 |
+
+> **The data for all four EXISTS and can never form a trajectory.** Every one
+> of those 5,232 series carries **exactly one** instant — written once per
+> fixture by the daily `--update` — against a requirement of three, >=30 min
+> apart, pre-kickoff. Avg instants 1.00, max 1. Zero qualifying series, and no
+> choice of band, start time or vocabulary changes that.
+
+So the absence is not an absence of data. It is an absence of *repeated*
+observation, and only H1 requesting those markets itself produces it.
+
+## The reachable ceiling for a pick-following design: 57.1%
+
+**1,595 of 2,795 picks** are in the two families H1 requests. That is the
+ceiling **before any other constraint** — before the band, before the
+kickoff-distance filter, before the per-match cap. A pick-following collector
+that follows the card's keys perfectly still cannot see 42.9% of the card.
+
+## What requesting them would cost
+
+H1's credit formula, from `h1-collect.yml`:
+`credits = rounds x leagues x markets x 2`.
+
+`measured` 2026-11-04, the window's only real collection day: **26 credits**
+for 2 leagues x 2 markets x 3 rounds.
+
+| design | markets | credits/day | over an 8-day window |
+|---|---|---|---|
+| deployed | 2 | **26** | ~208 |
+| six families | 6 | **~78** | **~624** |
+
+**Against a 168-credit reservation that is ~3.7x over.** So the six-family
+design does not fit the current allocation at the current league count: one of
+the window length, the league count or the reservation has to move, and which
+one is a decision with its own trade.
+
+*A shorter window costs power; fewer leagues costs supply — and this window
+already failed on supply (band-eligible fixtures 10, then 0, 1, 0, 0). Those
+two are not interchangeable and the next pre-registration must say which it
+spends.*
+
+## Why this ranks ahead of timing and the band
+
+Both of those were tested and are not binding:
+
+* **timing** — the collector has never run before the card. `daily-picks`
+  completed 07:28Z and the real instants were 14:11/14:32/16:35/18:38,
+  **4h43m to 11h10m after** the card existed.
+* **the band** — it currently filters by league; a pick-following design makes
+  it a pure kickoff-distance filter, which is a loosening.
+
+**Market coverage is the only one of the three that caps the result no matter
+what else is chosen.** It must be settled first, with its credit cost stated,
+before a December window is sized.

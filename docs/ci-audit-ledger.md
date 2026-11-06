@@ -36286,3 +36286,182 @@ time in this stage.
 `tests/test_reminders_are_evaluated.py`, `tests/test_margin_acknowledged.py`,
 `tests/test_two_margins.py`, `tests/test_cron_moved.py`,
 `tests/test_no_secrets_in_repo.py`, `docs/h1-design-finding.md` (new).*
+
+---
+
+## 2026-11-06 (II) — `SUBSTITUTED`, AND THE 45 MINUTES ARE KEPT
+
+`SUBSTITUTED` · `HEADROOM KEPT` · `REDS DRIVEN` · `H1 COVERAGE REGISTERED`
+
+### `SUBSTITUTED` — forward only, and the argument keeps its own numbers
+
+The live margin computation takes the re-derived bound. The assertions
+recording the `s5.19` cron decision keep the figures that decision was made
+on.
+
+| | max | mean+3sd | regime | n | measured |
+|---|---|---|---|---|---|
+| **LIVE** `FULL_CARD_PICKS_MAX/3SD` | **40.35** | **64.59** | parallel, ALL-CARD weekday | **12** | 2026-11-06 |
+| **RECORD** `PICKS_BOUND_AT_S519_DECISION` | **88.1** | **107.0** | serial, FULL-CARD weekday | 4 | 2026-10-01 |
+
+> **A DECISION'S RECORD KEEPS THE FIGURES THE DECISION WAS MADE ON.**
+> Re-pointing those thirteen reads at the live constant would make them assert
+> an argument that was never made — that `0 1` was chosen against a 40.35
+> bound, which would have implied a *different* cron (the latest boundary
+> clearing 60 moves 60 → 105 weekday under the new bound).
+
+**13 reads across 6 argument-recording tests** now go through
+`_S519`; the record carries its own `date`, `regime`, `n`, `used_for` and
+`superseded_by`, so a reader can get from the historical figure to the live
+one without either being mistaken for the other.
+
+**THE SWAP CONTROL.** `tests/test_decision_record_is_not_a_live_constant.py`
+asserts both directions — the argument reads only the record, and
+`ci_audit`'s margin path reads only the live constant — and then **swaps them
+and requires the failure**. Both directions catch it: all six argument tests
+are flagged when the reads are exchanged, and a planted record-read inside
+`ci_audit` is found. It also refuses to run at all if the two figures ever
+agree, because an agreeing pair makes every separation assertion vacuous.
+
+### BOTH MARGINS, BEFORE AND AFTER — three quantities, three floors
+
+Each against its own floor, with its own n. `measured` 2026-11-06.
+
+| quantity | floor it is measured against | n | before | after |
+|---|---|---|---|---|
+| **schedule** weekday (pooled) | derived deadline 630 (10:30) | lag 11 | **−7m** | **+35m** |
+| **schedule** weekend (pooled) | derived deadline 600 (10:00) | lag 4 | **+10m** | **+53m** |
+| **structural** weekday | observed earliest LOCAL kickoff **750** (12:30), n=718 weekday days | lag 11 | **−39.306530** | **−39.306530** |
+| **structural** weekend | observed earliest LOCAL kickoff **720** (12:00), n=375 weekend days | lag 4 | **−59.407508** | **−59.407508** |
+
+**The structural deficits are byte-identical**, because
+`schedule_deadline.py` references neither picks constant — verified, not
+assumed. The substitution moved the schedule margin and left the structural
+floor exactly where it was.
+
+*That is the conflation undone: one quantity is measured against a deadline we
+derive, the other against a kickoff that is a fact about football. They were
+never in contradiction; they were never the same measurement.*
+
+`cohort_status.py`: **`s5.19` / `cdec29`, unmoved.** A measurement constant, not
+a policy.
+
+### `HEADROOM KEPT` — 45 minutes, not spent, and the n that would release it
+
+Substituting the bound moved the latest 15-minute cron boundary that clears the
+registered 60 from **60 → 105** weekday and **30 → 60** weekend.
+`HEADROOM_NOT_SPENT` records it unspent.
+
+> **Headroom against a breached floor is not surplus.** The schedule margin
+> cleared; the structural margin did not move at all, and is still short by
+> 39.3 and 59.4 minutes.
+
+**WHEN SPENDING IT BECOMES A MEASURED DECISION.** The bound is `mean+3sd`, whose
+registered successor is p95, and `quantile_is_usable(n, p)` is
+`n >= 5/(1-p)` → **n ≥ 100**. At n=11 with max 389.75 neither statistic is
+supported: the tail is unbounded by the data.
+
+Projected from the **measured** arrival rate, the way the duration constant's
+n=10 trigger was registered:
+
+| | n now | rate (measured) | n ≥ 100 arrives |
+|---|---|---|---|
+| weekday | 11 | **5.50 /week** (2026-10-23..11-06, span 14d) | **2027-02-27** |
+| weekend | 4 | **3.50 /week** (2026-10-24..11-01, span 8d) | **2027-05-17** |
+
+**No cron change in this stage, and none before that n.** A trade taken on a
+tail the data cannot bound is the `0 4` selection again — chosen from another
+cron's spread, and breached on arrival.
+
+### THREE ENTRIES
+
+> **A decision's record keeps the figures the decision was made on.** The
+> constant is re-derived forward; the argument keeps its own numbers with their
+> date, regime and n. Asserted in both directions, with a swap control,
+> because "they are separate" is unfalsifiable otherwise.
+
+> **Two consumers reading one input on one commit are a free control.**
+> `reminders` read **n=0** while `ci-audit` read **n=11**, same commit, same
+> minute, same API, for **sixteen days**. *Neither figure looked wrong alone* —
+> n=0 is a legitimate value for a series and so is n=11. Only the pair said
+> anything. Now a standing check:
+> `tests/test_two_consumers_read_one_input.py`.
+
+> **A sizing recorded once has aged.** `87/31/9` re-measured as
+> **`274/61/7`** — 3.1× and 2.0× — and **51 of the 61** assertions encode facts
+> a future attempt needs. The guard that refused to re-acknowledge on stale
+> numbers is what forced the re-measurement; without it the deferral would have
+> been renewed against a figure that had tripled.
+
+### AND THE STANDING CHECK CAUGHT ONE OF MINE IMMEDIATELY
+
+Measuring which selections reach a per-run-history reader found a live call I
+had just written into `test_contamination_and_margin.py` — a
+`capture_critical` file with **no marker**, i.e. **inside the capture gate**,
+where `daily-picks` checks out shallow, the series reads n=0, and the gate
+FAILS.
+
+> **A live-reading test in the capture gate loses the day card. There had been
+> three occurrences. That would have been the fourth, and I wrote it.**
+
+It was split before it ever ran: the static half (the recorded fit) stays in
+the gate, the live half is `live`-marked. The check's predicate counts a caller
+only when it does NOT stub `_sh` — a stubbed caller never touches live history,
+and counting those would have flagged `non-gating`'s four and buried the real
+signal. Measured: **GATE 0, reminders 4 (depth 0), non-gating 0 unstubbed of 4.**
+
+### DISCIPLINE
+
+Gate **1732 passed**, unchanged, and `capture_critical` unchanged at **78**
+for the third time in two days. Non-gating 983 -> **997**; census files
+144 -> 146, not_critical 66 -> 68 — both new files non-critical *by
+construction*, because each would be wrong inside the gate it measures.
+
+Four ratchets fired on my own work and all four were **fixed rather than
+raised**: the PNC scan (a `HEADROOM_NOT_SPENT` with no consumer — now one), the
+raw-match backlog (one site converted to an AST name-set comparison, one
+declared with a reason against a cap of 4 that is *the point*), the unguarded
+matcher backlog (both sites anchored on a size, which is a real guard and not a
+loophole), and the gate census.
+
+`ci-audit` exits **0**. `s5.19 / cdec29` unmoved.
+
+### `H1 COVERAGE REGISTERED` — the binding constraint is market coverage
+
+`docs/h1-design-finding.md`. The four families H1 never requests, and what is
+actually wrong with them:
+
+| family | picks | share | series in window | **with ≥3 instants** | max instants |
+|---|---|---|---|---|---|
+| `team_goals` | 460 | 16.5% | 3,880 | **0** | **1** |
+| `double_chance` | 289 | 10.3% | 674 | **0** | **1** |
+| `btts` | 280 | 10.0% | 452 | **0** | **1** |
+| `draw_no_bet` | 171 | 6.1% | 226 | **0** | **1** |
+
+> **The data exists and can never form a trajectory.** All 5,232 series carry
+> **exactly one** instant — written once per fixture by the daily `--update` —
+> against a requirement of three, ≥30 min apart, pre-kickoff. Avg 1.00, max 1,
+> zero qualifying. No band, start time or vocabulary changes that; only H1
+> requesting those markets itself does.
+
+**Reachable ceiling for a pick-following design: 57.1%** — 1,595 of 2,795
+picks — *before* the band, the kickoff filter or the per-match cap.
+
+**Cost.** `credits = rounds × leagues × markets × 2`; `measured` 2026-11-04 at
+**26 credits/day** for 2 leagues × 2 markets × 3 rounds.
+
+| design | markets | credits/day | over 8 days |
+|---|---|---|---|
+| deployed | 2 | 26 | ~208 |
+| six families | 6 | **~78** | **~624** |
+
+**~3.7× the 168-credit reservation.** So one of the window length, the league
+count or the reservation must move — and that is a trade, not an arithmetic
+consequence. A shorter window costs power; fewer leagues costs supply, and this
+window already failed on supply (band-eligible fixtures 10, then 0, 1, 0, 0).
+
+Timing and the band were both tested and are **not** binding: the collector has
+never run before the card (4h43m–11h10m after it), and a pick-following band is
+a loosening. **Market coverage is the only one of the three that caps the result
+regardless of what else is chosen, so it is the first thing a December design
+must settle.**

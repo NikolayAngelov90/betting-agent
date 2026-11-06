@@ -98,10 +98,31 @@ def test_the_PROFILE_carries_its_n_and_does_NOT_pool_two_populations():
 
     import scripts.ci_audit as ci
 
-    # the registered upper bound is untouched by profiling
-    assert ci.FULL_CARD_PICKS_MAX == 88.1, (
-        "profiling changed the registered time-to-picks bound; profiling "
-        "changes nothing (rule 4) and the bound is n=4 from 2026-10-01")
+    # ── PROFILING STILL CHANGES NOTHING. RESTATED 2026-11-06. ────────────
+    #
+    # This asserted `FULL_CARD_PICKS_MAX == 88.1`. The live bound moved to
+    # 40.35 on 2026-11-06 -- NOT by profiling, which is what this test
+    # guards, but by an AUTHORISED substitution onto the parallel regime
+    # (n=12, measured 2026-11-06), executing `REDERIVE_PICKS_BOUND_PLAN`.
+    #
+    # The guarantee is unchanged and is now checked where it belongs: the
+    # n=4 figure survives untouched in the DECISION RECORD, and the live
+    # bound carries the substitution's own n and regime. Profiling could
+    # move neither.
+    rec = ci.PICKS_BOUND_AT_S519_DECISION
+    assert rec["max"] == 88.1 and rec["n"] == 4, (
+        "the n=4 time-to-picks bound moved in the decision record; profiling "
+        "changes nothing (rule 4) and that figure is from 2026-10-01")
+    assert rec["measured"] == "2026-10-01" and "SERIAL" in rec["regime"]
+    # and the LIVE bound is the substituted one, with ITS n -- not a profile
+    assert ci.FULL_CARD_PICKS_MAX == pytest.approx(40.35), (
+        f"the live bound is {ci.FULL_CARD_PICKS_MAX}; expected the 40.35 "
+        f"substituted on 2026-11-06")
+    assert rec["superseded_by"]["n"] == 12, (
+        "the live bound's n is not recorded beside the figure it replaced")
+    # THE TWO POPULATIONS ARE STILL NOT POOLED, which is this test's subject
+    assert rec["n"] != rec["superseded_by"]["n"], (
+        "the two populations now report one n, so they have been merged")
 
 
 def test_the_REGISTERED_60_and_the_8_4_RESIDUAL_are_UNTOUCHED():

@@ -1143,8 +1143,12 @@ STRUCTURAL_ACK = {
         "why": ("the floor IS the observed earliest LOCAL kickoff (12:30, "
                 "n=718 weekday days, measured 2026-10-22) so no deadline "
                 "choice clears it, and the binding term is GitHub's "
-                "scheduler lateness: n=10 UNIMODAL under `0 1`, mean 332.3 "
-                "sd 40.7 max 389.75, measured 2026-11-06. The duration term "
+                "scheduler lateness: n=11 UNIMODAL under `0 1`, mean 337.4 "
+                "sd 42.1 max 389.75, measured 2026-11-06 (the entry first "
+                "carried the n=10 figures 332.3/40.7 from earlier the same "
+                "day, beside a lag_n of 11 -- an internal inconsistency in "
+                "my own record, restated rather than left to drift). The "
+                "duration term "
                 "(mean 26.5, max 40.35, n=12 parallel regime) is small "
                 "beside it"),
         "action": ("the only levers that move a 332-minute lateness term are "
@@ -1216,6 +1220,55 @@ STRUCTURAL_ACK = {
 #: itself (margin +53.0 against a required 60 is a deficit of -7.0). Stated
 #: because the previous acknowledgement stored a figure whose convention a
 #: reader had to infer.
+
+
+#: ── THE 45 MINUTES ARE KEPT, NOT SPENT. 2026-11-06, AUTHORISED. ──────────
+#:
+#: Substituting the picks bound moved the latest 15-minute cron boundary that
+#: clears the registered 60 from 60 to 105 on weekdays and from 30 to 60 at
+#: the weekend. THAT HEADROOM IS NOT SURPLUS AND IS NOT SPENT.
+#:
+#: WHY NOT. The schedule margin cleared (weekday -7 -> +35, weekend +10 ->
+#: +53) but the STRUCTURAL margin did not move at all -- byte-identical
+#: deficits of -39.306530 (weekday) and -59.407508 (weekend), because
+#: `schedule_deadline` references neither picks constant. A floor is still
+#: breached by 39 and 59 minutes; headroom measured against a different floor
+#: is not a surplus to give away.
+#:
+#: WHEN SPENDING IT BECOMES A MEASURED DECISION. The bound is `mean+3sd` over
+#: the lateness series, and `mean+3sd` is conservative by accident: its
+#: registered successor is p95, and `quantile_is_usable(n, 0.95)` is
+#: `n >= 5/(1-p)` = **n >= 100**. At n=11 with max 389.75 neither statistic is
+#: supported -- the tail is unbounded by the data.
+#:
+#: Projected the way the duration constant's n=10 trigger was registered,
+#: from the MEASURED arrival rate rather than an assumed one:
+#:
+#:   weekday  n=11, 5.50 runs/week (measured over 2026-10-23..11-06, span
+#:            14d, grain=RUN)  ->  n>=100 on **2027-02-27**
+#:   weekend  n=4,  3.50 runs/week (measured over 2026-10-24..11-01, span
+#:            8d)               ->  n>=100 on **2027-05-17**
+#:
+#: SO THE CRON IS NOT MOVED IN THIS STAGE, AND NOT BEFORE THAT n. A trade
+#: taken on a tail the data cannot bound is the `0 4` selection again, which
+#: was chosen from another cron's spread and breached on arrival.
+HEADROOM_NOT_SPENT = {
+    "weekday": {"deployed_cron": 60, "latest_clearing": 105, "headroom": 45},
+    "weekend": {"deployed_cron": 30, "latest_clearing": 60, "headroom": 30},
+    "why_not_spent": ("the STRUCTURAL floor is still breached by 39.3 "
+                      "(weekday) and 59.4 (weekend) minutes, and the "
+                      "substitution did not move it at all"),
+    "spendable_when": {
+        "n": 100,
+        "basis": ("quantile_is_usable(n, 0.95) == n >= 5/(1-0.95); below it "
+                  "neither p95 nor mean+3sd bounds the tail"),
+        "weekday_rate_per_week": 5.50,
+        "weekday_projected": "2027-02-27",
+        "weekend_rate_per_week": 3.50,
+        "weekend_projected": "2027-05-17",
+        "rate_measured": "2026-11-06, grain=RUN, from the series own dates",
+    },
+}
 
 
 def structural_breach_is_acknowledged(binding: float,

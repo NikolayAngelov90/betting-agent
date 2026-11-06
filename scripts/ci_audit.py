@@ -1830,56 +1830,66 @@ REDERIVE_PICKS_BOUND_PLAN = (
     "MIN_N_TO_REDERIVE_PICKS_BOUND post-cccb0e6 weekday runs exist; do NOT "
     "pool them with the serial runs, and report max and mean+3sd together "
     "with the regime named")
-# ── THE TRIGGER HAS FIRED AND THE RE-DERIVATION IS *NOT* APPLIED. 2026-11-06.
+# ── SUBSTITUTED 2026-11-06, AUTHORISED, FORWARD ONLY. ──────────────────────
 #
-# `REDERIVE_PICKS_BOUND_PLAN`'s condition is met: the parallel-regime series
-# reached n=12 against MIN_N_TO_REDERIVE_PICKS_BOUND=10. The replacement
-# figures are MEASURED and recorded here so the next reader does not have to
-# re-derive them:
+# `REDERIVE_PICKS_BOUND_PLAN` is executed: the live margin computation takes
+# the parallel regime's bound. Both figures are reported together with the
+# regime named, as the plan requires, and the regimes are NOT pooled --
+# membership is by `headSha` descending from cccb0e6, which the series
+# function enforces, so none of the four serial runs contributes.
 #
-#   OLD (deployed)  serial, FULL-CARD weekday runs, n=4, measured 2026-10-01
-#                   max 88.1   mean+3sd 107.0   range 67.4-88.1
-#   NEW (prepared)  parallel, ALL-CARD weekday runs, n=12, measured 2026-11-06
-#                   max 40.35  mean+3sd 64.59   mean 26.53  sd 12.69
-#                   members descend from cccb0e6; NOT pooled with the serial 4
+#   LIVE (from 2026-11-06)  parallel, ALL-CARD weekday runs, n=12,
+#                           measured 2026-11-06
+#                           max 40.35   mean+3sd 64.59   mean 26.53  sd 12.69
 #
-# WHY IT IS NOT APPLIED, having been applied and reverted the same day.
+# A CHANGE OF POPULATION, NOT A RE-MEASUREMENT OF THE OLD ONE. The serial
+# full-card population is retired, not wrong. The names are kept because every
+# consumer imports them and the margin arithmetic is unchanged;
+# `PICKS_BOUND_NEW_POPULATION` is what they now describe.
 #
-# Substituting it is arithmetic on every margin (+47.75 on the max pairing,
-# +42.41 on mean+3sd) and it was verified not to touch `schedule_deadline.py`,
-# which references neither constant. That check was too narrow. The constants
-# also feed the CRON DERIVATION, and with the new bound the latest 15-minute
-# boundary clearing the registered 60 moves from 60 to 105 on weekdays and
-# from 30 to 60 at the weekend:
+# IT IS NOT A CLAIM THAT ANYTHING GOT 47 MINUTES FASTER. The serial bound was
+# a MAX over the rare full-card case, and the restriction that made it rare is
+# what parallelisation removed.
 #
-#     the deployed cron becomes 45 min EARLIER than it needs to be,
-#     and TEN tests in `test_cron_moved.py` encode the ARGUMENT for the
-#     s5.19 move -- that it spends real margin, that the pooled reading was
-#     an artefact, that the rejected cron was a breach.
-#
-# Re-deriving a bound is a MEASUREMENT. Rewriting the recorded argument for an
-# AUTHORISED decision is not, and `s5.19`'s weekday `0 1` / weekend `30 0`
-# carries Niki's authorisation with its trade written down. So the measurement
-# is recorded, the substitution is prepared, and it waits for the decision --
-# which is also an opportunity, not only a cost: 45 minutes of margin are
-# provably unspent.
-PREPARED_PICKS_BOUND = {
-    # INLINED, not a reference: `PICKS_BOUND_NEW_POPULATION` is defined
-    # further down this file, so naming it here is a forward reference.
-    "regime": ("time-to-picks over ALL-CARD weekday runs, PARALLEL "
-               "review regime (REVIEW_CONCURRENCY=4, first in cccb0e6, "
-               "2026-10-21 21:29)"),
-    "n": 12, "measured": "2026-11-06",
-    "max": 40.35, "mean_plus_3sd": 64.59, "mean": 26.53, "sd": 12.69,
-    "replaces": {"max": 88.1, "mean_plus_3sd": 107.0},
-    "margin_delta": {"max_pairing": 47.75, "mean_plus_3sd_pairing": 42.41},
-    "cron_headroom_it_opens": {"weekday": 45, "weekend": 30},
-    "blocked_on": ("authorisation: applying it rewrites the recorded "
-                   "argument for the s5.19 cron decision (10 assertions in "
-                   "test_cron_moved.py)"),
+# WHAT IT DOES NOT TOUCH: `schedule_deadline.py` references neither constant
+# (measured 2026-11-06), so the derived floor and `MIN_ACCEPTABLE_MARGIN_MIN`
+# are unaffected. It DOES move the latest cron boundary that clears 60 (60 ->
+# 105 weekday, 30 -> 60 weekend) -- see `CRON_HEADROOM_NOT_TAKEN`, which is
+# deliberately NOT spent.
+FULL_CARD_PICKS_MAX = 40.35
+FULL_CARD_PICKS_3SD = 64.59
+
+#: ── THE FIGURES THE s5.19 DECISION WAS MADE ON. DO NOT UPDATE THIS. ───────
+#:
+#: A DECISION'S RECORD KEEPS THE FIGURES THE DECISION WAS MADE ON. The ten
+#: assertions in `tests/test_cron_moved.py` that record WHY the weekday cron
+#: moved to `0 1` -- that it spends real margin, that the pooled reading was
+#: an artefact, that the rejected cron was a breach -- are a record of an
+#: argument, not a description of the pipeline. Re-pointing them at the live
+#: constant would make them assert an argument that was never made.
+#:
+#: SO THE TWO ARE SEPARATE BY CONSTRUCTION AND NEITHER READS THE OTHER.
+#: `tests/test_decision_record_is_not_a_live_constant.py` asserts that, and
+#: its known-wrong control swaps them and requires the failure.
+PICKS_BOUND_AT_S519_DECISION = {
+    "max": 88.1,
+    "mean_plus_3sd": 107.0,
+    "measured": "2026-10-01",
+    "n": 4,
+    "regime": ("MAX time-to-picks over FULL-CARD (>=40 fixture) weekday runs, "
+               "SERIAL review regime; range 67.4-88.1, mean 76.4, sd 10.2"),
+    "used_for": ("the s5.19 cron decision of 2026-10-22: weekday `0 1`, "
+                 "weekend `30 0`"),
+    "superseded_by": {
+        "max": 40.35, "mean_plus_3sd": 64.59, "n": 12,
+        "measured": "2026-11-06",
+        "regime": ("time-to-picks over ALL-CARD weekday runs, PARALLEL review "
+                   "regime (REVIEW_CONCURRENCY=4, first in cccb0e6)"),
+    },
+    "why_not_updated": ("it records the inputs to a decision that was taken "
+                        "on 2026-10-22 and cannot be re-taken retroactively; "
+                        "the live constant is substituted forward instead"),
 }
-FULL_CARD_PICKS_MAX = 88.1
-FULL_CARD_PICKS_3SD = 107.0
 
 # ══════════ A CHANGE OF DEFINITION, NOT A RE-MEASUREMENT ════════════════════
 #
@@ -3642,34 +3652,33 @@ def verdict(facts: Dict[str, object], hits: List[str],
 #: the next scheduled run. An acknowledgement pinned to the reading itself
 #: would re-alarm within a day or two and the daily red would be back.
 ACKNOWLEDGED_MARGIN_BREACH_JITTER = 11.32
-# ── RETIRED 2026-11-06: EXPIRED, AND ITS ACTION IS BLOCKED, SO IT IS GONE. ──
+# ── RETIRED 2026-11-06: CLEARED BY ITS ACTION, WHICH WAS TAKEN. ────────────
 #
 # The entry read `measured_at=20.665799601890512, binding=9.3458,
 # since=2026-10-22, review=2026-11-04`, and its registered clearing action was
 # "the parallel-regime picks series reaching n=10 and FULL_CARD_PICKS_MAX
 # being re-derived from it".
 #
-# ITS REVIEW DATE PASSED ON 2026-11-04 and the two `DRIVEN` tests exercising
-# its coverage had been red since -- the expiry working, not a bug. A
-# self-expiring acknowledgement is cleared by its action or DELETED. Never
-# extended.
+# BOTH THINGS WERE TRUE OF IT, IN ORDER:
 #
-# THE ACTION'S TRIGGER HAS FIRED BUT THE ACTION IS NOT AVAILABLE TO ME. The
-# series reached n=12, the re-derivation was performed, measured and REVERTED
-# the same day: the constants also feed the cron derivation, and applying them
-# rewrites ten assertions that encode the argument for the AUTHORISED `s5.19`
-# cron move. The figures are in `PREPARED_PICKS_BOUND`.
+#   1. its review date passed on 2026-11-04, and the two `DRIVEN` tests
+#      exercising its coverage went red -- the expiry working, not a bug;
+#   2. its action was then TAKEN. The series reached n=12, the substitution
+#      was authorised, and the live bound moved 88.1 -> 40.35 (mean+3sd
+#      107.0 -> 64.59). The schedule margin cleared: weekday pooled_binding
+#      -7m -> +35m, weekend +10m -> +53m, both against the 30-minute
+#      threshold. There is no breach left to defer.
 #
-# SO IT IS DELETED AND THE BREACH ALARMS. The live reading is -6.93 against a
-# 30-minute threshold -- a 27.6-minute DETERIORATION from the +20.67 this
-# entry acknowledged -- and re-acknowledging a deterioration is the one thing
-# an acknowledgement must never do. This is the same disposition the `0 4`
-# entry got on 2026-10-20: it alarms until the decision is taken, that is the
-# clearing action, and it is now the blocking item.
+# It is retired for the second reason. A merely-expired acknowledgement would
+# have had to be cleared or deleted anyway, and re-acknowledging was never
+# available: +20.67 -> -6.93 is a 27.6-minute DETERIORATION, and absorbing a
+# deterioration is the one thing an acknowledgement must never do.
 #
-# AN ALARM WITH A CLEARING ACTION IS NOT CLR-2 NOISE. CLR-2 forbids alarms
-# that no available action clears; this one clears the moment the
-# authorisation is given, and the work behind it is already done.
+# WHAT DID *NOT* MOVE, and it is why the cron headroom is not spent: the
+# STRUCTURAL margin is byte-identical before and after -- deficits of
+# -39.306530 (weekday) and -59.407508 (weekend) -- because
+# `schedule_deadline` references neither picks constant. See
+# `schedule_deadline.HEADROOM_NOT_SPENT`.
 #
 # `margin_breach_is_acknowledged` IS KEPT. An empty register is the correct
 # state for "nothing is deferred", and keeping the function means the next

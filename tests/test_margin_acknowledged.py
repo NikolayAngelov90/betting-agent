@@ -61,7 +61,7 @@ def test_the_REGISTER_IS_EMPTY_which_is_the_correct_state():
         f"entry here must carry its own review date and its clearing action.")
 
 
-def test_the_RETIREMENT_RECORDS_WHY_IT_WENT_and_WHAT_IS_BLOCKING():
+def test_the_RETIREMENT_RECORDS_WHY_IT_WENT_and_WHAT_CLEARED_IT():
     """An acknowledgement removed on its expiry alone leaves the condition
     unexplained. This one expired AND its action is blocked, and the record
     has to carry both or the next reader re-acknowledges it."""
@@ -75,46 +75,48 @@ def test_the_RETIREMENT_RECORDS_WHY_IT_WENT_and_WHAT_IS_BLOCKING():
     # "no longer written down" about text that is right there.
     flat = " ".join(head.replace("#", " ").split()).lower()
     for frag in ("retired 2026-11-06", "review date passed",
-                 "prepared_picks_bound", "-6.93", "27.6-minute",
-                 "re-acknowledging a deterioration",
+                 "its action was then taken", "88.1 -> 40.35",
+                 "-7m -> +35m", "-6.93", "27.6-minute",
+                 "absorbing a deterioration",
                  "empty register is the correct state",
-                 "clears the moment the authorisation is given"):
+                 "byte-identical"):
         assert frag in flat, f"the retirement does not record {frag!r}"
 
 
-def test_the_PICKS_BOUND_IS_STILL_THE_DEPLOYED_SERIAL_ONE():
-    """The re-derivation was PREPARED and REVERTED, so the deployed constants
-    must still be the serial ones. If they moved, the authorisation was given
-    and this file -- and the ten cron assertions -- need restating with it."""
-    assert ci.FULL_CARD_PICKS_MAX == 88.1, (
-        f"the picks bound is {ci.FULL_CARD_PICKS_MAX}, not the deployed 88.1. "
-        f"If the re-derivation was authorised, restate the ten assertions in "
-        f"test_cron_moved.py that encode the s5.19 argument")
-    assert ci.FULL_CARD_PICKS_3SD == 107.0, ci.FULL_CARD_PICKS_3SD
+def test_the_PICKS_BOUND_WAS_SUBSTITUTED_FORWARD():
+    """The clearing action is a number in the source, so check the number."""
+    assert ci.FULL_CARD_PICKS_MAX == pytest.approx(40.35), (
+        f"the live picks bound is {ci.FULL_CARD_PICKS_MAX}, not the 40.35 "
+        f"the acknowledgement was retired on. If it was reverted, the "
+        f"schedule breach is back and the register must carry it again")
+    assert ci.FULL_CARD_PICKS_3SD == pytest.approx(64.59)
     assert ci.FULL_CARD_PICKS_MAX < ci.FULL_CARD_PICKS_3SD, (
         "max above mean+3sd means the two were swapped")
 
 
-def test_the_PREPARED_RE_DERIVATION_IS_RECORDED_WITH_ITS_REGIME_AND_BLOCKER():
-    """`REDERIVE_PICKS_BOUND_PLAN` required both figures and the regime named.
-    They are measured and recorded even though the substitution is not made,
-    so the red that asks for it is actionable rather than a request to
-    re-derive from scratch."""
-    pb = ci.PREPARED_PICKS_BOUND
-    assert pb["n"] == 12 and pb["measured"] == "2026-11-06"
-    assert pb["max"] == 40.35 and pb["mean_plus_3sd"] == 64.59
-    assert pb["replaces"] == {"max": 88.1, "mean_plus_3sd": 107.0}
-    assert pb["margin_delta"]["max_pairing"] == 47.75
-    assert pb["cron_headroom_it_opens"] == {"weekday": 45, "weekend": 30}
-    assert "authorisation" in pb["blocked_on"]
-    reg = pb["regime"].lower()
-    for frag in ("parallel", "all-card", "cccb0e6"):
-        assert frag in reg, f"the regime does not state {frag!r}"
-    i = SRC.index("PREPARED_PICKS_BOUND = {")
-    flat = " ".join(SRC[max(0, i - 3000):i].replace("#", " ").split()).lower()
-    for frag in ("not pooled", "n=12", "40.35", "64.59",
-                 "60 to 105", "ten tests", "measurement"):
-        assert frag in flat, f"the preparation does not record {frag!r}"
+def test_the_DECISION_RECORD_KEPT_THE_FIGURES_THE_DECISION_WAS_MADE_ON():
+    """FORWARD ONLY. The s5.19 argument keeps its own numbers.
+
+    `tests/test_decision_record_is_not_a_live_constant.py` holds the
+    separation in both directions and the swap control; this asserts the
+    record exists and still DISAGREES with the live constant, because an
+    agreeing pair makes that whole file vacuous.
+    """
+    rec = ci.PICKS_BOUND_AT_S519_DECISION
+    assert rec["max"] == 88.1 and rec["mean_plus_3sd"] == 107.0
+    assert rec["n"] == 4 and rec["measured"] == "2026-10-01"
+    assert "SERIAL" in rec["regime"]
+    assert rec["max"] != ci.FULL_CARD_PICKS_MAX, (
+        "the record and the live constant agree, so the separation between "
+        "them cannot be verified")
+    sup = rec["superseded_by"]
+    assert sup["n"] == 12 and sup["max"] == pytest.approx(
+        ci.FULL_CARD_PICKS_MAX)
+    k = SRC.index("FULL_CARD_PICKS_MAX = 40.35")
+    flat = " ".join(SRC[max(0, k - 2200):k].replace("#", " ").split()).lower()
+    for frag in ("parallel", "all-card", "n=12", "2026-11-06", "not pooled",
+                 "cccb0e6"):
+        assert frag in flat, f"the substitution does not state {frag!r}"
 
 
 # ── THE VACUITY GUARD ──────────────────────────────────────────────────────

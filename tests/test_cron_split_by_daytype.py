@@ -101,7 +101,8 @@ def test_BOTH_crons_are_the_LATEST_that_CLEAR_the_registered_60():
     import math
 
     import scripts.ci_audit as _ci
-    from scripts.schedule_deadline import (MIN_ACCEPTABLE_MARGIN_MIN,
+    from scripts.schedule_deadline import (HEADROOM_NOT_SPENT,
+                                           MIN_ACCEPTABLE_MARGIN_MIN,
                                            observed_earliest_min)
 
     #: The SLOW cluster per day type, `measured` 2026-10-22 under the retired
@@ -124,16 +125,89 @@ def test_BOTH_crons_are_the_LATEST_that_CLEAR_the_registered_60():
         latest15 = int(math.floor(cap / 15) * 15)
         assert crons[dtype] == expect, (
             f"the {dtype} cron is {crons[dtype]}, expected {expect}")
-        assert crons[dtype] == latest15, (
-            f"the {dtype} cron {crons[dtype]} is no longer the latest "
+
+        # ── IT IS NO LONGER THE LATEST, AND THAT IS HEADROOM. 2026-11-06. ──
+        #
+        # This asserted equality with `latest15`. The picks bound was
+        # substituted forward (88.1 -> 40.35, parallel regime, n=12), which
+        # moved the latest clearing boundary 60 -> 105 weekday and 30 -> 60
+        # weekend. The deployed crons did NOT move.
+        #
+        #     the cron is now EARLIER than the latest that clears,
+        #     which is the SAFE direction, and the difference is UNSPENT.
+        #
+        # IT IS NOT SPENT BECAUSE THE STRUCTURAL FLOOR IS STILL BREACHED --
+        # deficits of -39.306530 (weekday) and -59.407508 (weekend), which the
+        # substitution did not move at all. Headroom measured against a
+        # different floor is not a surplus to give away. The n at which
+        # spending it becomes a measured decision, and its projected date,
+        # are in `HEADROOM_NOT_SPENT` -- which this is the consumer of.
+        assert crons[dtype] <= latest15, (
+            f"the {dtype} cron {crons[dtype]} is LATER than the latest "
             f"15-minute boundary that clears {MIN_ACCEPTABLE_MARGIN_MIN}m "
-            f"(cap {cap:.1f} -> {latest15}). Either an input moved or the "
-            f"cron was set by hand; re-derive before trusting it.")
-        # and it must actually clear, not merely be the latest candidate
+            f"(cap {cap:.1f} -> {latest15}). That is a BREACH, not spare "
+            f"headroom: re-derive before trusting it.")
+        rec = HEADROOM_NOT_SPENT[dtype]
+        assert rec["deployed_cron"] == crons[dtype], (
+            f"{dtype}: the deployed cron moved to {crons[dtype]}; if that was "
+            f"the authorised trade, restate HEADROOM_NOT_SPENT with it")
+        assert rec["latest_clearing"] == latest15, (
+            f"{dtype}: the latest clearing boundary is now {latest15}, "
+            f"recorded {rec['latest_clearing']}. Re-measure and restate "
+            f"rather than leaving a stale figure beside a live decision.")
+        assert rec["headroom"] == latest15 - crons[dtype]
+
+        # and it must actually clear, not merely be no later than the latest
         for delay, picks in ((SLOW[dtype]["max"], _ci.FULL_CARD_PICKS_MAX),
                              (SLOW[dtype]["p3sd"], _ci.FULL_CARD_PICKS_3SD)):
             assert floor - (crons[dtype] + delay + picks) >= \
                 MIN_ACCEPTABLE_MARGIN_MIN, (dtype, delay, picks)
+
+
+def test_the_HEADROOM_IS_RECORDED_AS_UNSPENT_with_its_n_and_its_DATE():
+    """The consumer of `HEADROOM_NOT_SPENT`, and rule 2 in assertion form.
+
+    A record that nothing reads is a producer with no consumer, which is what
+    the PNC scan caught when this constant was first written.
+    """
+    from scripts.schedule_deadline import (HEADROOM_NOT_SPENT as H,
+                                           STRUCTURAL_ACK)
+    for dtype in ("weekday", "weekend"):
+        assert H[dtype]["headroom"] == (
+            H[dtype]["latest_clearing"] - H[dtype]["deployed_cron"])
+        assert H[dtype]["headroom"] > 0, (
+            f"{dtype} has no headroom recorded; if it was spent, say so")
+
+    # RULE 2: headroom against a breached floor is not surplus. The record
+    # must name the breach it is being withheld against.
+    assert "STRUCTURAL" in H["why_not_spent"].upper()
+    for frag in ("39.3", "59.4"):
+        assert frag in H["why_not_spent"], (
+            f"the record does not name the {frag}-minute deficit it is "
+            f"withheld against")
+    # and those deficits must still be real
+    for dtype, fig in (("weekday", -39.3), ("weekend", -59.4)):
+        got = STRUCTURAL_ACK[dtype]["measured_at"]
+        assert abs(got - fig) < 0.2, (
+            f"{dtype}: the structural deficit is now {got:.2f}, not the "
+            f"{fig} the headroom is withheld against. If the floor stopped "
+            f"being breached, the headroom becomes spendable -- re-decide.")
+
+    # THE n, AND ITS DATE, DERIVED NOT PICKED
+    w = H["spendable_when"]
+    assert w["n"] == 100, w
+    assert "5/(1-0.95)" in w["basis"] or "quantile_is_usable" in w["basis"], (
+        "the n is not tied to the quantile rule that produced it")
+    assert w["weekday_projected"] == "2027-02-27"
+    assert w["weekend_projected"] == "2027-05-17"
+    assert w["weekday_rate_per_week"] > 0 and w["weekend_rate_per_week"] > 0
+    # PROVENANCE: a date and a grain, which is what rule 5 asks for -- not
+    # the literal word "measured", which my first version checked for and
+    # which the string does not contain.
+    prov = w["rate_measured"]
+    assert "2026-" in prov and "grain=" in prov, (
+        f"the arrival rate has no date and grain, so the projected date is a "
+        f"guess: {prov!r}")
 
 
 def test_the_WEEKEND_cron_is_EARLIER_than_the_weekday_one():

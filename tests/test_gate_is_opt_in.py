@@ -132,7 +132,18 @@ from scripts.capture_critical import (
 #: `capture_closing_lines.SELECTION_SPEC` BY AST rather than importing
 #: it, because that module IS on the capture path. Declining the fifth
 #: opportunity for the import-pulls-a-file-into-the-gate trap.
-CENSUS = {"files": 144, "capture_critical": 78, "not_critical": 66}
+#: RE-MEASURED 2026-11-06 (II), after the picks-bound substitution:
+#: files 144 -> 146, not_critical 66 -> 68, `capture_critical`
+#: UNCHANGED AT 78 for the THIRD time in two days. The two new files
+#: are non-critical by construction:
+#:   test_decision_record_is_not_a_live_constant.py -- the separation
+#:     of the live bound from the s5.19 decision record, with the swap
+#:     control. Deliberately does NOT import `tests.conftest`, because
+#:     `code_of` would drag a decision-record test into the gate.
+#:   test_two_consumers_read_one_input.py -- the standing cross-read
+#:     check. It measures gate membership, so it must not be IN the
+#:     gate it measures.
+CENSUS = {"files": 146, "capture_critical": 78, "not_critical": 68}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -422,8 +433,23 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #           guard (an empty register answers {} to everything, so every
     #           refusal would pass for the wrong reason), and the prepared
     #           re-derivation recorded with its blocker
-    assert len(nong) == 983, (
-        f"the non-gating selection is {len(nong)}, recorded 983")
+    #   +14 on 2026-11-06 (II): the picks-bound substitution, FORWARD ONLY.
+    #       GATE UNCHANGED at 1732 and the CENSUS unchanged at 78 critical --
+    #       every one landed outside the capture path, and one was MOVED out
+    #       of it (a live per-run-history read I had just written into
+    #       `test_contamination_and_margin`, which would have been the FOURTH
+    #       live-state-in-the-gate card loss).
+    #         test_decision_record_is_not_a_live_constant.py  +6  both
+    #           directions of the separation, the swap control, and a refusal
+    #           to run at all if the two figures ever agree
+    #         test_two_consumers_read_one_input.py            +7  the standing
+    #           cross-read: the gate must hold zero live per-run-history
+    #           readers, any selection holding one needs fetch-depth 0, and a
+    #           stubbed caller must NOT be counted
+    #         test_cron_split_by_daytype.py                   +1  the consumer
+    #           of HEADROOM_NOT_SPENT, with the n and the projected date
+    assert len(nong) == 997, (
+        f"the non-gating selection is {len(nong)}, recorded 997")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

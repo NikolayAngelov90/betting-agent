@@ -239,10 +239,18 @@ def test_the_BINDING_TERM_IS_NAMED_and_it_is_the_LATENESS():
     """The cause, with its n and its shape: if the lag distribution moved,
     the record must say so and say whether it is unimodal under this cron."""
     wd = sd.STRUCTURAL_ACK["weekday"]
-    for frag in ("332.3", "389.75", "UNIMODAL", "n=10"):
+    # THE CURRENT FIGURES, WITH THE CURRENT n. The entry first carried the
+    # n=10 readings (332.3/40.7) beside a `lag_n` of 11 -- an inconsistency
+    # inside one record, restated 2026-11-06. Asserting the superseded
+    # numbers would have passed on the historical note alone, which is how a
+    # restatement gets to look like a measurement.
+    for frag in ("337.4", "42.1", "389.75", "UNIMODAL", "n=11"):
         assert frag in wd["why"], (
             f"the weekday acknowledgement does not record {frag!r}, so the "
-            f"binding term is not identified")
+            f"binding term is not identified at its current n")
+    assert wd["lag_n"] == 11, (
+        f"lag_n is {wd['lag_n']} but the why-text says n=11; one record must "
+        f"not carry two sample sizes")
     assert "40.35" in wd["why"] or "26.5" in wd["why"], (
         "the duration term is not stated beside the lateness, so a reader "
         "cannot see which one dominates")
@@ -380,20 +388,37 @@ def test_the_AUDIT_consults_the_predicate_rather_than_printing_unconditionally()
 #     carries its n and its regime with a small n stated as small.
 
 
-def test_the_PICKS_BOUND_still_describes_the_SERIAL_regime():
-    """The review was parallelised in `cccb0e6` at 21:29 on 2026-10-21 and the
-    newest daily-picks run is 08:29 the same day: **n = 0 post-change runs.**
-    So this constant has NOT been re-derived and still describes the serial
-    regime. If it moves, the mover must state the new n and the regime.
+def test_the_PICKS_BOUND_now_describes_the_PARALLEL_regime():
+    """RESTATED 2026-11-06, when the substitution was authorised and made.
+
+    It read: the constant has NOT been re-derived and still describes the
+    SERIAL regime (n=0 post-change runs on 2026-10-21). The series filled to
+    n=12 and the bound was substituted FORWARD. What this test demanded of
+    any mover -- "state the new n and the REGIME, and confirm it is not
+    pooled" -- is what it now checks.
     """
-    assert _ci.FULL_CARD_PICKS_MAX == 88.1, (
-        f"FULL_CARD_PICKS_MAX moved to {_ci.FULL_CARD_PICKS_MAX}. State the "
-        f"new n and the REGIME it was measured in, and confirm it is not "
-        f"pooled with the serial runs")
-    assert _ci.FULL_CARD_PICKS_3SD == 107.0
+    assert _ci.FULL_CARD_PICKS_MAX == pytest.approx(40.35), (
+        f"FULL_CARD_PICKS_MAX is {_ci.FULL_CARD_PICKS_MAX}, not the 40.35 "
+        f"substituted on 2026-11-06. State the new n and the REGIME it was "
+        f"measured in, and confirm it is not pooled with the serial runs")
+    assert _ci.FULL_CARD_PICKS_3SD == pytest.approx(64.59)
+
+    # THE REGIME IS NAMED, THE n IS STATED, AND IT IS NOT POOLED
     src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
-    assert "n = 0 post-change runs" in src, (
-        "the reason the constant was not re-derived is no longer recorded")
+    i = src.index("FULL_CARD_PICKS_MAX = 40.35")
+    head = " ".join(src[max(0, i - 2200):i].replace("#", " ").split())
+    for frag in ("parallel", "ALL-CARD", "n=12", "2026-11-06", "40.35",
+                 "64.59", "NOT pooled", "cccb0e6"):
+        assert frag in head, (
+            f"the substitution does not state {frag!r} beside the constant")
+
+    # and the SERIAL figures survive, in the decision record, not here
+    rec = _ci.PICKS_BOUND_AT_S519_DECISION
+    assert rec["max"] == 88.1 and rec["n"] == 4, (
+        "the serial figures are gone; the s5.19 argument was made on them")
+    assert "SERIAL" in rec["regime"]
+    assert rec["superseded_by"]["max"] == pytest.approx(
+        _ci.FULL_CARD_PICKS_MAX)
 
 
 def test_a_RE_DERIVATION_on_a_SMALL_n_is_refused_by_a_STATED_MINIMUM():
