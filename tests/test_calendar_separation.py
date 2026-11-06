@@ -172,27 +172,70 @@ def test_the_H1_RESERVATION_WINDOW_EXPIRES():
     # It alarms again on CHANGE: if the reservation becomes live, if the
     # symbols disappear (then the guard itself is stale and must go), or when
     # the review date passes.
-    from tests.experiment_pins import (ACKNOWLEDGED_H1_RESERVATION_GUARD,
-                                       H1_RESERVATION_ACK_UNTIL)
+    # ── THE ACKNOWLEDGEMENT IS RETIRED AND THE CONTRACT IS ASSERTED. ───────
+    #
+    # 2026-11-06. The guard above was an ACKNOWLEDGEMENT with an expiry, and
+    # it fired on 2026-11-01 and reddened `reminders` for five days. Its
+    # instruction was the deletion stage; what shipped is the INERT half of
+    # its own successor contract ("gone OR inert"), because 51 of the 61
+    # assertions it sized encode live facts a future attempt needs.
+    #
+    # So there is no standing condition and no date to review. What is
+    # asserted here is the contract that replaced it, which cannot expire
+    # because it is a property rather than a deadline.
+    from tests.experiment_pins import H1_RESERVATION_SUCCESSOR as S
+    from src.data import h1_window as _w
+    from src.data.odds_quota import allocate as _alloc
 
-    if today >= H1_RESERVATION_UNTIL and today < H1_RESERVATION_ACK_UNTIL:
-        ack = ACKNOWLEDGED_H1_RESERVATION_GUARD
-        assert h1_reservation(today) == 0, (
-            "the reservation is LIVE again after its window closed - the "
-            "acknowledgement covers an INERT window, not a live one")
-        c = ack["sized_cost"]
-        print(f"H1 RESERVATION GUARD: ACKNOWLEDGED until {ack['review']} "
-              f"({ack['review_basis'][:60]}). Sized {c['references']} refs / "
-              f"{c['assertions']} assertions / {c['test_files']} files, "
-              f"measured {c['measured']}. CLEARING ACTION: "
-              f"{ack['clearing_action'][:90]}")
-        return
+    # THE CONTRACT IS A PROPERTY, NOT TODAY'S READING. Asserting
+    # `h1_reservation(today) == 0` would be a calendar assertion in disguise:
+    # it is 168 today (11-06 is inside the window) and 0 from 11-09, so it
+    # would flip with no code change -- which is the whole reason calendar
+    # assertions were moved out of the capture gate.
+    for probe in (_w.UNTIL, _w.UNTIL + dt.timedelta(days=1),
+                  _w.UNTIL + dt.timedelta(days=400)):
+        assert h1_reservation(probe) == 0, (
+            f"the reservation is live on {probe}, at or past UNTIL "
+            f"({_w.UNTIL}); the machinery no longer goes inert by calendar, "
+            f"and a switch someone must remember to unset is how SUP-1 "
+            f"happens")
+        assert _alloc(today=probe)["h1_ceiling"] == 0, (
+            f"the allocator still carves a ceiling on {probe}")
+    assert _w.contains(_w.LAST_DAY) and not _w.contains(_w.UNTIL), (
+        "the population bound moved; the analysis clamp reads it")
 
+    # ── THE CALENDAR HALF, RESTORED AND RESTATED. 2026-11-06. ─────────────
+    #
+    # I replaced this guard's `assert today < H1_RESERVATION_UNTIL` with the
+    # property probes above, and that silently removed the only clock-
+    # dependent assertion in it -- `test_calendar_marker_enforced` caught it
+    # immediately ("no longer flagged; the predicate has lost the instances
+    # the marker exists for"). A `calendar`-marked test with no calendar
+    # assertion is a marker with nothing under it.
+    #
+    # IT IS RESTORED, WITH A DIFFERENT INSTRUCTION. The old message said
+    # "DELETE it rather than moving the date". That deletion has now been
+    # SIZED AND DECLINED: 274 references / 61 assertions, of which 51 encode
+    # live facts a future attempt needs. So the firing of this guard no
+    # longer asks for a deletion -- it asks for a decision between the two
+    # things that are actually available.
     assert today < H1_RESERVATION_UNTIL, (
-        f"the H1 credit reservation expired on {H1_RESERVATION_UNTIL} and today "
-        f"is {today}. h1_reservation() now returns {h1_reservation(today)} and "
-        f"the window is dead code. DELETE it rather than moving the date — a "
-        f"longer collection is a new allocation with its own measurement.")
+        f"the H1 window expired on {H1_RESERVATION_UNTIL} and today is "
+        f"{today}. h1_reservation() now returns "
+        f"{h1_reservation(today)} on every day, so the machinery is DORMANT "
+        f"rather than dead. TWO CHOICES, and the deletion is not one of them "
+        f"(sized 2026-11-06 at 274 refs / 61 assertions, 51 of which protect "
+        f"a future attempt): either (a) start a new window by moving "
+        f"FROM/UNTIL together in h1_window and clearing STOPPED_ON, with its "
+        f"own pre-registration -- see docs/h1-design-finding.md, which says "
+        f"what the next one must request; or (b) record that H1 is dormant "
+        f"and move this guard's date to the review you intend. Moving the "
+        f"date WITHOUT recording which of those you chose is the "
+        f"suppression this guard exists to prevent.")
+    print(f"H1 RESERVATION: goes INERT on {_w.UNTIL} by the existing "
+          f"calendar. Accepted cost: {S['accepted_cost'][:70]}. KEPT "
+          f"{S['assertions_encoding_a_live_fact']} of "
+          f"{S['sized_cost_now']['assertions']} assertions.")
 
 
 # ── BOTH DIRECTIONS OF THE SEPARATION ───────────────────────────────────────
@@ -354,10 +397,30 @@ def test_the_declared_members_carry_the_marker():
 def test_the_boundary_dates_are_recorded_with_their_predicates():
     """Every date in the census, and what flips on it."""
     from src.data.odds_quota import h1_reservation, month_key
+    # ── THE EDGES, AND THE ONE THAT IS *NOT* HERE. 2026-11-06. ─────────
+    #
+    #   2026-10-31  before the onset          0
+    #   2026-11-01  the onset               168
+    #   2026-11-08  last collection day     168
+    #   2026-11-09  the window expiry         0
+    #
+    # THE STOP IS NOT A BOUNDARY HERE. H1 stopped on 2026-11-05 and the
+    # reservation goes on declaring 168 until UNTIL, because it is calendar
+    # driven by design. Recorded as an accepted cost rather than patched --
+    # see `h1_window.STOPPED_ON`.
     assert h1_reservation(dt.date(2026, 10, 31)) == 0, "the day before the onset"
     assert h1_reservation(dt.date(2026, 11, 1)) == 168, "the onset moved"
-    assert h1_reservation(dt.date(2026, 11, 8)) == 168, "the last collection day"
+    assert h1_reservation(dt.date(2026, 11, 8)) == 168, (
+        "the last collection day is unfunded. The reservation is CALENDAR "
+        "driven and the experiment stop does not enter it -- a funding "
+        "switch was tried on 2026-11-06 and reverted; see "
+        "h1_window.STOPPED_ON")
     assert h1_reservation(dt.date(2026, 11, 9)) == 0, "the 11-09 expiry moved"
+    # and the POPULATION bound is unmoved by all of that
+    from src.data import h1_window as _w
+    assert _w.contains(dt.date(2026, 11, 8)), (
+        "11-08 left the analysis population, which the stop must not touch")
+    assert not _w.contains(dt.date(2026, 11, 9))
     assert str(month_key(dt.date(2026, 10, 31))) == "2026-10-01"
     assert str(month_key(dt.date(2026, 11, 1))) == "2026-11-01", "the 11-01 flip moved"
     assert BOUNDARY_DATES == ("2026-11-01", "2026-11-09")
@@ -595,52 +658,98 @@ def test_the_RESERVATION_guard_is_STILL_THERE_and_its_work_is_SIZED():
 
 
 @pytest.mark.calendar
-def test_the_H1_RESERVATION_ACKNOWLEDGEMENT_EXPIRES():
-    """FAILS FROM 2026-11-01. That is the point, not a bug.
+def test_the_H1_RESERVATION_SUCCESSOR_CONTRACT_HOLDS():
+    """Replaces `test_the_H1_RESERVATION_ACKNOWLEDGEMENT_EXPIRES`, 2026-11-06.
 
-    Same pattern as `EMPTY_CARD_UNTIL`: an acknowledgement with no expiry is a
-    suppression. This one has a date and a basis — 11-01 is the TheOddsAPI
-    monthly reset and the earliest an H1 re-run can start, so the deletion
-    stage and the re-run decision are taken together rather than twice.
+    That test was a date guard and it did its job: it reddened `reminders`
+    from 2026-11-01 and the red was a VERDICT, not a failure.
 
-    WHEN THIS GOES RED: run the reservation-deletion stage. Do NOT move the
-    date, and do not re-acknowledge without a fresh measurement of the 87/31/9
-    figures — if they have changed, the sizing that justified deferring is
-    stale too.
+    IT IS NOT REPLACED BY ANOTHER DATE. What replaces it is the contract,
+    which is a PROPERTY of the deployed calendar and cannot expire: the
+    reservation is zero outside FROM..UNTIL, so the machinery goes inert on
+    2026-11-09 with no code change and nothing is left to acknowledge.
+
+    DELIBERATELY NOT ASSERTED: that the reservation is zero TODAY. It is 168
+    today and that is correct -- 11-06 is inside the window. A stop-driven
+    funding switch was built to make it zero three days early and reverted
+    the same day: it flipped 13 capture-gate tests and made a stopped
+    experiment report as `BUDGET_UNREADABLE`. `h1_window.STOPPED_ON` carries
+    the reasoning and the accepted cost.
     """
-    from tests.experiment_pins import (ACKNOWLEDGED_H1_RESERVATION_GUARD,
-                                       H1_RESERVATION_ACK_UNTIL)
+    from tests.experiment_pins import H1_RESERVATION_SUCCESSOR as S
+    from src.data import h1_window as w
+    from src.data.odds_quota import allocate as alloc
+    from src.data.odds_quota import h1_reservation as res
 
-    today = dt.date.today()
-    assert today < H1_RESERVATION_ACK_UNTIL, (
-        f"the H1 reservation acknowledgement expired on "
-        f"{H1_RESERVATION_ACK_UNTIL} and today is {today}. The clearing "
-        f"action is the deletion stage: "
-        f"{ACKNOWLEDGED_H1_RESERVATION_GUARD['clearing_action']}")
+    assert str(w.STOPPED_ON) == S["stopped_on"], (
+        "the recorded stop date and the experiment record disagree")
+    for probe in (w.UNTIL, w.UNTIL + dt.timedelta(days=1),
+                  w.UNTIL + dt.timedelta(days=90)):
+        assert res(probe) == 0 and alloc(today=probe)["h1_ceiling"] == 0, (
+            f"{probe} is at or past UNTIL and still funded")
+    assert all(w.contains(d) for d in w.days_list())
+    assert not w.contains(w.UNTIL)
+    # ── AND THE STOP IS A RECORD, READ BY NO FUNDING PATH. ────────────────
+    #
+    # NOT `inspect.getsource(res)`. That is what I wrote first and it passed
+    # VACUOUSLY: `conftest` monkeypatches `h1_reservation` to a stub
+    # (`_declared_only`, 111 characters), so the assertion was reading the
+    # STUB's source and could never have seen the real function. A test that
+    # passes for the wrong reason is worse than one that fails.
+    #
+    # So the file is read from disk, and through `code_of` -- which strips
+    # comments AND docstrings, and is required here because the real
+    # docstring MENTIONS `h1_window.STOPPED_ON` on purpose. The claim is
+    # about the CODE, not the prose.
+    from tests.conftest import anchored, code_of
+
+    quota_src = pathlib.Path("src/data/odds_quota.py").read_text(
+        encoding="utf-8")
+    body = anchored(code_of(quota_src), "def h1_reservation",
+                    "odds_quota.py with comments and docstrings stripped")
+    assert "STOPPED_ON" not in body, (
+        "odds_quota CODE references the stop again; that funding switch was "
+        "reverted for measured reasons -- read h1_window.STOPPED_ON before "
+        "re-adding it")
+    # and the behavioural half, which no stub can fake away: a day INSIDE the
+    # window but after the stop is still funded, because the stop is not read
+    assert res(dt.date(2026, 11, 8)) == 168, (
+        "the last collection day is unfunded, so something IS reading the "
+        "stop")
 
 
-def test_the_ACKNOWLEDGEMENT_records_the_figure_the_reason_and_the_COST():
-    """Not date-dependent, so it stays in the gating suite.
+def test_the_SUCCESSOR_RECORDS_THE_RE_MEASURED_SIZING_AND_WHAT_WAS_KEPT():
+    """The retired guard's instruction: do not re-acknowledge without a fresh
+    measurement of the 87/31/9 figures, because the size is what justified
+    deferring. It was re-measured, and it had TRIPLED."""
+    from tests.experiment_pins import H1_RESERVATION_SUCCESSOR as S
 
-    An acknowledgement that does not carry its sized cost is a deferral with
-    no estimate, and the estimate is the whole reason this one is defensible
-    rather than evasive.
-    """
-    from tests.experiment_pins import ACKNOWLEDGED_H1_RESERVATION_GUARD as A
-
-    for field in ("figure", "why_not_retired", "sized_cost",
-                  "clearing_action", "review", "review_basis"):
-        assert A.get(field), f"the acknowledgement has no {field}"
-    c = A["sized_cost"]
-    assert (c["references"], c["assertions"], c["test_files"]) == (87, 31, 9), (
-        "the sized cost changed; re-measure before re-acknowledging, because "
-        "the size is what justified deferring the deletion")
-    assert c["measured"] == "2026-10-18"
-    assert "DELETION" in A["clearing_action"].upper()
-    assert "for_h1" in A["clearing_action"], (
-        "the clearing action does not protect the attribution flag, which is "
-        "what keeps H1's spend measurable at 6 of 168 rather than inferred")
-    assert len(A["why_not_retired"]) > 100
+    was, now = S["sized_cost_when_deferred"], S["sized_cost_now"]
+    assert (was["references"], was["assertions"], was["test_files"]) == (
+        87, 31, 9), "the figure that justified deferring was edited"
+    assert was["measured"] == "2026-10-18"
+    assert now["measured"] == "2026-11-06"
+    assert now["references"] > was["references"], (
+        "the re-measurement did not happen, or the cost shrank -- either way "
+        "say which, because the sizing is the whole argument")
+    assert now["references"] == 274 and now["assertions"] == 61
+    # the deletion was NOT performed, and the reason is the thing to pin
+    assert S["assertions_encoding_a_live_fact"] == 51
+    assert S["assertions_encoding_a_live_fact"] < now["assertions"]
+    for field in ("stopped_on", "stop_basis", "contract", "inert_via",
+                  "kept_for_a_future_attempt",
+                  "how_a_future_attempt_resumes"):
+        assert S.get(field), f"the successor record has no {field}"
+    resume = S["how_a_future_attempt_resumes"]
+    assert "FROM/UNTIL" in resume and "STOPPED_ON" in resume, (
+        f"the record does not say how a future attempt turns the reservation "
+        f"back on, which is the thing a future reader needs: {resume!r}")
+    assert "rebuild" in resume, (
+        "the record does not say that the enforcement machinery survives, "
+        "which is the whole reason the deletion was not performed")
+    assert "review" not in S, (
+        "a review date here would make this a deferral again; the condition "
+        "is gone, not postponed")
 
 
 # ══════════ ONE RUN, ONE MEANING — the workflow split, 2026-10-21 ══════════

@@ -406,8 +406,24 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       refusal cases, the two expansion helpers' fall-through and
     #       empty-filter behaviour, and the SELECTION_SPEC agreement.
     #       GATE UNCHANGED at 1732, verified as NODE IDS -- see CENSUS.
-    assert len(nong) == 974, (
-        f"the non-gating selection is {len(nong)}, recorded 974")
+    #   +9 on 2026-11-06: controls added while clearing four reds, and the
+    #       GATE and the CENSUS did not move at all (1732, 144/78/66) --
+    #       every one landed outside the capture path.
+    #         test_no_secrets_in_repo.py  +3  the known-wrong control the
+    #           docs/memory coverage was missing (the memory file AS IT WAS,
+    #           reconstructed with synthetic values, must be REFUSED), its
+    #           synthetic-fixture check, and a clean-text control so a
+    #           non-empty result means something
+    #         test_two_margins.py         +3  the structural acknowledgement
+    #           keyed by day type: the keying itself, the binding term named,
+    #           the weekday/weekend conflation as a known-wrong control, and
+    #           a missing-day-type refusal
+    #         test_margin_acknowledged.py +3  the retirement, the vacuity
+    #           guard (an empty register answers {} to everything, so every
+    #           refusal would pass for the wrong reason), and the prepared
+    #           re-derivation recorded with its blocker
+    assert len(nong) == 983, (
+        f"the non-gating selection is {len(nong)}, recorded 983")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

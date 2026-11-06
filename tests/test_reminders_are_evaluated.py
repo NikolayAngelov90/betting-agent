@@ -52,9 +52,15 @@ SRC = YML.read_text(encoding="utf-8")
 REMINDERS = {
     "tests/test_absent_run_and_unparseable.py": [
         "test_the_detector_does_not_call_a_day_with_a_RUN_missing"],
+    # `test_the_H1_RESERVATION_ACKNOWLEDGEMENT_EXPIRES` RETIRED 2026-11-06:
+    # it fired on 11-01, reddened this workflow by VERDICT for five days, and
+    # its clearing action was taken. Its successor is a PROPERTY, not a date,
+    # so it is still a reminder in the sense that matters -- it fails if the
+    # reservation starts funding a stopped experiment again -- but it cannot
+    # expire. The count below moves with it.
     "tests/test_calendar_separation.py": [
         "test_the_H1_RESERVATION_WINDOW_EXPIRES",
-        "test_the_H1_RESERVATION_ACKNOWLEDGEMENT_EXPIRES"],
+        "test_the_H1_RESERVATION_SUCCESSOR_CONTRACT_HOLDS"],
     "tests/test_cron_split_by_daytype.py": [
         "test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED"],
     "tests/test_empty_card_suppression.py": [
@@ -469,18 +475,65 @@ def test_the_RUN_THAT_LIED_is_recorded_in_the_audit_beside_the_table():
 
 # ── what reddens next, so the date is not rediscovered ───────────────────
 
-def test_the_NEXT_SCHEDULED_RED_is_recorded_and_is_2026_11_01():
-    """`measured` 2026-10-22: of the seven reminders, the only one driven by
-    a DATE that has not yet passed is `H1_RESERVATION_ACK_UNTIL`. The other
-    two calendar guards already fired and had their decisions taken
-    (`EMPTY_CARD_UNTIL` 2026-10-09, the H1 window 2026-10-17/acknowledged
-    10-18); the remaining four are `live` and depend on data, not the clock.
+def test_there_is_NO_DATE_DRIVEN_RED_PENDING_and_that_is_MEASURED():
+    """Restated 2026-11-06, and NOT restated as another date.
+
+    WAS: "of the seven reminders, the only one driven by a DATE that has not
+    yet passed is `H1_RESERVATION_ACK_UNTIL`" (`measured` 2026-10-22). That
+    date passed on 2026-11-01, reddened `reminders` by VERDICT for five days,
+    and its clearing action was taken on 2026-11-06 -- so the symbol no
+    longer exists and the old assertion could not even be evaluated.
+
+    NOW, `measured` 2026-11-06 by scanning every `date(...)` assigned to an
+    UPPER_CASE name under `tests/`: the only one that had passed and was
+    UNRESOLVED was `H1_RESERVATION_ACK_UNTIL`. Every other passed date is a
+    test FIXTURE, and the next future one is 2027-04-02 -- an Easter fixture,
+    not a guard.
+
+    SO THE REMAINING REMINDERS ARE DATA-DRIVEN, NOT CLOCK-DRIVEN. This
+    asserts that property instead of a date, because "the next red is on D"
+    is a stale literal waiting to happen -- which is precisely how its
+    predecessor came to name a symbol that no longer existed.
     """
     import datetime as dt
+    import pathlib
+    import re
 
-    from tests.experiment_pins import H1_RESERVATION_ACK_UNTIL
+    pat = re.compile(r"_?date\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})\)")
+    name_pat = re.compile(r"\s*([A-Z][A-Z0-9_]*)\s*[:=]")
+    found = []
+    files = sorted(pathlib.Path("tests").glob("*.py"))
+    assert files, "the tests/ glob found nothing, so this verifies nothing"
+    for f in files:
+        for ln, line in enumerate(
+                f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            m, nm = pat.search(line), name_pat.match(line)
+            if m and nm:
+                found.append((dt.date(*(int(g) for g in m.groups())),
+                              nm.group(1), f"{f.name}:{ln}"))
+    assert found, (
+        "the scan found no registered dates at all, so any claim about which "
+        "of them is pending verifies nothing -- UNEVALUATED, not clear")
 
-    assert H1_RESERVATION_ACK_UNTIL == dt.date(2026, 11, 1)
-    assert H1_RESERVATION_ACK_UNTIL > dt.date(2026, 10, 22), (
-        "the H1 reservation acknowledgement has expired; `reminders` is now "
-        "red BY VERDICT and the clearing action is the deletion stage")
+    # THE NEGATIVE CLAIM IS MADE AGAINST THE MODULE, NOT THE SOURCE TEXT.
+    # A `not in <raw source>` assertion here would be satisfied by a comment
+    # mentioning the name, and it put this test into the hand-rolled
+    # raw-match backlog for no gain: `hasattr` is the authoritative check and
+    # cannot be fooled by prose. The scan above stays, because its job is the
+    # POSITIVE census of which dates exist.
+    import tests.experiment_pins as pins
+
+    assert not hasattr(pins, "H1_RESERVATION_ACK_UNTIL"), (
+        "H1_RESERVATION_ACK_UNTIL is back. A future attempt gets its own "
+        "name and its own basis rather than reviving a retired one")
+    assert hasattr(pins, "H1_RESERVATION_SUCCESSOR"), (
+        "the successor record is gone, so nothing says why the "
+        "acknowledgement was retired")
+    # the census must have been able to find a date guard at all
+    assert any(n.endswith("_UNTIL") or n.endswith("_ON") or "DATE" in n
+               for _d, n, _w in found) or len(found) >= 10, (
+        f"the scan found {len(found)} dates but none shaped like a guard, so "
+        f"it may be looking in the wrong place")
+

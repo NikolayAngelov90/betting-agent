@@ -265,11 +265,43 @@ def test_the_PARALLEL_bound_carries_its_n_which_is_ONE():
     # not a decision. The decision is due when the series can actually be
     # RE-DERIVED, which is `MIN_N_TO_REDERIVE_PICKS_BOUND`. Same over-eager
     # threshold as the series-reset reminder, made twice in two days.
+    # ── THE WORK IS DONE AND THE DECISION IS NOT MINE. 2026-11-06. ────────
+    #
+    # This reminder is LEFT RED on purpose. It fired correctly at n=12, the
+    # re-derivation was performed, measured, and then REVERTED, and the
+    # figures are recorded in `ci_audit.PREPARED_PICKS_BOUND` so the red is
+    # actionable rather than a request to start over.
+    #
+    # WHY IT WAS REVERTED. Substituting the bound is arithmetic on every
+    # margin (+47.75 on the max pairing), and it was checked against
+    # `schedule_deadline.py`, which references neither constant. That check
+    # was too narrow: the constants also feed the CRON DERIVATION, and the
+    # latest 15-minute boundary clearing the registered 60 moves 60 -> 105 on
+    # weekdays and 30 -> 60 at the weekend. TEN assertions in this file encode
+    # the ARGUMENT for the authorised `s5.19` move -- that it spends real
+    # margin, that the pooled reading was an artefact, that the rejected cron
+    # was a breach.
+    #
+    #     Re-deriving a bound is a MEASUREMENT.
+    #     Rewriting the recorded argument for an AUTHORISED decision is not.
+    #
+    # So it waits, and it waits VISIBLY: `reminders` red means a decision is
+    # due, and one is.
     n = s.get("n")
+    prepared = ci.PREPARED_PICKS_BOUND
     assert n is None or n < ci.MIN_N_TO_REDERIVE_PICKS_BOUND, (
         f"the parallel series has reached n={n} of "
-        f"{ci.MIN_N_TO_REDERIVE_PICKS_BOUND}: RE-DERIVE the picks bound and "
-        f"re-open `0 2`, rather than going on quoting the simulated 55.1")
+        f"{ci.MIN_N_TO_REDERIVE_PICKS_BOUND}. THE RE-DERIVATION IS ALREADY "
+        f"MEASURED AND PREPARED -- `ci_audit.PREPARED_PICKS_BOUND`: max "
+        f"{prepared['max']} (was {prepared['replaces']['max']}), mean+3sd "
+        f"{prepared['mean_plus_3sd']} (was "
+        f"{prepared['replaces']['mean_plus_3sd']}), n={prepared['n']} "
+        f"measured {prepared['measured']}. Applying it adds "
+        f"{prepared['margin_delta']['max_pairing']}m to every max-pairing "
+        f"margin and opens "
+        f"{prepared['cron_headroom_it_opens']['weekday']}m of weekday cron "
+        f"headroom. BLOCKED ON: {prepared['blocked_on']}. This red clears "
+        f"when that decision is taken, not by a measurement.")
 
 
 # ── PART C: the series reset, as a COST ──────────────────────────────────
@@ -299,14 +331,54 @@ def test_the_SERIES_RESET_is_recorded_as_a_COST_with_the_new_date():
     # a `live` test in the reminders selection, so its failure IS a due
     # decision; the decision is due when n reaches the 10 the second-step
     # condition needs, which is the projected 2026-11-06.
-    n = len(by_type.get("weekday") or [])
-    assert n < SECOND_STEP_CONDITION["n_min"], (
-        f"the weekday series has reached n={n} under the new cron, so the "
-        f"second-step condition is now EVALUABLE: check it (no point above "
-        f"{SECOND_STEP_CONDITION['no_point_above']}, gap ratio below "
-        f"{SECOND_STEP_CONDITION['gap_ratio_below']}, mean+3sd at most "
-        f"{SECOND_STEP_CONDITION['mean_plus_3sd_at_most']}) and either take "
-        f"the second step or record that the slow cluster still governs.")
+    # ── THE CONDITION WAS EVALUATED ON 2026-11-06 AND IT FAILED. ──────────
+    #
+    # The reminder above fired as designed when n reached 10, and it offered
+    # two clearing actions: take the second step, or RECORD THAT THE SLOW
+    # CLUSTER STILL GOVERNS. The second one is a measurement, so it was
+    # taken rather than deferred.
+    #
+    # `measured` 2026-11-06, grain=RUN, n=11 weekday lags under `0 1`:
+    #   272.3 272.9 287.3 325.5 336.0 336.4 357.4 363.8 381.8 388.8 389.8
+    #
+    #   criterion              required    measured   verdict
+    #   no point above            200.0      389.75   NOT MET  (by 189.75)
+    #   gap ratio below             8.0       91.76   NOT MET  (11x over)
+    #   mean+3sd at most          156.2      463.77   NOT MET  (3.0x over)
+    #
+    # FAILED ON ALL THREE, and not marginally. The slow cluster governs and
+    # the second step is NOT taken. That is recorded here rather than in a
+    # comment elsewhere, because the assertion below is what stops the
+    # reminder firing again every day for a decision already taken.
+    #
+    # WHAT WOULD RE-OPEN IT: the series becoming fast enough to meet the
+    # condition. The assertion is therefore on the CONDITION, not on n -- so
+    # it fires again if the lateness genuinely improves, which is the only
+    # event that should re-open the question.
+    SECOND_STEP_EVALUATED = {
+        "on": "2026-11-06", "n": 11, "verdict": "NOT MET on all three",
+        "max": 389.75, "gap_ratio": 91.76, "mean_plus_3sd": 463.77,
+    }
+    import statistics
+    lag = [l for _d, l in (by_type.get("weekday") or [])]
+    n = len(lag)
+    assert n >= SECOND_STEP_CONDITION["n_min"], (
+        f"the weekday series fell to n={n}, below the "
+        f"{SECOND_STEP_CONDITION['n_min']} the condition needs. A series that "
+        f"SHRANK is a different event from one that never filled -- say which")
+    worst = max(lag)
+    m3 = statistics.mean(lag) + 3 * statistics.pstdev(lag)
+    assert (worst > SECOND_STEP_CONDITION["no_point_above"]
+            or m3 > SECOND_STEP_CONDITION["mean_plus_3sd_at_most"]), (
+        f"the second-step condition now PASSES on the level criteria "
+        f"(max {worst:.2f} vs {SECOND_STEP_CONDITION['no_point_above']}, "
+        f"mean+3sd {m3:.2f} vs "
+        f"{SECOND_STEP_CONDITION['mean_plus_3sd_at_most']}). The lateness "
+        f"has genuinely improved since it was evaluated at "
+        f"{SECOND_STEP_EVALUATED['on']} "
+        f"(max {SECOND_STEP_EVALUATED['max']}, mean+3sd "
+        f"{SECOND_STEP_EVALUATED['mean_plus_3sd']}): RE-EVALUATE the second "
+        f"step, which is now a live option rather than a closed one.")
 
 
 def test_BOTH_SERIES_are_RETAINED_and_LABELLED_BY_CRON_never_pooled():

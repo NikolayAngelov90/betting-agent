@@ -172,7 +172,16 @@ RETIRED_H1_RESERVATION_WINDOW = _h1_window.RETIRED
 
 
 def h1_reservation(today: Optional[_date] = None) -> int:
-    """Credits reserved for H1 TODAY. Zero outside the window."""
+    """Credits reserved for H1 TODAY. Zero outside the window.
+
+    STILL BY CALENDAR AND BY NOTHING ELSE. On 2026-11-06 a stop-driven
+    funding switch was added here and reverted the same day: it flipped 13
+    capture-gate tests (the latent members with no explicit `today=`) and
+    made `reservation_is_expressible()` report a STOPPED experiment as
+    `BUDGET_UNREADABLE`, which is a third-state collapse. The reservation goes
+    inert on UNTIL by design; see `h1_window.STOPPED_ON` for the full
+    reasoning and the accepted cost.
+    """
     today = today or _date.today()
     if H1_RESERVATION_FROM <= today < H1_RESERVATION_UNTIL:
         return H1_RESERVED_CREDITS

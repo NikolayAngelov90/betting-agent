@@ -329,6 +329,32 @@ def classify_red(workflow: str, log: str, facts: Dict[str, object]) -> tuple:
 # verdict and its resolution. What changes is only whether it enters `alarmed`.
 RESOLVED_RUNS = {
     # run id        (resolving commit, reason)
+    # ── THE ROTATION WINDOW, RESOLVED 2026-11-06. ──────────────────────────
+    #
+    # BOTH ARE CONSEQUENCES OF AN OPERATOR ACTION, NOT FINDINGS. On 2026-11-05
+    # the `DATABASE_URL` and `TELEGRAM_BOT_TOKEN` secrets were rotated at
+    # 10:28:17Z and 10:37:04Z after six credentials were found in plaintext in
+    # a memory file. Two manually dispatched `daily-picks` runs straddled that
+    # window:
+    #
+    #   42009542908  started 10:17:58Z, BROKEN with 6 tracebacks on the DB
+    #                steps -- it was holding the OLD connection string when
+    #                the password was rotated 10m into the run
+    #   42011125644  started 10:29:30Z, DID_NOT_RUN -- cancelled, superseded
+    #
+    # THE CARD WAS NEVER AT RISK: the scheduled run 41987611677 (07:29:45Z)
+    # had already completed DEGRADED, which is this pipeline's ordinary state,
+    # and 2026-11-06's scheduled run 42181135849 succeeded. The two reds are
+    # collateral of a credential rotation that had to happen immediately.
+    #
+    # A consequence of an operator action is not a second finding, and the
+    # resolving "commit" is the rotation itself rather than a code change --
+    # recorded as the secret-guard commit that prompted it.
+    "42009542908": ("ea8baad", "collateral of the 2026-11-05 credential "
+                               "rotation: held the pre-rotation DATABASE_URL "
+                               "when the password changed mid-run"),
+    "42011125644": ("ea8baad", "cancelled during the same rotation window; "
+                               "superseded, never a finding"),
     # ── THE SIX-DAY OUTAGE, RESOLVED 2026-10-18 BY 7514a50 ─────────────────
     #
     # One finding, six reds, and the partition was IDENTICAL on all six:
@@ -1804,6 +1830,54 @@ REDERIVE_PICKS_BOUND_PLAN = (
     "MIN_N_TO_REDERIVE_PICKS_BOUND post-cccb0e6 weekday runs exist; do NOT "
     "pool them with the serial runs, and report max and mean+3sd together "
     "with the regime named")
+# ── THE TRIGGER HAS FIRED AND THE RE-DERIVATION IS *NOT* APPLIED. 2026-11-06.
+#
+# `REDERIVE_PICKS_BOUND_PLAN`'s condition is met: the parallel-regime series
+# reached n=12 against MIN_N_TO_REDERIVE_PICKS_BOUND=10. The replacement
+# figures are MEASURED and recorded here so the next reader does not have to
+# re-derive them:
+#
+#   OLD (deployed)  serial, FULL-CARD weekday runs, n=4, measured 2026-10-01
+#                   max 88.1   mean+3sd 107.0   range 67.4-88.1
+#   NEW (prepared)  parallel, ALL-CARD weekday runs, n=12, measured 2026-11-06
+#                   max 40.35  mean+3sd 64.59   mean 26.53  sd 12.69
+#                   members descend from cccb0e6; NOT pooled with the serial 4
+#
+# WHY IT IS NOT APPLIED, having been applied and reverted the same day.
+#
+# Substituting it is arithmetic on every margin (+47.75 on the max pairing,
+# +42.41 on mean+3sd) and it was verified not to touch `schedule_deadline.py`,
+# which references neither constant. That check was too narrow. The constants
+# also feed the CRON DERIVATION, and with the new bound the latest 15-minute
+# boundary clearing the registered 60 moves from 60 to 105 on weekdays and
+# from 30 to 60 at the weekend:
+#
+#     the deployed cron becomes 45 min EARLIER than it needs to be,
+#     and TEN tests in `test_cron_moved.py` encode the ARGUMENT for the
+#     s5.19 move -- that it spends real margin, that the pooled reading was
+#     an artefact, that the rejected cron was a breach.
+#
+# Re-deriving a bound is a MEASUREMENT. Rewriting the recorded argument for an
+# AUTHORISED decision is not, and `s5.19`'s weekday `0 1` / weekend `30 0`
+# carries Niki's authorisation with its trade written down. So the measurement
+# is recorded, the substitution is prepared, and it waits for the decision --
+# which is also an opportunity, not only a cost: 45 minutes of margin are
+# provably unspent.
+PREPARED_PICKS_BOUND = {
+    # INLINED, not a reference: `PICKS_BOUND_NEW_POPULATION` is defined
+    # further down this file, so naming it here is a forward reference.
+    "regime": ("time-to-picks over ALL-CARD weekday runs, PARALLEL "
+               "review regime (REVIEW_CONCURRENCY=4, first in cccb0e6, "
+               "2026-10-21 21:29)"),
+    "n": 12, "measured": "2026-11-06",
+    "max": 40.35, "mean_plus_3sd": 64.59, "mean": 26.53, "sd": 12.69,
+    "replaces": {"max": 88.1, "mean_plus_3sd": 107.0},
+    "margin_delta": {"max_pairing": 47.75, "mean_plus_3sd_pairing": 42.41},
+    "cron_headroom_it_opens": {"weekday": 45, "weekend": 30},
+    "blocked_on": ("authorisation: applying it rewrites the recorded "
+                   "argument for the s5.19 cron decision (10 assertions in "
+                   "test_cron_moved.py)"),
+}
 FULL_CARD_PICKS_MAX = 88.1
 FULL_CARD_PICKS_3SD = 107.0
 
@@ -3568,28 +3642,42 @@ def verdict(facts: Dict[str, object], hits: List[str],
 #: the next scheduled run. An acknowledgement pinned to the reading itself
 #: would re-alarm within a day or two and the daily red would be back.
 ACKNOWLEDGED_MARGIN_BREACH_JITTER = 11.32
-ACKNOWLEDGED_MARGIN_BREACH: dict = {
-    "weekday": {
-        "since": "2026-10-22",
-        "measured_at": 20.665799601890512,
-        "binding": 20.665799601890512 - ACKNOWLEDGED_MARGIN_BREACH_JITTER,
-        "jitter": ACKNOWLEDGED_MARGIN_BREACH_JITTER,
-        "why": ("the deadline is the observed earliest kickoff and the ready "
-                "time is ours, so no deadline choice clears it; and the "
-                "reading is CONSERVATIVE on both terms - the picks bound is a "
-                "full-card MAX from the retired SERIAL regime (88.1m, n=4) "
-                "while the parallel series' one observation is 35.1m, and the "
-                "lateness series is BIMODAL (n=10: 255.9-304.9 then "
-                "128.4-144.1, same cron) so mean+3sd is measuring "
-                "between-cluster spread rather than tail risk"),
-        "action": ("dispatch daily-picks by hand on the morning (it skips the "
-                   "measured 3h58m-5h04m scheduler lateness); the durable "
-                   "clearing action is the parallel-regime picks series "
-                   "reaching n=10 and FULL_CARD_PICKS_MAX being re-derived "
-                   "from it"),
-        "review": "2026-11-04",
-    },
-}
+# ── RETIRED 2026-11-06: EXPIRED, AND ITS ACTION IS BLOCKED, SO IT IS GONE. ──
+#
+# The entry read `measured_at=20.665799601890512, binding=9.3458,
+# since=2026-10-22, review=2026-11-04`, and its registered clearing action was
+# "the parallel-regime picks series reaching n=10 and FULL_CARD_PICKS_MAX
+# being re-derived from it".
+#
+# ITS REVIEW DATE PASSED ON 2026-11-04 and the two `DRIVEN` tests exercising
+# its coverage had been red since -- the expiry working, not a bug. A
+# self-expiring acknowledgement is cleared by its action or DELETED. Never
+# extended.
+#
+# THE ACTION'S TRIGGER HAS FIRED BUT THE ACTION IS NOT AVAILABLE TO ME. The
+# series reached n=12, the re-derivation was performed, measured and REVERTED
+# the same day: the constants also feed the cron derivation, and applying them
+# rewrites ten assertions that encode the argument for the AUTHORISED `s5.19`
+# cron move. The figures are in `PREPARED_PICKS_BOUND`.
+#
+# SO IT IS DELETED AND THE BREACH ALARMS. The live reading is -6.93 against a
+# 30-minute threshold -- a 27.6-minute DETERIORATION from the +20.67 this
+# entry acknowledged -- and re-acknowledging a deterioration is the one thing
+# an acknowledgement must never do. This is the same disposition the `0 4`
+# entry got on 2026-10-20: it alarms until the decision is taken, that is the
+# clearing action, and it is now the blocking item.
+#
+# AN ALARM WITH A CLEARING ACTION IS NOT CLR-2 NOISE. CLR-2 forbids alarms
+# that no available action clears; this one clears the moment the
+# authorisation is given, and the work behind it is already done.
+#
+# `margin_breach_is_acknowledged` IS KEPT. An empty register is the correct
+# state for "nothing is deferred", and keeping the function means the next
+# deferral is a data entry rather than a code change. Its behaviour is still
+# driven -- against a SYNTHETIC entry, because an empty register would
+# otherwise make those tests vacuous: a function returning {} for everything
+# passes every "it refuses" assertion for the wrong reason.
+ACKNOWLEDGED_MARGIN_BREACH: dict = {}
 
 
 def margin_breach_is_acknowledged(day_type: str, binding: float) -> dict:
@@ -3601,13 +3689,22 @@ def margin_breach_is_acknowledged(day_type: str, binding: float) -> dict:
     # previous entry's `review` date passed on 2026-10-18 and it kept
     # absorbing a +21m weekday breach, because this function compared only
     # `binding`. A deferral with a date that nothing reads is not a deferral.
+    # ── AN UNDATED ACKNOWLEDGEMENT IS A SUPPRESSION. 2026-11-06. ────────
+    #
+    # This was `if review:`, so an entry with NO review key skipped the expiry
+    # check entirely and absorbed forever -- the exact shape the date exists
+    # to prevent, reachable by omitting one field. `structural_breach_is_
+    # acknowledged` already refused that case; this one did not, and the
+    # asymmetry was invisible because the only entry ever written had a date.
+    # Found by a known-wrong control, not by a run.
     review = ack.get("review")
-    if review:
-        try:
-            if _dt.date.today() > _dt.date.fromisoformat(review):
-                return {}
-        except ValueError:
-            return {}          # an unparseable date absorbs nothing either
+    if not review:
+        return {}
+    try:
+        if _dt.date.today() > _dt.date.fromisoformat(review):
+            return {}
+    except (ValueError, TypeError):
+        return {}              # an unparseable date absorbs nothing either
     # MORE negative than the recorded figure is a NEW observation, and a
     # standing acknowledgement must not absorb a deterioration.
     return ack if binding >= ack["binding"] else {}
@@ -4323,7 +4420,16 @@ def main() -> int:
         # `ACKNOWLEDGED_MARGIN_BREACH` compared only the figure and absorbed
         # a breach for days past its own review date.
         _deficit = _struct["binding"] - _struct["min_margin"]
-        _sack = structural_breach_is_acknowledged(_deficit)
+        # THE DAY TYPE IS PASSED, because the acknowledgement is keyed
+        # by it from 2026-11-06: the structural floor is 29.3 minutes
+        # earlier at the weekend, and one unkeyed figure was covering
+        # both day types while having been measured on a Wednesday.
+        _sack = structural_breach_is_acknowledged(
+            _deficit, day_type(_tomorrow))
+        # The entry for THIS day type, whether or not it currently
+        # covers the reading: the alarm text must name the figure it
+        # was actually compared against.
+        _sack_live = STRUCTURAL_ACK.get(day_type(_tomorrow)) or {}
         if _sack:
             print(f"   structural margin {_struct['binding']:+.0f} min for "
                   f"{_tomorrow} is below {_struct['min_margin']} min "
@@ -4334,16 +4440,16 @@ def main() -> int:
             print(f"!! STRUCTURAL MARGIN {_struct['binding']:+.0f} min for "
                   f"{_tomorrow} (deficit {_deficit:+.1f}) is NO LONGER "
                   f"COVERED by the acknowledgement made "
-                  f"{STRUCTURAL_ACK['since']} at "
-                  f"{STRUCTURAL_ACK['binding']:+.1f} (review "
-                  f"{STRUCTURAL_ACK['review']}): it has either DETERIORATED "
+                  f"{_sack_live.get('since')} at "
+                  f"{_sack_live.get('binding', 0.0):+.1f} (review "
+                  f"{_sack_live.get('review')}): it has either DETERIORATED "
                   f"or passed its review date. CLEARING ACTION: "
-                  f"{STRUCTURAL_ACK['action']}")
+                  f"{_sack_live.get('action', '')}")
             alarmed.append(
                 f"structural margin deficit {_deficit:+.1f}m for {_tomorrow} "
                 f"is worse than the acknowledged "
-                f"{STRUCTURAL_ACK['binding']:+.1f}m, or the acknowledgement "
-                f"(review {STRUCTURAL_ACK['review']}) has expired")
+                f"{_sack_live.get('binding', 0.0):+.1f}m, or the acknowledgement "
+                f"(review {_sack_live.get('review')}) has expired")
 
     if _cron is None:
         # ── MADE TO ALARM 2026-10-22. ─────────────────────────────────────

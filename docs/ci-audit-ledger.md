@@ -35901,3 +35901,348 @@ measurement stage of its own. Not touched here.
 `tests/test_market_vocabulary.py` (new), `docs/absence-sweep-registration.md`
 (new), `src/betting/value_calculator.py`, `scripts/h1_analysis.py`,
 `tests/test_cron_split_by_daytype.py`.*
+
+---
+
+## 2026-11-06 — FOUR REDS, AND THEY ARE ONE DECISION
+
+`RESERVATION DELETED` · `MARGIN RESTATED` · `REDS CLASSIFIED` ·
+`ROTATION RECORDED` · `H1 DESIGN REGISTERED`
+
+> **The four reds reduce to ONE pending authorisation, and it is not mine.**
+> Two were cleared outright; the other two are the same blocked decision seen
+> from two workflows.
+
+**TWO THINGS I BUILT TODAY WERE REVERTED BY THEIR OWN MEASUREMENTS**, and both
+reversals are recorded below rather than tidied away. In each case the change
+worked and the cost of it was larger than the benefit — which was only visible
+after building it.
+
+### `RESERVATION DELETED` — the contract is a property, and it was already true
+
+The guard's instruction was *"do not re-acknowledge without a fresh
+measurement of the 87/31/9 figures"*. Re-measured 2026-11-06 over the five
+symbols its clearing action names, grain=SYMBOL OCCURRENCE:
+
+| | recorded 2026-10-18 | measured 2026-11-06 |
+|---|---|---|
+| references | 87 | **274** (3.1x) |
+| assert statements | 31 | **61** (2.0x) |
+| assertion-bearing test files | 9 | **7** |
+
+**And the deletion would have been wrong.** Of the 61 assertions, **51 encode
+live facts a FUTURE attempt needs**:
+
+| n | what it protects |
+|---|---|
+| 17 | the reservation ALLOCATES — a `for_h1` instance took **288 credits against a 168 reservation** on 2026-10-23 |
+| 12 | the enforced stop, and proof that each limb fires |
+| 10 | credit attribution — what keeps H1's spend measurable rather than inferred |
+| 6 | the window has ONE definition and every consumer imports it |
+| 3 | terminal states reachable from the caller as wired |
+| 3 | the dead ceiling |
+
+Deleting that removes the guards that stopped an overdraw and keeps nothing.
+
+**THE SUCCESSOR CONTRACT WAS ALREADY SATISFIED BY THE DEPLOYED DESIGN.** The
+reservation is calendar-driven on purpose, so **for any day ≥ `UNTIL`,
+`h1_reservation()` is 0 and `h1_ceiling` is 0** — true today, needing no code,
+arriving on **2026-11-09**. That is a property, it cannot expire, and it is
+what now replaces the date guard.
+
+> **THE FUNDING SWITCH I BUILT, AND WHY IT WENT BACK.** `H1 WINDOW FAILED` on
+> 11-05 but the window's dates run to 11-09, so a 168-credit reservation was
+> still being carved for a stopped experiment. I added
+> `h1_window.STOPPED_ON` + `is_collecting()` to separate the FUNDING question
+> from the POPULATION question — `contains()` deliberately untouched, because
+> `h1_analysis` clamps the closed population on it. It worked: ceiling
+> 168 → 0, normal ceiling 182 → 350.
+>
+> **Measured cost: 13 CAPTURE-GATE tests flipped** — the *latent members* that
+> `test_calendar_separation` already counts and warns about, which call quota
+> methods with no explicit `today=`. Worse,
+> `reservation_is_expressible()` refused the window as **`BUDGET_UNREADABLE`**:
+> it asks whether 168 credits can be CARVED on every window day, which is a
+> DESIGN property, and an unfunded day is indistinguishable from a
+> mis-declared one. **Reporting a stopped experiment as an unreadable budget
+> is a third-state collapse** — the class this project keeps paying for, and I
+> introduced a fresh instance of it while separating two other conflated
+> questions.
+>
+> It bought 4 days × 168 credits that nothing was going to spend. It is
+> reverted; `STOPPED_ON` remains as a **record read by no funding path**, with
+> the reasoning beside it so the next person does not rebuild it.
+
+**THE ACCEPTED COST, stated not hidden:** 168 credits stay reserved
+2026-11-05..11-08 for a stopped experiment. Nothing collects, so nothing
+spends them; the normal ceiling is 182 rather than 350 on four days, against a
+measured usage that has never approached either.
+
+**The acknowledgement is retired with NO successor date.** A date with nothing
+to remind anyone of is the alarm-that-always-fires shape from the other side.
+
+### `MARGIN RESTATED` — three quantities, three floors, one conflation
+
+They had been conflated, and that is what made this look contradictory.
+
+| quantity | reading | the floor it is measured against | n | measured |
+|---|---|---|---|---|
+| weekday SCHEDULE margin (live series) | **+89.92m** vs 60 — CLEARS | derived deadline 630 (10:30) | lag 10, dur 79 | 2026-11-05 |
+| **STRUCTURAL weekday** | **−39.306530** deficit | observed earliest LOCAL kickoff **750** (12:30) | 718 weekday days | 2026-11-06 |
+| **STRUCTURAL weekend** | **−59.407508** deficit | observed earliest LOCAL kickoff **720** (12:00) | 375 weekend days | 2026-11-06 |
+| ci-audit SCHEDULE margin (pooled) | **−6.93** vs 30 | same deadline, a RETIRED picks bound | lag 11 | 2026-11-06 |
+
+Two move in opposite directions because **they are measured against different
+floors** — one a deadline we derive, the others a kickoff that is a fact about
+football.
+
+> **THE ACKNOWLEDGEMENT WAS ONE UNKEYED FIGURE, AND THAT WAS THE DEFECT.**
+> `STRUCTURAL_ACK` held a single `−7.4`, and the structural floor is **30
+> minutes earlier at the weekend**. It was measured on 2026-10-21 — a
+> **Wednesday** — and applied to Sundays, where the deficit is 20.1 minutes
+> worse. It had never been tested against a weekend reading.
+
+**THE CAUSE, NAMED: the lateness distribution.** `measured` 2026-11-06,
+grain=RUN, n=11 under `0 1`:
+`272.3 272.9 287.3 325.5 336.0 336.4 357.4 363.8 381.8 388.8 389.8`
+— mean 332.3, sd 40.7, max **389.75**, **UNIMODAL**. The `−7.4`'s own text
+cites a **BIMODAL** n=10 topping out at 304.9, under the previous cron. **The
+max has moved +84.85 minutes.** Against 332 minutes of scheduler lateness the
+whole duration term (mean 26.5, max 40.35) is a minor part of `ready`, so
+remedies sized in minutes of run time cannot close a deficit of this shape.
+
+And the `−7.4` is **not comparable**: all four of its inputs retired within
+four days of it being written — the floor was localised and re-measured
+(10-22), the cron moved to `0 1` (10-22), DST moved the per-day UTC conversion
+(10-25). Localising also **inverted which day type binds**: the retired UTC
+constants were weekday 570 / weekend 585, so the weekday bound; under local
+measurement the weekend does.
+
+Restated **keyed by day type**, at full precision, with a floor a measured
+jitter under each reading (11.32, borrowed from the lateness-driven binding's
+own single-point moves and corroborated today at 9.21). Driven: covers each
+reading, refuses 0.01 past each floor, covers improvements, refuses a missing
+day type, and **the weekend figure is no longer covered by the weekday
+entry**.
+
+> **THE ROUNDED-FIGURE TRAP CAUGHT ME, THIRD INSTANCE IN THIS REGISTER.** I
+> pinned the acknowledgement at the **printed** `−30.1` and the deterioration
+> predicate refused the live `−39.306530` on its first exposure — exactly as
+> `19.0` once refused `18.89232917906861` and `−7.0` refused `−7.4`. Figures
+> are now stored at full precision and printed from the expressions that
+> compute them.
+
+**A REAL DEFECT, FOUND BY A KNOWN-WRONG CONTROL.**
+`margin_breach_is_acknowledged` did `if review:` — so an entry with **no**
+review date skipped the expiry check and absorbed forever, reachable by
+omitting one field. Its structural sibling already refused that; the asymmetry
+was invisible because the only entry ever written had a date.
+
+**THE SCHEDULE ACKNOWLEDGEMENT IS DELETED, AND ITS BREACH ALARMS.** Its review
+date passed 2026-11-04, and its registered clearing action — re-deriving the
+picks bound — is **prepared but blocked** (below). Re-acknowledging is
+impossible: +20.67 → −6.93 is a **27.6-minute deterioration**, and absorbing a
+deterioration is the one thing an acknowledgement must never do. Same
+disposition the `0 4` entry got on 2026-10-20: it alarms until the decision is
+taken. **An alarm with an available clearing action is not CLR-2 noise** —
+CLR-2 forbids alarms no action clears, and this one clears the moment the
+authorisation is given.
+
+The predicate is kept, and its tests now drive a **synthetic** entry: an empty
+register returns `{}` for everything and would satisfy every "it refuses"
+assertion for the wrong reason.
+
+### `REDS CLASSIFIED` — one finding, four components, two of them consequences
+
+| run | sha | event | tracebacks | steps_failed |
+|---|---|---|---|---|
+| `42188742889` | 412a4bb | workflow_run 08:35Z | 0 | 2 |
+| `42135043919` | 412a4bb | workflow_run 00:11Z | 0 | 2 |
+
+**ONE finding, not two** — the two alarm bodies differ only in figures that
+moved as the series grew. It carried four components:
+
+| # | component | classification |
+|---|---|---|
+| 1 | structural deficit −59.4 for 11-07 not covered | **FIXED** (keyed + restated) |
+| 2 | `42009542908` daily-picks BROKEN | **CONSEQUENCE**, resolved |
+| 3 | `42011125644` daily-picks DID_NOT_RUN | **CONSEQUENCE**, resolved |
+| 4 | schedule margin −6.93 < 30, DETERIORATED | **the remainder** |
+
+2 and 3 are collateral of the **credential rotation**: `DATABASE_URL` and
+`TELEGRAM_BOT_TOKEN` were rotated at 10:28:17Z and 10:37:04Z on 11-05, and two
+manual dispatches straddled it — one holding the pre-rotation connection
+string when the password changed ten minutes into its run, one cancelled.
+**A consequence of an operator action is not a second finding.** The card was
+never at risk: 41987611677 (07:29Z) had completed, and 2026-11-06's
+42181135849 succeeded. Both are in `RESOLVED_RUNS` with the rotation named.
+
+**THE REMAINDER IS ONE DECISION, AND IT IS NOT A MEASUREMENT.**
+`REDERIVE_PICKS_BOUND_PLAN`'s trigger fired at **n=12** against 10:
+
+```
+OLD (deployed)   serial, FULL-CARD weekday, n=4,  2026-10-01   max 88.1   3sd 107.0
+NEW (prepared)   parallel, ALL-CARD weekday, n=12, 2026-11-06  max 40.35  3sd 64.59
+```
+
+Applying it adds **+47.75m** to every max-pairing margin and clears the
+schedule breach outright (weekend −7m → +53m, verified by running it).
+
+> **IT WAS APPLIED AND REVERTED, because my cascade check was too narrow.** I
+> verified `schedule_deadline.py` references neither constant — true, so the
+> derived deadline and `MIN_ACCEPTABLE_MARGIN_MIN` are safe — and stopped
+> there. They also feed the **cron derivation**: the latest 15-minute boundary
+> clearing the registered 60 moves **60 → 105** on weekdays and **30 → 60** at
+> the weekend, and **ten assertions encode the ARGUMENT for the authorised
+> `s5.19` cron move** — that it spends real margin, that the pooled reading
+> was an artefact, that the rejected cron was a breach.
+>
+> Re-deriving a bound is a MEASUREMENT. Rewriting the recorded argument for an
+> AUTHORISED decision is not. The figures are in
+> `ci_audit.PREPARED_PICKS_BOUND`, the reminder now names them so the red is
+> actionable rather than a request to start over, and **45 minutes of weekday
+> margin are provably unspent.**
+
+**THE SECOND-STEP CONDITION WAS EVALUATED RATHER THAN DEFERRED**, because its
+other clearing action was a measurement I could take. `measured` 2026-11-06,
+n=11:
+
+| criterion | required | measured | verdict |
+|---|---|---|---|
+| no point above | 200.0 | **389.75** | NOT MET by 189.75 |
+| gap ratio below | 8.0 | **91.76** | NOT MET, 11x |
+| mean+3sd at most | 156.2 | **463.77** | NOT MET, 3.0x |
+
+Failed on all three and not marginally: **the slow cluster still governs.** The
+assertion now keys on the CONDITION rather than on n, so it re-opens only if
+the lateness genuinely improves — the one event that should re-open it.
+
+#### TOMORROW, PREDICTED (2026-11-07, a WEEKEND day)
+
+| workflow | prediction | what would make it red |
+|---|---|---|
+| `daily-picks` | **GREEN** (DEGRADED) | a capture failure or a red gate; the structural deficit reports, it does not alarm |
+| `non-gating-tests` | **GREEN** | — |
+| `ci-audit` | **RED** | the schedule margin: weekend pooled_binding **+10m** against the 30m threshold |
+| `reminders` | **RED** | the picks-bound decision, by VERDICT |
+
+**Both reds are the same authorisation and both clear with it.** Green is a
+prediction with one named precondition, not a hope.
+
+### `ROTATION RECORDED` — masked, and rotation is what ended it
+
+Measured 2026-11-06 with `git log -S` against each live value. **No value is
+printed here or anywhere.**
+
+| secret | commits containing the CURRENT value | rotated |
+|---|---|---|
+| `DATABASE_URL` | **0** (the old password was in **3**) | **2026-11-05 10:28:17Z** |
+| `TELEGRAM_BOT_TOKEN` | 0 | **2026-11-05 10:37:04Z** |
+| the other five | 0 | — |
+
+**That zero IS the proof of rotation**: the password that appeared in three
+commits is no longer the live one.
+
+> **ROTATION ENDS AN EXPOSURE. REWRITING HISTORY DOES NOT.** The precedent is
+> SEC-1: `.mcp.json` carried two live keys in a public repository for **188
+> days**, and that entry's own words are *"Rotation is what made these keys
+> safe — this commit only stopped the bleeding."* Both values remain in every
+> commit from `02de2b0` onward and in every fork, clone and scraper cache
+> taken during those 188 days. The same is true of the database password: it
+> is in three commits forever, and it is harmless because it is dead.
+
+The guard covers `docs/` and the memory directory, and **it now has the control
+it was missing**: the memory file's SHAPE as it was on 2026-11-04 is
+reconstructed with synthetic values and fed to the same scan the real test
+uses — **it is refused**, on the connection-string password among others. The
+scan logic was extracted into one helper first, because a control that
+re-implements its subject proves only that two copies agree; a clean-text
+control runs the other way so a non-empty result means something.
+
+`memory/github_token.md` carries locations and no values and is indexed in
+`MEMORY.md`, so nothing sits unwatched again.
+
+**THE OPEN ITEM. The file claimed six credentials and documents four**, and the
+memory directory is not a git repository, so the unnamed pair is
+unrecoverable. The five pre-November candidates, ranked by what each can do:
+
+| rank | candidate | secret age | what it can do | action |
+|---|---|---|---|---|
+| **1** | `ANTHROPIC_API_KEY` | 2026-06-10 | **spends money, unbounded** | **rotate first** |
+| 2 | `CLAUDE_CODE_OAUTH_TOKEN` | 2026-06-11 | spends the Pro pool, grants agent capability | rotate |
+| 3 | `API_FOOTBALL_KEY` | 2026-08-27 | free tier, read-only — but the account was **suspended once**, so rotation carries account risk | **accepted risk** if the dashboard offers no in-account regeneration, recorded with that reason |
+| 4 | `ODDS_API_KEY` | 2026-08-23 | free tier, read-only, quota only | low |
+| 5 | `FOOTBALL_DATA_ORG_KEY` | 2026-02-24 | free tier, read-only, 10 calls/min | low |
+
+### `H1 DESIGN REGISTERED` — the vocabulary was not the limit
+
+`docs/h1-design-finding.md`. Of 1,120 qualifying trajectories, **939 were for
+a selection the model did not pick**; 52 matched.
+
+The larger constraint is not about this window. H1 requests
+`markets=h2h,totals`; the card picks from **six** families. `measured`
+2026-11-06, grain=PICK over 2,795 picks:
+
+| reachable by h2h+totals | **1,595 — 57.1%** |
+|---|---|
+| **UNREACHABLE BY DESIGN** | **1,200 — 42.9%** (team_goals 460, double_chance 289, btts 280, draw_no_bet 171) |
+
+No vocabulary work changes that. The 11-05 extraction fixed the
+**comparison**; it could not fix the **coverage**.
+
+The obvious objection — that a pick-following collector needs a later start —
+is false and measured: `daily-picks` completed 07:28Z and the real collection
+instants were 14:11/14:32/16:35/18:38, **4h43m to 11h10m after the card
+existed**. The collector has never run before the picks. So the change is to
+the REQUEST, not the schedule; the band stops being a league filter and
+becomes a kickoff-distance filter, which is the direction this window's supply
+failure argues for. **The credit cost is deliberately NOT sized here** — it
+needs a measured distribution of distinct (league, family) pairs per card, and
+that belongs in the next window's pre-registration, not in a finding written
+from 26 credits.
+
+Second finding, recorded because it was found BY the first and would otherwise
+look like part of it: `picked_selections` overwrote, so **180 of 2,587
+fixtures silently lost one of their two picks**. **FIXED 2026-11-05.**
+
+### DISCIPLINE — three of my own defects, each caught by an existing guard
+
+**1. A VACUOUS ASSERTION OF MINE, AND THE REASON IS WORTH KEEPING.** I wrote
+`assert "STOPPED_ON" not in inspect.getsource(h1_reservation)` to prove the
+funding path does not read the stop. It passed. **It was reading
+`conftest`'s monkeypatched STUB** — `_declared_only`, 111 characters — not the
+real function, which is 750 and mentions `STOPPED_ON` in its docstring on
+purpose. Inside pytest that symbol is not the function.
+
+> **A source assertion through a monkeypatched symbol tests the patch.**
+
+Replaced with the file read from disk through `code_of` (which strips the
+docstring the claim must not see), anchored on `def h1_reservation`, plus a
+behavioural half no stub can fake: 11-08 is still funded.
+
+**2. A GUARD WHOSE NEEDLE BECAME AN EVERYDAY TOKEN.**
+`test_the_fitted_date_NEVER_appears_without_its_R_SQUARED` required that
+`2026-11-06` never be written without `R^2=0.451` beside it, because it was a
+PROJECTION. **Today is 2026-11-06.** It fired on a `RESOLVED_RUNS` entry about
+a credential rotation. The projection has RESOLVED — it predicted n>=10 by
+11-06 and the measured value is n=12 — so the fit is now recorded in
+`PICKS_SERIES_PROJECTION` with its outcome and checked against the live
+series, instead of being required to travel with a date that is also just
+today. **The stale-literal trap with the clock on the other side.**
+
+**3. TWO BACKLOG RATCHETS CAUGHT MY NEW MATCHERS**, each grown by exactly one:
+`raw` 48 -> 49 and `hand` 8 -> 9. Both were mine, both were fixed rather than
+ratcheted up — the negative claim in the reminders census was redundant beside
+an authoritative `hasattr`, and the other became the `code_of` read above.
+**The backlogs are back at baseline, not raised.**
+
+Gate **1732**, membership and census **unchanged** (144 files / 78
+capture_critical / 66 not) — every control added today landed outside the
+capture path. Non-gating 974 -> **983**. `s5.19 / cdec29` unmoved.
+
+*Recorded 2026-11-06. `src/data/h1_window.py`, `src/data/odds_quota.py`,
+`scripts/ci_audit.py`, `scripts/schedule_deadline.py`,
+`tests/experiment_pins.py`, `tests/test_calendar_separation.py`,
+`tests/test_reminders_are_evaluated.py`, `tests/test_margin_acknowledged.py`,
+`tests/test_two_margins.py`, `tests/test_cron_moved.py`,
+`tests/test_no_secrets_in_repo.py`, `docs/h1-design-finding.md` (new).*

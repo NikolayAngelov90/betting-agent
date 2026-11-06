@@ -319,6 +319,107 @@ def test_the_REAL_ID_APPEARS_IN_NO_COMMIT_measured_over_history():
         f"because they would identify the blobs.")
 
 
+def _scan_text(name, text):
+    """Every pattern over one file's text. ONE definition.
+
+    EXTRACTED 2026-11-06. This logic was inline in
+    `test_MEMORY_AND_DOCS_CARRY_NO_SECRET_SHAPED_LITERAL`, so the
+    known-wrong control below had no way to drive it without re-implementing
+    it -- and a control that re-implements its subject proves only that two
+    copies agree.
+    """
+    offenders = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for label, pat in STANDALONE:
+            for m in pat.finditer(line):
+                if label in SHAPE_ONLY and _is_placeholder_digits(m.group(0)):
+                    continue
+                offenders.append(
+                    f"{name}:{lineno}: {label} {_mask(m.group(0))}")
+        for m in KEY_FIELD.finditer(line):
+            if PLACEHOLDER.match(m.group(1)):
+                continue
+            offenders.append(
+                f"{name}:{lineno}: credential-shaped {_mask(m.group(1))}")
+        for m in CONN_STRING.finditer(line):
+            pw = m.group(1)
+            if PLACEHOLDER.match(pw) or pw in {"pass", "password"}:
+                continue
+            offenders.append(
+                f"{name}:{lineno}: connection-string password {_mask(pw)}")
+    return offenders
+
+
+#: The memory file's SHAPE as it was on 2026-11-04, with SYNTHETIC values.
+#: Every literal below is invented and matches no real credential; what is
+#: reproduced is the FORM, which is what the guard reads.
+MEMORY_FILE_AS_IT_WAS = """
+# GitHub token and friends
+
+GH_TOKEN=ghp_0000000000000000000000000000000000
+TELEGRAM_BOT_TOKEN=1234567890:AAaaBBbbCCccDDddEEeeFFffGGggHHhhIIi
+TELEGRAM_CHAT_ID=-1009876543210
+DATABASE_URL=postgresql://neondb_owner:np_SyntheticPw123456@ep-x-y.eu-central-1.aws.neon.tech/neondb
+FOOTBALL_DATA_ORG_KEY=0123456789abcdef0123456789abcdef
+"""
+
+
+def test_KNOWN_WRONG_the_MEMORY_FILE_AS_IT_WAS_IS_REFUSED():
+    """The control the coverage needed: the thing it was added for.
+
+    `docs/` and the memory directory were added to the guard on 2026-11-04
+    BECAUSE `memory/github_token.md` held six live credentials in plaintext,
+    in a file not even indexed in `MEMORY.md`. A scan that passes over a
+    clean tree proves nothing about whether it would have caught that file,
+    so the file's SHAPE is reconstructed here with synthetic values and fed
+    to the same predicate the real scan uses.
+    """
+    offenders = _scan_text("github_token.md", MEMORY_FILE_AS_IT_WAS)
+    assert offenders, (
+        "the memory file AS IT WAS would pass the guard today. The coverage "
+        "added on 2026-11-04 does not catch the thing it was added for.")
+    kinds = " ".join(offenders)
+    for expected in ("connection-string password",):
+        assert expected in kinds, (
+            f"the guard misses {expected!r} in the reconstructed file: "
+            f"{offenders}")
+    assert len(offenders) >= 3, (
+        f"only {len(offenders)} of the five credential shapes were caught: "
+        f"{offenders}")
+    # AND NOTHING REAL IS PRINTED, by construction: the fixture is synthetic
+    # and the offenders are masked anyway.
+    assert all("…" in o or "*" in o for o in offenders), (
+        f"an offender was reported unmasked: {offenders}")
+
+
+def test_the_CONTROL_FIXTURE_IS_SYNTHETIC_and_matches_no_live_value():
+    """A control built from a real credential would be the leak it tests for."""
+    import os
+    live = [v for v in (os.environ.get(k) for k in
+                        ("DATABASE_URL", "TELEGRAM_BOT_TOKEN",
+                         "TELEGRAM_CHAT_ID", "FOOTBALL_DATA_ORG_KEY",
+                         "ODDS_API_KEY", "API_FOOTBALL_KEY")) if v]
+    for v in live:
+        assert v not in MEMORY_FILE_AS_IT_WAS, (
+            "the known-wrong fixture contains a LIVE credential value")
+    # and the fixture must not be mistaken for a passing example
+    assert "np_SyntheticPw" in MEMORY_FILE_AS_IT_WAS
+
+
+def test_the_SCAN_HELPER_FINDS_NOTHING_IN_CLEAN_TEXT():
+    """The other direction: the helper must not flag ordinary prose, or the
+    control above passes for everything."""
+    clean = (
+        "# Where the credentials live\n"
+        "| `DATABASE_URL` | GitHub repository secret, and `.env` locally |\n"
+        "DATABASE_URL=${DATABASE_URL}\n"
+        "The measured overround was 3.59pp over n=1603 settled picks.\n"
+        "Run 42188742889 concluded failure at 2026-11-06T08:35:13Z.\n")
+    assert _scan_text("clean.md", clean) == [], (
+        "the helper flags ordinary documentation, so a non-empty result "
+        "proves nothing")
+
+
 def test_MEMORY_AND_DOCS_CARRY_NO_SECRET_SHAPED_LITERAL():
     """EVERY pattern, over docs/ and the memory directory. Added 2026-11-04.
 
@@ -352,27 +453,8 @@ def test_MEMORY_AND_DOCS_CARRY_NO_SECRET_SHAPED_LITERAL():
             except Exception:
                 continue
             scanned += 1
-            for lineno, line in enumerate(text.splitlines(), 1):
-                for label, pat in STANDALONE:
-                    for m in pat.finditer(line):
-                        if (label in SHAPE_ONLY
-                                and _is_placeholder_digits(m.group(0))):
-                            continue
-                        offenders.append(
-                            f"{p.name}:{lineno}: {label} {_mask(m.group(0))}")
-                for m in KEY_FIELD.finditer(line):
-                    if PLACEHOLDER.match(m.group(1)):
-                        continue
-                    offenders.append(
-                        f"{p.name}:{lineno}: credential-shaped "
-                        f"{_mask(m.group(1))}")
-                for m in CONN_STRING.finditer(line):
-                    pw = m.group(1)
-                    if PLACEHOLDER.match(pw) or pw in {"pass", "password"}:
-                        continue
-                    offenders.append(
-                        f"{p.name}:{lineno}: connection-string password "
-                        f"{_mask(pw)}")
+            # ONE DEFINITION: the same helper the known-wrong control drives.
+            offenders.extend(_scan_text(p.name, text))
     # THE HAYSTACK IS ANCHORED BY ITS OWN SIZE. A zero-hit scan over zero
     # files passes for the wrong reason, and the memory directory is outside
     # the repository so a moved path would silently empty it.

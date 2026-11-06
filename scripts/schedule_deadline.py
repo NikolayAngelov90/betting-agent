@@ -1061,34 +1061,154 @@ REFERENCE_RESIDUAL = {
 #: edited -- it was stated 2026-10-10 before any of this -- and the exposure
 #: stays its own term at zero rather than being folded in.
 STRUCTURAL_ACK = {
-    "since": "2026-10-21",
-    # RE-MEASURED the same day. It read -19.8 against a duration term that
-    # charged the card for work done AFTER it was delivered; the term now
-    # measures time-to-picks and the shortfall is -7.0. A figure in an
-    # acknowledgement is the one thing a reader trusts without checking, so
-    # it is re-stated rather than left to drift -- the stale-literal defect.
-    # -7.4, NOT -7.0, AND THE CHECK CAUGHT THAT ON ITS FIRST EXPOSURE.
-    # I computed the margin at +52.6 against a required 60 and wrote -7.0,
-    # which is 60 - 52.6 rounded the wrong way. The deterioration predicate
-    # refused to cover the live -7.4 and alarmed, which is exactly what it is
-    # for -- and it is the same shape as the self-anchored floor: a figure I
-    # derived and then transcribed loosely.
-    "binding": -7.4,
-    "why": ("the structural margin is the DURATION problem, not a deadline "
-            "choice: the floor IS the observed earliest kickoff, so no "
-            "anchoring clears it. 14.6 of the original 19.8 minutes were an "
-            "INSTRUMENTATION ERROR (the term measured run start to run END, "
-            "including the post-picks results scrape: mean 12.8m, max 49.6m, "
-            "n=111) and are gone without any step getting faster. 7.0 "
-            "remain, and they are real"),
-    "action": ("~7.4 min of time-to-picks remain. MEASURED 2026-10-21 over "
-               "n=72 runs: parallelising the Claude review behind an atomic "
-               "marker buys +30.5m by itself (it cuts the SPREAD, sd 18.4 -> "
-               "10.8, and the bound is mean+3sd); moving the ML retrain off "
-               "the picks path buys +3.5m; the shipped request-pacing change "
-               "buys +4.0m once it reaches the series. Retrain + pacing alone "
-               "leaves 1.3m. Or dispatch manually that morning"),
-    "review": "2026-11-21",
+    # ── RESTATED 2026-11-06, AND KEYED BY DAY TYPE. ────────────────────────
+    #
+    # IT WAS A SINGLE UNKEYED FIGURE OF -7.4, AND THAT WAS THE DEFECT. The
+    # structural margin differs by ~29 minutes between day types, because the
+    # floor does: OBSERVED_EARLIEST_LOCAL_MIN is 750 (12:30) on a weekday and
+    # 720 (12:00) at the weekend. One figure was being compared against both,
+    # and it was measured on 2026-10-21 -- a WEDNESDAY. It had never been
+    # tested against a weekend reading.
+    #
+    # THIS IS A CHANGE OF DEFINITION, NOT A RE-ACKNOWLEDGEMENT OF A WORSE
+    # CONDITION -- which is the one thing an acknowledgement must never be.
+    # The -7.4 is not comparable with what is measured now, because all four
+    # of its inputs were retired within FOUR DAYS of it being written:
+    #
+    #   2026-10-22  the floor was LOCALISED and re-measured (the retired UTC
+    #               constants survive as RETIRED_OBSERVED_EARLIEST_UTC_MIN,
+    #               weekday 570 / weekend 585 -- note the weekday bound then
+    #               and the WEEKEND binds now; localising INVERTED it)
+    #   2026-10-22  the cron moved to `0 1`, so the lateness series the -7.4
+    #               was computed from belongs to a retired regime, and
+    #               regimes are not pooled
+    #   2026-10-25  DST, which moves the per-day UTC conversion of a LOCAL
+    #               floor
+    #   2026-11-06  the picks bound was re-derived off the parallel regime
+    #               (88.1 -> 40.35), executing REDERIVE_PICKS_BOUND_PLAN
+    #
+    # THE CAUSE, NAMED. It is the lateness distribution, not the duration and
+    # not the deadline. `measured` 2026-11-06, grain=RUN, n=10 under the
+    # current `0 1` cron: mean 332.3, sd 40.7, max 389.75, and the series is
+    # UNIMODAL (the -7.4's own text cites a BIMODAL n=10 whose clusters topped
+    # out at 304.9, under the previous cron). The max has moved +84.85 min.
+    # Against 332 minutes of scheduler lateness the whole duration term --
+    # mean 26.5, max 40.35 -- is a minor part of `ready`, so the remedies
+    # sized in minutes of run time cannot close a deficit of this shape.
+    "weekday": {
+        # THE SUPERSEDED REMEDY, KEPT BECAUSE IT WAS MEASURED. Until
+        # 2026-11-06 the action was a list of duration savings, and the
+        # ordering claim behind it is still a true and useful lesson --
+        # variance before mean. It is superseded, not wrong: the binding term
+        # is now a 332-minute lateness, so savings of 30.5 and 3.5 minutes
+        # cannot close the deficit however correctly they were ordered.
+        "superseded_action": (
+            "MEASURED 2026-10-21 over n=72 runs: parallelising the Claude "
+            "review behind an atomic marker buys +30.5m by itself (it cuts "
+            "the SPREAD, sd 18.4 -> 10.8, and the bound is mean+3sd); moving "
+            "the ML retrain off the picks path buys +3.5m; the shipped "
+            "request-pacing change buys +4.0m once it reaches the series"),
+        "superseded_why": (
+            "the structural margin was the DURATION problem: 14.6 of the "
+            "original 19.8 minutes were an INSTRUMENTATION ERROR (the term "
+            "measured run start to run END, including the post-picks results "
+            "scrape: mean 12.8m, max 49.6m, n=111) and went without any step "
+            "getting faster"),
+        "superseded_binding": -7.4,
+        "since": "2026-11-06",
+        # EXACT, NOT THE PRINTED FIGURE. My first attempt pinned -30.1 --
+        # the value as the audit ROUNDS it for display -- and the
+        # deterioration check refused to cover the live reading on its
+        # first exposure. That is the same loosely-transcribed-figure
+        # defect the retired -7.4/-7.0 entry records, caught the same way.
+        "measured_at": -39.306530,
+        # THE FLOOR SITS A MEASURED JITTER UNDER THE READING, so an
+        # ordinary arriving point does not re-alarm. 11.32 is the largest
+        # ordinary single-point move of the weekday lateness-driven
+        # binding, measured 2026-10-22 over 5 consecutive prefixes, and it
+        # is BORROWED deliberately: both margins are driven by the same
+        # lateness series, so its jitter is the same quantity. Corroborated
+        # today at n=1: the weekday deficit moved -30.1 -> -39.31 as the
+        # series went n=10 -> n=11, a single-point move of 9.21 < 11.32.
+        "binding": -39.306530 - 11.32,
+        "jitter": 11.32,
+        "jitter_basis": ("largest ordinary single-point move of the "
+                         "lateness-driven binding, measured 2026-10-22 "
+                         "over 5 prefixes; corroborated at n=1 on "
+                         "2026-11-06 at 9.21m"),
+        "measured": "2026-11-06",
+        "lag_n": 11,
+        "duration_n": 79,
+        "floor_min_local": 750,
+        "why": ("the floor IS the observed earliest LOCAL kickoff (12:30, "
+                "n=718 weekday days, measured 2026-10-22) so no deadline "
+                "choice clears it, and the binding term is GitHub's "
+                "scheduler lateness: n=10 UNIMODAL under `0 1`, mean 332.3 "
+                "sd 40.7 max 389.75, measured 2026-11-06. The duration term "
+                "(mean 26.5, max 40.35, n=12 parallel regime) is small "
+                "beside it"),
+        "action": ("the only levers that move a 332-minute lateness term are "
+                   "a MANUAL dispatch on the morning (which skips the "
+                   "scheduler entirely) or an earlier cron. Reducing run "
+                   "duration cannot close this: the whole duration term is "
+                   "40.35 max against a 30.1-minute deficit driven by a "
+                   "term eight times its size"),
+        "review": "2026-11-20",
+        "review_basis": ("the lateness series reaching n=20 under the "
+                         "current cron. It is n=10 on 2026-11-06 and "
+                         "weekday runs arrive at ~5/week, so n=20 is about "
+                         "two weeks -- the first point at which sd 40.7 is "
+                         "measured over enough points for mean+3sd to be a "
+                         "tail bound rather than a spread estimate"),
+    },
+    "weekend": {
+        # THE SUPERSEDED REMEDY, KEPT BECAUSE IT WAS MEASURED. Until
+        # 2026-11-06 the action was a list of duration savings, and the
+        # ordering claim behind it is still a true and useful lesson --
+        # variance before mean. It is superseded, not wrong: the binding term
+        # is now a 332-minute lateness, so savings of 30.5 and 3.5 minutes
+        # cannot close the deficit however correctly they were ordered.
+        "superseded_action": (
+            "MEASURED 2026-10-21 over n=72 runs: parallelising the Claude "
+            "review behind an atomic marker buys +30.5m by itself (it cuts "
+            "the SPREAD, sd 18.4 -> 10.8, and the bound is mean+3sd); moving "
+            "the ML retrain off the picks path buys +3.5m; the shipped "
+            "request-pacing change buys +4.0m once it reaches the series"),
+        "superseded_why": (
+            "the structural margin was the DURATION problem: 14.6 of the "
+            "original 19.8 minutes were an INSTRUMENTATION ERROR (the term "
+            "measured run start to run END, including the post-picks results "
+            "scrape: mean 12.8m, max 49.6m, n=111) and went without any step "
+            "getting faster"),
+        "superseded_binding": -7.4,
+        "since": "2026-11-06",
+        "measured_at": -59.407508,
+        "binding": -59.407508 - 11.32,
+        "jitter": 11.32,
+        # THE WEEKEND SERIES IS n=4 AND THAT IS RECORDED, NOT HIDDEN. Four
+        # points cannot bound a tail, so this entry acknowledges a reading
+        # whose own provenance is weak; the jitter is borrowed from the
+        # weekday series for want of a weekend one. Both are re-derived at
+        # the review, which is why the two share a date.
+        "measured": "2026-11-06",
+        "lag_n": 4,
+        "duration_n": 32,
+        "floor_min_local": 720,
+        "why": ("the WEEKEND floor is 30 minutes EARLIER than the weekday "
+                "one (12:00 local, n=375 weekend days, measured 2026-10-22), "
+                "which is why the same lateness produces a deficit 29.3 "
+                "minutes worse. Localising the floor INVERTED which day type "
+                "binds: under the retired UTC constants the weekday bound "
+                "(570 vs 585); under local measurement the weekend does"),
+        "action": ("as weekday, and weekends are worse: the cron is `30 0` "
+                   "and the floor is earlier, so a manual dispatch is the "
+                   "only same-day lever"),
+        "review": "2026-11-20",
+        "review_basis": ("reviewed with the weekday entry so the two are "
+                         "re-measured against the same lateness series "
+                         "rather than drifting apart, which is how one "
+                         "unkeyed figure came to cover both"),
+    },
 }
 
 #: THE FIELD `binding` IS A SIGNED DEFICIT: `-7.0` means seven minutes SHORT
@@ -1098,7 +1218,9 @@ STRUCTURAL_ACK = {
 #: reader had to infer.
 
 
-def structural_breach_is_acknowledged(binding: float, today=None) -> dict:
+def structural_breach_is_acknowledged(binding: float,
+                                      day_type: str = None,
+                                      today=None) -> dict:
     """`STRUCTURAL_ACK` when it covers this figure, `{}` when it does not.
 
     TWO COMPARISONS, AND THE LAST ACKNOWLEDGEMENT MADE ONLY ONE. The retired
@@ -1118,7 +1240,9 @@ def structural_breach_is_acknowledged(binding: float, today=None) -> dict:
     acceptable".
     """
     today = today or _dt.date.today()
-    ack = STRUCTURAL_ACK
+    ack = STRUCTURAL_ACK.get(day_type) if day_type else None
+    if not ack:
+        return {}
     review = ack.get("review")
     if not review:
         return {}
@@ -1167,8 +1291,14 @@ def two_margins(day, ref: dict, cron_minutes,
     structural["kind"] = "STRUCTURAL"
     structural["coverage"] = coverage_all
     structural["exposure"] = _exposure
-    structural["clearing_action"] = STRUCTURAL_ACK["action"]
-    structural["acknowledged"] = STRUCTURAL_ACK
+    # KEYED BY DAY TYPE from 2026-11-06. `two_margins` already knows which
+    # day it is serving, so it reads the entry for that day type rather than
+    # a single figure that was measured on a Wednesday and applied to both.
+    _ack_dtype = "weekend" if day.weekday() >= 5 else "weekday"
+    _ack = STRUCTURAL_ACK.get(_ack_dtype) or {}
+    structural["clearing_action"] = _ack.get("action", "")
+    structural["acknowledged"] = _ack
+    structural["acknowledged_day_type"] = _ack_dtype
 
     rmin = ref.get("min")
     actionable = prospective_margin(

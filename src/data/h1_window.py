@@ -58,7 +58,7 @@ from __future__ import annotations
 
 from datetime import date as _date
 from datetime import datetime as _datetime
-from typing import Tuple
+from typing import Optional, Tuple
 
 #: ── THE WINDOW. CHANGE IT HERE AND NOWHERE ELSE. ─────────────────────────
 #:
@@ -77,6 +77,43 @@ UNTIL: _date = _date(2026, 11, 9)
 #: comparable with one measured inside this one, and the first attempt's `n=4`
 #: is quoted often enough that its dates must stay readable.
 RETIRED: Tuple[_date, _date] = (_date(2026, 10, 9), _date(2026, 10, 17))
+
+#: ── THE STOP IS RECORDED, AND IT IS *NOT* A FUNDING SWITCH. 2026-11-06. ──
+#:
+#: `H1 WINDOW FAILED` on 2026-11-05 (day-5 rule, n=12 FIXTURE-grain against
+#: 18, NOT extended). A `STOPPED_ON` date plus an `is_collecting()` predicate
+#: was built here and then REVERTED the same day. The reasoning is kept
+#: because the next person will have the same idea.
+#:
+#: WHAT IT WOULD HAVE BOUGHT: `h1_reservation()` returning 0 from 11-05
+#: instead of 11-09, i.e. 168 credits back to normal pricing for THREE DAYS.
+#:
+#: WHAT IT COST, measured: 13 tests in the CAPTURE GATE flipped --
+#: `test_two_month_counter`, `test_h1_reservation_is_an_allocation`,
+#: `test_h1_enforced_stop` -- because they call quota methods with no
+#: explicit `today=`. Those are the LATENT MEMBERS that
+#: `test_calendar_separation` already counts and warns about. Worse,
+#: `reservation_is_expressible()` refused the window as
+#: `BUDGET_UNREADABLE`: it asks whether a 168-credit reservation can be
+#: CARVED on every day of the window, which is a DESIGN property, and an
+#: unfunded day is indistinguishable from a mis-declared one. Reporting a
+#: stopped experiment as an unreadable budget is a third-state collapse --
+#: the exact defect class this project keeps paying for.
+#:
+#: WHY IT IS UNNECESSARY. The reservation is calendar-driven BY DESIGN and
+#: goes inert on UNTIL with no code change: for any day >= UNTIL,
+#: `h1_reservation()` is 0 and `allocate()["h1_ceiling"]` is 0. The successor
+#: contract is therefore a PROPERTY OF THE DEPLOYED DESIGN and not something
+#: that had to be built -- it simply arrives on 2026-11-09.
+#:
+#: THE ACCEPTED COST, stated rather than hidden: 168 credits stay reserved
+#: for 2026-11-05..11-08 for an experiment that has stopped. Nothing is
+#: collecting, so nothing spends them; the only effect is that normal
+#: pricing's ceiling is 182 rather than 350 on those four days, against a
+#: measured normal usage that has never approached either. Four days of
+#: unused headroom is a smaller cost than a funding switch inside a
+#: capture-path module.
+STOPPED_ON: Optional[_date] = _date(2026, 11, 5)   #: RECORDED, read by nothing
 
 #: Collection days, inclusive of FROM and exclusive of UNTIL.
 DAYS: int = (UNTIL - FROM).days

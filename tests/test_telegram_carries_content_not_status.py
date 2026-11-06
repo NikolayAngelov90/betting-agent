@@ -194,7 +194,19 @@ def test_CONTROL_a_MARGIN_BREACH_STILL_sends():
     one is acknowledged, so this drives a DETERIORATION past its floor."""
     import scripts.ci_audit as ci
 
-    ack = ci.ACKNOWLEDGED_MARGIN_BREACH["weekday"]
+    # THE REGISTER IS EMPTY FROM 2026-11-06: the schedule acknowledgement was
+    # retired (expired, and its clearing action is blocked on an
+    # authorisation). This control is about whether a BREACH still reaches
+    # the alarm body, which is independent of whether one is deferred -- so
+    # it drives a SYNTHETIC entry rather than becoming vacuous, and asserts
+    # the empty register separately.
+    assert ci.ACKNOWLEDGED_MARGIN_BREACH == {}, (
+        "something is deferred again; drive that entry instead of the "
+        "synthetic one")
+    ack = {"since": "2026-10-22", "measured_at": 20.665799601890512,
+           "binding": 20.665799601890512 - 11.32, "jitter": 11.32,
+           "why": "synthetic, to drive this control",
+           "action": "re-derive FULL_CARD_PICKS_MAX", "review": "2026-11-04"}
     assert ci.margin_breach_is_acknowledged("weekday", ack["binding"] - 1) == {}
     # and the body writer must carry an actionable alarm through
     import os

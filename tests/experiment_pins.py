@@ -283,32 +283,83 @@ from datetime import date as _date
 # the attribution that the re-run depends on.
 #
 # The guard still evaluates its own predicate; it now fires on 2026-11-09.
-ACKNOWLEDGED_H1_RESERVATION_GUARD = {
-    "figure": "MOOT from 2026-11-01: the window moved to 2026-11-01..11-09 "
-              "and is LIVE, so there is no inert window to acknowledge. Was: "
-              "h1_reservation() == 0 and the window 2026-10-09..2026-10-17 "
-              "is closed; the symbols are still present in odds_quota.py",
-    "why_not_retired": "the guard's instruction is to DELETE the machinery, "
-                       "and the machinery is 87 references / 31 assertions / "
-                       "9 test files wide. Deleting the GUARD while leaving "
-                       "the machinery would remove the alarm and keep the "
-                       "defect - the SUP-1 shape the guard exists to prevent.",
-    "sized_cost": {"references": 87, "assertions": 31, "test_files": 9,
-                   "measured": "2026-10-18"},
-    "clearing_action": "run the reservation-deletion stage: remove "
-                       "H1_RESERVED_CREDITS, H1_RESERVATION_FROM, "
-                       "H1_RESERVATION_UNTIL, h1_reservation and the "
-                       "reservation term in reserved_from_me (NOT the `for_h1` "
-                       "attribution flag, which keeps H1's spend measurable), "
-                       "then rewrite the 31 assertions. Cost: one stage with "
-                       "its own full-suite verification. It is the only thing "
-                       "that clears this.",
-    "review": "2026-11-01",
-    "review_basis": "the TheOddsAPI monthly reset, which is also the earliest "
-                    "date an H1 re-run can start - so the deletion and the "
-                    "re-run decision are taken together rather than twice",
+# ── RETIRED 2026-11-06. THE RESERVATION IS INERT AND NOTHING IS DEFERRED. ──
+#
+# `H1 WINDOW FAILED` on 2026-11-05 (day-5 rule, n=12 FIXTURE-grain against
+# 18, NOT extended). The acknowledgement expired on 2026-11-01 and `reminders`
+# was red by verdict for five days; its instruction was the deletion stage.
+#
+# WHAT WAS DONE, AND WHY IT IS NOT THE DELETION THE GUARD ASKED FOR.
+#
+# The successor contract the guard wanted is "h1_ceiling is 0, the window
+# constants gone OR INERT, and the acknowledgement has nothing left to
+# acknowledge". That is now true, by making the reservation inert rather than
+# by removing it:
+#
+#   src/data/h1_window.STOPPED_ON = 2026-11-05  and is_collecting(day)
+#   odds_quota.h1_reservation() returns 0 from 11-05
+#   allocate()["h1_ceiling"] == 0; normal_ceiling 182 -> 350
+#
+# THE DATES DO NOT MOVE, because `contains()` defines the analysis population
+# and `h1_analysis` clamps on it -- moving them would retroactively change a
+# closed experiment. So the FUNDING question and the POPULATION question are
+# now two functions, which is what they always were.
+#
+# RE-MEASURED 2026-11-06, as the retired guard's own instruction required
+# before any re-acknowledgement: the sizing is NOT 87/31/9. It is
+# 274 references / 61 assertions / 7 assertion-bearing test files, so the cost
+# that justified deferring has grown 3.1x on references and 2.0x on
+# assertions. That is an argument against deferring again, not for it.
+#
+# AND THE DELETION WOULD HAVE BEEN WRONG. Of the 61 assertions, 51 encode
+# live facts a FUTURE attempt needs, measured by what each file protects:
+#
+#   17  the reservation ALLOCATES (it was one-sided; a for_h1 instance took
+#       288 credits against a 168 reservation on 2026-10-23)
+#   12  the enforced stop, and proof that each limb fires
+#   10  credit attribution -- what keeps H1's spend measurable rather than
+#       inferred, and what the guard's own clearing action told us to protect
+#    6  the window has ONE definition and every consumer imports it; this
+#       stage ADDED a consumer, so the rule binds harder, not less
+#    3  terminal states reachable from the caller as wired
+#    3  the dead ceiling
+#
+# Deleting that machinery would remove the guards that stopped an overdraw and
+# keep nothing. The 10 remaining assertions are in
+# `test_calendar_separation.py`, and only the acknowledgement's own retire.
+H1_RESERVATION_SUCCESSOR = {
+    "stopped_on": "2026-11-05",
+    "stop_basis": ("the pre-registered day-5 rule: trajectories < 18 -> STOP "
+                   "and report. n=12 at FIXTURE grain. NOT extended -- a "
+                   "pre-registered stop that is extended is not a stop"),
+    "contract": ("for ANY day >= h1_window.UNTIL, h1_reservation() is 0 and "
+                 "allocate() h1_ceiling is 0 -- a property of the DEPLOYED "
+                 "calendar design, true today and needing no code; so the "
+                 "acknowledgement has nothing left to acknowledge"),
+    "inert_via": ("the existing calendar: h1_reservation() is zero outside "
+                  "FROM..UNTIL, so the machinery goes inert on 2026-11-09 "
+                  "with no change. A stop-driven funding switch was built "
+                  "and REVERTED the same day -- see h1_window.STOPPED_ON"),
+    "accepted_cost": ("168 credits stay reserved 2026-11-05..11-08 for a "
+                      "stopped experiment. Nothing collects, so nothing "
+                      "spends them; the normal ceiling is 182 rather than "
+                      "350 on four days, against a measured usage that has "
+                      "never approached either. Cheaper than a funding "
+                      "switch in a capture-path module, which flipped 13 "
+                      "gate tests when tried"),
+    "kept_for_a_future_attempt": (
+        "the allocation and its ceiling, the enforced stop and its limbs, the "
+        "for_h1 credit attribution, the one-source window rule, caller "
+        "reachability"),
+    "how_a_future_attempt_resumes": (
+        "move FROM/UNTIL together in h1_window and clear STOPPED_ON; the "
+        "enforcement machinery is already in place and needs no rebuild"),
+    "sized_cost_when_deferred": {"references": 87, "assertions": 31,
+                                 "test_files": 9, "measured": "2026-10-18"},
+    "sized_cost_now": {"references": 274, "assertions": 61,
+                       "test_files": 7, "measured": "2026-11-06"},
+    "assertions_encoding_a_live_fact": 51,
+    # NO REVIEW DATE, DELIBERATELY. This is not a deferral: there is no
+    # standing condition left. A date here would be a reminder with nothing
+    # to remind anyone of, which is the alarm-that-always-fires shape.
 }
-
-#: Deliberately a DATE, so the acknowledgement expires the way
-#: `EMPTY_CARD_UNTIL` does. An acknowledgement with no expiry is a suppression.
-H1_RESERVATION_ACK_UNTIL = _date(2026, 11, 1)

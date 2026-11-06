@@ -191,99 +191,159 @@ def test_the_SUPERSEDED_series_is_RETAINED():
         "so the next reader may take it for the current figure")
 
 
-def test_the_ACKNOWLEDGEMENT_carries_the_RE_MEASURED_figure():
-    """A figure in an acknowledgement is the one thing a reader trusts
-    without checking, so it must not be allowed to drift."""
-    ack = sd.STRUCTURAL_ACK
-    assert ack["binding"] == pytest.approx(-7.4), (
-        f"the acknowledgement claims {ack['binding']}. It must be the "
-        f"MEASURED deficit: -19.8 was computed against a duration term that "
-        f"measured the wrong quantity, and -7.0 was a loose transcription of "
-        f"60 - 52.6 that the deterioration predicate caught on its first "
-        f"exposure")
-    assert "INSTRUMENTATION ERROR" in ack["why"], (
-        "the acknowledgement does not record that most of the original "
-        "shortfall was a measurement error rather than slow code")
-    # and the action must name the SPREAD, because that is what decides order
-    assert "SPREAD" in ack["action"] and "mean+3sd" in ack["action"], (
-        "the action does not say that the spread is what the bound is made "
-        "of, so the next person will optimise the mean first")
+DAY_TYPES = ("weekday", "weekend")
 
 
-def test_VARIANCE_BEFORE_MEAN_is_recorded_with_its_arithmetic():
-    """Rule 4. The ordering claim is a measurement, not a preference:
-    parallelising the review cuts the sd 18.4 -> 10.8 and buys +30.5 min,
-    against +3.5 for the retrain move whose mean reduction is comparable."""
-    act = sd.STRUCTURAL_ACK["action"]
-    for fig in ("+30.5", "18.4", "10.8", "+3.5", "+4.0"):
-        assert fig in act, f"{fig} is not recorded in the clearing action"
-    assert "n=72" in act, "the model's sample size is not stated"
+def test_the_ACKNOWLEDGEMENT_is_KEYED_BY_DAY_TYPE():
+    """RESTATED 2026-11-06. It was ONE unkeyed figure covering both.
+
+    The structural floor is 30 minutes earlier at the weekend
+    (OBSERVED_EARLIEST_LOCAL_MIN 720 vs 750), so the same lateness produces a
+    materially different deficit -- and the single -7.4 figure had been
+    measured on a WEDNESDAY and applied to Sundays.
+    """
+    assert set(sd.STRUCTURAL_ACK) == set(DAY_TYPES), (
+        f"the acknowledgement is not keyed by day type: "
+        f"{sorted(sd.STRUCTURAL_ACK)}")
+    for d in DAY_TYPES:
+        e = sd.STRUCTURAL_ACK[d]
+        for field in ("since", "measured", "measured_at", "binding",
+                      "jitter", "why", "action", "review", "lag_n"):
+            assert e.get(field) is not None, f"{d} has no {field}"
 
 
-# ═══════ THE ACKNOWLEDGEMENT, AFTER THE RESTATEMENT — 2026-10-21 ══════════
-#
-# The structural figure moved -19.8 -> -7.0 when the duration term started
-# measuring time-to-picks. An acknowledgement compares a figure, and the LAST
-# one silently absorbed a breach because it compared only `binding` and never
-# `review`: a deferral with a date nothing reads is not a deferral.
+def test_the_ACKNOWLEDGEMENT_carries_the_MEASURED_figure_at_FULL_PRECISION():
+    """A figure in an acknowledgement is the one thing a reader trusts without
+    checking, so it must not be a DISPLAYED value.
+
+    Recorded three times now: -19.8 was computed against a duration term that
+    measured the wrong quantity; -7.0 was a loose transcription of 60 - 52.6;
+    and on 2026-11-06 I pinned the printed -30.1 and the predicate refused the
+    live -39.306530 on its first exposure.
+    """
+    for d in DAY_TYPES:
+        e = sd.STRUCTURAL_ACK[d]
+        assert e["measured_at"] != round(e["measured_at"], 1), (
+            f"{d}: the reading {e['measured_at']} is stored at display "
+            f"precision, which is how a floor comes to refuse its own "
+            f"reading")
+        assert e["binding"] == pytest.approx(
+            e["measured_at"] - e["jitter"]), (
+            f"{d}: the floor is not the reading minus the jitter")
+        assert e["binding"] < e["measured_at"], (
+            f"{d}: a floor at or above the reading re-alarms on the next "
+            f"arriving point")
 
 
-def test_the_ACKNOWLEDGEMENT_matches_the_RESTATED_figure():
-    ack = sd.STRUCTURAL_ACK
-    assert ack["binding"] == pytest.approx(-7.4), (
-        "the figure must be the MEASURED deficit; -7.0 was a loose "
-        "transcription of 60 - 52.6 and the predicate caught it on its "
-        "first exposure")
-    # NOT asserted here: that the LIVE margin sits at that deficit. The first
-    # draft did, using this module's synthetic DELAYS/DURATIONS, which give a
-    # margin of +102 -- it was checking a fixture and reporting it as a fact
-    # about production. That belongs to a `live` test, and conflating the two
-    # is the thing the marker exists to prevent.
-    assert "7.4" in ack["action"], (
-        "the action does not restate the figure it is acknowledging")
-    assert "INSTRUMENTATION ERROR" in ack["why"], (
-        "the acknowledgement does not record WHY the figure moved from -19.8")
+def test_the_BINDING_TERM_IS_NAMED_and_it_is_the_LATENESS():
+    """The cause, with its n and its shape: if the lag distribution moved,
+    the record must say so and say whether it is unimodal under this cron."""
+    wd = sd.STRUCTURAL_ACK["weekday"]
+    for frag in ("332.3", "389.75", "UNIMODAL", "n=10"):
+        assert frag in wd["why"], (
+            f"the weekday acknowledgement does not record {frag!r}, so the "
+            f"binding term is not identified")
+    assert "40.35" in wd["why"] or "26.5" in wd["why"], (
+        "the duration term is not stated beside the lateness, so a reader "
+        "cannot see which one dominates")
 
 
-def test_it_ALARMS_ON_DETERIORATION_and_the_drive_is_EXPLICIT():
-    """The figures the directive named, driven."""
-    today = dt.date(2026, 10, 21)
-    for covered in (-7.4, -7.0, -6.9, -6.0, 0.0, 5.0):
-        assert sd.structural_breach_is_acknowledged(covered, today), (
-            f"deficit {covered:+.1f} is no worse than the acknowledged -7.4 "
-            f"and must be COVERED")
-    for alarms in (-7.5, -8.0, -20.0, -100.0):
-        assert sd.structural_breach_is_acknowledged(alarms, today) == {}, (
-            f"deficit {alarms:+.1f} is WORSE than the acknowledged -7.4 and "
-            f"must alarm -- deterioration is an event")
+def test_VARIANCE_BEFORE_MEAN_is_SUPERSEDED_but_NOT_DELETED():
+    """Rule 4, and the other half of it: a measured lesson is not deleted
+    because it stopped being the lever.
+
+    Parallelising the review cut the sd 18.4 -> 10.8 and bought +30.5 min
+    against +3.5 for the retrain move. That ordering claim is still true. It
+    is no longer the ACTION, because the binding term is a 332-minute
+    lateness that a 30-minute saving cannot close.
+    """
+    for d in DAY_TYPES:
+        sup = sd.STRUCTURAL_ACK[d]["superseded_action"]
+        for fig in ("+30.5", "18.4", "10.8", "+3.5", "+4.0", "n=72"):
+            assert fig in sup, f"{d}: {fig} is no longer recorded anywhere"
+        assert sd.STRUCTURAL_ACK[d]["superseded_binding"] == pytest.approx(
+            -7.4), "the figure this replaced is not recorded"
+        assert "INSTRUMENTATION ERROR" in \
+            sd.STRUCTURAL_ACK[d]["superseded_why"], (
+            "the record no longer says that most of the original shortfall "
+            "was a measurement error rather than slow code")
+        act = sd.STRUCTURAL_ACK[d]["action"]
+        assert "manual" in act.lower() or "dispatch" in act.lower(), (
+            f"{d}: the live action does not name a lever that moves a "
+            f"lateness term")
+
+
+def test_it_ALARMS_ON_DETERIORATION_per_day_type_and_the_drive_is_EXPLICIT():
+    today = dt.date(2026, 11, 6)
+    for d in DAY_TYPES:
+        floor = sd.STRUCTURAL_ACK[d]["binding"]
+        for covered in (floor, floor + 0.01, floor + 10, 0.0, 5.0):
+            assert sd.structural_breach_is_acknowledged(covered, d, today), (
+                f"{d}: deficit {covered:+.2f} is no worse than the "
+                f"acknowledged {floor:+.2f} and must be COVERED")
+        for alarms in (floor - 0.01, floor - 10, -500.0):
+            assert sd.structural_breach_is_acknowledged(
+                alarms, d, today) == {}, (
+                f"{d}: deficit {alarms:+.2f} is WORSE than {floor:+.2f} and "
+                f"must alarm -- deterioration is an event")
+
+
+def test_KNOWN_WRONG_a_WEEKEND_figure_is_not_covered_by_the_WEEKDAY_entry():
+    """The conflation, driven. This is what one unkeyed figure permitted."""
+    today = dt.date(2026, 11, 6)
+    weekend_reading = sd.STRUCTURAL_ACK["weekend"]["measured_at"]
+    assert sd.structural_breach_is_acknowledged(
+        weekend_reading, "weekday", today) == {}, (
+        "the weekend reading is absorbed by the weekday acknowledgement, "
+        "which is the conflation the keying exists to remove")
+    assert sd.structural_breach_is_acknowledged(
+        weekend_reading, "weekend", today), (
+        "the weekend reading is not covered by its OWN entry")
 
 
 def test_it_EXPIRES_and_the_REVIEW_DATE_is_actually_COMPARED():
-    """The retired `ACKNOWLEDGED_MARGIN_BREACH` compared only the figure, so
-    it absorbed a breach for days past its own review date."""
-    review = dt.date.fromisoformat(sd.STRUCTURAL_ACK["review"])
-    assert sd.structural_breach_is_acknowledged(-7.4, review), (
-        "it expires ON the review date; the date itself is still covered")
-    assert sd.structural_breach_is_acknowledged(
-        -7.4, review + dt.timedelta(days=1)) == {}, (
-        "the acknowledgement outlived its review date")
-    assert sd.structural_breach_is_acknowledged(
-        -7.4, review + dt.timedelta(days=365)) == {}
+    """A deferral with a date nothing reads is not a deferral."""
+    for d in DAY_TYPES:
+        e = sd.STRUCTURAL_ACK[d]
+        review = dt.date.fromisoformat(e["review"])
+        assert sd.structural_breach_is_acknowledged(
+            e["binding"], d, review), (
+            f"{d}: it expires ON the review date; the date itself is covered")
+        assert sd.structural_breach_is_acknowledged(
+            e["binding"], d, review + dt.timedelta(days=1)) == {}, (
+            f"{d}: the acknowledgement outlived its review date")
 
 
-def test_an_UNPARSEABLE_or_MISSING_review_date_absorbs_NOTHING():
-    """An acknowledgement that cannot be dated is not one."""
-    import copy
+def test_a_MISSING_DAY_TYPE_absorbs_NOTHING():
+    """The predicate's new refusal, and it must not be skippable."""
+    today = dt.date(2026, 11, 6)
+    assert sd.structural_breach_is_acknowledged(-500.0, None, today) == {}
+    assert sd.structural_breach_is_acknowledged(-500.0, "", today) == {}
+    assert sd.structural_breach_is_acknowledged(
+        -500.0, "holiday", today) == {}
+
+
+def test_an_UNPARSEABLE_or_MISSING_review_date_absorbs_NOTHING(monkeypatch):
+    """An acknowledgement that cannot be dated is not one.
+
+    DRIVEN THROUGH THE KEYED SHAPE. The previous version deep-copied the flat
+    dict and set a TOP-LEVEL "review", which on a keyed dict changed nothing
+    the predicate reads -- it then passed because a missing day type returns
+    {} anyway. A test that passes for the wrong reason is worse than one that
+    fails.
+    """
+    today = dt.date(2026, 11, 6)
+    good = sd.STRUCTURAL_ACK["weekday"]
+    assert sd.structural_breach_is_acknowledged(
+        good["binding"], "weekday", today), (
+        "the predicate cannot cover a healthy entry, so nothing below is "
+        "verified")
     for bad in (None, "", "soon", "2026-13-45", "21/11/2026"):
-        patched = copy.deepcopy(sd.STRUCTURAL_ACK)
-        patched["review"] = bad
-        real, sd.STRUCTURAL_ACK = sd.STRUCTURAL_ACK, patched
-        try:
-            assert sd.structural_breach_is_acknowledged(
-                -7.4, dt.date(2026, 10, 21)) == {}, (
-                f"review={bad!r} still absorbed the breach")
-        finally:
-            sd.STRUCTURAL_ACK = real
+        monkeypatch.setitem(sd.STRUCTURAL_ACK, "weekday",
+                            dict(good, review=bad))
+        assert sd.structural_breach_is_acknowledged(
+            good["binding"], "weekday", today) == {}, (
+            f"review={bad!r} still absorbed the breach")
 
 
 def test_the_REGISTERED_MINIMUM_is_UNEDITED_and_the_EXPOSURE_PRINTS_AT_ZERO():

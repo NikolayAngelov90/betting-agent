@@ -260,19 +260,45 @@ def test_a_breaching_margin_ALARMS_and_names_the_remedy():
         "no remedy on file — the decision fires with no option prepared")
 
 
-def test_the_fitted_date_NEVER_appears_without_its_R_SQUARED():
-    """Rule 3, enforced on the files that cite it.
+#: THE PROJECTION RESOLVED ON ITS OWN TARGET DATE. 2026-11-06.
+#:
+#: It read: the parallel-regime picks series reaches n >= 10 by 2026-11-06,
+#: projected from R^2 = 0.451. MEASURED on 2026-11-06: n = 12. The projection
+#: was correct and is now an OUTCOME.
+PICKS_SERIES_PROJECTION = {
+    "projected": "n >= 10 by 2026-11-06", "r_squared": 0.451,
+    "measured_on": "2026-11-06", "measured_n": 12, "verdict": "REACHED",
+}
 
-    `2026-11-06` is a projection from R^2=0.451. Anywhere it is written, the fit
-    must be written too, or it reads as a measured deadline.
+
+def test_the_PROJECTION_RESOLVED_and_its_FIT_IS_STILL_RECORDED():
+    """RESTATED 2026-11-06. It was: `2026-11-06` may not be written without
+    R^2=0.451 beside it, or it reads as a measured deadline.
+
+    THAT GUARD HAD TO GO, AND NOT BECAUSE IT WAS WRONG. Its date ARRIVED.
+    From 2026-11-06 the string `2026-11-06` is also just today's date, written
+    for unrelated reasons many times a day -- the guard fired on a
+    `RESOLVED_RUNS` entry about a credential rotation. A guard whose needle
+    becomes an everyday token stops discriminating; this is the
+    stale-literal trap with the clock on the other side.
+
+    WHAT REPLACES IT: the projection is settled by measurement, so the fit no
+    longer has to travel with the date -- it has to be RECORDED, which is
+    what `PICKS_SERIES_PROJECTION` does. A projection that has been resolved
+    is not a projection any more.
     """
-    for p in (pathlib.Path("scripts/ci_audit.py"),
-              pathlib.Path(".github/workflows/daily-picks.yml")):
-        text = p.read_text(encoding="utf-8")
-        for mo in re.finditer(r"2026-11-06", text):
-            window = text[max(0, mo.start() - 400):mo.end() + 400]
-            assert "0.451" in window or "R^2" in window, (
-                f"{p}: 2026-11-06 is cited without its fit")
+    P = PICKS_SERIES_PROJECTION
+    assert P["r_squared"] == 0.451, "the fit that produced the date is gone"
+    assert P["measured_n"] >= 10 and P["verdict"] == "REACHED", P
+    # the outcome must be checkable against the live series, not just stored
+    import scripts.ci_audit as _ci
+    live = _ci.parallel_regime_picks_series()
+    assert live["n"] >= _ci.MIN_N_TO_REDERIVE_PICKS_BOUND, (
+        f"the series is n={live['n']}, below "
+        f"{_ci.MIN_N_TO_REDERIVE_PICKS_BOUND}. A series that SHRANK after "
+        f"being recorded as REACHED is a different event -- say which")
+    assert live["n"] >= P["measured_n"], (
+        f"the series fell from the recorded {P['measured_n']} to {live['n']}")
 
 
 # ── C: the tool and the documented rule cannot diverge again ────────────────
