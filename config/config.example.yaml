@@ -277,7 +277,12 @@ betting:
   odds_refresh_window_minutes: 120
   odds_refresh_min_interval_minutes: 180
 
-  min_odds: 1.50            # Skip very short prices — too little margin for model error
+  min_odds: 1.14            # DERIVED 2026-11-06, not chosen: admits the
+                            # de-vigged [0.70,0.80) FLB band, whose legs
+                            # price 1.1450..1.3700 raw. See
+                            # docs/flb-band-preregistration.md (fed8338).
+                            # 1/0.79 would be the RAW-implied bound and is
+                            # the wrong arithmetic: raw = devig*(1+margin).
   max_odds: 10.0
   min_expected_value: 0.05  # 5% minimum edge — filters noise, improves selectivity
   min_confidence: 0.55      # 55% minimum model probability — model must give >50% clear majority

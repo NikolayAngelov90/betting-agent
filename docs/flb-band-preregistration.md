@@ -227,5 +227,7 @@ markets, not the gates, not `paper_trading_mode`. `betting.min_odds` is a
 mechanism that already exists — `CODE_REVISION` `s5.19 → s5.20` — rather than
 by hand.
 
-*Registered 2026-11-06. Derivation reproducible via
-`python -m scripts.band_open`.*
+*Registered 2026-11-06, commit `fed8338`. The config change and the
+`s5.20` bump landed **2026-11-07**, so cohort `s5.19`'s last day is
+2026-11-06 and no pick exists that was made under a 1.14 floor before
+this document. Derivation reproducible via `python -m scripts.band_open`.*

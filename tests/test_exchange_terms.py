@@ -113,38 +113,93 @@ def test_KNOWN_WRONG_THE_SCHEMA_REALLY_HAS_NO_SIZE_FIELD():
 
 # -- THE BANDS ARE DISJOINT, AND IT IS DERIVED FROM THE CONFIG -----------
 
-def test_the_ANOMALYS_BAND_IS_BELOW_OUR_CONFIGURED_FLOOR():
-    """Derived from the deployed config, not asserted.
+def test_the_s5_19_FLOOR_MADE_THE_BAND_UNREACHABLE():
+    """THE HISTORICAL FINDING, kept as arithmetic rather than as memory.
 
-    `min_odds` is a price floor, so it is a CEILING on implied probability:
-    1/1.50 = 66.7%. The anomaly starts at 70%. The gap is 3.3 points of
-    implied probability and nothing we bet can cross it.
+    This is why the band was opened, and it must stay checkable after the
+    floor moves: a price floor is a CEILING on implied probability, so
+    1/1.50 = 66.7% against a band starting at 70% leaves a 3.3-point gap
+    that nothing priced above the floor can cross.
+
+    The figures are the s5.19 cohort's. They are dated, not superseded.
     """
-    cfg = yaml.safe_load(
-        pathlib.Path("config/config.yaml").read_text(encoding="utf-8"))
-    live = cfg["betting"]["min_odds"]
-    assert live == MEASURED_TERMS["config_min_odds"], (
-        f"config/config.yaml now has betting.min_odds = {live}, but this "
-        f"stage measured against {MEASURED_TERMS['config_min_odds']}. If the "
-        f"floor moved, the disjointness result must be re-measured")
-    our_ceiling = 100.0 / live
+    floor_then = MEASURED_TERMS["config_min_odds"]
+    assert floor_then == 1.50
+    assert MEASURED_TERMS["cohort_at_measurement"] == "s5.19"
+    ceiling_then = 100.0 / floor_then
     band_lo, band_hi = MEASURED_TERMS["anomaly_band_implied_pct"]
-    assert our_ceiling == pytest.approx(66.67, abs=0.02)
-    assert our_ceiling < band_lo, (
-        f"our implied-probability ceiling is {our_ceiling:.1f}% and the "
-        f"anomaly's band starts at {band_lo}%. They no longer fail to "
-        f"overlap, so the central finding of this stage has changed")
-    assert band_lo - our_ceiling == pytest.approx(3.33, abs=0.02)
+    assert ceiling_then == pytest.approx(66.67, abs=0.02)
+    assert ceiling_then < band_lo, (
+        "the s5.19 floor no longer sits below the band, which would make the "
+        "reason this stage existed wrong")
+    assert band_lo - ceiling_then == pytest.approx(3.33, abs=0.02)
     assert band_hi > band_lo
 
 
-def test_WE_HOLD_ZERO_PICKS_IN_THE_ANOMALYS_BAND():
-    assert MEASURED_TERMS["picks_in_anomaly_band"] == 0, (
-        "we now hold picks in the anomaly's band. That changes the stage's "
-        "conclusion from 'a different selection' to 'a measurable exposure'")
-    assert MEASURED_TERMS["our_min_odds"] >= 1.50
-    assert MEASURED_TERMS["our_median_odds"] > 1.429, (
-        "our median price is now inside the anomaly's band; re-measure")
+def test_the_LIVE_FLOOR_NOW_ADMITS_THE_BAND_and_is_the_DERIVED_value():
+    """And the successor: read the DEPLOYED config and check it opens the band.
+
+    `config/config.example.yaml` is the one that matters -- CI copies it over
+    `config/config.yaml` -- so both are read and both must agree, or the
+    local and deployed configurations have diverged.
+    """
+    live = {}
+    for f in ("config/config.example.yaml", "config/config.yaml"):
+        cfg = yaml.safe_load(pathlib.Path(f).read_text(encoding="utf-8"))
+        live[f] = cfg["betting"]["min_odds"]
+    assert len(set(live.values())) == 1, (
+        f"the two configs disagree on betting.min_odds: {live}. CI copies the "
+        f"example over the local file, so a divergence means the deployed "
+        f"floor is not the one measured here")
+    floor = next(iter(live.values()))
+    assert floor == MEASURED_TERMS["floor_opened_to"] == 1.14, (
+        f"the live floor is {floor}; this stage's successor registered 1.14. "
+        f"If it moved again, re-derive it -- the value is derived from the "
+        f"band and the measured margin, never chosen")
+    # and it must actually admit the band it was derived to admit
+    assert floor <= 1.1450, (
+        f"the floor {floor} is above the minimum raw odds of an in-band leg "
+        f"measured on 2026-11-06 (1.1450), so it does NOT admit the whole "
+        f"de-vigged band and the measurement cannot see the top of its own "
+        f"band")
+    # the naive derivation must NOT be what is deployed -- that is the error
+    # this stage's registration exists to prevent
+    assert floor < 1.0 / 0.79, (
+        f"the floor equals the RAW-implied bound 1/0.79 = {1 / 0.79:.4f}. The "
+        f"pre-registration's bands are DE-VIGGED and raw = devig*(1+margin), "
+        f"so that bound opens the band only partway")
+
+
+def test_the_GATE_REGISTRYS_STATED_FLOOR_IS_NOT_STALE():
+    """A stale literal in prose, closed. `gate_registry.REGISTRY` describes
+    what each gate removes, and the min_odds entry quotes the value. It went
+    one cohort out of date the moment the floor moved, and nothing checked
+    it -- so this checks it."""
+    from src.betting.gate_registry import REGISTRY
+    cfg = yaml.safe_load(
+        pathlib.Path("config/config.example.yaml").read_text(encoding="utf-8"))
+    for name in ("min_odds", "max_odds"):
+        stated = REGISTRY[name].removes
+        value = cfg["betting"][name]
+        assert f"({value})" in stated, (
+            f"gate_registry's `{name}` entry says {stated!r}, but the "
+            f"deployed value is {value}. A description that quotes a config "
+            f"value goes stale silently; update it with the config")
+
+
+def test_the_s5_19_POPULATION_HELD_ZERO_PICKS_IN_THE_BAND():
+    """A closed population, so this figure is final rather than current.
+
+    Every pick in the s5.19 record was made under a 1.50 floor, so 0 is not
+    a sample that could grow -- it is the whole cohort. The s5.20 cohort is
+    expected to hold a non-zero count, and that is the point of opening it.
+    """
+    assert MEASURED_TERMS["picks_in_anomaly_band"] == 0
+    assert MEASURED_TERMS["our_min_odds"] >= MEASURED_TERMS[
+        "config_min_odds"], (
+        "a pick in the s5.19 record priced below that cohort's own floor; "
+        "the floor was not being applied")
+    assert MEASURED_TERMS["our_median_odds"] > 1.429
 
 
 def test_the_BAND_VERDICT_CALLS_IT_A_SELECTION_CHANGE_not_a_pricing_one():
@@ -159,6 +214,12 @@ def test_the_BAND_VERDICT_CALLS_IT_A_SELECTION_CHANGE_not_a_pricing_one():
     assert "min_odds" in v and "66.7" in v, (
         "the verdict no longer carries the mechanism and the figure, so a "
         "reader cannot check it")
+    # and the successor is recorded ON the verdict, so a reader of this
+    # finding learns in the same place that it has since been acted on
+    assert MEASURED_TERMS["floor_opened_in_cohort"] == "s5.20"
+    assert "fed8338" in MEASURED_TERMS["floor_opened_why"], (
+        "the opened-floor record no longer names the pre-registration commit, "
+        "so a reader cannot check that the hypothesis predated the cohort")
 
 
 # -- HARD RULE 1: A COMMISSION COMES FROM A PUBLISHED SCHEDULE -----------

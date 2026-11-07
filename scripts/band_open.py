@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import pathlib
 import random
 import re
 import statistics
@@ -55,8 +56,21 @@ EXTERNAL_GAP_PP = 3.74
 EXTERNAL_LABEL = ("external, Footiqo, 2025/26, ONE bookmaker (1xBet), five "
                   "leagues, n=134 at 70-79%")
 
-#: The deployed floor this stage would move.
-CURRENT_MIN_ODDS = 1.50
+#: The floor this stage MOVED, kept as the labelled baseline the candidate
+#: counts are measured against. It is NOT read as "current": the deployed
+#: value is read live by `_live_floor()` below, because a literal here went
+#: one cohort out of date the moment the config changed and that is the
+#: stale-literal class this register keeps finding.
+PREVIOUS_MIN_ODDS = 1.50
+
+
+def _live_floor() -> float:
+    """The DEPLOYED floor, from `config.example.yaml` -- the file CI copies
+    over `config/config.yaml`, so it is the one that runs."""
+    import yaml
+    cfg = yaml.safe_load(
+        pathlib.Path("config/config.example.yaml").read_text(encoding="utf-8"))
+    return float(cfg["betting"]["min_odds"])
 
 #: Power target for the n calculation. One-sided, because the
 #: pre-registration's alternative is directional (a POSITIVE gap).
@@ -205,6 +219,7 @@ def measure() -> dict:
                         "margin": orr - 1.0, "date": date_of.get(mid),
                     })
 
+    live_floor = _live_floor()
     lo, hi = BAND_DEVIG
     in_band = [L for L in legs if lo <= L["p_devig"] < hi]
 
@@ -243,7 +258,7 @@ def measure() -> dict:
     # A price the floor admits is a CANDIDATE, not a pick: the EV, value and
     # per-match gates still apply and are untouched. So this is an UPPER
     # BOUND on what opening the band adds, and it is labelled as one.
-    rejected_now = [L for L in in_band if L["odds"] < CURRENT_MIN_ODDS]
+    rejected_now = [L for L in in_band if L["odds"] < PREVIOUS_MIN_ODDS]
     fixtures_with_band = {L["mid"] for L in rejected_now}
     days = len({d for d in date_of.values() if d})
     picked_mids = {p[1] for p in picks}
@@ -255,7 +270,7 @@ def measure() -> dict:
 
     candidates = {
         "legs_in_band": len(in_band),
-        "legs_in_band_below_current_floor": len(rejected_now),
+        "legs_in_band_below_baseline_floor": len(rejected_now),
         "fixtures_with_an_admissible_band_leg": len(fixtures_with_band),
         "of_those_we_never_picked_at_all": len(band_fixtures_unpicked),
         "window_days": days,
@@ -267,6 +282,10 @@ def measure() -> dict:
                  "unchanged and would reject most of them, so the realised "
                  "pick rate is at most this and probably far below it."),
         "provenance": "measured 2026-11-06, grain=LEG and FIXTURE",
+        "baseline_floor": PREVIOUS_MIN_ODDS,
+        "live_floor": live_floor,
+        "live_floor_admits_whole_band": live_floor <= min(
+            (L["odds"] for L in in_band), default=float("inf")),
     }
 
     # -- THE SPILL: a RAW floor cannot express a DE-VIGGED band ------------
@@ -283,7 +302,7 @@ def measure() -> dict:
     CANDIDATE_FLOOR = 1.14
     spill = {"floor": CANDIDATE_FLOOR}
     adm = [L for L in legs if L["odds"] >= CANDIDATE_FLOOR]
-    newly = [L for L in adm if L["odds"] < CURRENT_MIN_ODDS]
+    newly = [L for L in adm if L["odds"] < PREVIOUS_MIN_ODDS]
     spill["newly_admitted_legs"] = len(newly)
     buckets: Dict[str, int] = defaultdict(int)
     for L in newly:
@@ -375,7 +394,7 @@ def main() -> int:
     print("THE CANDIDATE POPULATION  -  an upper bound, not a forecast")
     print("=" * 78)
     print(f"  legs in the de-vigged band            : {c['legs_in_band']}")
-    print(f"  of those, below the current 1.50 floor: "
+    print(f"  of those, below the BASELINE 1.50 floor: "
           f"{c['legs_in_band_below_current_floor']}")
     print(f"  fixtures carrying such a leg          : "
           f"{c['fixtures_with_an_admissible_band_leg']}")
@@ -383,6 +402,12 @@ def main() -> int:
           f"{c['of_those_we_never_picked_at_all']}")
     print(f"  over {c['window_days']} days = "
           f"{c['fixtures_per_day']:.2f} fixtures/day at most")
+    print()
+    print(f"  baseline floor (the one this stage moved): "
+          f"{c['baseline_floor']}")
+    print(f"  LIVE floor in config.example.yaml        : {c['live_floor']}")
+    print(f"  does the live floor admit the whole band : "
+          f"{'YES' if c['live_floor_admits_whole_band'] else 'NO'}")
     print()
     print("  by market:")
     for m, n in c["per_market"].items():

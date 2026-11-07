@@ -483,11 +483,24 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       and they DERIVE from `config/config.yaml` that the anomaly's
     #       70-79% band lies below our own 66.7% ceiling, so 0 of 1,639
     #       picks sit in it and none can while `betting.min_odds` is 1.50.
+    #       THAT FLOOR MOVED TO 1.14 on 2026-11-06 (cohort s5.20) to open
+    #       the band for measurement, so those assertions now record the
+    #       s5.19 state as history and check the NEW floor -- see
+    #       docs/flb-band-preregistration.md (fed8338).
     #       The config read is live, so moving the floor fails the test
     #       rather than silently invalidating the finding.
     #       GATE UNCHANGED at 1732, for the same reason as (IV).
-    assert len(nong) == 1040, (
-        f"the non-gating selection is {len(nong)}, recorded 1040")
+    #   +2 on 2026-11-07: test_exchange_terms.py gained two tests when the
+    #       floor it had pinned at 1.50 MOVED to 1.14 (cohort s5.20). Its
+    #       disjointness assertion was written to fail loudly if that
+    #       happened, and it did its job, so it is now SPLIT: one test keeps
+    #       the s5.19 arithmetic as a dated historical finding, one reads the
+    #       DEPLOYED config and checks the new floor still admits the whole
+    #       de-vigged band (and is not the naive 1/0.79 bound). The second
+    #       new test closes a stale literal the change exposed --
+    #       `gate_registry` quoted the floor in prose and nothing checked it.
+    assert len(nong) == 1042, (
+        f"the non-gating selection is {len(nong)}, recorded 1042")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

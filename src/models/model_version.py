@@ -1228,7 +1228,51 @@ TRACKED_KEYS: List[str] = [
 #:       10:33 Sofia) leaves the margin at +10.4 under the picks constants
 #:       this project still retains — a breach by its own instrument. It is
 #:       registered for 2026-11-04 with a falsifiable condition.
-CODE_REVISION = "s5.19"
+#:
+#: s5.20 — 2026-11-07. ONE KEY (derived and registered 2026-11-06; the
+#:       bump itself lands 11-07, so s5.19's last day is 2026-11-06): `betting.min_odds` 1.50 -> 1.14, which OPENS
+#:       THE FLB 70-79% BAND TO MEASUREMENT. It is a selection-affecting
+#:       change by definition — it admits a price class the gate had refused
+#:       since the experiment began — so it takes a new cohort.
+#:
+#:       THE BOUND IS DERIVED, AND `1/0.79` IS THE WRONG ARITHMETIC.
+#:       `docs/flb-preregistration.md` fixes its bands on DE-VIGGED
+#:       probability, while `min_odds` gates the RAW price, and
+#:       `raw = p_devig * (1 + margin)`. A leg at de-vigged 0.79 therefore
+#:       prices near 1.19, not 1.2658. Measured over 23,398 leg sets at taken
+#:       prices: margin median 6.66% / p95 8.17% / max 16.11%, implying floors
+#:       1.1720 / 1.1556 / 1.0765; and the 5,314 legs actually in the band run
+#:       1.1450..1.3700 raw. 1.14 is the two-decimal value below every in-band
+#:       leg measured and inside that range: it admits 5,314 of 5,314, 100.00%.
+#:
+#:       WHY THE BAND WAS UNREACHABLE, NOT MERELY EMPTY. 1/1.50 = 66.7% is a
+#:       CEILING on implied probability and the band starts at 70%, so 0 of
+#:       1,639 settled picks sat in it and none COULD. The earlier reading —
+#:       "our avg taken odds of ~1.6 put the mass in the middle" — made that
+#:       look like a sampling accident more data would fix. It was a gate.
+#:
+#:       A RAW FLOOR CANNOT EXPRESS A DE-VIGGED BAND, and the spill is
+#:       recorded rather than engineered away: of 9,334 newly admitted legs,
+#:       56.9% are the target band, 31.6% sit between the old ceiling and the
+#:       band, 11.5% spill into [0.80, 0.90). The pre-registration tests each
+#:       band separately, so that POPULATES two further bands instead of
+#:       confounding the target — and it is what that document asked for,
+#:       since it calls a single band clearing weak evidence and wants several
+#:       bands moving together. Three of five bands could never be tested.
+#:
+#:       THIS IS A MEASUREMENT, NOT AN ATTEMPT TO PROFIT. `paper_trading_mode`
+#:       stays `true` and there has never been a live wager. The economic bar
+#:       is stated separately in the registration because measuring the
+#:       anomaly and collecting it are two questions: the band's own cost at
+#:       the taken price is 4.70pp, so the external +3.74pp nets -0.96pp at
+#:       current pricing. A positive measurement is EXPECTED to fail that bar.
+#:
+#:       NOTHING ELSE MOVED. Not `max_odds`, `max_picks_per_match`,
+#:       `min_expected_value`, `min_confidence`, the blend, the markets or the
+#:       gates. Registered in `docs/flb-band-preregistration.md`, committed
+#:       `fed8338` BEFORE this bump, so the hypothesis and the n=829 powered
+#:       decision rule predate the first pick the cohort can produce.
+CODE_REVISION = "s5.20"
 
 
 def _stable(value: Any) -> Any:

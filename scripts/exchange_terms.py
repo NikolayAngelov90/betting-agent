@@ -138,7 +138,20 @@ MEASURED_TERMS = {
     "our_max_implied_pct": 66.7,
     "anomaly_band_implied_pct": (70.0, 79.0),
     "picks_in_anomaly_band": 0,
+    # THE FLOOR AT THE TIME OF THIS MEASUREMENT. Not superseded as a figure:
+    # the 0-of-1,639 result above is a property of the s5.19 cohort, which ran
+    # at 1.50 for its whole life. `floor_opened_to` is what replaced it.
     "config_min_odds": 1.50,
+    "cohort_at_measurement": "s5.19",
+    "floor_opened_to": 1.14,
+    "floor_opened_on": "2026-11-07",
+    "floor_opened_in_cohort": "s5.20",
+    "floor_opened_why": (
+        "to MEASURE the FLB band, not to profit from it. Derived in "
+        "docs/flb-band-preregistration.md (fed8338), committed BEFORE the "
+        "bump: 1.14 admits 5,314 of 5,314 de-vigged in-band legs. The band "
+        "was UNREACHABLE at 1.50, not merely empty, which is why opening it "
+        "is the only way the anomaly becomes measurable in our own data."),
     "band_verdict": (
         "DISJOINT. `betting.min_odds: 1.50` is 66.7% implied, and the "
         "anomaly is documented at 70-79% implied. 0 of 1,639 picks sit in "

@@ -37178,3 +37178,194 @@ unchanged. `cohort_status.py` reads `s5.19 / cdec29`. Invariant 6b untouched.
 *Recorded 2026-11-06. `scripts/exchange_terms.py`,
 `tests/test_exchange_terms.py` (both new, 17 tests). Census 148→149,
 non-gating 1023→1040, gate unchanged at 1732.*
+
+---
+
+## 2026-11-07 — `BAND OPENED`: one key, cohort `s5.20`, and the n is registered
+
+The FLB band was unreachable by a registered gate. This stage opens it **to
+measure the anomaly in our own data**, not to profit from it.
+`paper_trading_mode` stays `true` and there has never been a live wager.
+
+### `BAND OPENED` — the declaration
+
+| | |
+|---|---|
+| **the derived bound** | **`betting.min_odds: 1.50 → 1.14`** |
+| **cohort** | **`s5.19` → `s5.20`** |
+| **model_version** | `…cdec29` → `…f20105` (config alone) → **`…12f2c7`** (with the bump) |
+| **pre-registration** | **`fed8338`**, committed 2026-11-06, **before** this bump |
+| **n to test the band at all** | **100** picks (≥ 50 fixtures) |
+| **n for 80% power vs `+3.74pp`** | **829** picks |
+| **earliest arrival** | **n=100 ≈ 2026-11-12**, **n=829 ≈ 2026-12-15** — both ceilings |
+| `paper_trading_mode` | **`true`, unchanged** |
+
+### THE BOUND IS DERIVED, AND `1/0.79` IS THE WRONG ARITHMETIC
+
+`docs/flb-preregistration.md` fixes its bands on **de-vigged** probability
+(`p_devig = p_implied / Σ p_implied`). But `min_odds` gates the **raw** price,
+and `raw = p_devig × (1 + margin)`. So a leg at de-vigged 0.79 prices near
+**1.19**, not 1.2658.
+
+> **Taking the floor from `1/0.79` would have opened the band only partway,
+> and the measurement could not have seen the top of its own band.** The
+> directive's arithmetic — "the band's upper implied probability gives the
+> lower odds bound" — is right for a **raw**-implied band. These bands are
+> de-vigged, and the margin sits between the two.
+
+Margin **measured**, 2026-11-06, grain = LEG SET, n = 23,398 at taken prices:
+
+| margin (relative) | value | implied floor `1/(0.80·(1+m))` |
+|---|---|---|
+| median | 6.66% | 1.1720 |
+| p95 | 8.17% | 1.1556 |
+| max | 16.11% | 1.0765 |
+
+**Cross-check**: the **5,314** legs that actually fall in the de-vigged
+`[0.70, 0.80)` band run **1.1450 … 1.3700** raw, 1st percentile 1.1650.
+
+> **`1.14` is the two-decimal value below every in-band leg measured and
+> inside the theoretical range. It admits 5,314 of 5,314 — 100.00%.** Not
+> chosen; the test re-derives it against the live config and refuses
+> `1/0.79`.
+
+### THE POPULATION CHANGE, MEASURED — AND THE SPILL, REPORTED
+
+A raw floor cannot express a de-vigged band. At 1.14, **9,334** legs are newly
+admitted:
+
+| de-vigged band | legs | share |
+|---|---|---|
+| **`[0.70, 0.80)` — the target** | **5,314** | **56.9%** |
+| `< 0.70` (between the old 66.7% ceiling and the band) | 2,945 | 31.6% |
+| `[0.80, 0.90)` — spill into the next band | 1,075 | 11.5% |
+
+> **This is not a second experiment smuggled into one bump.** Each band is
+> tested **separately**, so the spill **populates** `[0.60,0.70)` and
+> `[0.80,0.90)` rather than confounding the target — and it is what
+> `flb-preregistration.md` asked for, since it calls a single band clearing
+> *weak evidence* and wants *several bands moving together*. **Three of five
+> bands could never be tested before this.**
+
+**Band composition, before and after.** Before: `[0.70,0.80)` held **0 of
+1,639** picks and could hold none. After: the band is admissible on **1,574
+fixtures** in the existing record, **21.56/day**. The `s5.19` average taken
+odds were **1.627** (min 1.50, median 1.58, max 3.49, implied ceiling
+**66.7%**); the `s5.20` average cannot be stated yet because **the cohort has
+0 picks** — which is exactly the state the pre-registration had to ship into.
+
+### THE n, AND WHY BOTH DATES ARE CEILINGS
+
+At `max_picks_per_match: 1`, a band pick is one per fixture, so picks are
+independent at the fixture grain — which is why the n is analytic and the
+bootstrap checks it rather than replacing it:
+
+```
+n = p(1-p)·((z₀.₀₅ + z₀.₈₀)/effect)²  =  0.75·0.25·((1.6449+0.8416)/0.0374)²  =  829
+```
+
+Empirical power at n=829 over 4,000 simulated bands: **82.8%**.
+
+> **21.97 fixtures/day is the rate at which fixtures CARRY an admissible
+> in-band leg — not the rate at which picks are made.** The EV, value,
+> confidence, correlation and per-match gates are **untouched** and will
+> reject most candidates. So the realised rate is bounded above by this and
+> the honest dates are **not before** 2026-11-12 for a testable band and
+> **not before** 2026-12-15 for a powered one.
+
+### WHAT THIS STAGE DOES NOT DO — stated so the register is legible
+
+* **NO VENUE CHANGE.** `Pinnacle`'s established **1.17pp** saving on 50.9% of
+  picks is a **cost reduction, not an edge**, and switching the pricer in the
+  same bump would confound the band measurement. **It waits, and it waits
+  deliberately.**
+* **NO EXCHANGE.** Size is `UNAVAILABLE` in the feed, so the exchange cost is
+  **unestablished — not refuted**, and only the second ends the question.
+  **Obtaining size would require** a feed that carries order-book depth per
+  selection: the exchanges' own APIs (Betfair Exchange API,
+  `developers.matchbook.com`) return available-size ladders, which TheOddsAPI
+  does not. That is a new provider, a new credential and a new quota — not a
+  parse change — and nothing in this stage assumes it.
+* **NO COMMISSION ASSUMPTION.** Matchbook's 2% came from a **search of their
+  own domain, not a fetch**; Betfair's 6% is the **Australian** schedule; the
+  EU Market Base Rate is **unobtained**. The verdict does not turn anywhere in
+  **2%–15.6%**, so the gap is recorded and not filled with a guess.
+* **AND THE UNIT OBSERVATION, recorded because it will be cited:** commission
+  in **probability points** is `≈ c(o−1)/o²`, which **peaks at even money at
+  exactly `c/4`**; in **ROI** it is `win_rate·c·(o−1)`, which **rises with the
+  price**. **The two units disagree about which price it hurts most**, so
+  every commission figure names its unit.
+
+### THE COVERAGE STATEMENT ANY EVENTUAL VENUE CARRIES — recorded now
+
+* `team_goals`, `double_chance`, `btts`, `draw_no_bet` — **52.6% of our
+  picks** — are quoted by **neither** exchange; **Betfair quotes `1X2` only**.
+* So an exchange-restricted policy is a **different population, not a random
+  fifth**, and `n=525` needs **169 days** at Matchbook or **459** at Betfair
+  against **27** at Bet365.
+* **Any eventual venue decision carries that as a statement about what its
+  result is about.**
+
+### TWO STALE LITERALS FOUND BY MAKING THE CHANGE
+
+* **`gate_registry.py` quoted the floor in prose**: *"removes selections
+  priced below betting.min_odds (1.50)"*. It went a cohort out of date the
+  moment the config moved and **nothing checked it**. Updated, and now
+  **guarded** — a new test asserts the registry's stated value for `min_odds`
+  and `max_odds` equals the deployed config, so the next move cannot leave
+  the description behind.
+* **My own `band_open.py` had `CURRENT_MIN_ODDS = 1.50`**, which became the
+  *previous* floor the moment it was committed. Renamed to
+  `PREVIOUS_MIN_ODDS` as a labelled baseline, with the deployed value read
+  **live** from `config.example.yaml`.
+
+### AND THE FILE THAT MATTERS IS THE EXAMPLE
+
+`tests/test_config_identity.py` records that CI does
+`cp config/config.example.yaml config/config.yaml`, so **the example IS the
+deployed config**. Changing only `config/config.yaml` — which is
+`.gitignore`d — would have been overwritten on the next run and the band would
+never have opened. Both files are changed and a test asserts they agree.
+
+### WHAT WAS NOT TOUCHED
+
+Not `max_odds`, `max_picks_per_match`, `min_expected_value`,
+`min_confidence`, `min_ev_confidence_score`, `kelly_fraction`, the blend
+weights, the markets, the gates, or `paper_trading_mode`. ρ=0.42, σ,
+`TARGET_N`, the derived deadline floor, the 168-credit reservation,
+`FULL_CARD_PICKS_MAX = 40.35` and `PICKS_BOUND_AT_S519_DECISION = 88.1` all
+unchanged. **Invariant 6b and the four revision pins moved under rule 8's
+exemption, with the argument beside each**, because rule 7 orders a bump for a
+selection-affecting change.
+
+### A SEPARATE RED AROSE AT MIDNIGHT — REPORTED, NOT FIXED
+
+Rule 8 of this stage exempts invariant 6b and the revision pins and orders
+**STOP, do not fix, report** for anything else. One thing else:
+
+> **`tests/test_red_means_new.py` — 7 tests red, because the structural
+> margin acknowledgement's `review` date `2026-11-06` has passed.** The
+> acknowledgement now resolves `UNACKNOWLEDGED`, so the schedule-margin
+> finding reddens: `audit alarm — schedule margin +21m < 30m
+> [UNACKNOWLEDGED: recorded, but its review date 2026-11-06 has passed]`.
+
+**It is not this stage's doing**, and that was verified rather than assumed:
+with every change here stashed, the same 7 tests fail at `HEAD`. The trigger
+is the clock, not the config — the band work touches nothing the schedule
+margin reads.
+
+**It is the self-expiring guard working as designed.** The rule already in
+this register is that *a self-expiring guard is cleared by its action or
+deleted, never extended* — so **the review date must not simply be pushed
+out**, and it has not been. The acknowledged figure was measured at n=10 with
+a jitter floor, and its registered successor is **p95 at n ≥ 100**, projected
+**2027-02-27** (weekday). Until then the choices are to re-measure and
+re-acknowledge on current data, or to accept the red.
+
+**Left red deliberately, and it is Niki's call**, not something to be cleared
+in a bump authorised for one config key.
+
+*Recorded 2026-11-07. `config/config.example.yaml`,
+`src/models/model_version.py`, `tests/experiment_pins.py`,
+`src/betting/gate_registry.py`, `scripts/band_open.py`,
+`docs/flb-band-preregistration.md` (`fed8338`).*

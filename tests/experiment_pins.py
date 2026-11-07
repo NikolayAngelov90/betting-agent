@@ -208,23 +208,103 @@ History:
                     RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS
                     here because rule 7 orders the bump; the argument is this
                     entry and no test is relaxed.
+
+    s5.20 2026-11-07  ONE KEY, AND IT OPENS A BAND THAT WAS UNREACHABLE.
+                    (Derived and pre-registered 2026-11-06; the bump
+                    lands 11-07, so s5.19's last day is 2026-11-06.)
+                    `betting.min_odds` 1.50 -> 1.14. Selection-affecting by
+                    definition: it admits a price class the gate had refused
+                    since the experiment began, so rule 7 orders a new cohort.
+
+                    WHY THE BAND WAS UNREACHABLE AND NOT MERELY EMPTY. The FLB
+                    test reported `[0.70,0.80)` and `[0.80,0.90)` as `n=0,
+                    INSUFFICIENT` and attributed it to "our avg taken odds of
+                    ~1.6 put the mass in the middle" -- a SAMPLING reading
+                    that more data would fix. Measured 2026-11-06: 1/1.50 =
+                    66.7% is a CEILING on implied probability and the band
+                    starts at 70%, so 0 of 1,639 settled picks sat in it and
+                    none COULD. It was a registered gate, not a thin sample.
+
+                    THE BOUND IS DERIVED, AND 1/0.79 IS THE WRONG ARITHMETIC.
+                    The bands are fixed on DE-VIGGED probability; `min_odds`
+                    gates the RAW price; `raw = p_devig * (1 + margin)`. So a
+                    leg at de-vigged 0.79 prices near 1.19, not 1.2658, and a
+                    floor from 1/0.79 would open the band only partway -- the
+                    measurement could not see the top of its own band.
+                    Measured over 23,398 leg sets at taken prices: margin
+                    median 6.66% / p95 8.17% / max 16.11%, implying floors
+                    1.1720 / 1.1556 / 1.0765; the 5,314 legs actually in the
+                    band run 1.1450..1.3700 raw. 1.14 is the two-decimal value
+                    below every in-band leg measured and inside that range,
+                    admitting 5,314 of 5,314 -- 100.00%.
+
+                    A RAW FLOOR CANNOT EXPRESS A DE-VIGGED BAND, so the spill
+                    is recorded rather than engineered away: of 9,334 newly
+                    admitted legs, 56.9% are the target band, 31.6% sit
+                    between the old ceiling and the band, 11.5% spill into
+                    `[0.80,0.90)`. Each band is tested SEPARATELY, so that
+                    POPULATES two further bands instead of confounding the
+                    target -- and it is what `flb-preregistration.md` asked
+                    for, since it calls a single band clearing weak evidence
+                    and wants several bands moving together. Three of five
+                    bands could never be tested before this.
+
+                    MEASUREMENT, NOT PROFIT. `paper_trading_mode` stays
+                    `true`; there has never been a live wager. The economic
+                    bar is registered separately because measuring the
+                    anomaly and collecting it are two questions: the band's
+                    own cost at the taken price is 4.70pp, so the external
+                    +3.74pp (n=134, Footiqo, one book, five leagues) nets
+                    -0.96pp at current pricing. A positive measurement is
+                    EXPECTED to fail that bar, and "the bias is real and we
+                    cannot collect it" is a registered outcome.
+
+                    THE n IS REGISTERED BEFORE THE FIRST PICK. n=829 in-band
+                    picks for 80% power, one-sided alpha=0.05, at the band
+                    midpoint; empirical power 82.8% over 4,000 bootstrap
+                    draws; the pre-registration's own floor to test a band at
+                    all is n=100. At the measured ceiling of 21.56
+                    fixtures/day carrying an admissible in-band leg: n=100 in
+                    5 days, n=829 in 38 -- BOTH CEILINGS, because that is the
+                    FIXTURE rate and the EV, value and confidence gates are
+                    untouched and will reject most candidates.
+
+                    NOTHING ELSE MOVED. Not `max_odds`,
+                    `max_picks_per_match`, `min_expected_value`,
+                    `min_confidence`, the blend, the markets or the gates.
+                    `betting.min_odds` is a TRACKED_KEY, so the fingerprint
+                    moved by the mechanism that already exists rather than by
+                    hand: cdec29 -> f20105 on the config change alone, then
+                    -> 12f2c7 with the revision bump.
+                    RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS
+                    here because rule 7 orders the bump; the argument is this
+                    entry and `docs/flb-band-preregistration.md` (committed
+                    `fed8338` BEFORE this bump), and no test is relaxed.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
 #:
-#: MOVED s5.18 -> s5.19 on 2026-10-22, with the argument in the history above.
+#: MOVED s5.19 -> s5.20 on 2026-11-07, with the argument in the history
+#: above: `betting.min_odds` 1.50 -> 1.14 opens the de-vigged [0.70,0.80) FLB
+#: band, which `1/1.50 = 66.7%` had made unreachable rather than merely empty.
 #: Invariant 6b pins this to a literal precisely so a bump has to argue; the
-#: argument is the s5.19 entry and the test is unchanged.
-CODE_REVISION_PIN = "s5.19"
+#: argument is the s5.20 entry plus `docs/flb-band-preregistration.md`
+#: (`fed8338`, committed BEFORE the bump), and the test is unchanged.
+CODE_REVISION_PIN = "s5.20"
 
 #: Must equal model_version(config.example.yaml).
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.cdec29"
+#:
+#: MOVED on 2026-11-07. `betting.min_odds` is a TRACKED_KEY, so the one-key
+#: config change moved the fingerprint `cdec29 -> f20105` on its own, and the
+#: `s5.20` revision bump moved it again to `12f2c7`. Both steps are the
+#: existing mechanism working, not bookkeeping.
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.12f2c7"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 #: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16
 #: and 12 by 889f8ba on 09-17. That is the defect the always-bump rule closes.
-PREVIOUS_CODE_REVISION = "s5.17"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.818026"
+PREVIOUS_CODE_REVISION = "s5.19"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.cdec29"
 
 
 #: How many completed-match queries are exempt from the training-exclusion
