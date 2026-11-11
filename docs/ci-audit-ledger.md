@@ -37660,3 +37660,237 @@ unchanged. Invariant 6b untouched.
 `tests/test_deployed_config_is_the_example.py` (new, 6 tests),
 `tests/test_red_means_new.py`, `tests/test_reference_deadline.py`,
 `docs/absence-sweep-registration.md`.*
+
+---
+
+## 2026-11-11 — `FLOOR RESTORED`, the band tested on LEGS, and H1 DORMANT
+
+Four parts in one stage, in the order the time pressure dictated: the floor
+first because it was the only item with a cost per hour, then the measurements
+it does not affect, then the record that depends on them.
+
+### `FLOOR RESTORED` — pushed first, `7435b61`
+
+| | |
+|---|---|
+| **the change** | **`betting.min_odds: 1.14 → 1.50`**, one key |
+| **cohort** | `s5.20` → **`s5.21`** |
+| **model_version** | `12f2c7` → `6d17e7` (config alone) → **`52678c`** (with the bump) |
+| **verified from** | **`config.example.yaml`** — the file CI copies over the gitignored local one |
+| `paper_trading_mode` | **`true`, unchanged** |
+
+**DERIVED FROM THE RECORD, NOT CHOSEN.** All **fifteen** cohorts from
+2026-08-11 to 2026-11-07 ran at exactly 1.50 — **n=1,798 picks**, per-cohort
+average taken odds **1.592 … 1.671**, and the **minimum taken price in every
+one of them is 1.50 to the cent**, so the floor was binding throughout. That
+is the range the operator states as the target, and it is a property of the
+deployed record rather than a preference asserted over it.
+
+**Pushed before anything else measured**, because every scheduled
+`daily-picks` run until then publishes more picks at prices that were
+rejected. Fourth instance of the config-example surface: changing only
+`config/config.yaml` would have been silently overwritten.
+
+**The stale literals were re-derived the same way they were on the way down**
+— the gate-registry description, and `band_open`'s baseline, which now also
+carries `FLOOR_THE_BAND_WOULD_NEED = 1.14` as **a measurement, not a
+setting**.
+
+> **AND THE STALENESS GUARD CAUGHT ITSELF.** It asserted
+> `f"({value})" in stated`, which had passed only by luck: YAML loads `1.14`
+> as a float that formats back as `"1.14"`, but loads `1.50` as `1.5`, so the
+> restored floor failed against a registry string reading `"(1.50)"`. Both are
+> the same number. **A guard against a stale literal must not itself depend on
+> `repr`**, so it now parses the number and compares numerically.
+
+**THE FINGERPRINT DOES NOT RETURN TO `cdec29`, AND THAT IS THE POINT.**
+Restoring a config value does not restore a cohort: the fingerprint covers
+`CODE_REVISION` too. **`s5.21` runs the same CONFIG as `s5.19` and is a
+DIFFERENT COHORT**, because the code between them is not the same code. That
+is the defect the always-bump rule closes, and a test now pins it.
+
+### `ROUND TRIP RECORDED` — with its cost, not smoothed
+
+> The band was opened on 2026-11-07 to make the favourite–longshot anomaly
+> measurable in our own data. **It did not need to be opened.** The hypothesis
+> is about market calibration and is testable on legs in the odds record at
+> any floor. Opening the band was necessary to **act** on the anomaly, not to
+> **measure** it, and acting is blocked on an exchange whose price depth is
+> `UNAVAILABLE`.
+
+**`s5.20`, described completely so it is never quietly skipped:**
+
+| | |
+|---|---|
+| span | **2026-11-08 … 2026-11-09 — two days** |
+| n | **86 picks** (85 settled, 1 pending) |
+| taken odds | min **1.14**, p25 1.25, median **1.440**, mean **1.464**, max 1.99 |
+| against | **1.592 … 1.671** for every cohort before it |
+| de-vigged bands | 0.40–0.50: 1 · **0.50–0.60: 33** · 0.60–0.70: 23 · 0.70–0.80: 17 · 0.80–0.90: 10 · unevaluated 2 |
+| break-even win rate at the mean | **68.3%** |
+| settled | win rate **65.9%**, ROI **−7.49%** on n=85 — *two days; no conclusion* |
+
+**RETAINED AND LABELLED, never deleted.** Those picks settle normally and are
+**never pooled** with `s5.19` or `s5.21`. A test pins the three fingerprints
+distinct, with a **known-wrong control** showing what pooling would hide:
+`s5.20`'s 1.464 average diluted into the 1,798-pick record moves it by
+**under a hundredth**, so the cohort that cost the round trip would become
+invisible.
+
+### `BAND TEST UNAFFECTED` — confirmed by running it, not assumed
+
+The leg test was run **after** the floor was restored and pushed. That is the
+strongest available confirmation: it produced its full table at
+`min_odds = 1.50`.
+
+* it reads the **`odds` record**, never `saved_picks`;
+* its bands are the **external study's boundaries**, fixed before our data;
+* its n is **52,737 legs** over ~10,700 fixtures, not 829 picks;
+* its arrival date is **today**, not 2026-12-15.
+
+**Nothing in it depends on `min_odds`.** Had anything done so, the stage would
+have stopped — that was the condition, and it did not fire.
+
+### `BAND TESTED ON LEGS` — the anomaly is REAL in our own data
+
+`measured` 2026-11-11, grain=**LEG** (one fixture·market·selection at the
+TAKEN price), de-vigged **per leg set**, bootstrap over **FIXTURES**, 4,000
+draws. 37,691 completed matches, **37,079 kept** after the registered
+exclusions (−28 `corrupt_1x2_assignment`, −81 `corrupt_team_identity`, −503
+`phantom_kickoff_now_stamp`).
+
+| band | n legs | fixtures | mean de-vig | observed | **gap** | 95% CI | verdict | external |
+|---|---|---|---|---|---|---|---|---|
+| 0.30–0.40 | 8,830 | 4,039 | 35.15% | 33.52% | **−1.63** | [−2.60, −0.71] | **NEGATIVE** | — |
+| 0.40–0.50 | 11,833 | 4,770 | 45.12% | 44.76% | −0.35 | [−1.25, +0.56] | NOT PRESENT | −1.34 @134 |
+| 0.50–0.60 | 11,379 | 4,763 | 54.62% | 55.76% | **+1.14** | [+0.19, +2.11] | **PRESENT** | +1.29 @591 |
+| 0.60–0.70 | 7,606 | 3,935 | 64.76% | 66.39% | **+1.64** | [+0.55, +2.76] | **PRESENT** | +3.21 @266 |
+| 0.70–0.80 | 8,927 | 3,955 | 74.82% | 76.25% | **+1.43** | [+0.49, +2.34] | **PRESENT** | +3.74 @134 |
+| 0.80–0.90 | 4,162 | 2,855 | 83.99% | 86.38% | **+2.38** | [+1.21, +3.53] | **PRESENT** | +6.32 @32 |
+
+> **H-BAND IS SUPPORTED. Four consecutive bands PRESENT with every CI above
+> zero, and the lowest band NEGATIVE — which is the favourite–longshot shape
+> rather than a uniform positive offset.** That is precisely what
+> `docs/flb-preregistration.md` fixed as the only outcome supporting the
+> *hypothesis* rather than one band: *"several bands moving together in the
+> predicted direction."*
+
+**It agrees in DIRECTION with the external study in all five comparable
+bands**, including the negative 40–49 — at **20–130× its n**, and at roughly
+**a third to a half** of its magnitudes. Ours is the larger and less selected
+measurement, so ours governs.
+
+**The method, and why each choice is load-bearing:** one leg per
+(fixture, market, selection) at the taken price, because using every
+bookmaker's quote would multiply the same leg by the number of books;
+de-vigging against **that set's own** overround, because a pooled margin
+misassigns the legs whose own set is wide; and the bootstrap resampling
+**fixtures**, because a 1X2 set is three legs settled by one scoreline.
+
+**A TIE NEARLY MIS-GRADED THE TEST.** `extract_legs` returns prices only, so
+each price's selection had to be recovered — and the first version matched by
+**value**. `Over 2.5` and `Under 2.5` both at 1.90 are one number, the two
+selections grade **oppositely**, and the de-vigged probability is identical
+either way: **the band would be right and the result wrong.** Reconstructing
+the keys the way `extract_legs` builds them moved the 70–79 gap from +1.66 to
+**+1.43pp**. Kept as a driven control.
+
+**STATED LIMITATION.** 45,283 leg sets were refused as not canonicalisable —
+almost all `team_goals` Under/2.5+/3.5+ lines and non-half `over_under` lines,
+for which **the deployed grader has no branch**. That is a property of the
+settlement table, not of the band, and it removes legs from both tails.
+
+### `COLLECTABLE` — NO, at every venue with an established price
+
+Existence and collectability are two questions. The cost is the **in-band**
+cost at the **band's own price** — bookmaker margins rise in the favourites
+band while both exchanges' are flat, so the cheapest venue overall is not the
+cheapest venue in the band.
+
+| band | gap | CI lo | `Pinnacle` | `Bet365` | `1xBet` | taken policy | exchange ᴱ |
+|---|---|---|---|---|---|---|---|
+| 0.50–0.60 | +1.14 | +0.19 | 2.28 → **−2.09** | 4.14 → −3.94 | 3.69 → −3.49 | 3.71 → −3.52 | 0.54 → −0.35 |
+| 0.60–0.70 | +1.64 | +0.55 | 2.93 → **−2.38** | 4.72 → −4.17 | 5.23 → −4.67 | 4.56 → −4.01 | 0.63 → −0.07 |
+| 0.70–0.80 | +1.43 | +0.49 | 3.87 → **−3.38** | 4.90 → −4.41 | 6.48 → −5.98 | 5.01 → −4.52 | 0.64 → −0.15 |
+| 0.80–0.90 | +2.38 | +1.21 | 3.68 → **−2.47** | 4.68 → −3.46 | 7.58 → −6.36 | 5.73 → −4.52 | 0.74 → **+0.48** |
+
+*(cost in pp; the arrow is `CI lower bound − cost`.)*
+
+> **NEGATIVE AT EVERY BOOKMAKER IN EVERY BAND — on the CI lower bound AND on
+> the point estimate.** The in-band cost rises with the band at every
+> bookmaker, so the margin grows exactly where the inefficiency does.
+
+**ONE CELL SURVIVES, AND IT IS NOT A PLAN.** The 80–90% band at an exchange:
+**+0.48pp** on the lower bound before commission. It needs a rate below
+**3.6%** — Matchbook's published **2%** clears it at **+0.21pp**, Betfair's
+**6%** Australian schedule does not (**−0.33pp**). And:
+
+* the exchange's **depth is `UNAVAILABLE`** in the feed, so the price is
+  **unestablished**, not low;
+* **fixture coverage is 6.1%**;
+* Matchbook's 2% was read from **their own domain but not directly fetched**;
+* and the band is raw odds **≈1.19 — below the 1.50 floor just restored.**
+  Acting on it would mean re-opening the floor that was closed today.
+
+### `s5.20 DISTRIBUTION` — the floor was NOT an attractor
+
+> **NO.** Only **4 of 86 (4.7%)** sat below 1.15 and the median landed at
+> **1.440**, mid-way through the newly admitted range. The selection did
+> **not** systematically take the shortest admissible price, so the floor
+> acted as a gate rather than an attractor.
+
+**But the finding that matters more:** only **27 of 86 (31%)** reached the
+70–79 or 80–90 bands where the gap is largest, while **33** went to 50–60
+where it is smallest. **The floor change moved the distribution downward
+without aiming it at the band.** Combined with a model established to add
+nothing over the price, the picked subset is not a designed sample of the
+band — it is shorter prices, not better-valued ones.
+
+Break-even at the mean 1.464 is **68.3%**; the settled rate is **65.9%**, ROI
+**−7.49%** on n=85 over two days, which supports no conclusion and is stated
+as such.
+
+### `H1 DORMANT` — a recorded decision, reviewed on a mechanism
+
+The 11-09 expiry offered two choices and excluded deletion. **Dormancy is
+chosen**, recorded in `h1_window.DORMANCY` with three measured reasons:
+
+1. **the pick population changed twice in four days** (1.50 → 1.14 → 1.50,
+   `s5.20` then `s5.21`), and the three cohorts may not be pooled;
+2. **the registered limit is market coverage** — 57.1% reachable / 42.9% not
+   — and the band change altered which markets picks fall in, so the ceiling
+   is stale until re-measured on `s5.21`;
+3. **the question H1 was for has partly answered itself**: the band test
+   establishes the anomaly AND establishes it is not collectable at any venue
+   with an established price. **What blocks acting is venue depth, not price
+   history**, so a price-path collection is not the binding measurement today.
+
+**`STOPPED_ON` stays, the 51 assertions stay, deletion stays excluded.** The
+review is **two mechanisms** — the coverage ceiling re-measured on `s5.21`,
+and a venue with measurable depth — anchored to **2026-11-24, UEFA MD5**, an
+external fixture fact rather than a chosen deadline. The guard now asserts
+that a decision *exists* and fires if the anchor passes unexamined.
+
+### WHAT MOVED, AND WHAT DID NOT
+
+**The gate grew for the first time since it was inverted**: +23 to **1755**,
+because `test_band_on_legs.py` is `capture_critical via src.data.market_spec`
+— one control imports the real spec at function level, and `_modules_imported`
+walks the AST. **Accepted rather than engineered around**: a fabricated spec
+would not have caught the tie, and all 23 tests are static, touching no
+database and no clock. Census 151→152, critical 78→79, non-gating 1073
+unchanged.
+
+Not touched: `max_odds`, `max_picks_per_match`, `min_expected_value`,
+`min_confidence`, the blend, the markets, the gates, `paper_trading_mode`,
+ρ=0.42, σ, `TARGET_N`, the derived deadline floor, `FULL_CARD_PICKS_MAX`,
+`MARGIN_ALARM_MIN`, the registered 60. No credits spent.
+
+*Recorded 2026-11-11. `config/config.example.yaml`,
+`src/models/model_version.py`, `src/betting/gate_registry.py`,
+`src/data/h1_window.py`, `tests/experiment_pins.py`,
+`scripts/band_legs.py` (new), `tests/test_band_on_legs.py` (new, 23 tests),
+`scripts/band_open.py`, `scripts/exchange_terms.py`,
+`tests/test_calendar_separation.py`, `tests/test_exchange_terms.py`,
+`tests/test_deployed_config_is_the_example.py`, `tests/test_gate_is_opt_in.py`,
+`docs/flb-band-preregistration.md`. Floor pushed as `7435b61`.*

@@ -115,6 +115,93 @@ RETIRED: Tuple[_date, _date] = (_date(2026, 10, 9), _date(2026, 10, 17))
 #: capture-path module.
 STOPPED_ON: Optional[_date] = _date(2026, 11, 5)   #: RECORDED, read by nothing
 
+#: ═════════ H1 IS DORMANT. A DECISION, RECORDED — 2026-11-11 ═════════════
+#:
+#: The expiry guard fired on 2026-11-09 and offered two choices: start a new
+#: window, or record dormancy and move the review to what is intended.
+#: **DORMANCY IS CHOSEN**, authorised 2026-11-11, and the reasons are recorded
+#: here so the guard's next firing has something to compare against.
+#:
+#: Deletion remains excluded: 274 references / 61 assertions, 51 of which
+#: encode live facts a future attempt needs. `STOPPED_ON` stays.
+#:
+#: WHY NOT NOW — three reasons, each measured rather than asserted:
+#:
+#:  1. THE PICK POPULATION JUST CHANGED TWICE IN FOUR DAYS. `min_odds` went
+#:     1.50 -> 1.14 on 11-07 (cohort s5.20) and back on 11-11 (s5.21).
+#:     `s5.20` is 86 picks over two days at an average taken price of 1.464
+#:     against 1.59..1.67 for every cohort before it. Running H1 across a
+#:     composition that has just moved and moved back measures a moving
+#:     target, and the three cohorts may not be pooled.
+#:
+#:  2. THE REGISTERED LIMIT IS MARKET COVERAGE AND IT NEEDS RE-MEASURING.
+#:     `docs/h1-design-finding.md` sizes the reachable ceiling at 57.1% --
+#:     42.9% of picks sit in markets whose trajectories cannot be collected.
+#:     The band change altered which markets picks fall in, so that figure is
+#:     stale until it is re-measured on the `s5.21` composition. Sizing a
+#:     window against a stale ceiling is how the first attempt overdrew 288
+#:     credits against a 168 reservation.
+#:
+#:  3. AND THE QUESTION H1 WAS FOR HAS PARTLY ANSWERED ITSELF ELSEWHERE.
+#:     The leg-level band test (2026-11-11, n=52,737 legs over ~10,700
+#:     fixtures) finds the favourite-longshot bias PRESENT in four
+#:     consecutive bands -- +1.14 / +1.64 / +1.43 / +2.38 pp, every CI above
+#:     zero -- and NOT COLLECTABLE at any venue whose price is established
+#:     takeable: the net is negative at every bookmaker in every band, on the
+#:     CI lower bound AND on the point estimate. The one surviving cell is
+#:     the 80-90% band at an EXCHANGE, +0.48pp on the lower bound before
+#:     commission, needing a rate below 3.6%, on 6.1% fixture coverage, with
+#:     DEPTH UNAVAILABLE. **What blocks acting is venue depth, not price
+#:     history** -- so a price-path collection is not the binding measurement
+#:     today.
+#:
+#: THE REVIEW IS A MECHANISM, NOT A DEADLINE. Two things must report before a
+#: window is sized, and the date below is an ANCHOR for the first opportunity
+#: rather than a promise:
+#:
+#:     (a) the market-coverage ceiling re-measured on the `s5.21` pick
+#:         composition, replacing the 57.1% / 42.9% figures; and
+#:     (b) a venue with MEASURABLE DEPTH, since that is what blocks acting on
+#:         a gap the band test has already established.
+#:
+#: The anchor is the next UEFA matchday cluster, **MD5 on 24-25 November
+#: 2026** -- an external fixture fact, not a chosen deadline. A window can be
+#: anchored to it at no cost today, and anchoring to a real cluster is what
+#: the first attempt's sizing lacked.
+DORMANCY = {
+    "decided": "2026-11-11",
+    "decision": "DORMANT",
+    "authorised_by": "operator, 2026-11-11, in response to the 11-09 expiry",
+    "deletion": "EXCLUDED - 274 refs / 61 assertions, 51 protect a retry",
+    "stopped_on_stays": True,
+    "reasons": (
+        "the pick population changed twice in four days (min_odds 1.50 -> "
+        "1.14 -> 1.50, cohorts s5.20 then s5.21; s5.20 is 86 picks over two "
+        "days at avg 1.464) and the three cohorts may not be pooled",
+        "the registered limit is MARKET COVERAGE (57.1% reachable / 42.9% "
+        "not) and the band change altered which markets picks fall in, so "
+        "the ceiling is stale until re-measured on s5.21",
+        "the leg-level band test already establishes the anomaly (four bands "
+        "PRESENT, +1.14..+2.38pp) and establishes it is NOT collectable at "
+        "any venue with an established price; what blocks acting is VENUE "
+        "DEPTH, not price history, so a price-path collection is not the "
+        "binding measurement today",
+    ),
+    "review_mechanisms": (
+        "the market-coverage ceiling re-measured on the s5.21 composition",
+        "a venue with MEASURABLE DEPTH becoming available",
+    ),
+    "review_anchor": _date(2026, 11, 24),
+    "review_anchor_basis": (
+        "the next UEFA matchday cluster, MD5 on 24-25 November 2026 -- an "
+        "external fixture fact, not a chosen deadline. It is the first "
+        "opportunity a window could be anchored to, and anchoring to a real "
+        "cluster is what the first attempt's sizing lacked"),
+    "provenance": "recorded 2026-11-11; the band figures are measured, "
+                  "grain=LEG, n=52,737",
+}
+
+
 #: Collection days, inclusive of FROM and exclusive of UNTIL.
 DAYS: int = (UNTIL - FROM).days
 

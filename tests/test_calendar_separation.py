@@ -219,19 +219,35 @@ def test_the_H1_RESERVATION_WINDOW_EXPIRES():
     # live facts a future attempt needs. So the firing of this guard no
     # longer asks for a deletion -- it asks for a decision between the two
     # things that are actually available.
-    assert today < H1_RESERVATION_UNTIL, (
-        f"the H1 window expired on {H1_RESERVATION_UNTIL} and today is "
-        f"{today}. h1_reservation() now returns "
-        f"{h1_reservation(today)} on every day, so the machinery is DORMANT "
-        f"rather than dead. TWO CHOICES, and the deletion is not one of them "
-        f"(sized 2026-11-06 at 274 refs / 61 assertions, 51 of which protect "
-        f"a future attempt): either (a) start a new window by moving "
-        f"FROM/UNTIL together in h1_window and clearing STOPPED_ON, with its "
-        f"own pre-registration -- see docs/h1-design-finding.md, which says "
-        f"what the next one must request; or (b) record that H1 is dormant "
-        f"and move this guard's date to the review you intend. Moving the "
-        f"date WITHOUT recording which of those you chose is the "
-        f"suppression this guard exists to prevent.")
+    # ── THE CHOICE WAS MADE: DORMANCY, RECORDED. 2026-11-11. ──────────
+    #
+    # The guard fired on 11-09 and demanded a decision between starting a new
+    # window and recording dormancy, and it forbade moving the date without
+    # recording which. Option (b) was taken and authorised, so the date moves
+    # WITH its record: `h1_window.DORMANCY` carries the decision, three
+    # measured reasons, and the two MECHANISMS that must report before a
+    # window is sized.
+    #
+    # THE DATE IS AN ANCHOR, NOT A DEADLINE, and it is derived: the next UEFA
+    # matchday cluster, MD5 on 24-25 November 2026. It is the first
+    # opportunity a window could be anchored to. The substantive trigger is
+    # the mechanism pair, and this assertion exists so the record cannot sit
+    # past its own anchor unexamined -- and so this `calendar`-marked test
+    # keeps a clock-dependent assertion, which is what the marker is for.
+    assert _w.DORMANCY["decision"] == "DORMANT", (
+        "the H1 window expired and no decision is recorded. Record one in "
+        "`h1_window.DORMANCY` -- dormancy with its reasons, or a new window "
+        "with its own pre-registration. Deletion remains excluded.")
+    assert today < _w.DORMANCY["review_anchor"], (
+        f"H1 has been DORMANT since {_w.DORMANCY['decided']} and its review "
+        f"anchor {_w.DORMANCY['review_anchor']} has passed (today "
+        f"{today}). h1_reservation() returns {h1_reservation(today)} on "
+        f"every day. The anchor was the UEFA MD5 cluster of 24-25 November; "
+        f"the two mechanisms it waits on are "
+        f"{list(_w.DORMANCY['review_mechanisms'])}. EITHER report those and "
+        f"size a window, OR re-anchor to the next cluster WITH the reason. "
+        f"Deletion is still not one of the choices, and moving the anchor "
+        f"without recording why is the suppression this guard prevents.")
     print(f"H1 RESERVATION: goes INERT on {_w.UNTIL} by the existing "
           f"calendar. Accepted cost: {S['accepted_cost'][:70]}. KEPT "
           f"{S['assertions_encoding_a_live_fact']} of "

@@ -149,7 +149,7 @@ from scripts.capture_critical import (
 #: because `scripts/market_mix.py` keeps every database and
 #: `market_spec` import INSIDE its functions, so importing it reaches
 #: nothing on the capture path.
-CENSUS = {"files": 151, "capture_critical": 78, "not_critical": 73}
+CENSUS = {"files": 152, "capture_critical": 79, "not_critical": 73}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -386,8 +386,24 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       python pin and the recorded local-interpreter gap) and 9 for the
     #       dispatch form being mutually fundable.
     gate, nong = _ids(GATE_EXPR), _ids(NON_GATING_EXPR)
-    assert len(gate) == 1732, (
-        f"the gating selection is {len(gate)}, recorded 1732 — say what moved")
+    # ── THE GATE GREW, FOR THE FIRST TIME SINCE IT WAS INVERTED. ─────────
+    #
+    #   +23 on 2026-11-11: test_band_on_legs.py, the leg-level FLB test. It
+    #       is capture_critical `via src.data.market_spec`, which one of its
+    #       known-wrong controls imports AT FUNCTION LEVEL -- and
+    #       `_modules_imported` uses `ast.walk`, so a function-level import
+    #       counts exactly as a module-level one does.
+    #
+    #       ACCEPTED RATHER THAN ENGINEERED AROUND, and the trade is stated:
+    #       the control proves `_keys_for` mirrors `extract_legs`' own key
+    #       construction for a REAL spec, and it caught a tie that mis-graded
+    #       legs and moved the 70-79 gap from +1.66 to +1.43pp. A fabricated
+    #       spec would have proved nothing. All 23 tests are STATIC -- they
+    #       read constants, source text and the AST, and touch no database
+    #       and no clock -- so none can lose the day card, which is the risk
+    #       the gate exists to carry.
+    assert len(gate) == 1755, (
+        f"the gating selection is {len(gate)}, recorded 1755 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the
