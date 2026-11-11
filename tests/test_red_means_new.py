@@ -33,6 +33,41 @@ import scripts.ci_audit as ci
 KEY = "margin.schedule"
 REC = ci.KNOWN_FINDINGS[KEY]
 
+#: A RECORD OF OUR OWN, BECAUSE THE CONTROLS MUST NOT BREAK WHEN A REAL
+#: FINDING IS DISCHARGED — 2026-11-07.
+#:
+#: These four controls used to drive the classifier through the LIVE
+#: `margin.schedule` record, asserting its exact figure and its exact review
+#: date. So when that finding was discharged by its own action (its margin
+#: moved +14.81m past its threshold and its date review was retired as
+#: uninformative), FOUR CONTROLS FAILED — and none of them was testing
+#: anything that had changed. A control coupled to live data reports the
+#: data moving as a mechanism defect.
+#:
+#: The mechanism is now driven through `SYNTHETIC`, which carries a figure, a
+#: tolerance and a FUTURE review date so each of the four states is
+#: reachable. The live record gets its own test below, asserting the shape a
+#: discharged finding must have — which is a different claim, deliberately.
+SYNTHETIC_KEY = "synthetic.margin"
+SYNTHETIC = {
+    "figure": 20.665799601890512,
+    "tolerance": "minutes",
+    "since": "2026-10-22",
+    "review": "2099-01-01",
+    "why": "a synthetic record, so the four controls own their own inputs",
+    "action": "none; this record exists to drive the classifier",
+}
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_record():
+    """`SYNTHETIC_KEY` present for every test in this module, removed after."""
+    ci.KNOWN_FINDINGS[SYNTHETIC_KEY] = dict(SYNTHETIC)
+    try:
+        yield
+    finally:
+        ci.KNOWN_FINDINGS.pop(SYNTHETIC_KEY, None)
+
 
 def _emit(keyed=(), alarmed=(), status=()):
     """`(exit_code, stdout, telegram_body)` from the real emitter."""
@@ -56,20 +91,26 @@ def _emit(keyed=(), alarmed=(), status=()):
 def test_CONTROL_1_an_UNCHANGED_acknowledged_finding_is_GREEN():
     """The whole point. The recorded figure, re-reported, must not redden."""
     code, out, body = _emit(
-        keyed=[(KEY, REC["figure"], "schedule margin +21m < 30m")])
+        keyed=[(SYNTHETIC_KEY, SYNTHETIC["figure"],
+                "schedule margin +21m < 30m")])
     assert code == 0, out
     assert "KNOWN, does not redden" in out
     assert "UNCHANGED" in out
     # IT PRINTS, with its figure and its review date
-    assert "+20.67" in out and REC["review"] in out, out
+    assert "+20.67" in out and SYNTHETIC["review"] in out, out
     assert body == "", "a known finding was pushed to Telegram"
     assert "no NEW, DETERIORATED or UNACKNOWLEDGED finding" in out
 
 
 def test_CONTROL_2_the_SAME_finding_DETERIORATED_is_RED():
-    """Worse than the record by more than the derived tolerance."""
-    worse = REC["figure"] - ci.FINDING_TOLERANCE_MINUTES - 0.01
-    code, out, body = _emit(keyed=[(KEY, worse, "schedule margin")])
+    """Worse than the record by more than the derived tolerance.
+
+    SYNTHETIC, because the live record now carries a `floor` and the floor is
+    checked FIRST -- so driving this through it would exercise the relapse
+    path and assert the wrong word. Two mechanisms, two tests.
+    """
+    worse = SYNTHETIC["figure"] - ci.FINDING_TOLERANCE_MINUTES - 0.01
+    code, out, body = _emit(keyed=[(SYNTHETIC_KEY, worse, "schedule margin")])
     assert code == 1, out
     assert "DETERIORATED" in out
     assert "::error::audit alarm" in out
@@ -136,8 +177,17 @@ def test_the_TOLERANCE_is_DERIVED_from_the_measured_single_point_movement():
     (-ci.FINDING_TOLERANCE_MINUTES - 0.01, "DETERIORATED"),
 ])
 def test_the_MINUTES_comparison_treats_LOWER_as_worse(delta, expect):
-    state, _why = ci.classify_finding(KEY, REC["figure"] + delta)
+    """SYNTHETIC: this is the TOLERANCE's behaviour, with no floor in the way.
+
+    The live record's floor is tested by its own control; mixing them would
+    make the direction-of-worse claim depend on which threshold fired.
+    """
+    state, _why = ci.classify_finding(SYNTHETIC_KEY,
+                                      SYNTHETIC["figure"] + delta)
     assert state == expect, (delta, state)
+    assert "floor" not in SYNTHETIC, (
+        "the synthetic record gained a floor, so these four cases no longer "
+        "isolate the relative tolerance")
 
 
 def test_the_COUNT_comparison_treats_HIGHER_as_worse():
@@ -158,32 +208,123 @@ def test_the_COUNT_comparison_treats_HIGHER_as_worse():
 
 def test_an_EXPIRED_review_date_makes_it_UNACKNOWLEDGED_whatever_the_figure():
     """A deferral with a date nothing reads is not a deferral."""
-    state, why = ci.classify_finding(KEY, REC["figure"],
-                                     today=dt.date(2099, 1, 1))
+    state, why = ci.classify_finding(SYNTHETIC_KEY, SYNTHETIC["figure"],
+                                     today=dt.date(2099, 1, 2))
     assert state == "UNACKNOWLEDGED"
-    assert REC["review"] in why
+    assert SYNTHETIC["review"] in why
     # and the EXACT figure does not rescue it
-    code, out, _ = _emit(keyed=[(KEY, REC["figure"], "x")])
+    code, out, _ = _emit(keyed=[(SYNTHETIC_KEY, SYNTHETIC["figure"], "x")])
     assert code == 0, "today it is unexpired, so this control is mis-dated"
 
 
 def test_an_UNPARSEABLE_review_date_is_UNACKNOWLEDGED():
-    saved = dict(ci.KNOWN_FINDINGS)
-    ci.KNOWN_FINDINGS[KEY] = dict(REC, review="not-a-date")
-    try:
-        assert ci.classify_finding(KEY, REC["figure"])[0] == "UNACKNOWLEDGED"
-    finally:
-        ci.KNOWN_FINDINGS.clear()
-        ci.KNOWN_FINDINGS.update(saved)
+    ci.KNOWN_FINDINGS[SYNTHETIC_KEY] = dict(SYNTHETIC, review="not-a-date")
+    assert ci.classify_finding(
+        SYNTHETIC_KEY, SYNTHETIC["figure"])[0] == "UNACKNOWLEDGED"
 
 
-def test_the_RECORD_carries_its_FIGURE_its_REVIEW_and_its_ACTION():
-    for field in ("figure", "tolerance", "since", "review", "why", "action"):
-        assert REC.get(field), f"the recorded finding has no {field}"
-    assert REC["figure"] == 20.665799601890512, (
-        "the recorded figure is not the full-precision reading; a predicate "
-        "reading a rounded display absorbs a breach it was never shown")
-    assert dt.date.fromisoformat(REC["review"]) > dt.date(2026, 10, 23)
+def test_EVERY_LIVE_RECORD_carries_its_FIGURE_and_a_TRIGGER():
+    """The live table's own contract, which is NOT the controls' contract.
+
+    A record may carry a date review or a mechanism trigger, but it must
+    carry one of them: a figure with neither cannot ever be looked at again.
+    """
+    for key, rec in ci.KNOWN_FINDINGS.items():
+        for field in ("figure", "tolerance", "since", "why", "action"):
+            assert rec.get(field) is not None, f"{key} has no {field}"
+        assert rec.get("review") or rec.get("review_trigger"), (
+            f"{key} carries neither a `review` date nor a `review_trigger`. "
+            f"A recorded figure with no way back to it is a permanent "
+            f"silence, which is the opposite of an acknowledgement")
+        assert isinstance(rec["figure"], float), (
+            f"{key}'s figure is not a float; a predicate reading a rounded "
+            f"display absorbs a breach it was never shown")
+
+
+def test_the_DISCHARGED_SCHEDULE_MARGIN_keeps_what_it_superseded():
+    """`margin.schedule` was discharged 2026-11-07 BY ITS OWN ACTION.
+
+    The action it registered on 2026-10-22 was "the parallel picks series
+    reaching n=10". That landed on 2026-11-06 at n=12, `FULL_CARD_PICKS_MAX`
+    was substituted 88.1 -> 40.35, and the margin moved +14.81m past its
+    threshold. So this is a discharge, not a re-acknowledgement, and the
+    retired figure stays with its date and its regime.
+    """
+    assert REC["figure"] == pytest.approx(35.4755, abs=0.001)
+    assert REC["clears_threshold"] is True
+    assert REC["figure"] > ci.MARGIN_ALARM_MIN, (
+        f"the discharged figure {REC['figure']:.2f} no longer clears the "
+        f"{ci.MARGIN_ALARM_MIN}m threshold, so it is a BREACH again and must "
+        f"be acknowledged rather than recorded as resolved")
+    # the date review is retired ON PURPOSE, and the trigger replaces it
+    assert "review" not in REC, (
+        "a date review is back on a quantity that only moves when a "
+        "mechanism moves. It fired on 2026-11-06 against a figure that had "
+        "already improved by 14.8 minutes -- a reminder with no information")
+    for mech in ("cron", "FULL_CARD_PICKS_MAX", "lateness"):
+        assert mech in REC["review_trigger"], (
+            f"`review_trigger` no longer names {mech}, so a reader cannot "
+            f"tell what would make this figure stale")
+    # RETIRED, NOT DELETED
+    sup = REC["superseded"]
+    assert sup["figure"] == 20.665799601890512
+    assert sup["since"] == "2026-10-22" and sup["review"] == "2026-11-06"
+    assert "88.1" in sup["regime"] and "SERIAL" in sup["regime"]
+    assert sup["figure"] < ci.MARGIN_ALARM_MIN < REC["figure"], (
+        "the superseded figure no longer sits below the threshold with the "
+        "new one above it, which is the whole shape of the discharge")
+    moved = REC["figure"] - sup["figure"]
+    assert moved == pytest.approx(14.81, abs=0.01), f"{moved:.2f}"
+
+
+def test_KNOWN_WRONG_A_DISCHARGE_DOES_NOT_SILENCE_A_RELAPSE():
+    """THE CONTROL THAT FOUND A REAL SILENCE, kept as the reason `floor` exists.
+
+    Recording the discharged figure (+35.48) with a RELATIVE tolerance of
+    11.32m made every value down to +24.16 read as UNCHANGED -- including the
+    band 24.16..30.00, which is BELOW the registered 30-minute threshold and
+    is a genuine breach. **Recording an improvement had bought a 5.84-minute
+    silence**, and it would have reached a run.
+
+    An absolute threshold cannot be expressed by a relative tolerance, so the
+    record carries `floor` and the classifier returns `RELAPSED` for it.
+    """
+    # the silent band, measured from the two constants rather than asserted
+    tol_edge = REC["figure"] - ci.FINDING_TOLERANCE_MINUTES
+    assert tol_edge < ci.MARGIN_ALARM_MIN, (
+        "the tolerance edge no longer sits below the threshold, so the "
+        "discharge no longer creates a silent band and this control is "
+        "describing a condition that has gone")
+    silent_band = ci.MARGIN_ALARM_MIN - tol_edge
+    assert silent_band == pytest.approx(5.84, abs=0.01), f"{silent_band:.2f}"
+
+    # a figure INSIDE that band is a breach, and must redden anyway
+    inside = (tol_edge + ci.MARGIN_ALARM_MIN) / 2.0
+    assert inside > tol_edge, "not inside the tolerance"
+    assert inside < ci.MARGIN_ALARM_MIN, "not below the threshold"
+    state, why = ci.classify_finding(KEY, inside)
+    assert state == "RELAPSED", (
+        f"a margin of {inside:+.2f} -- below the {ci.MARGIN_ALARM_MIN}m "
+        f"threshold but within tolerance of the discharged figure -- "
+        f"classified {state}. That is the silence the floor closes")
+    assert "floor" in why
+    assert "RELAPSED" in ci.FINDING_STATES_THAT_REDDEN
+    code, out, body = _emit(keyed=[(KEY, inside, "schedule margin relapsed")])
+    assert code == 1, out
+    assert "RELAPSED" in out
+    assert "schedule margin" in body, "a relapse was withheld from Telegram"
+
+    # and a figure ABOVE the threshold still prints rather than reddening,
+    # or the floor would have replaced one silence with a daily red
+    assert ci.classify_finding(KEY, ci.MARGIN_ALARM_MIN + 0.5)[0] == "UNCHANGED"
+
+
+def test_the_FLOOR_IS_THE_REGISTERED_THRESHOLD_and_is_not_edited():
+    """`floor` must BE `MARGIN_ALARM_MIN`, not a copy that can drift."""
+    assert REC["floor"] == float(ci.MARGIN_ALARM_MIN)
+    assert ci.MARGIN_ALARM_MIN == 30, (
+        "the registered threshold moved; it was stated 2026-10-10 and this "
+        "stage does not edit it")
 
 
 # ── the status split survives the keying ────────────────────────────────

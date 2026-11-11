@@ -29,6 +29,7 @@ that means "nothing there", and the conversion is invisible at the call site.**
 | 8 | `any([0, 0])` | a cron is MINUTES PAST MIDNIGHT, so `0 0` is `0` and `any` is `False` | `missing_scheduled_runs()` returned `UNEVALUATED` on **every call for a day**, silently, killing the detector built for the 422 window |
 | 9 | a silent SQLite fallback | an empty SQLite file answers every query with a plausible zero | **three confident wrong answers**; now refused unless `BETTING_AGENT_ALLOW_SQLITE=1` |
 | 10 | `git log` under a platform codec | the chat-id history guard captured with `text=True` and no encoding | **the guard written to prove a credential absent would have reported clean because it could not read**; fixed 2026-11-05 |
+| **11** | **a size limit that truncates instead of erroring** | `MEMORY.md` is loaded into every session with a **200-line cap**. It reached 202 lines on 2026-11-07 and the loader **dropped the tail and carried on** — one line of user preferences vanished from context with no error, no exception and nothing in the file to show it | **the preference line was absent from the session that was acting on the file**; found only because the host emitted a warning that happened to be read. Fixed by moving ~90 lines of reference detail to `project-reference.md`, taking the index to 101 lines |
 
 Instances 2, 4 and 10 were fixed on the day this class was named. **1 is
 registered and deliberately not fixed** (below). 3, 6, 7, 8 and 9 have guards;
@@ -71,6 +72,25 @@ they are not.
 
 ---
 
+### INSTANCE 11 IS NOT A SITE IN THIS REPOSITORY, AND THAT IS THE POINT
+
+Every other instance is a line of our code that we can guard. This one is a
+**host limit on a file we write**: the truncation happens outside the
+repository, so there is no predicate here that can catch it and no test that
+can fail on it.
+
+> **The class is about the SHAPE, not the syntax.** "Content disappears and
+> nothing errors" is the same defect whether it is `or ""` swallowing a 401
+> or a line cap swallowing a preference. Registering it here is the only
+> control available: the next person to add an index line knows the cap
+> exists and knows what exceeding it does.
+
+**THE RULE IT YIELDS**, stated so it survives this session: `MEMORY.md` is an
+INDEX — one line per memory, under ~200 characters each, and reference detail
+belongs in a topic file. A growing index is not a neutral act; past the cap it
+**silently deletes its own tail**, and the entries nearest the end are the
+ones most recently added.
+
 ## 2. THE THREE OUTCOMES EVERY SUCH SITE MUST HAVE
 
 A site that can conclude "nothing" must be able to return three states, and
@@ -108,6 +128,7 @@ infrastructure.
 | 2 `or "[]"` | stdout `""` with rc 0 | `UNEVALUATED`, not `n=0` |
 | 3 codec | a byte sequence invalid in cp1251 | decoded with replacement, never `None` |
 | 4 skip | a dead token | reported; **not skipped and not passed** |
+| **11 truncation** | a file one line over the cap | **the limit reports which lines were dropped, or the file is kept under it**; silence plus a shorter file is the defect |
 | 5 matcher | a haystack missing its anchor | `UNEVALUATED, not clear` |
 | 6 regex | the pattern against a **planted positive** | ≥1 hit, else the pattern is refused |
 | 7 selection | a marker expression selecting zero node ids | refuse the run |

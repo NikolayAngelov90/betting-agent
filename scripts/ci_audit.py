@@ -77,10 +77,8 @@ from scripts.schedule_deadline import (
     format_two_margins,
     format_reference_deadline,
     prospective_margin,
-    structural_breach_is_acknowledged,
-    STRUCTURAL_ACK,
     two_margins,
-    reference_earliest)
+    reference_earliest, EXPOSURE_ACK, exposure_is_acknowledged, MIN_ACCEPTABLE_MARGIN_MIN)
 
 LEDGER = pathlib.Path("docs/ci-audit-ledger.md")
 LOGS = pathlib.Path("ci_logs")
@@ -3784,20 +3782,82 @@ FINDING_TOLERANCE_COUNT = 0
 #: derived tolerances applies; `review` is the date after which it reddens
 #: again whatever its figure.
 KNOWN_FINDINGS: Dict[str, dict] = {
+    # ── DISCHARGED 2026-11-07 BY ITS OWN ACTION, NOT RE-ACKNOWLEDGED. ─────
+    #
+    # The 2026-10-22 entry deferred a +20.67m margin against a 30m threshold
+    # and named the action that would durably fix it: "the parallel picks
+    # series reaching n=10". THAT ACTION LANDED. The series reached n=12 on
+    # 2026-11-06, `REDERIVE_PICKS_BOUND_PLAN` fired, and
+    # `FULL_CARD_PICKS_MAX` was substituted 88.1 -> 40.35 with authorisation.
+    #
+    #     live binding  +35.476m   measured 2026-11-07, weekday (the worse
+    #                              day type), lateness n=11 / weekend n=5
+    #     threshold      30m       MARGIN_ALARM_MIN, unedited
+    #     acknowledged  +20.666m   2026-10-22, under the retired 88.1 bound
+    #     movement      +14.810m   and NO step got faster: the old figure was
+    #                              computed from a full-card MAX belonging to
+    #                              the retired SERIAL review regime
+    #
+    # SO THE BREACH IS GONE, NOT DEFERRED AGAIN. An acknowledgement whose
+    # action completes is discharged by recording the new figure; extending
+    # its date would have been the one move the expiry guard exists to refuse.
+    #
+    # AND THE DATE REVIEW IS RETIRED WITH IT, DELIBERATELY. This quantity
+    # changes ONLY when a mechanism changes -- the cron, the duration
+    # constant, or the lateness regime. A calendar review on such a figure is
+    # a reminder with no information: it fires on a day when nothing has
+    # happened, and it fired today on a figure that had already improved by
+    # 14.8 minutes. The live trigger is the DETERIORATION tolerance, which is
+    # derived (11.32m) and crossable; `review_trigger` records the mechanisms
+    # whose movement would invalidate the figure, so a reader knows what to
+    # re-measure rather than when.
     "margin.schedule": {
-        "figure": 20.665799601890512,
+        "figure": 35.47550104426989,
         "tolerance": "minutes",
-        "since": "2026-10-22",
-        # 2026-11-06 here is the projected date the parallel picks series
-        # reaches n=10, NOT the R^2=0.451 fit that shares the date elsewhere
-        # in this file. Two different projections landing on one day is
-        # exactly how a figure acquires the wrong provenance.
-        "review": "2026-11-06",
+        "since": "2026-11-07",
+        "provenance": ("measured 2026-11-07, grain=RUN, lateness n=11 "
+                       "weekday / n=5 weekend under the deployed `0 1` / "
+                       "`30 0` crons, duration bound FULL_CARD_PICKS_MAX="
+                       "40.35 (parallel regime, n=12); unit = MINUTES of "
+                       "margin, signed, higher is better"),
+        "clears_threshold": True,
+        # THE ABSOLUTE THRESHOLD IT CLEARS, carried so the relative tolerance
+        # cannot swallow a relapse. `MARGIN_ALARM_MIN` is not edited.
+        "floor": float(MARGIN_ALARM_MIN),
         "why": ("the deadline is the observed earliest kickoff and the ready "
                 "time is ours; the slow cluster governs and the cron was "
                 "derived from it"),
-        "action": ("dispatch daily-picks by hand that morning; durably, the "
-                   "parallel picks series reaching n=10"),
+        # NO `review` KEY, AND THAT IS THE POINT. `classify_finding` treats a
+        # missing review as "no expiry" and falls through to the figure
+        # comparison, which is the behaviour this finding should have.
+        "review_trigger": (
+            "a MECHANISM change, not a date: the deployed cron for either day "
+            "type, FULL_CARD_PICKS_MAX, or the lateness regime (a cron move "
+            "resets the series, and regimes are not pooled). Any of those "
+            "moving makes this figure stale regardless of how recent it is"),
+        "action": ("none outstanding. If it DETERIORATES past the tolerance: "
+                   "dispatch daily-picks by hand that morning, which skips "
+                   "the scheduler; the durable lever was the parallel picks "
+                   "series and it has already been taken"),
+        # ── RETIRED, NOT DELETED. The figure this record carried for 16
+        #    days, with its date and the regime it was measured in, so a
+        #    reader can see what moved and why the movement is not an
+        #    improvement in run speed.
+        "superseded": {
+            "figure": 20.665799601890512,
+            "since": "2026-10-22",
+            "review": "2026-11-06",
+            "regime": ("FULL_CARD_PICKS_MAX=88.1, a full-card MAX from the "
+                       "RETIRED SERIAL review regime, n=4, 2026-10-01"),
+            "review_was": ("the projected date the parallel picks series "
+                           "reaches n=10 -- NOT the R^2=0.451 fit that "
+                           "shares the date elsewhere in this file. Two "
+                           "projections landing on one day is how a figure "
+                           "acquires the wrong provenance"),
+            "why_retired": ("its action completed: the series reached n=12 "
+                            "on 2026-11-06 and the bound was substituted, "
+                            "moving the margin +14.81m past its threshold"),
+        },
     },
 }
 
@@ -3823,6 +3883,22 @@ def classify_finding(key: str, figure, today=None) -> tuple:
         except ValueError:
             return ("UNACKNOWLEDGED",
                     f"recorded with an unparseable review date {review!r}")
+    # ── THE ABSOLUTE FLOOR, BEFORE THE RELATIVE TOLERANCE. ───────────────
+    #
+    # A record that CLEARS its threshold carries the threshold as `floor`,
+    # and a figure back under it reddens WHATEVER the tolerance says. The
+    # tolerance measures movement from the record; the floor measures the
+    # condition itself, and only one of those is what the alarm is about.
+    floor = rec.get("floor")
+    if floor is not None and figure is not None:
+        worse_than_floor = (figure < floor if rec.get("tolerance", "minutes")
+                            == "minutes" else figure > floor)
+        if worse_than_floor:
+            return ("RELAPSED",
+                    f"{figure:+.2f} is back past its registered floor "
+                    f"{floor:+.2f}, which it had cleared at "
+                    f"{rec['figure']:+.2f}. A relative tolerance does not "
+                    f"cover an absolute threshold")
     if figure is None or rec.get("figure") is None:
         return ("UNCHANGED", "recorded, and neither occurrence carries a "
                              "figure to compare")
@@ -3844,11 +3920,27 @@ def classify_finding(key: str, figure, today=None) -> tuple:
                 f"(tolerance {tol} {kind})")
     return ("UNCHANGED",
             f"{figure:+.2f} is within {tol} {kind} of the recorded "
-            f"{rec['figure']:+.2f}; review {review}")
+            f"{rec['figure']:+.2f}; "
+            + (f"review {review}" if review
+               else "no date review -- its trigger is DETERIORATION past the "
+                    "tolerance, plus the mechanism changes in "
+                    "`review_trigger`"))
 
 
 #: The states that earn a red. UNCHANGED prints and does not.
-FINDING_STATES_THAT_REDDEN = ("NEW", "DETERIORATED", "UNACKNOWLEDGED")
+#: `RELAPSED` ADDED 2026-11-07, AND IT CLOSES A SILENCE THE DISCHARGE MADE.
+#:
+#: When `margin.schedule` was discharged its recorded figure rose +20.67 ->
+#: +35.48, and the deterioration tolerance is RELATIVE (11.32m). So every
+#: figure down to +24.16 became "UNCHANGED" -- including the band
+#: 24.16..30.00, which is BELOW the absolute 30-minute threshold and is a
+#: real breach. Recording an improvement had bought a 5.8-minute silence.
+#:
+#: A relative tolerance cannot express an absolute floor, so the floor is its
+#: own field and its own state. Caught by the known-wrong control written for
+#: the discharge, before either reached a run.
+FINDING_STATES_THAT_REDDEN = ("NEW", "DETERIORATED", "UNACKNOWLEDGED",
+                              "RELAPSED")
 
 
 def _emit_alarms(alarmed: List[str], alarmed_status: List[str],
@@ -4433,32 +4525,47 @@ def main() -> int:
         # by it from 2026-11-06: the structural floor is 29.3 minutes
         # earlier at the weekend, and one unkeyed figure was covering
         # both day types while having been measured on a Wednesday.
-        _sack = structural_breach_is_acknowledged(
-            _deficit, day_type(_tomorrow))
-        # The entry for THIS day type, whether or not it currently
-        # covers the reading: the alarm text must name the figure it
-        # was actually compared against.
-        _sack_live = STRUCTURAL_ACK.get(day_type(_tomorrow)) or {}
-        if _sack:
+        # ── THE EXPOSURE IS WHAT IS ACKNOWLEDGED NOW — 2026-11-07. ─────
+        #
+        # The structural deficit is still PRINTED, because it is still the
+        # safety term and a term that disappears when absorbed cannot be
+        # seen to have been absorbed. But it is no longer the figure the
+        # acknowledgement is made against: its floor is the earliest kickoff
+        # EVER observed, so the deficit is negative by construction and no
+        # action clears it. `EXPOSURE_ACK` is made against the FREQUENCY --
+        # days on which we would have been more than the registered minimum
+        # late for the first kickoff we bet -- which is 0 of 674 weekday and
+        # 0 of 341 weekend days, and which one qualifying day would cross.
+        _dt_tomorrow = day_type(_tomorrow)
+        _eack = exposure_is_acknowledged(
+            EXPOSURE_ACK.get(_dt_tomorrow, {}).get("over60"), _dt_tomorrow)
+        _eack_live = EXPOSURE_ACK.get(_dt_tomorrow) or {}
+        if _eack:
             print(f"   structural margin {_struct['binding']:+.0f} min for "
                   f"{_tomorrow} is below {_struct['min_margin']} min "
-                  f"(deficit {_deficit:+.1f}) and is ACKNOWLEDGED since "
-                  f"{_sack['since']}, review {_sack['review']}. It does NOT "
-                  f"alarm: {_sack['action']}")
+                  f"(deficit {_deficit:+.1f}) and is ACKNOWLEDGED AGAINST "
+                  f"THE EXPOSURE, measured {_eack['measured']}: "
+                  f"{_eack['over60']} of {_eack['n']} {_dt_tomorrow} days "
+                  f"exceeded the registered {MIN_ACCEPTABLE_MARGIN_MIN}m "
+                  f"(worst {_eack['max']}m). It does NOT alarm. Trigger: "
+                  f"{_eack['alarm_if']}; review on a mechanism change, not a "
+                  f"date. Retired figure: the margin deficit "
+                  f"{_eack['superseded']['measured_at']:+.1f} measured "
+                  f"{_eack['superseded']['measured']}")
         else:
             print(f"!! STRUCTURAL MARGIN {_struct['binding']:+.0f} min for "
                   f"{_tomorrow} (deficit {_deficit:+.1f}) is NO LONGER "
-                  f"COVERED by the acknowledgement made "
-                  f"{_sack_live.get('since')} at "
-                  f"{_sack_live.get('binding', 0.0):+.1f} (review "
-                  f"{_sack_live.get('review')}): it has either DETERIORATED "
-                  f"or passed its review date. CLEARING ACTION: "
-                  f"{_sack_live.get('action', '')}")
+                  f"COVERED. The exposure acknowledgement made "
+                  f"{_eack_live.get('measured')} holds "
+                  f"{_eack_live.get('over60')} day(s) over the registered "
+                  f"minimum and the current reading exceeds it. CLEARING "
+                  f"ACTION: {_eack_live.get('action', '')}")
             alarmed.append(
-                f"structural margin deficit {_deficit:+.1f}m for {_tomorrow} "
-                f"is worse than the acknowledged "
-                f"{_sack_live.get('binding', 0.0):+.1f}m, or the acknowledgement "
-                f"(review {_sack_live.get('review')}) has expired")
+                f"structural margin deficit {_deficit:+.1f}m for {_tomorrow}: "
+                f"the EXPOSURE has deteriorated past the acknowledged "
+                f"{_eack_live.get('over60')} day(s) over "
+                f"{MIN_ACCEPTABLE_MARGIN_MIN}m - re-measure with "
+                f"`python -m scripts.margin_exposure`")
 
     if _cron is None:
         # ── MADE TO ALARM 2026-10-22. ─────────────────────────────────────

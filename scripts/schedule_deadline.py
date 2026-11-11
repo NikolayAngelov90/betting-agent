@@ -1258,8 +1258,39 @@ HEADROOM_NOT_SPENT = {
     "why_not_spent": ("the STRUCTURAL floor is still breached by 39.3 "
                       "(weekday) and 59.4 (weekend) minutes, and the "
                       "substitution did not move it at all"),
+    # ── WHICH DECISION p95 SERVES, AND WHICH IT DOES NOT — 2026-11-07 ────
+    #
+    # `p95 at n>=100` WAS REGISTERED AS THE SUCCESSOR TO TWO DIFFERENT
+    # THINGS, AND IT IS ONLY THE SUCCESSOR TO ONE.
+    #
+    # It was registered on the assumption that the binding quantity is the
+    # LATENESS TAIL -- and for the CRON MOVE that is true: spending 45
+    # minutes of headroom means betting that the tail is bounded, `mean+3sd`
+    # is conservative by accident, and at n=11 with max 389.75 neither
+    # statistic is supported. So p95 at n>=100 STAYS, for that decision,
+    # with its own projection below.
+    #
+    # It is NOT the successor for the ACKNOWLEDGEMENT. The lateness tail
+    # ENTERS the exposure -- through `binding_ready` -- and the exposure is a
+    # COUNT OVER 674 AND 341 DAYS, not a quantile over 11 runs. It is
+    # therefore measurable NOW, at the n we already have, and `EXPOSURE_ACK`
+    # measures it: 0 days over the registered minimum in every stratum.
+    #
+    # > **TWO QUANTITIES, TWO DECISIONS, AND CONFLATING THEM PUT A
+    # > THREE-MONTH WAIT IN FRONT OF A QUESTION ANSWERABLE TODAY.** The
+    # > 2027-02-27 projection is the date the CRON decision becomes
+    # > measurable. It was never the date the acknowledgement became
+    # > possible, and reading it as such is what left a breach standing with
+    # > no available action.
+    "p95_serves": "the CRON MOVE decision only -- whether to spend headroom",
+    "p95_does_not_serve": ("the ACKNOWLEDGEMENT. Superseded for that purpose "
+                           "2026-11-07 by EXPOSURE_ACK, which is a count "
+                           "over 674 weekday and 341 weekend DAYS rather "
+                           "than a quantile over 11 RUNS, and is therefore "
+                           "measurable at the n already in hand"),
     "spendable_when": {
         "n": 100,
+        "serves": "the cron move, NOT the acknowledgement",
         "basis": ("quantile_is_usable(n, 0.95) == n >= 5/(1-0.95); below it "
                   "neither p95 nor mean+3sd bounds the tail"),
         "weekday_rate_per_week": 5.50,
@@ -1271,10 +1302,270 @@ HEADROOM_NOT_SPENT = {
 }
 
 
+#: ═════════ ACKNOWLEDGED AGAINST THE EXPOSURE — 2026-11-07 ═══════════════
+#:
+#: A QUANTITY DESCRIBING A RARE EVENT IS ACKNOWLEDGED AGAINST ITS FREQUENCY,
+#: NOT ITS WORST CASE. The structural margin's floor is the earliest kickoff
+#: EVER OBSERVED over three years, so the margin asks "could we be ready
+#: before the worst day in the record" and the answer is no, every day, for
+#: ever. **A figure that cannot improve cannot be acknowledged**: an
+#: acknowledgement is made against a measurement, and this one is a
+#: definition.
+#:
+#: THE DECISION QUANTITY IS THE EXPOSURE:
+#:
+#:     exposure(day) = max(0, binding_ready - earliest kickoff THAT DAY)
+#:
+#: `measured` 2026-11-07 by `scripts/margin_exposure.py`, grain=DAY, unit
+#: MINUTES, over the 30 configured leagues (`scraping.flashscore_leagues`,
+#: read from the deployed config), 2023-01-01 onward:
+#:
+#:   stratum            n    exp>0   share   p99    max    >60m
+#:   ALL             1015       10    1.0%   0.0   39.3       0
+#:   weekday          674        2    0.3%   0.0   39.3       0
+#:   weekend          341        8    2.3%   5.2   20.2       0
+#:   weekday/holiday   29        0    0.0%   0.0    0.0       0
+#:   weekend/holiday   18        0    0.0%   0.0    0.0       0
+#:
+#: > **ZERO DAYS ABOVE THE REGISTERED 60-MINUTE MINIMUM, IN EVERY STRATUM,
+#: > OVER 1,015 EVALUATED DAYS.** The structural margin reports a 39- and
+#: > 59-minute breach every single day; the exposure it is a proxy for has
+#: > never once exceeded the minimum.
+#:
+#: AND THE MEASUREMENT REPRODUCES THE FLOOR'S OWN ANCHORS, which is the check
+#: that it is measuring the right thing: the two worst days are 2023-10-26
+#: (weekday, 09:30 UTC) and 2024-11-02 (weekend, 10:00 UTC) -- exactly the
+#: dates `OBSERVED_EARLIEST_LOCAL_MIN` records for its two anchors.
+#:
+#: THREE OUTCOMES, NOT TWO. 185 days carry configured-league rows but NO
+#: readable kickoff time (every row a 00:00 placeholder). They are
+#: **UNEVALUATED** -- reported, excluded from the denominator, and never
+#: counted as zero exposure. A further 678 days mix timed rows with
+#: placeholders, so their exposure is a LOWER BOUND.
+#:
+#: THE POPULATION FILTER COST ME THE FIRST READING, AND IT IS WORTH THE
+#: WARNING. `NOT LIKE 'world/%'` is not the configured league set: it leaves
+#: `other/world` (07:30 UTC), `other/romania` (08:00), `other/andorra`
+#: (08:30) and `other/greece` (08:45) in the population. The weekend exposure
+#: read **22.7% with 46 days over 60** before the real filter, and every one
+#: of the ten worst days was a fixture no pick could have been made on.
+EXPOSURE_MEASURED = {
+    "measured": "2026-11-07",
+    "quantity": ("max(0, binding_ready - earliest kickoff that day), "
+                 "binding_ready = max(ready_max, ready_mean+3sd)"),
+    "unit": "minutes",
+    "grain": "DAY",
+    "population": ("the 30 leagues in `scraping.flashscore_leagues`, read "
+                   "from config.example.yaml; 2023-01-01 onward; 00:00 "
+                   "placeholders and microsecond-stamped rows excluded"),
+    "binding_ready": {"weekday": 609.3, "weekend": 605.2},
+    "strata": {
+        "ALL": {"n": 1015, "pos": 10, "p99": 0.0, "max": 39.3, "over60": 0},
+        "weekday": {"n": 674, "pos": 2, "p99": 0.0, "max": 39.3, "over60": 0},
+        "weekend": {"n": 341, "pos": 8, "p99": 5.2, "max": 20.2, "over60": 0},
+        "weekday/holiday": {"n": 29, "pos": 0, "p99": 0.0, "max": 0.0,
+                            "over60": 0},
+        "weekend/holiday": {"n": 18, "pos": 0, "p99": 0.0, "max": 0.0,
+                            "over60": 0},
+    },
+    "UNEVALUATED_days": 185,
+    "UNEVALUATED_why": ("every configured-league row on these days is a "
+                        "00:00 placeholder, so the earliest kickoff could "
+                        "not be read. NOT counted as zero exposure and NOT "
+                        "in the denominator"),
+    "partial_days": 678,
+    "partial_why": ("these days carry a timed kickoff AND a placeholder, so "
+                    "the true earliest may sit behind the placeholder and "
+                    "the exposure is a LOWER BOUND"),
+    "holiday_basis": ("`assumed` from the published Bulgarian public-holiday "
+                      "calendar, listed in `scripts/margin_exposure.py`; no "
+                      "holiday library is installed and adding a dependency "
+                      "to stratify a measurement was not taken silently"),
+}
+
+#: THE SINGLE-PERIOD MOVEMENT, MEASURED OVER PREFIXES OF THE LATENESS SERIES.
+#: Not chosen: the deterioration threshold has to come from how much the
+#: quantity moves when one more point arrives, so the exposure was recomputed
+#: over every prefix.
+#:
+#:   weekday, n=6..11:  binding_ready moved at most 16.57m in one step,
+#:                      the positive-day count by 1, THE >60m COUNT BY 0
+#:   weekend, n=3..5:   binding_ready moved at most 48.74m in one step,
+#:                      the positive-day count by 7, THE >60m COUNT BY 0
+#:
+#: > **THE POSITIVE-DAY COUNT IS NOT AN ALARM QUANTITY.** One weekend point
+#: > moved it 1 -> 8. The `>60m` count has never moved off zero across all
+#: > nine measured prefixes, so it is the stable one, and a count's tolerance
+#: > is ZERO by the rule this register already keeps: one more day past the
+#: > registered minimum is a new fact, not jitter.
+EXPOSURE_SENSITIVITY = {
+    "measured": "2026-11-07",
+    "grain": "RUN",
+    "weekday": {"prefixes": 6, "largest_ready_move": 16.57,
+                "largest_pos_move": 1, "largest_over60_move": 0},
+    "weekend": {"prefixes": 3, "largest_ready_move": 48.74,
+                "largest_pos_move": 7, "largest_over60_move": 0},
+}
+
+#: THE ACKNOWLEDGEMENT, AGAINST THE EXPOSURE AND NOT THE MARGIN.
+#:
+#: WHAT IT ALARMS ON: `over60 > 0` for the day type -- any day on which we
+#: would have been more than the registered 60 minutes late for the first
+#: kickoff we bet. DERIVED, not chosen: that count is 0 in every stratum and
+#: moved 0 across all nine measured prefixes, and a count's tolerance is
+#: zero. **It is a threshold that CAN be crossed** -- one qualifying day
+#: crosses it -- which is the whole difference from the figure it replaces.
+#:
+#: WHAT TRIGGERS A REVIEW: a MATERIAL CHANGE IN THE EXPOSURE, never a date.
+#: This quantity moves only when a mechanism moves -- the cron, the duration
+#: constant, the lateness regime, the configured league set, or the floor. A
+#: calendar review on it fires on a day when nothing has happened, and that
+#: is exactly what happened to `margin.schedule` on 2026-11-06: its date came
+#: up and reddened a figure that had already improved by 14.8 minutes.
+#:
+#: THE REGISTERED 60 IS NOT EDITED. It was stated 2026-10-10, before any of
+#: this, and the exposure stays its own printed term even at zero -- a term
+#: that disappears when satisfied cannot be seen to have been satisfied.
+EXPOSURE_ACK = {
+    "weekday": {
+        "over60": 0,
+        "pos": 2,
+        "p99": 0.0,
+        "max": 39.3,
+        "n": 674,
+        "measured": "2026-11-07",
+        "alarm_if": "over60 > 0",
+        "tolerance": 0,
+        "tolerance_basis": ("a COUNT, so zero: the >60m count moved 0 across "
+                            "6 measured prefixes of the weekday lateness "
+                            "series, and one more day past the registered "
+                            "minimum is a new fact rather than jitter"),
+        "review_trigger": ("a MECHANISM change: the deployed weekday cron, "
+                           "FULL_CARD_PICKS_MAX, the lateness regime (a cron "
+                           "move resets the series), "
+                           "`scraping.flashscore_leagues`, or "
+                           "OBSERVED_EARLIEST_LOCAL_MIN. NOT a date"),
+        "why": ("the structural margin is -39.3m by construction because its "
+                "floor is the earliest kickoff ever observed; the exposure "
+                "that deficit stands proxy for is positive on 2 of 674 days, "
+                "tops out at 39.3m, and has NEVER exceeded the registered 60"),
+        "action": ("none while over60 is 0. If a day crosses: dispatch "
+                   "daily-picks by hand that morning, which skips the "
+                   "scheduler entirely -- the lateness term is ~337m against "
+                   "a duration term of 40.35m, so no run-time saving "
+                   "reaches it"),
+        # ── RETIRED, NOT DELETED, the way 88.1 was. ──────────────────────
+        "superseded": {
+            "quantity": "the STRUCTURAL MARGIN's signed deficit",
+            "measured_at": -39.306530,
+            "binding": -39.306530 - 11.32,
+            "jitter": 11.32,
+            "floor_min_local": 750,
+            "lag_n": 11,
+            "duration_n": 79,
+            "measured": "2026-11-06",
+            "review_was": "2026-11-20",
+            "why_retired": ("it is a worst-case margin against a floor that "
+                            "is itself a three-year minimum, so it is "
+                            "negative by construction and no action clears "
+                            "it. Rule 1: a rare event is acknowledged "
+                            "against its FREQUENCY. The figure is kept "
+                            "because it was measured and is still printed"),
+        },
+    },
+    "weekend": {
+        "over60": 0,
+        "pos": 8,
+        "p99": 5.2,
+        "max": 20.2,
+        "n": 341,
+        "measured": "2026-11-07",
+        "alarm_if": "over60 > 0",
+        "tolerance": 0,
+        "tolerance_basis": ("a COUNT, so zero. The weekend series is n=5 and "
+                            "only 3 prefixes are measurable, which is "
+                            "recorded rather than hidden -- but the >60m "
+                            "count moved 0 across all of them while the "
+                            "positive-day count moved 1 -> 8 on one point, "
+                            "which is why the count over the MINIMUM is the "
+                            "acknowledged quantity and the positive count is "
+                            "not"),
+        "review_trigger": ("as weekday, reading the weekend cron and the "
+                           "weekend floor"),
+        "why": ("the weekend floor is 30 minutes earlier (12:00 local) so the "
+                "structural deficit is worse at -59.4m, but the weekend "
+                "exposure is SMALLER in the tail: max 20.2m against the "
+                "weekday's 39.3m. The two orderings disagree, and the "
+                "exposure is the one that describes a day we would miss"),
+        "action": "as weekday; a manual dispatch is the only same-day lever",
+        "superseded": {
+            "quantity": "the STRUCTURAL MARGIN's signed deficit",
+            "measured_at": -59.407508,
+            "binding": -59.407508 - 11.32,
+            "jitter": 11.32,
+            "floor_min_local": 720,
+            "lag_n": 4,
+            "duration_n": 32,
+            "measured": "2026-11-06",
+            "review_was": "2026-11-20",
+            "why_retired": ("as weekday -- negative by construction "
+                            "against a three-year minimum floor, so no "
+                            "action clears it. And note the inversion it "
+                            "hid: the "
+                            "weekend margin is WORSE while the weekend "
+                            "exposure is BETTER, so the margin was ordering "
+                            "the two day types by their floors rather than "
+                            "by the risk"),
+        },
+    },
+}
+
+
+def exposure_is_acknowledged(over60: int, day_type: str) -> dict:
+    """`EXPOSURE_ACK[day_type]` when it covers `over60`, `{}` when it does not.
+
+    ONE COMPARISON, AND NO DATE. The quantity moves only when a mechanism
+    moves, so there is nothing a calendar could tell us that the figure
+    cannot. `review_trigger` records which mechanisms, for the reader.
+
+      COVERED      `over60` at or below the acknowledged count (0).
+      ALARMS       any increase. A count's tolerance is zero, so one
+                   qualifying day is a new fact and the acknowledgement does
+                   not absorb it.
+
+    `over60` of `None` is UNEVALUATED and absorbs NOTHING -- "could not
+    measure the exposure" is not "the exposure is fine".
+    """
+    ack = EXPOSURE_ACK.get(day_type)
+    if not ack:
+        return {}
+    if over60 is None:
+        return {}
+    if over60 > ack["over60"]:
+        return {}
+    return ack
+
+
 def structural_breach_is_acknowledged(binding: float,
                                       day_type: str = None,
                                       today=None) -> dict:
-    """`STRUCTURAL_ACK` when it covers this figure, `{}` when it does not.
+    """RETIRED 2026-11-07. Superseded by `exposure_is_acknowledged`.
+
+    `STRUCTURAL_ACK` when it covers this figure, `{}` when it does not.
+
+    WHY IT IS RETIRED RATHER THAN DELETED. The quantity it tests cannot be
+    acknowledged: the structural floor is the earliest kickoff EVER observed,
+    so the deficit is negative by construction and no action clears it. The
+    acknowledgement moved to the EXPOSURE -- days on which we would have been
+    more than the registered minimum late -- which is 0 of 674 weekday and 0
+    of 341 weekend days and which one qualifying day would cross.
+
+    `ci_audit.main` no longer calls this, and its import was removed with the
+    call. It is kept because `two_margins` still attaches `STRUCTURAL_ACK` to
+    the printed structural term, and because its own behaviour -- expiry
+    checked BEFORE deterioration, a missing review date absorbing nothing --
+    is the lesson that produced `exposure_is_acknowledged` and is still worth
+    a test. Its tests protect that record, not a live path.
 
     TWO COMPARISONS, AND THE LAST ACKNOWLEDGEMENT MADE ONLY ONE. The retired
     `ACKNOWLEDGED_MARGIN_BREACH` compared `binding` and never `review`, so it

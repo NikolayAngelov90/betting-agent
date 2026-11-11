@@ -37369,3 +37369,294 @@ in a bump authorised for one config key.
 `src/models/model_version.py`, `tests/experiment_pins.py`,
 `src/betting/gate_registry.py`, `scripts/band_open.py`,
 `docs/flb-band-preregistration.md` (`fed8338`).*
+
+---
+
+## 2026-11-07 (II) — `EXPOSURE MEASURED`, and a correction I owe first
+
+Instrumentation only. No config changed, no threshold edited,
+`cohort_status.py` reads **`s5.20 / 12f2c7`**, unmoved.
+
+### THE CORRECTION — I MIS-NAMED THE RED, AND THE DIRECTIVE INHERITED IT
+
+Yesterday I reported the midnight red as *"the structural margin
+acknowledgement's review date 2026-11-06 has passed"*. **That was wrong, and
+it matters because three different quantities were collapsed into one.**
+
+| | what it is | state on 2026-11-07 |
+|---|---|---|
+| `KNOWN_FINDINGS["margin.schedule"]` | the **SCHEDULE** margin, +20.666m, acknowledged 2026-10-22, **review 2026-11-06** | **THIS is what expired** |
+| `STRUCTURAL_ACK` | the **STRUCTURAL** margin, −39.31 / −59.41 | review **2026-11-20** — *not* expired |
+| `HEADROOM_NOT_SPENT.spendable_when` | **p95 at n≥100, 2027-02-27** | serves the **CRON MOVE**, a third question |
+
+> **And the expired one was not a breach at all.** Its registered action was
+> *"durably, the parallel picks series reaching n=10"*. **That action landed
+> on 2026-11-06** at n=12; `FULL_CARD_PICKS_MAX` was substituted 88.1 → 40.35;
+> and the live binding is **+35.476m against a 30m threshold — it CLEARS**,
+> by **+14.810m**, with no step having got faster.
+>
+> So there was no three-month wait and nothing to re-specify. **The clearing
+> action was a DISCHARGE, available the same day**, and my report sent this
+> stage looking at the wrong object. Hard rule 4 — *two quantities serving two
+> decisions are never conflated* — is the rule I broke to produce it.
+
+**`margin.schedule` DISCHARGED BY ITS OWN ACTION**, not re-acknowledged and
+not extended. The figure is recorded at **+35.476m** with its provenance; the
+old **+20.666m** is **retired with its date (2026-10-22), its review
+(2026-11-06) and its regime** (`FULL_CARD_PICKS_MAX=88.1`, serial, n=4).
+
+**And its date review is retired with it.** This quantity moves only when the
+cron, the duration constant or the lateness regime moves — so a calendar
+review fires on a day when nothing has happened, which is exactly what it did:
+**it reddened a figure that had already improved by 14.8 minutes.**
+`review_trigger` now names those mechanisms instead.
+
+### THE DISCHARGE CREATED A SILENCE, AND THE CONTROL CAUGHT IT
+
+Recording the improved figure with the **relative** 11.32m tolerance made
+every value down to **+24.16m** read `UNCHANGED` — including the band
+**24.16 … 30.00**, which is *below* the registered threshold and is a real
+breach.
+
+> **Recording an improvement had bought a 5.84-minute silence**, and it would
+> have reached a run. A relative tolerance cannot express an absolute floor.
+
+Fixed by giving the record a `floor` (= `MARGIN_ALARM_MIN`, unedited) and the
+classifier a fourth red state, **`RELAPSED`**, checked *before* the tolerance.
+Driven: 35.48 → `UNCHANGED`, 30.50 → `UNCHANGED`, **29.00 → `RELAPSED`**,
+24.00 → `RELAPSED`, 20.00 → `RELAPSED`.
+
+**Four controls in `test_red_means_new.py` had been driving the LIVE record**,
+asserting its exact figure and date — so a real discharge failed four tests
+that were testing nothing that had changed. They now drive a `SYNTHETIC`
+record and own their inputs; the live table gets its own contract test.
+
+### `EXPOSURE MEASURED` — Part A
+
+The directive's substantive point stands on the **structural** margin, and it
+is right: a floor that is the earliest kickoff *ever observed* makes the
+margin negative by construction, so **a figure that cannot improve cannot be
+acknowledged.**
+
+`exposure(day) = max(0, binding_ready − earliest kickoff THAT DAY)`
+
+`measured` 2026-11-07, grain=DAY, unit MINUTES, over the **30 configured
+leagues** (`scraping.flashscore_leagues`, read from the deployed example),
+2023-01-01 onward. `binding_ready` = weekday **609.3** (10:09 UTC), weekend
+**605.2** (10:05 UTC), from the live series under the deployed `0 1` / `30 0`
+crons with `FULL_CARD_PICKS_MAX = 40.35`.
+
+| stratum | n | exp>0 | share | median | p90 | p99 | max | **>60m** |
+|---|---|---|---|---|---|---|---|---|
+| ALL | 1,015 | 10 | **1.0%** | 0.0 | 0.0 | 0.0 | 39.3 | **0** |
+| weekday | 674 | 2 | **0.3%** | 0.0 | 0.0 | 0.0 | 39.3 | **0** |
+| weekend | 341 | 8 | **2.3%** | 0.0 | 0.0 | 5.2 | 20.2 | **0** |
+| weekday/holiday | 29 | 0 | 0.0% | 0.0 | 0.0 | 0.0 | 0.0 | **0** |
+| weekend/holiday | 18 | 0 | 0.0% | 0.0 | 0.0 | 0.0 | 0.0 | **0** |
+
+> **ZERO DAYS ABOVE THE REGISTERED 60-MINUTE MINIMUM, IN EVERY STRATUM, OVER
+> 1,015 EVALUATED DAYS.** The structural margin reports a 39- and 59-minute
+> breach *every single day*; the exposure it stands proxy for has never once
+> exceeded the minimum.
+
+**AND IT REPRODUCES THE FLOOR'S OWN ANCHORS**, which is the check that it
+measures the right thing: the two worst days are **2023-10-26** (weekday,
+09:30 UTC, 39.3m) and **2024-11-02** (weekend, 10:00 UTC) — exactly the dates
+`OBSERVED_EARLIEST_LOCAL_MIN` records for its two anchors. And `609.3 − 570 =
+39.3` reproduces the weekday margin deficit of −39.31: **the same event seen
+two ways.**
+
+**THE POPULATION FILTER COST ME THE FIRST READING.** `NOT LIKE 'world/%'` is
+not the configured league set — it leaves `other/world` (07:30 UTC),
+`other/romania` (08:00), `other/andorra` (08:30) and `other/greece` (08:45) in.
+The weekend exposure read **22.7% with 46 days over 60m**, and every one of
+the ten worst days was a fixture no pick could have been made on. The
+corrected population bottoms out at 09:30 and 09:59, which are the recorded
+anchors.
+
+**THREE OUTCOMES, NOT TWO.** 20,704 of 35,772 configured-league rows sit at
+exactly **00:00** — date-only placeholders — so **185 of 1,200 days have no
+readable kickoff time at all**. They are **`UNEVALUATED`**: reported, excluded
+from the denominator, and never counted as zero exposure. A further **678**
+days mix timed rows with placeholders, so their exposure is a **lower bound**.
+
+**Holiday stratum**: `assumed` from the published Bulgarian public-holiday
+calendar, listed in the script. Bulgaria because `OPERATOR_TZ` is Europe/Sofia
+and *both* kickoff anchors are `bulgaria/efbet-league` — not an arbitrary
+choice. No holiday library is installed and a dependency was not added
+silently, so the stratum carries the `assumed` label.
+
+**What moved from the 10-19 figures (14 of 715 weekday, 2.0%, p99 75, max
+150)**: those measure `max(0, deadline − kickoff)` under the retired
+12:00/10:15 percentile constants. **It is a different quantity**, so the
+comparison is between two definitions and not a movement in one. The weekday
+*frequency* is almost identical (2.0% → 0.3% on a stricter population) while
+the tail is far smaller (max 150 → 39.3), because the deadline was re-anchored
+to the observed minimum and the duration constant fell 88.1 → 40.35.
+
+### `ACKNOWLEDGED AGAINST EXPOSURE` — Part B
+
+`EXPOSURE_ACK`, keyed by day type, recording **count, p99 and max with n and
+date**. It alarms on **`over60 > 0`**.
+
+**THE THRESHOLD IS DERIVED, NOT CHOSEN.** The exposure was recomputed over
+every prefix of the lateness series:
+
+| | prefixes | largest 1-point move in `binding_ready` | in positive-day count | in **>60m count** |
+|---|---|---|---|---|
+| weekday | 6 (n=6…11) | 16.57m | 1 | **0** |
+| weekend | 3 (n=3…5) | 48.74m | **7** | **0** |
+
+> **The positive-day count is not an alarm quantity** — one weekend point
+> moved it **1 → 8**. The `>60m` count moved **0 across all nine prefixes**,
+> and a count's tolerance is zero by the rule this register already keeps. So
+> **one qualifying day crosses it**, which is the whole difference from the
+> figure it replaces: *a threshold that cannot be crossed is not a threshold.*
+
+**THE REVIEW IS TRIGGERED BY A MECHANISM, NEVER A DATE** — the cron,
+`FULL_CARD_PICKS_MAX`, the lateness regime, `scraping.flashscore_leagues`, or
+`OBSERVED_EARLIEST_LOCAL_MIN`. A date review on a quantity that only changes
+when a mechanism changes is a reminder with no information, and this stage
+exists because one fired.
+
+**DRIVEN**, both day types: current exposure (0) **covered**; one day's
+deterioration (1) **alarms**; materially worse (12) **alarms**; `None`
+**alarms** — *could not measure* is not *fine*; an unknown day type **alarms**.
+
+**RETIRED, NOT DELETED.** Each entry keeps the structural figure it supersedes
+with its `measured_at` at full precision, its jitter floor, its local floor
+minute, its `lag_n` and its date — the way `88.1` was kept.
+
+**AND THE ORDERING INVERTS, which is the strongest evidence the old quantity
+was the wrong one**: the *margin* says the weekend is worse (−59.4 vs −39.3);
+the *exposure* says the weekend is better (max 20.2 vs 39.3). The margin was
+ranking the day types by their floors rather than by the risk.
+
+The registered **60 is unedited**, and the exposure stays its own printed
+term even at zero.
+
+### `P95 RETIRED` — Part C
+
+`p95 at n≥100` was registered as the successor on the assumption that the
+binding quantity is the lateness **tail**.
+
+* **For the CRON MOVE that is true and it STAYS.** Spending 45 minutes of
+  headroom is a bet that the tail is bounded; `mean+3sd` is conservative by
+  accident; at n=11 with max 389.75 neither statistic is supported. The
+  2027-02-27 projection is kept, scoped to that decision.
+* **For the ACKNOWLEDGEMENT it is the wrong quantity.** The lateness tail
+  *enters* the exposure through `binding_ready`, and the exposure is a **count
+  over 674 and 341 DAYS**, not a quantile over **11 RUNS**. It is therefore
+  measurable at the n already in hand.
+
+> **Two quantities, two decisions — and conflating them put a three-month wait
+> in front of a question answerable today.** 2027-02-27 is when the *cron*
+> decision becomes measurable. It was never when the acknowledgement became
+> possible, and reading it as such is what left a breach standing with no
+> available action.
+
+Recorded as `p95_serves` / `p95_does_not_serve` beside the projection.
+
+### THE TWO REGISTERED ITEMS — Part D
+
+**ABSENCE CLASS, INSTANCE ELEVEN: a size limit that truncates instead of
+erroring.** `MEMORY.md` is loaded into every session under a **200-line cap**.
+It reached 202 lines and the loader **dropped the tail and carried on** — one
+line of user preferences gone from context, with no error and nothing in the
+file to show it. Registered in `docs/absence-sweep-registration.md` with its
+known-wrong control.
+
+> **It is not a site in this repository, and that is the point.** The
+> truncation happens outside the repo, so no predicate here can catch it. The
+> class is about the **shape** — *content disappears and nothing errors* —
+> whether it is `or ""` swallowing a 401 or a line cap swallowing a
+> preference. The rule it yields: `MEMORY.md` is an **index**, and past the
+> cap it silently deletes its own tail, newest entries first.
+
+**THE CONFIG-EXAMPLE SURFACE, FOURTH INSTANCE.**
+`tests/test_deployed_config_is_the_example.py` scans `tests/` and `scripts/`
+for files that **read** `config/config.yaml` without reading the example. One
+real offender: `test_reference_deadline.py` re-derived the reference coverage
+denominator from the **local** file — a test whose stated purpose is avoiding
+a stale literal, reading the file CI overwrites. Fixed to read the example.
+
+**The scan needed two corrections of its own**, both the same class I hit
+twice this week: a text match flagged two comments and a prose string; an AST
+match on *containment* still flagged the prose. It now requires the constant
+to **be** the path, with a known-wrong control holding a docstring, a comment
+and a prose string against a real read.
+
+### WHAT WIRING IT MOVED, AND WHAT WENT DEAD
+
+`EXPOSURE_ACK` would be a producer with no consumer if the audit still read
+the old predicate, so the structural branch now calls
+`exposure_is_acknowledged`. Three consequences, all handled rather than left:
+
+* **`structural_breach_is_acknowledged` is RETIRED, not deleted.** Its
+  quantity cannot be acknowledged, so nothing in production calls it and its
+  import was removed from `ci_audit` with the call. It stays because
+  `two_margins` still attaches `STRUCTURAL_ACK` to the **printed** structural
+  term, and because its own behaviour — **expiry checked BEFORE
+  deterioration, a missing review date absorbing nothing** — is the lesson
+  that produced its successor. Its tests now protect that record, not a live
+  path.
+* **The structural figure is still printed on both branches.** A term that
+  vanishes when absorbed cannot be seen to have been absorbed, so the test
+  that pins the audit's predicate also pins that the figure survives — and
+  pins that **both** predicates are never wired at once, which is how one
+  unkeyed figure came to cover two day types.
+* **And re-pointing it tripped the raw-match ratchet, twice.** The claim
+  "the retired predicate is not wired" was first a `not in` over
+  `inspect.getsource(main)` — a **negative raw-source assertion**, whose
+  failure mode is the vacuous pass that ratchet exists to refuse: rename
+  `main` and it reports clean. Rewriting it against the **AST** still tripped
+  it, because the detector cannot tell `not in called` from `not in src`. It
+  is now **one set equality** on the called names — `wired ==
+  {"exposure_is_acknowledged"}` — which is a positive claim about the call
+  graph and says exactly which predicate is wired. Backlog back to 48.
+* **`test_the_AUDIT_consults_the_predicate...` was re-pointed, not relaxed.**
+  Its claim is unchanged: the audit must *consult* an acknowledgement rather
+  than print it, or a reading that has stopped being covered still reports
+  "does NOT alarm". Only the predicate it names moved.
+
+### A SECOND RED AROSE BY DATE — THE H1 WINDOW. REPORTED, NOT TOUCHED.
+
+> **`tests/test_calendar_separation.py::test_the_H1_RESERVATION_WINDOW_EXPIRES`
+> fired on 2026-11-09**; today is 2026-11-11. `h1_reservation()` now returns
+> 0 on every day, so the machinery is **DORMANT rather than dead**.
+
+The guard states its own two choices and excludes a third:
+
+1. **start a new window** — move `FROM`/`UNTIL` together in `h1_window` and
+   clear `STOPPED_ON`, with its own pre-registration; `docs/h1-design-finding.md`
+   says what the next attempt must request; or
+2. **record that H1 is dormant** and move this guard's date to the review you
+   intend.
+
+**Deleting the machinery is explicitly not one of them** — sized 2026-11-06 at
+274 references / 61 assertions, **51 of which protect a future attempt**. And
+*"moving the date WITHOUT recording which of those you chose is the
+suppression this guard exists to prevent."*
+
+**This is Niki's decision and it is left red.** Rule 8 of this stage orders
+STOP-and-report for anything outside its own scope, and a self-expiring guard
+is cleared by its action or deleted, never extended — so the date has not been
+moved. It is not this stage's doing: the trigger is the calendar, and nothing
+here touches the H1 window.
+
+### WHAT THIS STAGE DID NOT DO
+
+No config key touched — `betting.min_odds` stays **1.14**,
+`paper_trading_mode` stays `true`, `MARGIN_ALARM_MIN` stays **30**, the
+registered **60** stays. `CODE_REVISION` **`s5.20`**, `model_version`
+**`12f2c7`**, both unmoved; this is instrumentation and must not move them.
+No credits spent. ρ=0.42, σ, `TARGET_N`, the 168-credit reservation,
+`FULL_CARD_PICKS_MAX = 40.35` and `PICKS_BOUND_AT_S519_DECISION = 88.1`
+unchanged. Invariant 6b untouched.
+
+*Recorded 2026-11-07. `scripts/margin_exposure.py` (new),
+`scripts/schedule_deadline.py`, `scripts/ci_audit.py`,
+`tests/test_exposure_acknowledged.py` (new, 22 tests),
+`tests/test_deployed_config_is_the_example.py` (new, 6 tests),
+`tests/test_red_means_new.py`, `tests/test_reference_deadline.py`,
+`docs/absence-sweep-registration.md`.*

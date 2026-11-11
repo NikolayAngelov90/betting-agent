@@ -321,8 +321,16 @@ def test_the_COVERAGE_FRACTION_is_re_derived_from_the_config():
     was true when written. Re-derived here from the config and the map."""
     import yaml
 
+    # THE EXAMPLE, NOT THE LOCAL FILE — 2026-11-07. CI does
+    # `cp config/config.example.yaml config/config.yaml`, so the example IS
+    # the deployed config and the local copy is a scratch file that may not
+    # exist at all in a fresh clone. This test re-derives the coverage
+    # denominator precisely to avoid a literal "that was true when written";
+    # reading it from the file CI overwrites was the same mistake one level
+    # down. Found by `test_deployed_config_is_the_example`.
     cfg = yaml.safe_load(
-        pathlib.Path("config/config.yaml").read_text(encoding="utf-8"))
+        pathlib.Path("config/config.example.yaml").read_text(
+            encoding="utf-8"))
     configured = set((cfg.get("scraping") or {}).get("flashscore_leagues") or [])
     assert configured, "no configured leagues; the denominator is unmeasurable"
     covered = fc.REFERENCE_LEAGUES & configured

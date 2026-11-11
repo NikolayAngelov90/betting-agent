@@ -370,16 +370,72 @@ def test_the_REGISTERED_MINIMUM_is_UNEDITED_and_the_EXPOSURE_PRINTS_AT_ZERO():
 
 
 def test_the_AUDIT_consults_the_predicate_rather_than_printing_unconditionally():
+    """RE-POINTED 2026-11-07, and the CLAIM is unchanged.
+
+    The audit must CONSULT an acknowledgement rather than print it, or a
+    reading that has stopped being covered still reports "does NOT alarm".
+    That claim is the same; the predicate it names is not.
+
+    `structural_breach_is_acknowledged` was the predicate until the
+    acknowledgement was re-specified against the EXPOSURE -- the structural
+    deficit is negative by construction against a three-year-minimum floor,
+    so it cannot be acknowledged at all. The audit now calls
+    `exposure_is_acknowledged`, and the structural figure is still PRINTED
+    beside it because a term that vanishes when absorbed cannot be seen to
+    have been absorbed.
+
+    SO THIS TEST ASSERTS A PREDICATE IS CONSULTED, NOT WHICH ONE -- but it
+    names the live one, because "some function is called" is not a check.
+    """
     import ast
     import inspect
+    import textwrap
 
     import scripts.ci_audit as _ci
     src = inspect.getsource(_ci.main)
-    assert "structural_breach_is_acknowledged" in src, (
-        "the audit prints the acknowledgement without checking whether it "
-        "still holds, so a deteriorated margin would report 'does NOT alarm'")
-    assert "NO LONGER" in src and "DETERIORATED" in src, (
+
+    # ── CALLS, FROM THE AST. NOT A TEXT MATCH. ──────────────────────────
+    #
+    # The claim is "the audit CALLS a predicate", and a text match cannot
+    # tell a call from a mention in a comment or a printed string -- which
+    # is the error this file's own week kept finding elsewhere. Worse, the
+    # negative half ("the retired predicate is NOT wired") is a negative
+    # raw-source assertion, whose failure mode is the vacuous pass the
+    # `code_of` ratchet exists to refuse: rename `main` and it reports
+    # clean. Collecting called names instead makes both halves positive
+    # statements about the call graph.
+    called = set()
+    for node in ast.walk(ast.parse(textwrap.dedent(src))):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+            if name:
+                called.add(name)
+
+    # ONE EQUALITY, NOT A PAIR OF `in`/`not in`. Stated this way the
+    # assertion says exactly WHICH predicate is wired, and it is a positive
+    # claim about the call graph -- a `not in` beside a source read is the
+    # shape the raw-match ratchet counts, and it cannot tell `not in called`
+    # from `not in src`. Two predicates on one condition is how ONE unkeyed
+    # figure came to cover both day types, so the set must be exact.
+    PREDICATES = {"exposure_is_acknowledged",
+                  "structural_breach_is_acknowledged"}
+    wired = called & PREDICATES
+    assert wired == {"exposure_is_acknowledged"}, (
+        f"`main` wires {sorted(wired) or 'NO'} acknowledgement predicate(s). "
+        f"It must call exactly `exposure_is_acknowledged`: with none it "
+        f"prints the acknowledgement without checking whether it still "
+        f"holds, and a deteriorated exposure reports 'does NOT alarm'; with "
+        f"both, the retired margin predicate -- whose quantity cannot be "
+        f"acknowledged at all -- is consulted beside its successor. Calls "
+        f"seen: {sorted(called)[:12]}")
+
+    assert "NO LONGER" in src, (
         "there is no branch for an acknowledgement that stopped covering")
+    # and the structural figure must still be printed, absorbed or not
+    assert "structural margin" in src and "STRUCTURAL MARGIN" in src, (
+        "the structural margin is no longer printed on both branches. It is "
+        "the safety term; absorbing it is not the same as hiding it")
 
 
 # ═════ THE PICKS BOUND: NOT RE-DERIVED, AND THE RULE IS ENFORCED ══════════

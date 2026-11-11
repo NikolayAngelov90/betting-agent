@@ -149,7 +149,7 @@ from scripts.capture_critical import (
 #: because `scripts/market_mix.py` keeps every database and
 #: `market_spec` import INSIDE its functions, so importing it reaches
 #: nothing on the capture path.
-CENSUS = {"files": 149, "capture_critical": 78, "not_critical": 71}
+CENSUS = {"files": 151, "capture_critical": 78, "not_critical": 73}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -499,8 +499,22 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       de-vigged band (and is not the naive 1/0.79 bound). The second
     #       new test closes a stale literal the change exposed --
     #       `gate_registry` quoted the floor in prose and nothing checked it.
-    assert len(nong) == 1042, (
-        f"the non-gating selection is {len(nong)}, recorded 1042")
+    #   +31 on 2026-11-07 (II): test_exposure_acknowledged.py and
+    #       test_deployed_config_is_the_example.py -- 28 test FUNCTIONS but
+    #       31 NODE IDS, because four of them are parametrised by day type.
+    #       This selection counts node ids, and counting functions is how I
+    #       first recorded 1070. The structural margin
+    #       was RE-SPECIFIED against the EXPOSURE -- a frequency, 0 days over
+    #       the registered minimum in every stratum across 1,015 evaluated
+    #       days -- because the margin itself is negative by construction
+    #       against a three-year-minimum floor and so cannot be acknowledged.
+    #       The second file scans for a deployed config value read from the
+    #       LOCAL file instead of the example, which is the file CI copies
+    #       over it; one real offender was found and fixed.
+    #       GATE UNCHANGED at 1732: both keep their database work inside
+    #       functions, verified through `classify()` (critical=False, via=[]).
+    assert len(nong) == 1073, (
+        f"the non-gating selection is {len(nong)}, recorded 1073")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 
