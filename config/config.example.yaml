@@ -277,12 +277,22 @@ betting:
   odds_refresh_window_minutes: 120
   odds_refresh_min_interval_minutes: 180
 
-  min_odds: 1.14            # DERIVED 2026-11-06, not chosen: admits the
-                            # de-vigged [0.70,0.80) FLB band, whose legs
-                            # price 1.1450..1.3700 raw. See
-                            # docs/flb-band-preregistration.md (fed8338).
-                            # 1/0.79 would be the RAW-implied bound and is
-                            # the wrong arithmetic: raw = devig*(1+margin).
+  min_odds: 1.50            # RESTORED 2026-11-11 (cohort s5.21). DERIVED
+                            # from the record, not chosen: every one of the
+                            # 15 cohorts from 2026-08-11 to 2026-11-07 ran
+                            # at exactly this floor, n=1,798 picks, average
+                            # taken odds 1.59-1.67 per cohort -- the range
+                            # the operator states as the target.
+                            # It was 1.14 for cohort s5.20 (11-08..11-09,
+                            # n=86, avg 1.464) to open the de-vigged
+                            # [0.70,0.80) FLB band. THAT WAS NOT NEEDED to
+                            # MEASURE the anomaly -- the hypothesis is about
+                            # market calibration and is testable on 5,314
+                            # in-band LEGS in the odds record at any floor.
+                            # Opening it was needed to ACT on the anomaly,
+                            # and acting is blocked on an exchange whose
+                            # price depth is UNAVAILABLE.
+                            # See docs/flb-band-preregistration.md (fed8338).
   max_odds: 10.0
   min_expected_value: 0.05  # 5% minimum edge — filters noise, improves selectivity
   min_confidence: 0.55      # 55% minimum model probability — model must give >50% clear majority

@@ -67,7 +67,7 @@ REGISTRY: Dict[str, Gate] = {g.name: g for g in [
     # ---------------------------------------------------------------- risk
     Gate(
         name="min_odds",
-        removes="selections priced below betting.min_odds (1.14)",
+        removes="selections priced below betting.min_odds (1.50)",
         kind="risk",
         original_evidence="a-priori: short prices leave no margin for model error",
         holdout_verdict=APRIORI,

@@ -152,22 +152,29 @@ def test_the_LIVE_FLOOR_NOW_ADMITS_THE_BAND_and_is_the_DERIVED_value():
         f"example over the local file, so a divergence means the deployed "
         f"floor is not the one measured here")
     floor = next(iter(live.values()))
-    assert floor == MEASURED_TERMS["floor_opened_to"] == 1.14, (
-        f"the live floor is {floor}; this stage's successor registered 1.14. "
-        f"If it moved again, re-derive it -- the value is derived from the "
-        f"band and the measured margin, never chosen")
-    # and it must actually admit the band it was derived to admit
-    assert floor <= 1.1450, (
-        f"the floor {floor} is above the minimum raw odds of an in-band leg "
-        f"measured on 2026-11-06 (1.1450), so it does NOT admit the whole "
-        f"de-vigged band and the measurement cannot see the top of its own "
-        f"band")
-    # the naive derivation must NOT be what is deployed -- that is the error
-    # this stage's registration exists to prevent
-    assert floor < 1.0 / 0.79, (
-        f"the floor equals the RAW-implied bound 1/0.79 = {1 / 0.79:.4f}. The "
-        f"pre-registration's bands are DE-VIGGED and raw = devig*(1+margin), "
-        f"so that bound opens the band only partway")
+    # ── RESTORED 2026-11-11 (cohort s5.21). A ROUND TRIP. ───────────────
+    #
+    # The floor was 1.14 for cohort `s5.20` (2026-11-08..09, n=86, average
+    # taken odds 1.464) and is back at 1.50, the value all fifteen prior
+    # cohorts ran at. `floor_opened_to` is NOT superseded as a figure: it is
+    # what the band needed, and it is dated.
+    assert floor == MEASURED_TERMS["floor_restored_to"] == 1.50, (
+        f"the live floor is {floor}; it was restored to 1.50 on 2026-11-11, "
+        f"derived from the record -- all fifteen cohorts before s5.20 ran at "
+        f"exactly this value")
+    assert MEASURED_TERMS["floor_opened_to"] == 1.14, (
+        "the opened floor is no longer recorded, so the round trip has lost "
+        "the figure it went out to")
+    # AND THE RESTORED FLOOR DOES NOT ADMIT THE BAND -- that is the trade,
+    # stated rather than hidden. The band is measurable anyway, on LEGS.
+    assert floor > 1.1450, (
+        f"the restored floor {floor} still admits the in-band legs (minimum "
+        f"raw 1.1450 measured 2026-11-06). The restoration was supposed to "
+        f"stop publishing those prices")
+    assert "LEG" in MEASURED_TERMS["band_measurable_without_the_floor"], (
+        "the record no longer says the band is measurable on legs without "
+        "the floor being open, which is the whole reason restoring it costs "
+        "the measurement nothing")
 
 
 def test_the_GATE_REGISTRYS_STATED_FLOOR_IS_NOT_STALE():
@@ -178,11 +185,24 @@ def test_the_GATE_REGISTRYS_STATED_FLOOR_IS_NOT_STALE():
     from src.betting.gate_registry import REGISTRY
     cfg = yaml.safe_load(
         pathlib.Path("config/config.example.yaml").read_text(encoding="utf-8"))
+    import re as _re
     for name in ("min_odds", "max_odds"):
         stated = REGISTRY[name].removes
-        value = cfg["betting"][name]
-        assert f"({value})" in stated, (
-            f"gate_registry's `{name}` entry says {stated!r}, but the "
+        value = float(cfg["betting"][name])
+        # ── COMPARE THE NUMBER, NOT ITS FORMATTING. ──────────────────────
+        #
+        # The first version of this test asserted `f"({value})" in stated`,
+        # which passed only by luck: YAML loads `1.14` as a float that
+        # formats back as "1.14", but it loads `1.50` as `1.5`, so the
+        # restored floor failed against a registry string reading "(1.50)".
+        # Both are the same number. A guard against a stale literal must not
+        # itself depend on repr.
+        found = _re.search(r"\(([0-9]+(?:\.[0-9]+)?)\)", stated)
+        assert found, (
+            f"gate_registry's `{name}` entry {stated!r} quotes no value at "
+            f"all, so there is nothing to check it against")
+        assert float(found.group(1)) == value, (
+            f"gate_registry's `{name}` entry says {found.group(1)}, but the "
             f"deployed value is {value}. A description that quotes a config "
             f"value goes stale silently; update it with the config")
 

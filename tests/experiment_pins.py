@@ -280,31 +280,65 @@ History:
                     here because rule 7 orders the bump; the argument is this
                     entry and `docs/flb-band-preregistration.md` (committed
                     `fed8338` BEFORE this bump), and no test is relaxed.
+
+    s5.21 2026-11-11  THE FLOOR IS RESTORED, AND THE ROUND TRIP IS RECORDED
+                    WITH ITS COST. `betting.min_odds` 1.14 -> 1.50.
+
+                    DERIVED FROM THE RECORD, NOT CHOSEN. All FIFTEEN cohorts
+                    from 2026-08-11 to 2026-11-07 ran at exactly 1.50:
+                    n=1,798 picks, per-cohort average taken odds
+                    1.592..1.671, and the MINIMUM taken price in every one of
+                    them is 1.50 to the cent -- so the floor was binding
+                    throughout and the figure is a property of the deployed
+                    record, not a preference asserted over it.
+
+                    THE COST. `s5.20` is TWO DAYS: 2026-11-08..2026-11-09,
+                    n=86, average taken odds 1.464 against 1.59..1.67 for
+                    every cohort before it, minimum 1.14. Prices the operator
+                    did not want published. RETAINED AND LABELLED -- it
+                    settles normally, is NEVER pooled with s5.19 or s5.21,
+                    and is far too small to support any conclusion.
+
+                    AND THE BAND DID NOT NEED OPENING TO BE MEASURED. The
+                    hypothesis is about MARKET CALIBRATION; its unit is a LEG
+                    with a de-vigged probability and a known result, and
+                    5,314 in-band legs exist in the odds record at ANY floor.
+                    Opening it was needed to ACT, not to measure, and acting
+                    is blocked on an exchange whose depth is UNAVAILABLE. The
+                    leg test arrives TODAY instead of 2026-12-15.
+
+                    NOTHING ELSE MOVED, and `paper_trading_mode` stays true.
+                    RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS
+                    here because rule 7 orders the bump; the argument is this
+                    entry.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
 #:
-#: MOVED s5.19 -> s5.20 on 2026-11-07, with the argument in the history
-#: above: `betting.min_odds` 1.50 -> 1.14 opens the de-vigged [0.70,0.80) FLB
-#: band, which `1/1.50 = 66.7%` had made unreachable rather than merely empty.
+#: MOVED s5.20 -> s5.21 on 2026-11-11: the floor is RESTORED to 1.50, the
+#: value all fifteen prior cohorts ran at. A ROUND TRIP, and the s5.20 entry
+#: above keeps what it cost -- 86 picks over two days at an average 1.464.
 #: Invariant 6b pins this to a literal precisely so a bump has to argue; the
-#: argument is the s5.20 entry plus `docs/flb-band-preregistration.md`
-#: (`fed8338`, committed BEFORE the bump), and the test is unchanged.
-CODE_REVISION_PIN = "s5.20"
+#: argument is the s5.21 entry, and no test is relaxed.
+CODE_REVISION_PIN = "s5.21"
 
 #: Must equal model_version(config.example.yaml).
 #:
-#: MOVED on 2026-11-07. `betting.min_odds` is a TRACKED_KEY, so the one-key
-#: config change moved the fingerprint `cdec29 -> f20105` on its own, and the
-#: `s5.20` revision bump moved it again to `12f2c7`. Both steps are the
-#: existing mechanism working, not bookkeeping.
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.12f2c7"
+#: MOVED on 2026-11-11. Restoring the floor moved the fingerprint
+#: `12f2c7 -> 6d17e7` on the config alone, and the `s5.21` bump moved it again
+#: to `52678c`.
+#:
+#: NOTE THAT IT DOES **NOT** RETURN TO `cdec29`. Restoring a config value does
+#: not restore a cohort: the fingerprint covers `CODE_REVISION` too, and that
+#: is the point of always bumping. `s5.21` runs the same CONFIG as `s5.19` and
+#: is a DIFFERENT COHORT, because the code between them is not the same code.
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.52678c"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 #: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16
 #: and 12 by 889f8ba on 09-17. That is the defect the always-bump rule closes.
-PREVIOUS_CODE_REVISION = "s5.19"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.cdec29"
+PREVIOUS_CODE_REVISION = "s5.20"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.12f2c7"
 
 
 #: How many completed-match queries are exempt from the training-exclusion

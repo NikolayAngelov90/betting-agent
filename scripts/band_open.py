@@ -56,12 +56,22 @@ EXTERNAL_GAP_PP = 3.74
 EXTERNAL_LABEL = ("external, Footiqo, 2025/26, ONE bookmaker (1xBet), five "
                   "leagues, n=134 at 70-79%")
 
-#: The floor this stage MOVED, kept as the labelled baseline the candidate
-#: counts are measured against. It is NOT read as "current": the deployed
-#: value is read live by `_live_floor()` below, because a literal here went
-#: one cohort out of date the moment the config changed and that is the
-#: stale-literal class this register keeps finding.
+#: THE BASELINE THE CANDIDATE COUNTS ARE MEASURED AGAINST, and it has now
+#: been both values. 1.50 was the floor before the band was opened on
+#: 2026-11-07; the floor was RESTORED to 1.50 on 2026-11-11 after two days at
+#: 1.14, so the baseline and the deployed value agree again.
+#:
+#: IT IS STILL NOT READ AS "CURRENT". The deployed value is read live by
+#: `_live_floor()` below, because a literal here went one cohort out of date
+#: the moment the config changed -- twice now, in both directions -- and that
+#: is the stale-literal class this register keeps finding.
 PREVIOUS_MIN_ODDS = 1.50
+
+#: What the band WOULD need, kept as a measurement and NOT as a setting:
+#: `1.14` admits 5,314 of 5,314 de-vigged in-band legs. It is no longer
+#: deployed, and the band is measured on LEGS instead -- which needs no floor
+#: at all. See `docs/flb-band-preregistration.md`.
+FLOOR_THE_BAND_WOULD_NEED = 1.14
 
 
 def _live_floor() -> float:
@@ -299,7 +309,7 @@ def measure() -> dict:
     # band separately, so the spill POPULATES a second band rather than
     # confounding the first, and hard rule 1 is satisfied at the grain it is
     # written for: one config key, one cohort, effects attributable per band.
-    CANDIDATE_FLOOR = 1.14
+    CANDIDATE_FLOOR = FLOOR_THE_BAND_WOULD_NEED
     spill = {"floor": CANDIDATE_FLOOR}
     adm = [L for L in legs if L["odds"] >= CANDIDATE_FLOOR]
     newly = [L for L in adm if L["odds"] < PREVIOUS_MIN_ODDS]

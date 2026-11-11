@@ -231,3 +231,48 @@ by hand.
 `s5.20` bump landed **2026-11-07**, so cohort `s5.19`'s last day is
 2026-11-06 and no pick exists that was made under a 1.14 floor before
 this document. Derivation reproducible via `python -m scripts.band_open`.*
+
+---
+
+## 8. THE FLOOR IS RESTORED, AND THE TEST MOVES TO LEGS — 2026-11-11
+
+**`betting.min_odds: 1.14 → 1.50`, cohort `s5.21`.** The operator does not
+want prices at 1.14–1.20 published.
+
+> **THIS COSTS THE MEASUREMENT NOTHING, AND SECTION 3 ABOVE IS WHY.** H-BAND
+> is a hypothesis about **market calibration**. Its subject is a **price**,
+> not a pick: the unit is a **leg** — one (fixture, market, selection) with a
+> de-vigged implied probability and a known result — and **5,314 in-band legs
+> already exist in the odds record**, at any floor.
+
+**So opening the band was never necessary to MEASURE the anomaly. It was
+necessary to ACT on it** — and acting is blocked on an exchange whose price
+depth is `UNAVAILABLE`, which is unestablished rather than refuted.
+
+**WHAT CHANGES IN THIS REGISTRATION:**
+
+| | registered 11-06 | restated 11-11 |
+|---|---|---|
+| unit | **pick** | **leg** |
+| n for 80% power | 829 picks | **5,314 in-band legs** |
+| arrival | ~2026-12-15 | **today** |
+| bands | `[0.70, 0.80)` de-vigged, external boundaries | **unchanged** |
+| de-vigging | proportional, per leg set | **unchanged** |
+| decision rule | §4 | **unchanged** |
+| economic bar | §5, stated separately | **unchanged** |
+
+**THE BANDS AND THE RULE DO NOT MOVE.** Only the population does, and it
+moves to the larger and less selected one. The pick-level version is a
+**selected subset** of the leg-level test — selected by a model established to
+add nothing over the price — and is therefore not a substitute for it.
+
+**THE COST OF THE ROUND TRIP, recorded here and not smoothed:** cohort
+`s5.20` ran **2026-11-08 … 2026-11-09**, **n=86 picks**, average taken odds
+**1.464** against 1.59–1.67 for every cohort before it, minimum **1.14**.
+Those are prices the operator did not want. The cohort is **retained and
+labelled** — it settles normally, it is **never pooled** with `s5.19` or
+`s5.21`, and it is far too small to support any conclusion.
+
+*Restated 2026-11-11. The floor's restoration is derived in the `s5.21` entry
+of `tests/experiment_pins.py`: all fifteen cohorts from 2026-08-11 to
+2026-11-07 ran at exactly 1.50.*

@@ -1272,7 +1272,40 @@ TRACKED_KEYS: List[str] = [
 #:       gates. Registered in `docs/flb-band-preregistration.md`, committed
 #:       `fed8338` BEFORE this bump, so the hypothesis and the n=829 powered
 #:       decision rule predate the first pick the cohort can produce.
-CODE_REVISION = "s5.20"
+#:
+#: s5.21 — 2026-11-11. THE FLOOR IS RESTORED: `betting.min_odds` 1.14 -> 1.50.
+#:       A round trip, recorded with its cost rather than smoothed.
+#:
+#:       DERIVED FROM THE RECORD, NOT CHOSEN. Every one of the FIFTEEN cohorts
+#:       from 2026-08-11 to 2026-11-07 ran at exactly 1.50 -- n=1,798 picks,
+#:       per-cohort average taken odds 1.592..1.671, and the MINIMUM taken
+#:       price in every one of them is 1.50 to the cent, so the floor was
+#:       binding throughout. That is the range the operator states as the
+#:       target, and it is a property of the deployed record rather than a
+#:       preference asserted over it.
+#:
+#:       WHAT THE ROUND TRIP COST. `s5.20` is a cohort of TWO DAYS --
+#:       2026-11-08..2026-11-09, n=86 picks, average taken odds 1.464 against
+#:       1.59..1.67 for every cohort before it, minimum 1.14. Those are prices
+#:       the operator did not want published. The cohort is RETAINED and
+#:       labelled: it settles normally, it is never pooled with `s5.19` or
+#:       `s5.21`, and it is far too small to support any conclusion.
+#:
+#:       AND IT DID NOT NEED TO BE OPENED. The favourite-longshot hypothesis
+#:       is about MARKET CALIBRATION. Its unit is a LEG -- a (fixture, market,
+#:       selection) with a de-vigged probability and a known result -- and
+#:       5,314 in-band legs already exist in the odds record at ANY floor.
+#:       Opening the band was necessary to ACT on the anomaly, not to MEASURE
+#:       it, and acting is blocked on an exchange whose price depth is
+#:       UNAVAILABLE. The measurement moves to legs and arrives TODAY rather
+#:       than 2026-12-15.
+#:
+#:       NOTHING ELSE MOVED. Not `max_odds`, `max_picks_per_match`,
+#:       `min_expected_value`, `min_confidence`, the blend, the markets, the
+#:       gates or `paper_trading_mode`, which stays `true`.
+#:       RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS here because
+#:       rule 7 orders the bump; the argument is this entry.
+CODE_REVISION = "s5.21"
 
 
 def _stable(value: Any) -> Any:

@@ -195,9 +195,10 @@ def test_KNOWN_WRONG_THE_TWO_FILES_CAN_DISAGREE_so_the_scan_is_not_vacuous():
         f"{ex['betting']['min_odds']} vs local {lo['betting']['min_odds']}. "
         f"CI uses the EXAMPLE, so the example is the one that is live")
     # and the example is the one that must carry the derived FLB floor
-    assert ex["betting"]["min_odds"] == 1.14, (
-        "the example no longer carries the derived band floor; see "
-        "docs/flb-band-preregistration.md")
+    assert ex["betting"]["min_odds"] == 1.50, (
+        "the example no longer carries the RESTORED floor. It went 1.50 -> "
+        "1.14 for cohort s5.20 and back on 2026-11-11; 1.50 is derived from "
+        "the record -- all fifteen cohorts before s5.20 ran at it")
 
 
 def test_KNOWN_WRONG_A_MENTION_IN_PROSE_IS_NOT_A_READ():

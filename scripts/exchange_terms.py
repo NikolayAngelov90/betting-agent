@@ -146,6 +146,29 @@ MEASURED_TERMS = {
     "floor_opened_to": 1.14,
     "floor_opened_on": "2026-11-07",
     "floor_opened_in_cohort": "s5.20",
+    # ── AND RESTORED. A ROUND TRIP, 2026-11-11, cohort s5.21. ───────────
+    "floor_restored_to": 1.50,
+    "floor_restored_on": "2026-11-11",
+    "floor_restored_in_cohort": "s5.21",
+    "floor_restored_why": (
+        "the operator does not want prices at 1.14-1.20 published. DERIVED "
+        "from the record: all fifteen cohorts from 2026-08-11 to 2026-11-07 "
+        "ran at exactly 1.50, n=1,798, per-cohort average taken odds "
+        "1.592..1.671, and the minimum taken price in every one is 1.50 to "
+        "the cent"),
+    "round_trip_cost": (
+        "cohort s5.20: TWO DAYS, 2026-11-08..2026-11-09, n=86 picks, average "
+        "taken odds 1.464 against 1.59..1.67 for every cohort before it, "
+        "minimum 1.14. Prices the operator did not want. RETAINED and "
+        "labelled; never pooled with s5.19 or s5.21; far too small to "
+        "support any conclusion"),
+    "band_measurable_without_the_floor": (
+        "the hypothesis is about MARKET CALIBRATION and its unit is a LEG -- "
+        "a (fixture, market, selection) with a de-vigged probability and a "
+        "known result. 5,314 in-band LEGS exist in the odds record at ANY "
+        "floor, so restoring it costs the measurement NOTHING. Opening the "
+        "band was necessary to ACT on the anomaly, not to measure it, and "
+        "acting is blocked on an exchange whose price depth is UNAVAILABLE"),
     "floor_opened_why": (
         "to MEASURE the FLB band, not to profit from it. Derived in "
         "docs/flb-band-preregistration.md (fed8338), committed BEFORE the "
