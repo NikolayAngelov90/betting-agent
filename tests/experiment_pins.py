@@ -311,34 +311,56 @@ History:
                     RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS
                     here because rule 7 orders the bump; the argument is this
                     entry.
+
+    s5.22 2026-11-12  THE CLAUDE PICK REVIEW IS REMOVED. One change, alone.
+                    `briefings.enabled` and `finalize_picks` are false in
+                    config.example.yaml. The saved pick is the model's pick.
+                    `api_fallback` is left as it was: unreachable.
+
+                    THE REASON IS A NUMBER. Over pick dates 2026-10-13..11-12,
+                    grain=PICK: 682 picks, 459 reviewed (67.3% -- 331 KEEP,
+                    128 CHANGE), 223 NOT reviewed (32.7%), and the gaps are
+                    whole days -- seven of twenty-two. The Pro session limit
+                    and the API balance both run out, so one fingerprint
+                    covered picks finalised under TWO rules and the review's
+                    paired value was never measurable. The share answered by
+                    the API fallback is UNEVALUATED: the backend is not
+                    stored per pick.
+
+                    SELECTION-AFFECTING, AND NEVER TRACKED. 27.9% of reviewed
+                    picks (128 of 459) were CHANGED to a different selection,
+                    yet no `briefings.*` key is in TRACKED_KEYS -- an
+                    invariant restricts that list to `models.*` and
+                    `betting.*` -- so the flag moves no fingerprint. The
+                    cohort moves by this bump alone; the gap is REPORTED.
+
+                    NOTHING ELSE MOVED. `betting.min_odds` stays 1.50.
+                    RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS
+                    here because rule 7 orders the bump; the argument is this
+                    entry.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
 #:
-#: MOVED s5.20 -> s5.21 on 2026-11-11: the floor is RESTORED to 1.50, the
-#: value all fifteen prior cohorts ran at. A ROUND TRIP, and the s5.20 entry
-#: above keeps what it cost -- 86 picks over two days at an average 1.464.
-#: Invariant 6b pins this to a literal precisely so a bump has to argue; the
-#: argument is the s5.21 entry, and no test is relaxed.
-CODE_REVISION_PIN = "s5.21"
+#: MOVED s5.21 -> s5.22 on 2026-11-12: the Claude pick review is REMOVED.
+#: It reviewed 67.3% of the last 30 days' picks and changed 27.9% of those,
+#: so it was selection-affecting on some days and absent on others. Invariant
+#: 6b pins this to a literal precisely so a bump has to argue; the argument is
+#: the s5.22 entry above, and no test is relaxed.
+CODE_REVISION_PIN = "s5.22"
 
 #: Must equal model_version(config.example.yaml).
 #:
-#: MOVED on 2026-11-11. Restoring the floor moved the fingerprint
-#: `12f2c7 -> 6d17e7` on the config alone, and the `s5.21` bump moved it again
-#: to `52678c`.
-#:
-#: NOTE THAT IT DOES **NOT** RETURN TO `cdec29`. Restoring a config value does
-#: not restore a cohort: the fingerprint covers `CODE_REVISION` too, and that
-#: is the point of always bumping. `s5.21` runs the same CONFIG as `s5.19` and
-#: is a DIFFERENT COHORT, because the code between them is not the same code.
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.52678c"
+#: MOVED on 2026-11-12, by the `s5.22` revision bump ALONE: `52678c ->
+#: 7f9e82`. The config change that removed the review moved NOTHING, because
+#: no `briefings.*` key is tracked -- which is the gap the s5.22 entry reports.
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.7f9e82"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 #: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16
 #: and 12 by 889f8ba on 09-17. That is the defect the always-bump rule closes.
-PREVIOUS_CODE_REVISION = "s5.20"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.12f2c7"
+PREVIOUS_CODE_REVISION = "s5.21"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.52678c"
 
 
 #: How many completed-match queries are exempt from the training-exclusion

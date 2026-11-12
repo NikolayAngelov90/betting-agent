@@ -343,7 +343,11 @@ def test_the_BIASED_ESTIMATOR_IS_NAMED_with_its_successors():
 COHORTS = {
     "s5.19": {"fingerprint": "cdec29", "min_odds": 1.50, "last": "2026-11-07"},
     "s5.20": {"fingerprint": "12f2c7", "min_odds": 1.14, "last": "2026-11-09"},
-    "s5.21": {"fingerprint": "52678c", "min_odds": 1.50, "last": None},
+    "s5.21": {"fingerprint": "52678c", "min_odds": 1.50, "last": "2026-11-12"},
+    # s5.22, 2026-11-12: the Claude pick review removed. Same floor, a FOURTH
+    # cohort -- the saved pick is now the model's pick on every day, where
+    # s5.21 and its predecessors mixed reviewed and unreviewed days.
+    "s5.22": {"fingerprint": "7f9e82", "min_odds": 1.50, "last": None},
 }
 
 
@@ -352,7 +356,7 @@ def test_the_THREE_COHORTS_ARE_DISTINCT_and_may_not_be_pooled():
     because the code between them is not the same code. That is exactly why
     restoring a config value does not restore a fingerprint."""
     fps = {c["fingerprint"] for c in COHORTS.values()}
-    assert len(fps) == 3, f"two cohorts share a fingerprint: {fps}"
+    assert len(fps) == len(COHORTS), f"two cohorts share a fingerprint: {fps}"
     assert COHORTS["s5.19"]["min_odds"] == COHORTS["s5.21"]["min_odds"] == 1.50
     assert COHORTS["s5.20"]["min_odds"] == 1.14
     # the same config, a different cohort
@@ -364,10 +368,10 @@ def test_the_THREE_COHORTS_ARE_DISTINCT_and_may_not_be_pooled():
                                        FROZEN_MODEL_VERSION,
                                        PREVIOUS_CODE_REVISION,
                                        PREVIOUS_MODEL_VERSION)
-    assert CODE_REVISION_PIN == "s5.21"
-    assert FROZEN_MODEL_VERSION.endswith(COHORTS["s5.21"]["fingerprint"])
-    assert PREVIOUS_CODE_REVISION == "s5.20"
-    assert PREVIOUS_MODEL_VERSION.endswith(COHORTS["s5.20"]["fingerprint"])
+    assert CODE_REVISION_PIN == "s5.22"
+    assert FROZEN_MODEL_VERSION.endswith(COHORTS["s5.22"]["fingerprint"])
+    assert PREVIOUS_CODE_REVISION == "s5.21"
+    assert PREVIOUS_MODEL_VERSION.endswith(COHORTS["s5.21"]["fingerprint"])
 
 
 def test_KNOWN_WRONG_POOLING_THEM_WOULD_HIDE_THE_ROUND_TRIP():

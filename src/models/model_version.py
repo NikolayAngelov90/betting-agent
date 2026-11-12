@@ -1305,7 +1305,37 @@ TRACKED_KEYS: List[str] = [
 #:       gates or `paper_trading_mode`, which stays `true`.
 #:       RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS here because
 #:       rule 7 orders the bump; the argument is this entry.
-CODE_REVISION = "s5.21"
+#:
+#: s5.22 — 2026-11-12. THE CLAUDE PICK REVIEW IS REMOVED. One change, alone.
+#:       `briefings.enabled` and `briefings.finalize_picks` are false in
+#:       `config.example.yaml`. The saved pick is the model's pick: no
+#:       KEEP/CHANGE step, no fallback call. `briefings.api_fallback` is left
+#:       as it was -- with the two flags off nothing can reach it.
+#:
+#:       WHY, AS A NUMBER. The review did not cover every pick. `measured`
+#:       2026-11-12 over pick dates 2026-10-13..2026-11-12, grain=PICK: 682
+#:       picks, 459 reviewed (67.3% -- 331 KEEP, 128 CHANGE), 223 NOT reviewed
+#:       (32.7%). The gaps are whole DAYS, seven of twenty-two: 10-24..10-27,
+#:       11-04, 11-08, 11-09. The Pro session limit and the API balance both
+#:       run out, so one fingerprint covered picks finalised under TWO rules,
+#:       and the review's paired value was never measurable.
+#:
+#:       THE SHARE THAT WENT THROUGH THE API FALLBACK IS UNEVALUATED, not
+#:       zero: the backend that answered is not stored per pick. Recorded as
+#:       unevaluated rather than estimated.
+#:
+#:       IT IS SELECTION-AFFECTING AND IT WAS NEVER TRACKED. Of the reviewed
+#:       picks 27.9% (128 of 459) were CHANGED to a different selection, yet
+#:       no `briefings.*` key is in TRACKED_KEYS -- an invariant restricts
+#:       that list to `models.*` and `betting.*` -- so flipping the flag moves
+#:       no fingerprint. The cohort therefore moves by this revision bump and
+#:       by nothing else, and that gap is REPORTED, not closed here.
+#:
+#:       NOTHING ELSE MOVED: `betting.min_odds` stays 1.50, every gate and
+#:       threshold is as it was, `paper_trading_mode` stays true.
+#:       RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS here because
+#:       rule 7 orders the bump; the argument is this entry.
+CODE_REVISION = "s5.22"
 
 
 def _stable(value: Any) -> Any:

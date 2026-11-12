@@ -149,7 +149,14 @@ from scripts.capture_critical import (
 #: because `scripts/market_mix.py` keeps every database and
 #: `market_spec` import INSIDE its functions, so importing it reaches
 #: nothing on the capture path.
-CENSUS = {"files": 153, "capture_critical": 79, "not_critical": 74}
+#: RE-MEASURED 2026-11-12 (III), the review removal (s5.22): files
+#: 153 -> 154, `capture_critical` 79 -> 80, not_critical UNCHANGED at 74.
+#: `test_review_removed.py` IS capture-critical, via `src.data.models`,
+#: and that is ACCEPTED rather than engineered around: its save control
+#: drives `_save_picks` against a real schema on a scratch SQLite file,
+#: and a fabricated row class would prove nothing about what is saved.
+#: Being in the gate shaped one of its tests -- see the gate figure.
+CENSUS = {"files": 154, "capture_critical": 80, "not_critical": 74}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -409,8 +416,22 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       — so these pin the formula, that not one band survives, that the
     #       70-80 artefact EXCEEDS the gap once reported as the finding, and
     #       that the superseded verdict is kept rather than quietly replaced.
-    assert len(gate) == 1760, (
-        f"the gating selection is {len(gate)}, recorded 1760 — say what moved")
+    #   +13 on 2026-11-12: test_review_removed.py, the controls for removing
+    #       the Claude pick review (s5.22). Capture-critical via
+    #       `src.data.models`, imported at function level by the control that
+    #       drives the save path. Every test is deterministic: scratch SQLite,
+    #       the example config, the AST and two workflow files. No clock, no
+    #       network, no production database.
+    #
+    #       ONE OF THEM WAS REWRITTEN BECAUSE IT IS IN THIS GATE. It first
+    #       asserted that the unused Claude credentials are still PRESENT in
+    #       daily-picks.yml. The stage's own instruction to the operator is
+    #       to delete them -- so the day that happened, a gating test would
+    #       have failed and the card would have been lost to a clean-up. It
+    #       is now a SUBSET check (no undeclared Claude entry), which passes
+    #       before and after the deletion, with a planted-entry control.
+    assert len(gate) == 1773, (
+        f"the gating selection is {len(gate)}, recorded 1773 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the

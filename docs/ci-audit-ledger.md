@@ -38312,3 +38312,131 @@ Census 152→153, non-gating 1073→1104, gate unchanged at 1760.
 *Recorded 2026-11-12. `src/evaluation/devig.py`, `scripts/sharp_anchor.py`,
 `scripts/residual_harness.py`, `tests/test_sharp_anchor.py` (31 tests),
 `docs/sharp-anchor-preregistration.md` (`7cbbddd`).*
+
+---
+
+## 2026-11-12 (III) — STAGE 31 PART G: the Claude pick review is REMOVED. Cohort s5.22
+
+One change, alone, and the only part of Stage 31 that is switched on.
+`cohort_status.py` reads **`s5.22 / 7f9e82`** (was `s5.21 / 52678c`).
+
+### What changed
+
+`briefings.enabled` and `briefings.finalize_picks` are **false** in
+`config/config.example.yaml` — the deployed file. The saved pick is the
+model's pick: no KEEP/CHANGE step and no fallback call. Nothing else moved;
+`betting.min_odds` stays 1.50 and `paper_trading_mode` stays true.
+
+### The first report — why, as a number
+
+`measured` 2026-11-12 · `saved_picks`, pick dates 2026-10-13 … 2026-11-12,
+`disposition IS NULL` · grain = pick:
+
+| | picks | share |
+|---|---|---|
+| reviewed | 459 | **67.3%** — 331 KEEP, 128 CHANGE |
+| **not reviewed** | **223** | **32.7%** |
+| answered by the API fallback | — | **`UNEVALUATED`** |
+| total | 682 | 22 pick-days |
+
+The gaps are whole **days** — seven of twenty-two (10-24 … 10-27, 11-04,
+11-08, 11-09). The Pro session limit and the API balance both run out, so one
+fingerprint covered picks finalised under **two rules**, and the review's
+paired value was never measurable.
+
+The fallback share is unevaluated, not zero: the backend that answered a
+review is not stored per pick.
+
+### Selection-affecting, and never tracked
+
+**27.9% of reviewed picks (128 of 459) were changed to a different
+selection.** Yet no `briefings.*` key is in `TRACKED_KEYS` — an invariant
+restricts that list to `models.*` and `betting.*` — so flipping the flag
+moves **no fingerprint**. The cohort moves by the `CODE_REVISION` bump and by
+nothing else. Invariant 6b and the revision pins are updated in the same
+commit with the argument beside each. **The gap is reported, not closed.**
+
+### The controls — driven, not asserted
+
+| control | how |
+|---|---|
+| no Claude call in a picks run | the review service runs under the deployed config with every route to Claude raising; it returns 0 untouched |
+| …and the driver can fire | the same driver under a config with the review **on** hits the tripwire |
+| the switch closes the site | AST: the one call to `finalize_picks_with_claude` sits inside an `if` reading both flags |
+| picks still saved, one per fixture | `_save_picks` driven on scratch SQLite: two fixtures, two picks, `review_action` NULL on both, model and final observations on the same leg; `max_picks_per_match` is 1 in the deployed config |
+| the card is unchanged in shape | one formatter, driven twice — plain, and carrying a review verdict: byte-identical. Changing the price changes the card, so the equality is not of two empty strings |
+
+### Listed, and stopped — deleting them is the operator's action
+
+* `ANTHROPIC_API_KEY` — job `env` in `daily-picks.yml`, and the secret
+* `CLAUDE_CODE_OAUTH_TOKEN` — job `env` in `daily-picks.yml`, and the secret
+* the step `npm install -g @anthropic-ai/claude-code`
+* the `briefings-sent` cache restore/save pair — the review was the only
+  writer of `data/briefings_sent.json`
+
+No other workflow names either credential.
+
+### Time removed, and the margin
+
+`measured` 2026-11-12 from the logs of the **22 scheduled** `daily-picks`
+runs started 2026-10-22 … 2026-11-12 (the parallel-review regime) · grain =
+run · minutes. Five runs failed before picks; three had no fixtures.
+
+| | n | mean | sd | median | max |
+|---|---|---|---|---|---|
+| review, runs where it ran | 14 | **2.27** | 1.74 | 1.76 | 6.43 |
+| …of which reviewed **0 of N** | 4 | 2.02 | — | — | 5.15 |
+
+**29% of the picks step's analysis-plus-review time**, at 4.2 s per fixture.
+On four runs the review ran, spent the time, and reviewed nothing — 0 of 49,
+13, 83 and 3 fixtures.
+
+**The margin, as the audit computes it today** (`measured` 2026-11-12):
+weekday binding **+12 min** (mean+3sd) and +118 (max), n=15; weekend +50 and
++167, n=6.
+
+**With the review removed** (`simulated`: each run's time-to-picks minus its
+own review minutes, runs where the review ran):
+
+| | n | max | mean+3sd |
+|---|---|---|---|
+| weekday | 10 | 40.35 → **38.62** | 48.34 → **45.08** |
+| weekend | 4 | 54.95 → **50.75** | 71.65 → **63.33** |
+
+So about **+3 minutes** of weekday margin on the binding term and +1.7 on the
+max term. **The margin's duration constants are not substituted** — a
+measurement is not an authorisation, and the post-removal series starts at
+n = 0.
+
+### Found on the way — reported, not fixed
+
+1. **The live duration constant counts SKIPPED picks steps.**
+   `_time_to_picks` reads the picks step's `completedAt`, and a step skipped
+   because the test gate failed has one. Three of the twelve runs behind
+   `FULL_CARD_PICKS_MAX = 40.35 / 3SD = 64.59` are such runs (7.05, 5.05 and
+   5.72 min). They lower the mean and inflate the spread: on the nine runs
+   that reached picks the same statistic is **48.66**, so the binding term
+   carries **15.9 minutes** that no card ever took — and n falls to 9, under
+   the registered minimum of 10. The constant was an authorised substitution,
+   so this is Niki's.
+2. **With `api_fallback: false` an exhausted session is not short-circuited.**
+   I set that key false first; `test_claude_code_short_circuits_after_
+   session_limit` went red (2 spawns where 1 is asserted). The short-circuit
+   is conditioned on the fallback being available. The path is now closed by
+   the two flags, so I withdrew my edit rather than touch the test.
+3. **The weekday margin test is still red** (+56 min against 60), as it was
+   before this stage. Left for Niki.
+4. **2026-11-10 … 11-12 produced no card because there were no fixtures** —
+   the international window. Every league reports `none-in-range` with its
+   earliest fixture on 11-20/21 (`spain/laliga2` on 11-13). Three real
+   zero-pick days, which is the case Part E has to handle.
+
+Census 153→154, `capture_critical` 79→80, gate 1760→**1773**: the control
+file is capture-critical via `src.data.models`. One of its tests was
+rewritten *because* it gates — it first asserted the unused credentials are
+still present, which would have lost the card on the day the operator deleted
+them.
+
+*Recorded 2026-11-12. `tests/test_review_removed.py` (13 tests),
+`config/config.example.yaml`, `src/models/model_version.py`,
+`tests/experiment_pins.py`.*

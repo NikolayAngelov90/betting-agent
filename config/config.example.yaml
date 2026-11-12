@@ -386,7 +386,14 @@ notifications:
 # Requires ANTHROPIC_API_KEY env var (GitHub secret). When unset, briefing
 # commands no-op gracefully so the rest of the pipeline is unaffected.
 briefings:
-  enabled: true               # master switch for the Claude pick review
+  # REVIEW REMOVED 2026-11-12 (cohort s5.22). The Claude KEEP/CHANGE step did
+  # not cover every pick: the Pro session limit and the API balance both run
+  # out, so picks were finalised under TWO rules. Measured over the last 30
+  # days: 682 picks, 459 reviewed (67.3%), 223 NOT reviewed (32.7%) -- seven
+  # of 22 pick-days wholly unreviewed. Its paired value was never measurable.
+  # The saved pick is the model's pick. See the s5.22 entry in
+  # tests/experiment_pins.py.
+  enabled: false              # master switch for the Claude pick review
   # send_to_telegram: post the full briefing ARTICLE to Telegram. false = Claude
   # still researches each match and finalizes the pick (KEEP/CHANGE), but no
   # article is posted — only the daily picks summary goes out. This is the
@@ -417,7 +424,7 @@ briefings:
   # odds (no veto: a bet is always placed; goal = best prediction at odds > 1.50).
   # The saved pick is updated to the decision and a code-generated footer shows
   # the final tracked bet, so the message can never contradict the DB.
-  finalize_picks: true
+  finalize_picks: false
   # Claude reviews EVERY saved pick before it is sent — WC every-match picks and
   # club-league value picks alike — as part of the --picks step.
 
