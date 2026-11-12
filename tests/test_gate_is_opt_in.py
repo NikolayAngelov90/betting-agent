@@ -402,8 +402,15 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       read constants, source text and the AST, and touch no database
     #       and no clock -- so none can lose the day card, which is the risk
     #       the gate exists to carry.
-    assert len(gate) == 1755, (
-        f"the gating selection is {len(gate)}, recorded 1755 — say what moved")
+    #   +5 on 2026-11-12: the de-vigging CORRECTION, in the same file. The
+    #       four bands reported PRESENT on 2026-11-11 do not survive
+    #       subtraction of the artefact proportional de-vigging produces --
+    #       `gap = M*(p-1/n)/(1+M)` is what a PERFECTLY CALIBRATED book shows
+    #       — so these pin the formula, that not one band survives, that the
+    #       70-80 artefact EXCEEDS the gap once reported as the finding, and
+    #       that the superseded verdict is kept rather than quietly replaced.
+    assert len(gate) == 1760, (
+        f"the gating selection is {len(gate)}, recorded 1760 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the

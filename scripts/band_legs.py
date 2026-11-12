@@ -124,15 +124,60 @@ MEASURED_LEGS = {
             "BELOW the restored 1.50 floor -- a selection the deployed config "
             "refuses, by the operator's own decision of 2026-11-11"),
     },
+    # ── THE ARTEFACT, AND THE RESIDUAL AFTER IT. 2026-11-11. ─────────────
+    #
+    # `gap = M*(p - 1/n)/(1+M)` is what a PERFECTLY CALIBRATED book shows
+    # under proportional de-vigging, because every leg is divided by the same
+    # `1+M` while the margin was added as `M/n`. The null is NOT zero.
+    #
+    # band -> (artefact_pp, residual_pp, ci_lo, ci_hi, verdict)
+    "artefact_and_residual": {
+        "0.30-0.40": (-0.69, -0.94, -1.92, -0.02, "OVERPRICED"),
+        "0.40-0.50": (-0.17, -0.18, -1.08, +0.73, "EXPLAINED BY THE DE-VIG"),
+        "0.50-0.60": (+0.37, +0.77, -0.18, +1.75, "EXPLAINED BY THE DE-VIG"),
+        "0.60-0.70": (+1.03, +0.61, -0.48, +1.73, "EXPLAINED BY THE DE-VIG"),
+        "0.70-0.80": (+1.62, -0.19, -1.13, +0.73, "EXPLAINED BY THE DE-VIG"),
+        "0.80-0.90": (+2.17, +0.21, -0.96, +1.36, "EXPLAINED BY THE DE-VIG"),
+    },
+    #: The known-biased estimator this stage used, and its successors. The
+    #: pre-registration fixed PROPORTIONAL de-vigging in advance -- which
+    #: protected the bands from being chosen after the fact, and did NOT
+    #: protect the estimator from being the wrong one.
+    "devig_method": "proportional (p/sum p), per leg set",
+    "devig_successors": ("Shin", "Power"),
+    "devig_literature": (
+        "Whelan, 'Estimating Expected Loss Rates in Betting Markets': under "
+        "this bias 'an equal-weighted average of loss rates across each of "
+        "the available bets will be higher than predicted by this widely "
+        "recommended calculation' -- the naive overround treatment is biased, "
+        "and Shin/Power exist for it"),
+
+    # ── CORRECTED 2026-11-11. THE EARLIER VERDICT WAS WRONG. ─────────────
+    #
+    # It read: "H-BAND IS SUPPORTED AND NOT COLLECTABLE. Four consecutive
+    # bands PRESENT with monotone gaps..." -- and that reading did not
+    # subtract the artefact its own method produces. Net of it, NOT ONE of
+    # the four survives, and the 70-80 band's residual is NEGATIVE because
+    # the artefact there (+1.62pp) EXCEEDS the gap that was reported as the
+    # finding (+1.43pp).
+    "superseded_verdict": (
+        "H-BAND IS SUPPORTED AND NOT COLLECTABLE -- asserted 2026-11-11 on "
+        "the RAW gaps, before the de-vigging artefact was subtracted. Wrong, "
+        "and kept so the correction is legible"),
     "verdict": (
-        "H-BAND IS SUPPORTED AND NOT COLLECTABLE. Four consecutive bands "
-        "PRESENT with monotone gaps and the lowest band NEGATIVE -- the "
-        "favourite-longshot shape -- agreeing in DIRECTION with the external "
-        "study in all five comparable bands at 20-130x its n, at roughly a "
-        "third to a half of its magnitudes. But the net is NEGATIVE at every "
-        "bookmaker in every band on BOTH the point estimate and the CI lower "
-        "bound. One cell survives and it is at an exchange whose depth is "
-        "unmeasurable, in a price band the deployed floor excludes"),
+        "H-BAND IS NOT SUPPORTED ON THIS METHOD. Four bands read PRESENT on "
+        "the raw gaps and NOT ONE survives subtraction of the de-vigging "
+        "artefact: residuals -0.18/+0.77/+0.61/-0.19/+0.21pp, every CI "
+        "spanning zero. ONE result survives and it is on the side we cannot "
+        "take: legs at 30-40% de-vigged probability are OVERPRICED by "
+        "0.94pp, CI [-1.92,-0.02] -- the longshot half of the classic bias, "
+        "collectable only by LAYING, which needs an exchange whose depth is "
+        "UNAVAILABLE. The collectability conclusion is unchanged and now "
+        "OVERDETERMINED: there is less to net against than was reported"),
+    "what_would_settle_it": (
+        "re-run under SHIN and POWER de-vigging and report all three side by "
+        "side. Until then the calibration table is NOT publishable as "
+        "evidence of mispricing"),
 }
 
 #: THE s5.20 PICK DISTRIBUTION. `measured` 2026-11-11, grain=PICK.
@@ -324,6 +369,22 @@ def measure() -> dict:
                         "league": league, "odds": price,
                         "p_raw": p_raw, "p_devig": p_raw / orr,
                         "margin": orr - 1.0,
+                        "arity": spec.arity,
+                        # ── THE DE-VIGGING ARTEFACT, PREDICTED PER LEG. ────
+                        #
+                        # With EQUAL margin shares and PROPORTIONAL
+                        # de-vigging, a PERFECTLY CALIBRATED book still shows
+                        #     gap = M*(p - 1/n)/(1+M)
+                        # because `quoted_i = p_i + M/n` and the de-vig
+                        # divides every leg by the same `1+M`. The sign flips
+                        # at `p = 1/n`: 0.500 for a two-way set, 0.333 for a
+                        # three-way one.
+                        #
+                        # So the gap this test measures is NOT zero under the
+                        # null. Subtracting this term is what isolates
+                        # mispricing from method.
+                        "artefact": ((orr - 1.0) * ((p_raw / orr)
+                                     - 1.0 / spec.arity) / orr),
                         "won": 1 if res == "win" else 0,
                     })
 
@@ -341,7 +402,10 @@ def measure() -> dict:
         fixtures = {L["mid"] for L in rows}
         if not rows:
             results[f"{band[0]:.2f}-{band[1]:.2f}"] = {
-                "n": 0, "fixtures": 0, "verdict": "INSUFFICIENT"}
+                "n": 0, "fixtures": 0, "verdict": "INSUFFICIENT",
+                "artefact_pp": None, "residual_pp": None,
+                "residual_ci95": None,
+                "residual_verdict": "INSUFFICIENT"}
             continue
         pred = statistics.mean(L["p_devig"] for L in rows)
         rate = sum(L["won"] for L in rows) / len(rows)
@@ -356,7 +420,22 @@ def measure() -> dict:
         if testable and ci:
             verdict = "PRESENT" if ci[0] > 0 else (
                 "NEGATIVE" if ci[1] < 0 else "NOT PRESENT")
+        art = statistics.mean(L["artefact"] for L in rows)
+        by_fix_res: Dict[int, List[Tuple[float, int]]] = defaultdict(list)
+        for L in rows:
+            # the null prediction for THIS leg: de-vigged prob + artefact
+            by_fix_res[L["mid"]].append((L["p_devig"] + L["artefact"],
+                                         L["won"]))
+        ci_res = _bootstrap_gap(by_fix_res) if testable else None
         results[f"{band[0]:.2f}-{band[1]:.2f}"] = {
+            "artefact_pp": 100.0 * art,
+            "residual_pp": gap - 100.0 * art,
+            "residual_ci95": ci_res,
+            "residual_verdict": (
+                "INSUFFICIENT" if not ci_res else
+                ("MISPRICED" if ci_res[0] > 0 else
+                 ("OVERPRICED" if ci_res[1] < 0 else
+                  "EXPLAINED BY THE DE-VIG"))),
             "n": len(rows), "fixtures": len(fixtures),
             "mean_devig": pred, "observed_rate": rate, "gap_pp": gap,
             "ci95": ci, "verdict": verdict,
@@ -535,6 +614,31 @@ def main() -> int:
               f"{100 * v['mean_devig']:10.2f}% {100 * v['observed_rate']:8.2f}% "
               f"{v['gap_pp']:+8.2f} {cis:>18s} {v['verdict']:>13s} "
               f"{exts:>10s}")
+    print()
+    print("  " + "=" * (len(hdr) - 4))
+    print("  THE SAME GAPS, NET OF THE DE-VIGGING ARTEFACT")
+    print("  A perfectly calibrated book shows gap = M*(p - 1/n)/(1+M) under")
+    print("  proportional de-vigging, because every leg is divided by the")
+    print("  same (1+M) while the margin was added as M/n. The null is NOT")
+    print("  zero, so the raw gap above cannot be read as mispricing.")
+    print()
+    h2 = (f"  {'band':12s} {'raw gap':>8s} {'artefact':>9s} "
+          f"{'RESIDUAL':>9s} {'95% CI on residual':>20s} {'verdict':>24s}")
+    print(h2)
+    print("  " + "-" * (len(h2) - 2))
+    for band in BANDS:
+        key = f"{band[0]:.2f}-{band[1]:.2f}"
+        v = r["results"][key]
+        # `n` is always PRESENT -- set to 0 for an empty band -- so this
+        # is a count of zero, not a missing key. The explicit comparison
+        # keeps those two apart.
+        if v["n"] == 0:
+            continue
+        ci = v.get("residual_ci95")
+        cis = f"[{ci[0]:+.2f},{ci[1]:+.2f}]" if ci else "not tested"
+        print(f"  {key:12s} {v['gap_pp']:+7.2f} {v['artefact_pp']:+8.2f} "
+              f"{v['residual_pp']:+8.2f} {cis:>20s} "
+              f"{v['residual_verdict']:>24s}")
     print()
     print(f"  external comparator: {r['external_label']}")
     print(f"  a band is TESTED only at n >= {MIN_N_TO_TEST} over "

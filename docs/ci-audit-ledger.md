@@ -37894,3 +37894,211 @@ Not touched: `max_odds`, `max_picks_per_match`, `min_expected_value`,
 `tests/test_calendar_separation.py`, `tests/test_exchange_terms.py`,
 `tests/test_deployed_config_is_the_example.py`, `tests/test_gate_is_opt_in.py`,
 `docs/flb-band-preregistration.md`. Floor pushed as `7435b61`.*
+
+---
+
+## 2026-11-12 — `INVENTORY`: what is publishable, and the finding that is not
+
+This stage reads. No site, no article, no channel change, nothing published.
+`cohort_status.py` reads **`s5.21 / 52678c`**, unmoved. The inventory is
+`docs/findings-inventory.md`.
+
+### THE CORRECTION COMES FIRST, BECAUSE IT REMOVES THE HEADLINE
+
+> **The band calibration result was a de-vigging artefact.** Four days ago
+> this ledger reported four consecutive bands **PRESENT** — +1.14 / +1.64 /
+> +1.43 / +2.38pp, every CI above zero — and called H-BAND supported. **Net of
+> the artefact its own method produces, not one of the four survives.**
+
+**IT IS ANALYTIC, NOT AN ESTIMATE.** `docs/flb-preregistration.md` fixed
+**proportional de-vigging** in advance: `p_devig = p_implied / Σ p_implied`. A
+book that adds margin in equal shares — `quoted_i = p_i + M/n` — and is
+**perfectly calibrated** still shows
+
+> **`gap = M · (p − 1/n) / (1 + M)`**
+
+because every leg is divided by the same `1 + M` while the margin went in as
+`M/n`. **The null is not zero**, and the sign flips at `1/n`: **0.500** for a
+two-way set, **0.333** for a three-way one.
+
+Subtracting it per leg, from that leg set's **own arity and own margin**, and
+re-bootstrapping over fixtures:
+
+| band | raw gap | artefact | **residual** | 95% CI | verdict |
+|---|---|---|---|---|---|
+| 0.30–0.40 | −1.63 | −0.69 | **−0.94** | [−1.92, **−0.02**] | **OVERPRICED** |
+| 0.40–0.50 | −0.35 | −0.17 | −0.18 | [−1.08, +0.73] | explained by the de-vig |
+| 0.50–0.60 | +1.14 | +0.37 | +0.77 | [−0.18, +1.75] | explained by the de-vig |
+| 0.60–0.70 | +1.64 | +1.03 | +0.61 | [−0.48, +1.73] | explained by the de-vig |
+| 0.70–0.80 | +1.43 | **+1.62** | **−0.19** | [−1.13, +0.73] | explained by the de-vig |
+| 0.80–0.90 | +2.38 | **+2.17** | +0.21 | [−0.96, +1.36] | explained by the de-vig |
+
+**In the 70–80 band — the one the whole FLB line of work was aimed at — the
+artefact (+1.62pp) is LARGER than the gap that was reported as the finding
+(+1.43pp), so the residual is negative.**
+
+**ONE RESULT SURVIVES, AND IT IS ON THE SIDE WE CANNOT TAKE.** Legs at 30–40%
+de-vigged probability are **overpriced by 0.94pp**, CI [−1.92, −0.02] — only
+just excluding zero. That is the **longshot half** of the classic bias, and
+collecting it means **laying**, which needs an exchange whose depth is
+`UNAVAILABLE`.
+
+**AND THE LITERATURE WARNED OF IT BEFORE WE PRE-REGISTERED IT.** Whelan,
+*Estimating Expected Loss Rates in Betting Markets*: under this bias *"an
+equal-weighted average of loss rates across each of the available bets will be
+higher than predicted by this widely recommended calculation."* Shin and Power
+de-vigging exist for precisely this.
+
+> **Pre-registration protected the BANDS from being chosen after the fact. It
+> did not protect the ESTIMATOR from being the wrong one, chosen before it.**
+> That is a new shape in this register: a pre-registration can lock in a
+> defect as firmly as it locks out a bias.
+
+**What would settle it:** re-run under **Shin** and **Power** and report all
+three side by side. Until then the table is **not publishable as evidence of
+mispricing**. The old verdict is kept as `superseded_verdict` so the
+correction stays legible.
+
+**And the collectability conclusion is unchanged and now OVERDETERMINED** —
+there is *less* to net against than was reported, not more.
+
+### `INVENTORY` — ranked, with provenance
+
+Ranked by: original? n large enough alone? reproducible from obtainable data?
+
+| # | claim | n / grain | label | rank reason |
+|---|---|---|---|---|
+| **1** | **a de-vigged gap is not evidence of mispricing** — the artefact accounts for the whole apparent effect | **52,737 legs** / ~10,700 fixtures; LEG | **WARNING** (arithmetic known; demonstration at this scale not found in one search) | the only finding both *useful to others* and *not undercut by its own method* |
+| **2** | **best lines are not takeable** — 21.28% of 1X2 best-line sets imply under 100%, **73.6%** in the 2–24h spread band | 927–1,372 sets/book | **WARNING**, plausibly **ORIGINAL in this form** — *originality UNVERIFIED* | anyone running a naive best-line backtest is measuring a price that never existed |
+| **3** | **the API-Football two-way trap** — "Home/Away" is draw-excluded, not 1X2; mapping it corrupted **2,486 matches** across 7 books incl. Pinnacle 26% | 2,486 matches | **WARNING**, provider-specific | reproducible, checkable, with a stated detection rule |
+| **4** | **per-book margin structure** — margin higher in the favourites band at every bookmaker, flat at both exchanges | 29 books, 1,489–18,928 obs each | **REPLICATION** | the literature already reports longshot odds "adjusted more aggressively downwards ... while overall margins are kept roughly at bookmaker-specific target levels" |
+| **5** | **the anomaly is smaller than the cost of taking it** | 29 books × 4 bands | **REPLICATION**; *weakened by the correction above* | "the margin eats the edge" is standard; ours is the per-venue arithmetic with coverage beside it |
+| **6** | **the settled paper record** — no edge over the price | 1,798 picks / 15 cohorts; PICK | **REPLICATION at small n**; an **ASSERTION**, not reproducible | MDE +5.60% vs +1.85% break-even, so *"cannot exclude an edge 3× larger"* |
+
+**A UNIT CORRECTION, recorded with it.** The "+0.77 to +1.18pp band premium"
+mixes a real relative increase with a **units effect** — `pp` is
+`(1/o)·c/(1+c)`, so a *constant* relative margin yields more probability
+points at shorter odds. In **relative margin** the increase is **+0.13 to
++0.59 points**; the exchanges move **−0.15 / −0.19**. Direction holds,
+magnitude was overstated by the unit.
+
+**Not publishable, and said so:** the `s5.20` cohort (86 picks, two days);
+CLV coverage 13% with `avg_clv` as a self-declared edge; `_find_best_odds`
+returning the median despite its name; and the whole operational register —
+exposure, crons, the capture gate, the absence class. Engineering practice,
+not findings about football markets.
+
+### `REPRODUCIBLE` — per finding
+
+| finding | reproducible? | from what |
+|---|---|---|
+| the artefact (1) | **YES, fully** — analytic | football-data.co.uk free CSVs, or The Odds API historical |
+| best lines (2) | **YES** | any feed with ≥2 books per leg |
+| the API-Football trap (3) | **YES** | API-Football free tier |
+| per-book margin (4) | **PARTLY** — 29 books needs a paid feed | The Odds API historical |
+| cost vs anomaly (5) | **PARTLY** | as above |
+| the paper record (6) | **NO — an ASSERTION** | our own `saved_picks`; no reader can check it |
+
+> **Everything derived from `saved_picks` is an ASSERTION**: the paper ROI, the
+> win rate, the cohort table, the `s5.20` distribution, the CLV series, and the
+> `pick_observations` quote ages. They may be reported only as such.
+
+The method is written out in full in the inventory — price per leg, the
+de-vig formula, the band boundaries, the bootstrap unit, every exclusion with
+its count, the artefact subtraction, and **the tie handling that moved the
+70–80 gap from +1.66 to +1.43pp**. Each table ships with the script that
+regenerates it (`band_legs`, `cost_by_book`, `exchange_terms`, `market_mix`,
+`band_open`, `margin_exposure`), all with `--json`, none writing to the
+database.
+
+### `RIGHTS` — per provider, quoted, with URL and fetch date
+
+| provider | verdict | the clause |
+|---|---|---|
+| **The Odds API** | **PERMISSIVE** | *"Calculating and displaying values you derive from our data"* is permitted, *"including for commercial use, provided our data is not the primary product being sold or redistributed"*; prohibited is *"resell, repackage, or redistribute our data as a standalone data product"*. Attribution *"not required, but is always appreciated"* |
+| **football-data.org** | **PERMISSIVE, ATTRIBUTION MANDATORY** | *"7.1 You agree to include the following attribution … 'Football data provided by the Football-Data.org API'"*; *"9.1 After cancellation … the Customer is not permitted to reference the football data"* |
+| **API-Football** | **RESTRICTIVE** | *"We do not provide a 'license' for the use and publication of the data … Any license or permission to publish the data must be requested by the user from the competent authorities."* |
+| **Flashscore** | **PROHIBITIVE** | *"2.2 You may not use the Site for any commercial purpose."*; 2.9 *"no extraction (copying) or utilization (making available to the public) of Database Content"*; 2.10 forbids *"aggregating, scraping or recreating it without our express consent"* |
+
+*The Odds API and Flashscore fetched directly 2026-11-11. football-data.org's
+T&C live on `/about` — both `/terms` and `/termsandconditions` return 404 —
+and state **"12.1 These Terms and Conditions become effective on June 1st,
+2018"**, so they are **eight years old**; recorded, not resolved.*
+
+> **API-FOOTBALL'S TERMS WERE NOT DIRECTLY FETCHED.**
+> `https://www.api-football.com/terms` returns **HTTP 403** to both WebFetch
+> and curl. The clauses above were read from that official page **via web
+> search**. Labelled as such, and **unclear is not permission**: what would
+> clarify it is a direct fetch plus a written answer on whether *aggregate
+> derived statistics* count as "publication of the data".
+
+**Under the strictest reading**, the two findings worth publishing most —
+ranks 1 and 2 — currently rest on **API-Football and Flashscore**, the two
+providers whose terms forbid it. They must be **re-run on football-data.co.uk
+(free, multi-book closing odds) or The Odds API** before publication.
+
+> **The binding constraint is not statistics, it is provenance.** And the
+> re-run that fixes it is the same re-run the Shin/Power check demands — **one
+> piece of work settles both.**
+
+### `PIPELINE CONSEQUENCE` — stated, unresolved
+
+| stage | feeds | cost (n=3, 2026-10-20) |
+|---|---|---|
+| `--update` — fixtures + odds capture | **the publishable findings** | **24.7 / 24.1 / 32.9 min — 43–50% of the run** |
+| `--settle` + Flashscore results | **the publishable findings** | 14.1 / 11.2 / 4.0 min, post-picks |
+| picks step — inference, value/EV gates, correlation filter | pick generation only | 11.3 / 5.4 / 21.1 min |
+| ·· the Claude review | pick generation only | **4.9 / 2.0 / 9.5 min** + tokens |
+| ML retrain, pick-level CLV | pick generation only | occasional / storage |
+
+**Stopping pick generation would save 5.4–21.1 runner minutes a day**, of
+which the Claude review is 2.0–9.5 plus its token cost. **Provider calls would
+not fall at all** — odds capture lives in `--update`, the stage that feeds the
+publishable product.
+
+> **So the saving is small and the expensive stage is the one worth keeping.**
+> The odds record is the asset; pick generation is a thin layer on top. "Stop
+> making picks to save money" is not the argument available.
+
+**AND THE TENSION, NAMED AND LEFT OPEN:**
+
+> The client Telegram channel publishes **picks and the settlement**, and that
+> was chosen **three days ago**. If the product becomes market calibration,
+> picks are not an input to it — and the channel's content is exactly what
+> would stop. **These two choices are in tension, and the resolution is
+> Niki's.** Nothing here decides it; no channel or pipeline change is made.
+
+### A RED AROSE BY ARRIVAL — THE WEEKDAY MARGIN DETERIORATED. REPORTED.
+
+Rule 8 orders STOP-and-report for anything outside this stage's scope. One
+thing:
+
+> **`test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED`
+> fails: the weekday margin is +56m and no longer clears the registered 60.**
+> It cleared at +90m when measured 2026-11-05 at n=10, and at +40m on
+> 2026-10-20 at n=8.
+
+The test demands the moved term be named rather than the figure re-pinned.
+**It is the LAG SERIES**, measured 2026-11-12:
+
+| weekday lateness | 2026-11-05 (n=10) | **now (n=15)** | moved |
+|---|---|---|---|
+| mean | 337.4 | **353.1** | **+15.7** |
+| sd | 42.1 | **46.7** | +4.6 (**3sd +13.8**) |
+| max | 389.75 | **411.62** | **+21.87** |
+| **mean+3sd** | ~463.7 | **493.3** | **≈ +29.6** |
+
+**Not the duration and not the deadline.** The duration series is n=79, mean
+29.7, max 76.70 — unchanged in character — and `schedule_deadline` references
+neither picks constant. **Five more weekday runs arrived and every one of the
+three lateness statistics got worse**, which is the same bimodal-scheduler
+story the register already holds, now with a higher upper mode.
+
+**Left red, and it is Niki's.** Moving the cron spends the 45 minutes of
+headroom that are explicitly held until n ≥ 100, and re-pinning the figure
+without an action is the absorption the guard exists to refuse. Nothing here
+touches either.
+
+*Recorded 2026-11-12 on 2026-11-11 measurements and licence fetches.
+`docs/findings-inventory.md` (new), `scripts/band_legs.py`,
+`tests/test_band_on_legs.py`. Nothing published.*

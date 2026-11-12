@@ -235,12 +235,107 @@ def test_the_ONE_SURVIVING_CELL_is_NOT_A_PLAN():
     assert MEASURED_LEGS["exchange_fixture_coverage"] < 0.10
 
 
-def test_the_VERDICT_keeps_BOTH_halves():
+def test_the_VERDICT_IS_THE_CORRECTED_ONE():
+    """CORRECTED 2026-11-11. The earlier verdict read the RAW gaps.
+
+    It said "H-BAND IS SUPPORTED" on four bands reading PRESENT, without
+    subtracting the artefact its own method produces. Not one survives.
+    """
     v = MEASURED_LEGS["verdict"]
-    assert "SUPPORTED" in v and "NOT COLLECTABLE" in v, (
-        "the verdict no longer carries both halves. The anomaly being real "
-        "and our being unable to take it are two findings, and dropping "
-        "either one misreports the stage")
+    assert "NOT SUPPORTED ON THIS METHOD" in v, (
+        "the verdict no longer states that the four PRESENT bands do not "
+        "survive the de-vigging correction. That is the finding")
+    assert "OVERDETERMINED" in v, (
+        "the verdict no longer says the collectability conclusion is "
+        "unchanged; weakening the gap does not weaken that half")
+    # the wrong one is RETIRED, not deleted, so the correction stays legible
+    sup = MEASURED_LEGS["superseded_verdict"]
+    assert "H-BAND IS SUPPORTED" in sup and "Wrong" in sup, (
+        "the superseded verdict is gone. A correction with no record of what "
+        "it corrected reads as if the error never happened")
+
+
+# ── THE DE-VIGGING ARTEFACT: THE NULL IS NOT ZERO ────────────────────────
+
+def test_the_ARTEFACT_IS_ANALYTIC_and_the_formula_holds():
+    """`gap = M*(p - 1/n)/(1+M)` for a PERFECTLY CALIBRATED book.
+
+    Derived, not fitted: `quoted_i = p_i + M/n` and the de-vig divides every
+    leg by the same `1+M`, so the residual is the whole of it. Driven here on
+    exact numbers so the formula cannot drift.
+    """
+    M = 0.066
+    for n in (2, 3):
+        for p in (0.35, 0.55, 0.85):
+            quoted = p + M / n
+            devig = quoted / (1.0 + M)
+            assert p - devig == pytest.approx(
+                M * (p - 1.0 / n) / (1.0 + M), abs=1e-12), (n, p)
+    # THE SIGN FLIPS AT 1/n, which is why the low band is negative
+    assert M * (0.45 - 0.5) / (1 + M) < 0 < M * (0.55 - 0.5) / (1 + M)
+    assert M * (0.30 - 1 / 3) / (1 + M) < 0 < M * (0.40 - 1 / 3) / (1 + M)
+
+
+def test_NOT_ONE_PRESENT_BAND_SURVIVES_THE_ARTEFACT():
+    """The correction, as the arithmetic rather than the prose."""
+    ar = MEASURED_LEGS["artefact_and_residual"]
+    bands = MEASURED_LEGS["bands"]
+    present = [k for k, v in bands.items() if v[6] == "PRESENT"]
+    assert len(present) == 4, present
+    for k in present:
+        _art, _res, lo, hi, verdict = ar[k]
+        assert verdict == "EXPLAINED BY THE DE-VIG", (
+            f"{k}: the residual verdict is now {verdict!r}. If a band has "
+            f"started surviving the correction that is a real finding and "
+            f"needs its own evidence bar")
+        assert lo < 0 < hi, (
+            f"{k}: the residual CI [{lo}, {hi}] no longer spans zero")
+
+
+def test_the_70_80_ARTEFACT_EXCEEDS_THE_GAP_that_was_reported():
+    """The sharpest form of the correction: in the band the whole FLB line of
+    work was aimed at, the method's own artefact is LARGER than the effect
+    that was reported as a finding."""
+    gap = MEASURED_LEGS["bands"]["0.70-0.80"][3]
+    art, res, _lo, _hi, _v = MEASURED_LEGS["artefact_and_residual"]["0.70-0.80"]
+    assert gap == pytest.approx(1.43, abs=0.01)
+    assert art == pytest.approx(1.62, abs=0.01)
+    assert art > gap, (
+        f"the artefact {art} no longer exceeds the reported gap {gap}; the "
+        f"correction's sharpest statement needs restating")
+    assert res < 0, f"the residual is {res}, no longer negative"
+    assert res == pytest.approx(gap - art, abs=0.02)
+
+
+def test_the_ONE_SURVIVING_RESULT_is_on_the_side_we_cannot_take():
+    """Longshots at 30-40% are OVERPRICED by 0.94pp. Collecting that means
+    LAYING, which needs an exchange, whose depth is UNAVAILABLE."""
+    art, res, lo, hi, verdict = MEASURED_LEGS[
+        "artefact_and_residual"]["0.30-0.40"]
+    assert verdict == "OVERPRICED"
+    assert res == pytest.approx(-0.94, abs=0.01)
+    assert hi < 0, f"the residual CI [{lo},{hi}] no longer excludes zero"
+    assert hi > -0.10, (
+        "the surviving result's upper bound has moved well clear of zero; it "
+        "was [-1.92,-0.02], i.e. only just significant, and that is part of "
+        "the claim")
+    # and it is the ONLY band whose CI excludes zero
+    excluding = [k for k, v in MEASURED_LEGS["artefact_and_residual"].items()
+                 if v[2] > 0 or v[3] < 0]
+    assert excluding == ["0.30-0.40"], excluding
+
+
+def test_the_BIASED_ESTIMATOR_IS_NAMED_with_its_successors():
+    """Hard rule: a method that determines the result is part of the result."""
+    assert MEASURED_LEGS["devig_method"].startswith("proportional")
+    assert MEASURED_LEGS["devig_successors"] == ("Shin", "Power")
+    lit = MEASURED_LEGS["devig_literature"]
+    assert "Whelan" in lit and "biased" in lit, (
+        "the record no longer cites the published warning that the naive "
+        "overround treatment is biased -- which was available BEFORE we "
+        "pre-registered it")
+    assert "SHIN" in MEASURED_LEGS["what_would_settle_it"].upper()
+    assert "NOT publishable" in MEASURED_LEGS["what_would_settle_it"]
 
 
 # ── 5. THREE COHORTS, NEVER POOLED ───────────────────────────────────────
