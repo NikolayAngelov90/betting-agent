@@ -38440,3 +38440,81 @@ them.
 *Recorded 2026-11-12. `tests/test_review_removed.py` (13 tests),
 `config/config.example.yaml`, `src/models/model_version.py`,
 `tests/experiment_pins.py`.*
+
+---
+
+## 2026-11-12 (IV) — STAGE 31 PART A: `INSTRUMENTED` — every snapshot carries the book's own clock
+
+Instrumentation only. `cohort_status.py` reads **`s5.22 / 7f9e82`**, unmoved
+by this commit — a test pins it.
+
+### What is stored now
+
+`odds_snapshots.book_last_update` — the bookmaker's own `last_update` for the
+quote, as the feed reports it, naive UTC. `observed_at` is when **we** fetched
+the quote; this is when **the book** last changed it. The difference is the
+quote's age.
+
+| feed | what it reports | what is stored |
+|---|---|---|
+| The Odds API | `last_update` per bookmaker **and** per market | the market's stamp; the bookmaker's only as the fallback |
+| API-Football | one `update` per **fixture** | **NULL** — that is not a bookmaker's own stamp |
+| every row before this commit | — | **NULL**, never backfilled |
+
+> **A price with no known age is `UNEVALUATED`, never fresh.** An absent,
+> empty or unparseable stamp is stored as NULL — never as our own fetch time,
+> which would give the quote an age of zero and store "we do not know" as "as
+> fresh as a price can be". A stamp *after* our observation is a clock
+> disagreement and reads `STALE`; it is not clamped to zero.
+
+`model_odds` is **not** added: with the review removed there is nothing to
+compare it with (the addendum's instruction).
+
+### The control the directive names — driven
+
+Two bookmakers in **one** response, with different `last_update`, pushed
+through `_save_game_odds` on a scratch database:
+
+| book | `observed_at` | `book_last_update` | age |
+|---|---|---|---|
+| `TheOddsAPI-pinnacle` | the same fetch | 2026-11-21 09:58:41 | — |
+| `TheOddsAPI-unibet_se` | the same fetch | 2026-11-21 03:12:05 | **6 h 46 m 36 s older** |
+
+One fetch, two ages. `observed_at` cannot tell them apart and the new column
+can. Also driven: the market stamp wins over the bookmaker stamp; the
+bookmaker stamp is the fallback; a missing stamp is NULL and reads
+`UNEVALUATED`; the `odds` table has no such column and its contents are
+unchanged; a database whose `odds_snapshots` predates the column gains it
+through the existing nullable-column migration and its old rows read NULL.
+
+### The reading on install day
+
+`measured` 2026-11-12 · production `odds_snapshots` · grain = one stored
+quote · `python -m scripts.quote_age`:
+
+| quotes | FRESH | STALE | **UNEVALUATED** |
+|---|---|---|---|
+| 251,064 | 0 | 0 | **251,064** |
+
+**The instrument is not installed in production yet**, and the script says so
+in those words rather than reporting zero stale quotes: the column is added
+the next time an agent is constructed (the first run after this commit). The
+fresh share of evaluated quotes is `UNEVALUATED`, not 0%. Fresh is registered
+as age ≤ 600 s.
+
+*Stated limits.* The first stamped quotes arrive when club football resumes —
+`spain/laliga2` on 11-13, the top divisions on 11-20/21. And `record_price`
+is documented as fail-open but only guards `session.add`; if the migration
+were ever skipped, the failure would surface at the flush and take the odds
+write with it. The same mechanism added `odds.first_seen_at` without
+incident; it is stated, not changed.
+
+Census 154→155, `capture_critical` 80→81, gate 1773→**1797**: the control
+file belongs on the capture path — it tests the odds write path itself. The
+producer-without-consumer scan fired on the new freshness helpers (14→19) and
+was cleared by wiring a consumer, `scripts/quote_age.py`, declared as a
+snapshot reader.
+
+*Recorded 2026-11-12. `src/data/models.py`, `src/data/price_history.py`,
+`src/scrapers/theodds_scraper.py`, `scripts/quote_age.py`,
+`tests/test_quote_age.py` (24 tests).*

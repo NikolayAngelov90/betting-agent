@@ -574,6 +574,19 @@ class OddsSnapshot(Base):
     selection = Column(String(50), nullable=False)
     odds_value = Column(Float, nullable=False)
     observed_at = Column(DateTime, nullable=False, default=utcnow)
+    #: Stage 31 Part A, 2026-11-12. THE BOOKMAKER'S OWN CLOCK, not ours.
+    #: `observed_at` is when WE fetched the quote; this is when THE BOOK last
+    #: changed it, as the feed reports it (naive UTC). The difference is the
+    #: quote's AGE, and it is the only thing that separates a generous price
+    #: from a slow one -- Stage 30 could not explain three Kambi books winning
+    #: 7-10pp above the anchor's fair price for want of exactly this.
+    #:
+    #: NULL MEANS UNEVALUATED, NEVER FRESH. The Odds API reports it per
+    #: bookmaker and per market; API-Football reports one `update` per FIXTURE,
+    #: which is not a bookmaker's own stamp, so its rows carry NULL. Every row
+    #: written before this column existed is NULL too and is never backfilled:
+    #: a guessed age would look like evidence.
+    book_last_update = Column(DateTime, nullable=True)
 
     __table_args__ = (
         Index('ix_odds_snapshots_key_time', 'match_id', 'bookmaker',

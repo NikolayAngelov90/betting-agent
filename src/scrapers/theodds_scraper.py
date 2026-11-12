@@ -837,6 +837,12 @@ class TheOddsScraper:
                 bm_key = f"{BOOKMAKER_PREFIX}-{bm['key']}"
                 for market in bm.get("markets", []):
                     market_key = market["key"]  # "h2h" or "totals"
+                    # Stage 31 Part A. The Odds API stamps `last_update` on
+                    # the bookmaker AND on each of its markets. The market's
+                    # is the quote's own; the bookmaker's is the newest of
+                    # its markets, so it is the fallback and never the first
+                    # choice. Neither present -> None -> UNEVALUATED.
+                    book_lu = market.get("last_update") or bm.get("last_update")
 
                     if market_key == "h2h":
                         # ── ASSIGNMENT, NOT FIRST-THRESHOLD-WINS (2026-10-10) ──
@@ -949,6 +955,7 @@ class TheOddsScraper:
                             written += self._upsert_odds(
                                 sess, match_id, bm_key, "1X2", selection, oprice,
                                 existing_index=existing_index,
+                                book_last_update=book_lu,
                             )
 
                     elif market_key == "totals":
@@ -962,6 +969,7 @@ class TheOddsScraper:
                             written += self._upsert_odds(
                                 sess, match_id, bm_key, "over_under", selection, oprice,
                                 existing_index=existing_index,
+                                book_last_update=book_lu,
                             )
 
         if session is not None:
@@ -988,8 +996,14 @@ class TheOddsScraper:
         selection: str,
         odds_value: float,
         existing_index: Optional[dict] = None,
+        book_last_update=None,
     ) -> int:
         """Insert-or-update a single Odds row. Returns 1 if written, 0 otherwise.
+
+        `book_last_update` is the bookmaker's own stamp for this quote as the
+        feed gave it. It goes to the price PATH only (`odds_snapshots`); the
+        `odds` row is unchanged, so every current-price consumer reads what it
+        read before.
 
         When `existing_index` is provided (keyed by (match_id, bookmaker,
         market_type, selection)) the existence check is done in-memory instead
@@ -1035,7 +1049,8 @@ class TheOddsScraper:
             # that overwrite semantics used to destroy. Fails open.
             _record_price(session, match_id=match_id, bookmaker=bookmaker,
                           market_type=market_type, selection=selection,
-                          odds_value=odds_value, observed_at=_now)
+                          odds_value=odds_value, observed_at=_now,
+                          book_last_update=book_last_update)
             return 1
         except Exception as e:
             logger.warning(f"TheOddsAPI upsert failed ({bookmaker} / {market_type} / {selection}): {e}")

@@ -156,7 +156,12 @@ from scripts.capture_critical import (
 #: drives `_save_picks` against a real schema on a scratch SQLite file,
 #: and a fabricated row class would prove nothing about what is saved.
 #: Being in the gate shaped one of its tests -- see the gate figure.
-CENSUS = {"files": 154, "capture_critical": 80, "not_critical": 74}
+#: RE-MEASURED 2026-11-12 (IV), the quote-age instrument (Stage 31 A):
+#: files 154 -> 155, `capture_critical` 80 -> 81, not_critical UNCHANGED
+#: at 74. `test_quote_age.py` BELONGS on the capture path and is there
+#: by four routes (database, models, price_history, scrapers): it tests
+#: the odds WRITE path itself, which is what the gate exists to protect.
+CENSUS = {"files": 155, "capture_critical": 81, "not_critical": 74}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -430,8 +435,16 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       have failed and the card would have been lost to a clean-up. It
     #       is now a SUBSET check (no undeclared Claude entry), which passes
     #       before and after the deletion, with a planted-entry control.
-    assert len(gate) == 1773, (
-        f"the gating selection is {len(gate)}, recorded 1773 — say what moved")
+    #   +24 on 2026-11-12: test_quote_age.py, Stage 31 Part A. The bookmaker's
+    #       own `last_update` is now stored with every odds snapshot, and
+    #       these drive the write path end to end on scratch SQLite: two books
+    #       in ONE response keep their own stamps, a missing stamp is NULL and
+    #       reads UNEVALUATED (never fresh), the `odds` table is untouched,
+    #       and a pre-column database gains the column through the existing
+    #       nullable migration. It changes what the capture path WRITES, so a
+    #       regression here is exactly what should stop a run.
+    assert len(gate) == 1797, (
+        f"the gating selection is {len(gate)}, recorded 1797 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the

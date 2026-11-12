@@ -216,6 +216,15 @@ _SNAPSHOT_READERS = {
     "exchange_terms.py": (
         "names the table in SIZE_FIELDS_SEARCHED, to record that it was "
         "searched for an available-size column and has none"),
+    # the QUOTE-AGE census, Stage 31 Part A, 2026-11-12. It reads three
+    # columns -- bookmaker, observed_at and the new book_last_update -- to
+    # count FRESH / STALE / UNEVALUATED quotes. No price is read, no outcome,
+    # and nothing reaches a model: it measures the instrument, and on a
+    # database the column has not reached it reports the instrument as not
+    # installed rather than as zero stale quotes.
+    "quote_age.py": (
+        "the freshness census: counts quotes by the age of the bookmaker's "
+        "own last_update. Reads timestamps only; feeds no prediction"),
     # the RESEARCH consumer, wired 2026-10-10
     "h1_collection_check.py": (
         "H1's analysis. It MEASURES the price path; it does not feed a "

@@ -18,6 +18,7 @@ a working system for a research convenience, which is the wrong way round.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from src.data.models import InjuryObservation, OddsSnapshot
@@ -26,9 +27,68 @@ from src.utils.logger import get_logger, utcnow
 logger = get_logger()
 
 
+#: A quote is FRESH when the book changed it no longer ago than this before
+#: we observed it. Registered in docs/confident-value-preregistration.md
+#: section 5, before any fresh subset existed to tune it on.
+FRESH_MAX_AGE_S = 600.0
+
+QUOTE_FRESH = "FRESH"
+QUOTE_STALE = "STALE"
+#: No `last_update` came with the quote. NOT fresh and NOT stale: unknown.
+QUOTE_UNEVALUATED = "UNEVALUATED"
+
+
+def parse_book_last_update(value):
+    """The feed's `last_update` as a naive-UTC datetime, or None.
+
+    NONE IS THE ONLY FALLBACK. Absent, empty, the wrong type or unparseable
+    all return None -- never `utcnow()`. A quote stamped with our own fetch
+    time would have age zero, and "we do not know how old this is" would be
+    stored as "this is as fresh as a price can be".
+    """
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def quote_age_seconds(observed_at, book_last_update):
+    """Seconds between the book's last change and our observation, or None.
+
+    None when either stamp is missing. A NEGATIVE age (the book's stamp is
+    after our own) is returned as it is: it is a clock disagreement, and
+    clamping it to zero would manufacture the freshest quote in the table.
+    """
+    if observed_at is None or book_last_update is None:
+        return None
+    return (observed_at - book_last_update).total_seconds()
+
+
+def quote_freshness(observed_at, book_last_update,
+                    max_age_s: float = FRESH_MAX_AGE_S) -> str:
+    """FRESH, STALE or UNEVALUATED. A price with no known age is never fresh."""
+    age = quote_age_seconds(observed_at, book_last_update)
+    if age is None:
+        return QUOTE_UNEVALUATED
+    return QUOTE_FRESH if 0.0 <= age <= max_age_s else QUOTE_STALE
+
+
 def record_price(session, *, match_id: int, bookmaker: str, market_type: str,
-                 selection: str, odds_value: float, observed_at=None) -> None:
-    """Append one price observation. Never raises."""
+                 selection: str, odds_value: float, observed_at=None,
+                 book_last_update=None) -> None:
+    """Append one price observation. Never raises.
+
+    `book_last_update` is the BOOK's own stamp for this quote, or None when
+    the feed gave none. It is stored as given and never defaulted.
+    """
     try:
         session.add(OddsSnapshot(
             match_id=int(match_id), bookmaker=str(bookmaker),
@@ -37,6 +97,7 @@ def record_price(session, *, match_id: int, bookmaker: str, market_type: str,
             # surfaces as "schema X does not exist", which is unreadable.
             odds_value=float(odds_value),
             observed_at=observed_at or utcnow(),
+            book_last_update=parse_book_last_update(book_last_update),
         ))
     except Exception as exc:                      # pragma: no cover - defensive
         logger.warning(f"price snapshot skipped for match {match_id}: {exc}")
