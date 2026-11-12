@@ -506,11 +506,367 @@ def _print_coverage(c: dict) -> None:
               f"({100 * cov / tot:5.1f}%)")
 
 
+# ══ PART B — THE BACKTEST. Fixed by 7cbbddd before any result was read. ══
+
+#: An edge above this is presumed a data error and excluded from the primary,
+#: and COUNTED. Registered; the uncapped figure is reported as a sensitivity.
+EDGE_CAP = 0.15
+SENSITIVITY_ESTIMATORS = ("proportional", "power")
+
+
+def _roi_ci(rows: List[dict], draws: int = BOOTSTRAP_DRAWS):
+    """95% CI on ROI, resampling FIXTURES. numpy, because 4,000 draws over
+    several thousand legs is slow in pure Python and identical in result."""
+    import numpy as np
+    by: Dict[int, List[float]] = defaultdict(list)
+    for r in rows:
+        by[r["mid"]].append(r["price"] * r["won"] - 1.0)
+    if len(by) < 2:
+        return None
+    sums = np.array([sum(v) for v in by.values()])
+    cnts = np.array([len(v) for v in by.values()], dtype=float)
+    rng = np.random.default_rng(20261112)
+    idx = rng.integers(0, len(sums), size=(draws, len(sums)))
+    roi = sums[idx].sum(axis=1) / cnts[idx].sum(axis=1)
+    return [float(np.percentile(roi, 2.5)), float(np.percentile(roi, 97.5))]
+
+
+def _row(rows: List[dict]) -> dict:
+    if not rows:
+        return {"n": 0, "fixtures": 0}
+    n = len(rows)
+    fixtures = len({r["mid"] for r in rows})
+    out = {
+        "n": n, "fixtures": fixtures,
+        "win_rate": sum(r["won"] for r in rows) / n,
+        "avg_odds": statistics.mean(r["price"] for r in rows),
+        "avg_fair": statistics.mean(r["fair"] for r in rows),
+        "avg_edge": statistics.mean(r["edge"] for r in rows),
+        "roi": statistics.mean(r["price"] * r["won"] - 1.0 for r in rows),
+        "ci95": _roi_ci(rows),
+    }
+    return out
+
+
+def backtest(date_from, date_until, label: str) -> dict:
+    """Every (leg, book) whose same-snapshot price can be compared with the
+    anchor's fair price, graded. All selection happens on PRICES; the result
+    is attached last and never feeds a filter."""
+    d = load(with_results=True, date_from=date_from, date_until=date_until)
+    matches, sets = d["matches"], d["sets"]
+    from src.agent.betting_agent import FootballBettingAgent
+    from src.data.market_vocabulary import canonical
+    grade = FootballBettingAgent._grade_selection
+
+    by_slot: Dict[Tuple, Dict[str, dict]] = defaultdict(dict)
+    for (mid, bm, market, line, side), st in sets.items():
+        by_slot[(mid, market, line, side)][bm] = st
+
+    cand: Dict[str, List[dict]] = {e: [] for e in
+                                   (PRIMARY_ESTIMATOR,) + SENSITIVITY_ESTIMATORS}
+    counts = defaultdict(int)
+    for (mid, market, line, side), books in by_slot.items():
+        m = matches[mid]
+        for feed, anchor in ANCHORS.items():
+            a = books.get(anchor)
+            if a is None:
+                continue
+            counts["anchor_sets"] += 1
+            fairs = {e: ESTIMATORS[e](a["q"]) for e in cand}
+            if fairs[PRIMARY_ESTIMATOR] is None:
+                counts["anchor_devig_refused"] += 1
+                continue
+            for bm, st in books.items():
+                if bm == anchor or _feed_of(bm) != feed:
+                    continue
+                if not _same_snapshot(a, st):
+                    counts["not_same_snapshot"] += 1
+                    continue
+                if st["keys"] != a["keys"]:
+                    counts["key_mismatch"] += 1
+                    continue
+                for i, key in enumerate(st["keys"]):
+                    canon = canonical(market, key)
+                    if canon is None:
+                        counts["not_canonicalisable"] += 1
+                        continue
+                    res = grade(canon[1], m["hg"], m["ag"])
+                    if res not in ("win", "loss"):
+                        counts["ungradeable_or_void"] += 1
+                        continue
+                    for e, fv in fairs.items():
+                        if fv is None:
+                            continue
+                        price = st["prices"][i]
+                        cand[e].append({
+                            "mid": mid, "leg": (market, line, side, key),
+                            "book": bm, "price": price, "fair": fv[i],
+                            "edge": price * fv[i] - 1.0,
+                            "won": 1 if res == "win" else 0,
+                            "league": m["league"], "market": market,
+                        })
+
+    # The post-hoc `platform_check` needs the graded pairs themselves, not a
+    # summary of them. A sentinel label, so no second code path builds them.
+    if label == "__candidates__":
+        return {"cand": cand, "matches": matches}
+    out = {"label": label, "from": str(date_from), "until": str(date_until),
+           "fixtures_loaded": len(matches), "counts": dict(counts),
+           "excluded": d["excluded"], "refused": d["refused"],
+           "rows_after_kickoff": d["rows_after_kickoff"], "estimators": {}}
+    for e, rows in cand.items():
+        res = {"candidates": len(rows), "thresholds": {}}
+        # the population the thresholds select FROM: every comparable leg
+        res["all_comparable"] = _row([r for r in rows
+                                      if r["book"] not in EXCHANGES])
+        for t in EDGE_THRESHOLDS:
+            q_all = [r for r in rows if r["edge"] >= t]
+            capped = [r for r in q_all if r["edge"] <= EDGE_CAP]
+            books_ = [r for r in capped if r["book"] not in EXCHANGES]
+            # POOLED: one bet per leg, the highest same-snapshot price
+            best: Dict[Tuple, dict] = {}
+            for r in books_:
+                k = (r["mid"],) + r["leg"]
+                if k not in best or r["price"] > best[k]["price"]:
+                    best[k] = r
+            pooled = list(best.values())
+            best_u: Dict[Tuple, dict] = {}
+            for r in q_all:
+                if r["book"] in EXCHANGES:
+                    continue
+                k = (r["mid"],) + r["leg"]
+                if k not in best_u or r["price"] > best_u[k]["price"]:
+                    best_u[k] = r
+            lo, hi = TARGET_ODDS_RANGE
+            per_book = defaultdict(list)
+            for r in capped:
+                per_book[r["book"]].append(r)
+            per_market = defaultdict(list)
+            for r in pooled:
+                per_market[r["market"]].append(r)
+            res["thresholds"][f"{t:.2f}"] = {
+                "pooled": _row(pooled),
+                "pooled_uncapped": _row(list(best_u.values())),
+                "over_cap_excluded": len(q_all) - len(capped),
+                "pooled_odds_1_50_2_20": _row(
+                    [r for r in pooled if lo <= r["price"] <= hi]),
+                "per_book": {bm: _row(v) for bm, v in sorted(
+                    per_book.items(), key=lambda kv: -len(kv[1]))},
+                "per_market": {mk: _row(v) for mk, v in per_market.items()},
+            }
+        out["estimators"][e] = res
+    return out
+
+
+def _fmt_row(name: str, v: dict) -> str:
+    # `_row` always sets `n` -- 0 for an empty selection -- so this is a
+    # count of zero, not a missing key.
+    if v["n"] == 0:
+        return f"    {name[:28]:28s} {'0':>6s}"
+    ci = v["ci95"]
+    cis = f"[{100 * ci[0]:+.1f},{100 * ci[1]:+.1f}]" if ci else "-"
+    return (f"    {name[:28]:28s} {v['n']:6d} {v['fixtures']:6d} "
+            f"{100 * v['win_rate']:6.1f}% {v['avg_odds']:7.3f} "
+            f"{100 * v['roi']:+7.2f}% {cis:>16s}")
+
+
+def _verdict(v: dict) -> str:
+    if v.get("n", 0) < 100 or v.get("fixtures", 0) < 50 or not v.get("ci95"):
+        return "INSUFFICIENT"
+    lo, hi = v["ci95"]
+    if lo > 0:
+        return "SUPPORTED on this period"
+    if hi < 0:
+        return "REFUTED"
+    return "NOT SUPPORTED at this n"
+
+
+def _print_backtest(r: dict) -> None:
+    print("=" * 78)
+    print(f"SHARP-ANCHOR  -  {r['label']}   kickoffs {r['from']} .. "
+          f"{r['until']} (exclusive)")
+    print("=" * 78)
+    print(f"  fixtures {r['fixtures_loaded']};  counts {r['counts']}")
+    hdr = (f"    {'':28s} {'n':>6s} {'fixt':>6s} {'win%':>7s} "
+           f"{'odds':>7s} {'ROI':>8s} {'95% CI on ROI':>16s}")
+    for e, ev in r["estimators"].items():
+        tag = "PRIMARY" if e == PRIMARY_ESTIMATOR else "sensitivity"
+        print()
+        print(f"  -- anchor de-vig: {e.upper()}  ({tag}) --  comparable "
+              f"(leg, book) pairs: {ev['candidates']}")
+        print(hdr)
+        print(_fmt_row("ALL comparable, no selection", ev["all_comparable"]))
+        for t, tv in ev["thresholds"].items():
+            print(f"    edge >= {100 * float(t):.0f}%   "
+                  f"({tv['over_cap_excluded']} pairs above the "
+                  f"{100 * EDGE_CAP:.0f}% cap excluded)")
+            print(_fmt_row("  POOLED best same-snapshot", tv["pooled"])
+                  + f"   {_verdict(tv['pooled'])}")
+            print(_fmt_row("  pooled, UNCAPPED", tv["pooled_uncapped"]))
+            print(_fmt_row("  pooled, odds 1.50-2.20",
+                           tv["pooled_odds_1_50_2_20"]))
+            if e == PRIMARY_ESTIMATOR:
+                for mk, mv in tv["per_market"].items():
+                    print(_fmt_row(f"    market {mk}", mv))
+                for bm, bv in list(tv["per_book"].items())[:40]:
+                    ex = " [EX]" if bm in EXCHANGES else ""
+                    print(_fmt_row(f"    {bm.replace('TheOddsAPI-', 'OA-')}"
+                                   f"{ex}", bv))
+
+
+# ══ THE PLATFORM DIAGNOSTIC — run AFTER the registered test, labelled so ══
+
+#: Three books on one trading platform (Kambi). Their qualifying legs win
+#: 7-10 points above the anchor's fair probability in BOTH periods, which a
+#: calibrated anchor rules out as a pricing edge.
+KAMBI_FAMILY = ("TheOddsAPI-unibet_se", "TheOddsAPI-unibet_nl",
+                "TheOddsAPI-leovegas_se")
+
+
+def platform_check() -> dict:
+    """POST-HOC, and it says so. The registered test ran once and its verdict
+    stands; this re-reads both periods to ask ONE question the per-book rows
+    raised -- how much of the pooled figure rests on one platform family
+    whose legs violate the anchor's calibration."""
+    r = backtest(DEV_FROM, HOLDOUT_UNTIL, "__candidates__")
+    rows = r["cand"][PRIMARY_ESTIMATOR]
+    out = {"post_hoc": True, "by_selection": {}, "pooled_without_family": {}}
+    sel = [x for x in rows if 0.02 <= x["edge"] <= EDGE_CAP
+           and x["market"] == "1X2"]
+    for fam, pred in (("kambi_family", lambda b: b in KAMBI_FAMILY),
+                      ("other_bookmakers",
+                       lambda b: b not in KAMBI_FAMILY
+                       and b not in EXCHANGES)):
+        for key in ("Home", "Draw", "Away"):
+            v = [x for x in sel if pred(x["book"]) and x["leg"][3] == key]
+            if v:
+                out["by_selection"][f"{fam}|{key}"] = {
+                    "n": len(v),
+                    "win_rate": sum(x["won"] for x in v) / len(v),
+                    "avg_fair": statistics.mean(x["fair"] for x in v),
+                    "roi": statistics.mean(x["price"] * x["won"] - 1.0
+                                           for x in v),
+                }
+    for lab, lo, hi in (("development", DEV_FROM, HOLDOUT_FROM),
+                        ("holdout", HOLDOUT_FROM, HOLDOUT_UNTIL)):
+        for t in EDGE_THRESHOLDS:
+            best: Dict[Tuple, dict] = {}
+            for x in rows:
+                if x["book"] in KAMBI_FAMILY or x["book"] in EXCHANGES:
+                    continue
+                if not (t <= x["edge"] <= EDGE_CAP):
+                    continue
+                d = r["matches"][x["mid"]]["kickoff"].date()
+                if not (lo <= d < hi):
+                    continue
+                k = (x["mid"],) + x["leg"]
+                if k not in best or x["price"] > best[k]["price"]:
+                    best[k] = x
+            out["pooled_without_family"][f"{lab}|{t:.2f}"] = _row(
+                list(best.values()))
+    return out
+
+
+#: THE REGISTRATION. Committed before any result was read for this analysis.
+PREREGISTRATION_COMMIT = "7cbbddd"
+
+#: WHAT STAGE 30 MEASURED. `measured` 2026-11-12. Units: probability points
+#: for calibration gaps, ROI as a fraction of stake, fixtures bootstrap 4,000.
+MEASURED = {
+    "measured": "2026-11-12",
+    "odds_era": ("2026-02-28", "2026-11-09"),
+    # ── PART A.1: the synthetic control (worst |gap| in any band, pp) ────
+    "control": {
+        "diagonal_is_zero": True,
+        "shin_equals_additive_two_way": True,
+        "proportional_on_additive_2way_6.6": 2.6004,
+        "proportional_on_additive_3way_6.6": 2.7593,
+        "shin_on_additive_3way_3.5": 0.3864,
+        "shin_on_additive_3way_6.6": 0.7209,
+        "power_on_additive_3way_6.6": 0.8507,
+        "note": ("each estimator is exact ONLY on the margin model it "
+                 "inverts. On a THREE-way additive book none of "
+                 "proportional, power and Shin is exactly zero; the additive "
+                 "estimator is, by construction. So the choice is a claim "
+                 "about which margin model real books follow"),
+    },
+    # ── PART A.2: outcome-free estimator evidence (weighted |dev|, pp) ───
+    "select": {
+        "TheOddsAPI-pinnacle": {"pairs": 2866, "shin": 0.100,
+                                "proportional": 0.193, "additive": 0.192,
+                                "power": 0.210},
+        "Pinnacle": {"pairs": 1006, "shin": 0.206, "proportional": 0.148,
+                     "additive": 0.244, "power": 0.314,
+                     "note": "cross-feed pairs inside 120s; MIXED"},
+    },
+    # ── PART A.3 ─────────────────────────────────────────────────────────
+    "coverage": {"fixtures": 4859, "anchor_any": 4666, "share": 0.960,
+                 "per_market": {"1X2": 4016, "over_under": 4666,
+                                "team_goals": 3996, "btts": 674},
+                 "rows_after_kickoff_dropped": 19238},
+    # ── PART B: the registered test and its exploratory surround ─────────
+    "anchor_calibration_all_comparable": {
+        "development": {"n": 162090, "win_rate": 0.4100, "fair": 0.4094,
+                        "claimed_edge": -0.0777, "roi": -0.0770},
+        "holdout": {"n": 90655, "win_rate": 0.3988, "fair": 0.3987,
+                    "claimed_edge": -0.0793, "roi": -0.0959},
+    },
+    "development_pooled": {        # exploratory; decides nothing
+        "0.02": {"n": 691, "win": 0.388, "odds": 4.029, "roi": 0.1142,
+                 "ci": (-0.018, 0.257)},
+        "0.03": {"n": 474, "win": 0.373, "odds": 4.433, "roi": 0.1111,
+                 "ci": (-0.061, 0.291)},
+        "0.05": {"n": 272, "win": 0.368, "odds": 4.615, "roi": 0.0021,
+                 "ci": (-0.205, 0.239)},
+    },
+    "holdout_pooled": {            # 0.03 is THE REGISTERED TEST
+        "0.02": {"n": 419, "win": 0.401, "odds": 4.212, "roi": 0.1192,
+                 "ci": (-0.037, 0.281)},
+        "0.03": {"n": 247, "fixtures": 219, "win": 0.336, "odds": 4.961,
+                 "roi": 0.0591, "ci": (-0.165, 0.294)},
+        "0.05": {"n": 100, "win": 0.300, "odds": 6.472, "roi": 0.1520,
+                 "ci": (-0.265, 0.585)},
+    },
+    "registered_verdict": "NOT SUPPORTED at this n",
+    "holdout_primary_by_estimator": {"shin": 0.0591, "power": 0.1190,
+                                     "proportional": -0.0395},
+    "holdout_odds_1_50_2_20": {
+        "0.02": {"n": 108, "roi": 0.2136, "ci": (0.047, 0.384)},
+        "0.03": {"n": 54, "roi": 0.1924, "ci": (-0.051, 0.427)},
+        "label": "SECONDARY and exploratory; about thirty looks declared",
+    },
+    "kambi_family": {
+        "post_hoc": True,
+        "home_legs": {"n": 163, "win": 0.399, "fair": 0.330},
+        "away_legs": {"n": 273, "win": 0.337, "fair": 0.243},
+        "holdout_primary_without_family": {"n": 182, "roi": -0.0426,
+                                           "ci": (-0.273, 0.193)},
+        "development_primary_without_family": {"n": 388, "roi": 0.0116,
+                                               "ci": (-0.163, 0.196)},
+        "reading": (
+            "UNEXPLAINED, not an edge. Three books on one platform win 7-10 "
+            "points above the anchor's fair probability on Home and Away "
+            "legs in both periods, about four standard errors, while the "
+            "anchor is calibrated to 0.06pp on 252,745 comparable pairs and "
+            "every other bookmaker sits at or below fair. With the family "
+            "removed the holdout primary is negative. What would settle it: "
+            "the per-bookmaker `last_update` The Odds API returns and this "
+            "scraper does not store, to tell a stale quote from a mis-keyed "
+            "one"),
+    },
+}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--control", action="store_true")
     ap.add_argument("--select", action="store_true")
     ap.add_argument("--coverage", action="store_true")
+    ap.add_argument("--dev", action="store_true")
+    ap.add_argument("--platform-check", action="store_true",
+                    help="POST-HOC diagnostic of the Kambi-family rows")
+    ap.add_argument("--open-holdout", action="store_true",
+                    help="THE SEAL. Registered to run once.")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     if a.control:
@@ -533,6 +889,24 @@ def main() -> int:
             print(json.dumps(c, indent=1, default=str))
         else:
             _print_coverage(c)
+        return 0
+    if a.platform_check:
+        print(json.dumps(platform_check(), indent=1, default=str))
+        return 0
+    if a.dev:
+        r = backtest(DEV_FROM, HOLDOUT_FROM, "DEVELOPMENT (exploratory)")
+        if a.json:
+            print(json.dumps(r, indent=1, default=str))
+        else:
+            _print_backtest(r)
+        return 0
+    if a.open_holdout:
+        r = backtest(HOLDOUT_FROM, HOLDOUT_UNTIL,
+                     "HOLDOUT (the registered test)")
+        if a.json:
+            print(json.dumps(r, indent=1, default=str))
+        else:
+            _print_backtest(r)
         return 0
     ap.print_help()
     return 0

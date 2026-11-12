@@ -149,7 +149,7 @@ from scripts.capture_critical import (
 #: because `scripts/market_mix.py` keeps every database and
 #: `market_spec` import INSIDE its functions, so importing it reaches
 #: nothing on the capture path.
-CENSUS = {"files": 152, "capture_critical": 79, "not_critical": 73}
+CENSUS = {"files": 153, "capture_critical": 79, "not_critical": 74}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -536,8 +536,18 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       over it; one real offender was found and fixed.
     #       GATE UNCHANGED at 1732: both keep their database work inside
     #       functions, verified through `classify()` (critical=False, via=[]).
-    assert len(nong) == 1073, (
-        f"the non-gating selection is {len(nong)}, recorded 1073")
+    #   +31 on 2026-11-12: test_sharp_anchor.py, Stage 30. The synthetic
+    #       control the band test lacked is DRIVEN here, not read off pinned
+    #       numbers: four de-vigging estimators against a perfectly
+    #       calibrated book under four margin models, each exact only on the
+    #       model it inverts. Also the seal (the outcome-free steps load
+    #       WITHOUT the score columns, read from the AST), the registered
+    #       verdict, and the residual harness's own controls -- zero features
+    #       reproduces the market exactly, a planted feature is found, noise
+    #       is not. GATE UNCHANGED at 1760: `src/evaluation/devig.py` is pure
+    #       stdlib and both scripts import their database work in functions.
+    assert len(nong) == 1104, (
+        f"the non-gating selection is {len(nong)}, recorded 1104")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

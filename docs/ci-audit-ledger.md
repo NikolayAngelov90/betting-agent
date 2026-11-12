@@ -38102,3 +38102,213 @@ touches either.
 *Recorded 2026-11-12 on 2026-11-11 measurements and licence fetches.
 `docs/findings-inventory.md` (new), `scripts/band_legs.py`,
 `tests/test_band_on_legs.py`. Nothing published.*
+
+---
+
+## 2026-11-12 (II) — STAGE 30: sharp anchor, residual harness, two components
+
+Measurement only. No config, threshold, model or cohort change:
+`cohort_status.py` reads **`s5.21 / 52678c`**, unmoved. Pre-registration
+**`7cbbddd`**, committed before any result was read for this analysis.
+
+The odds era is **2026-02-28 … 2026-11-09** — eight months. Every figure below
+that touches a price lives inside it.
+
+### `FAIR PRICE` — with the control result
+
+**THE SYNTHETIC CONTROL.** A perfectly calibrated book quoted under four margin
+models, de-vigged by four estimators. Worst absolute calibration gap in any
+band, probability points; `*` marks the estimator that inverts that model:
+
+| 3-way, margin 6.6% — book quotes | proportional | additive | power | Shin |
+|---|---|---|---|---|
+| multiplicative | **0.0000\*** | 2.9414 | 3.3245 | 2.1646 |
+| additive (equal shares) | **2.7593** | **0.0000\*** | 0.8507 | 0.7209 |
+| power | 3.0455 | 0.9691 | **0.0000\*** | 1.0257 |
+| Shin | 2.0701 | 0.7347 | 1.0841 | **0.0000\*** |
+
+> **Every estimator is exact on the model it inverts and fails the others.**
+> **Proportional fails the additive book by 1.4–2.8pp** — the band test's
+> error, reproduced on demand, with the band test's own shape (negative low,
+> positive high).
+
+Two things the control showed that were not assumed:
+
+* **Shin and additive are the same estimator for two-way sets** — 0.0000 in
+  both directions. A known identity, driven.
+* **On a THREE-way additive book no estimator among proportional, power and
+  Shin is exactly zero** (Shin leaves 0.39pp at a 3.5% margin). Only the
+  additive estimator is, by construction. So "which estimator" is a claim
+  about *which margin model real books follow*, and that needs evidence.
+
+**THE EVIDENCE, OUTCOME-FREE.** Each estimator on the anchor's quotes against
+the **same-snapshot exchange price** (~1% overround, so its fair price is
+nearly estimator-free). Weighted absolute band deviation, pp:
+
+| anchor | pairs | **Shin** | proportional | additive | power |
+|---|---|---|---|---|---|
+| `TheOddsAPI-pinnacle` (same feed) | 2,866 | **0.100** | 0.193 | 0.192 | 0.210 |
+| `Pinnacle` (cross-feed inside 120s) | 1,006 | 0.206 | **0.148** | 0.244 | 0.314 |
+
+**Shin is primary**: clearly flattest on the same-feed anchor. **On the
+API-Football anchor the evidence is MIXED** and is recorded as mixed.
+
+**AND REAL OUTCOMES CORROBORATE IT, by a different route** (Part C's
+calibration slope, home-win, n=4,001): **Shin +0.043 [−0.038, +0.124]**, power
++0.004 [−0.078, +0.085], **proportional +0.096 [+0.016, +0.175]** — the one
+estimator the synthetic control fails is the one whose slope excludes zero.
+
+**COVERAGE.** An anchor leg set on **4,666 of 4,859 fixtures (96.0%)**: 1X2
+4,016, over/under 4,666, team goals 3,996, BTTS 674; 86–100% in every
+configured league. **19,238 rows written at or after kickoff are dropped** —
+an in-play price knows the score.
+
+**SAME-SNAPSHOT IS A PROPERTY OF THE FEED.** Within a feed 97.8–99.8% of rows
+sit inside 120s (median 0.0s); **across feeds the median is 255s and p90 is
+8.1 hours.** So the anchor is always the Pinnacle of the *same feed*.
+
+### `SHARP-ANCHOR` — the registered test: **NOT SUPPORTED at this n**
+
+Fixed by `7cbbddd`: unit = leg; edge = takeable price × Shin fair probability
+− 1; pooled = the highest **same-snapshot** bookmaker price per leg; edges
+above 15% excluded and counted; bootstrap over fixtures.
+
+**The anchor works.** On every comparable pair, unselected:
+
+| | n | win rate | anchor fair | claimed edge | realised ROI |
+|---|---|---|---|---|---|
+| development | 162,090 | 41.00% | 40.94% | −7.77% | **−7.70%** |
+| holdout | 90,655 | 39.88% | 39.87% | −7.93% | −9.59% |
+
+**THE HOLDOUT, opened once** (kickoffs 2026-09-01 … 11-09, 1,545 fixtures):
+
+| edge ≥ | n | fixtures | win rate | avg odds | **ROI** | 95% CI | |
+|---|---|---|---|---|---|---|---|
+| 2% | 419 | 353 | 40.1% | 4.212 | +11.92% | [−3.7, +28.1] | secondary |
+| **3%** | **247** | **219** | **33.6%** | **4.961** | **+5.91%** | **[−16.5, +29.4]** | **THE REGISTERED TEST** |
+| 5% | 100 | 90 | 30.0% | 6.472 | +15.20% | [−26.5, +58.5] | secondary |
+
+**Development** (02-28 … 08-31, exploratory, decides nothing): 2% +11.42%
+[−1.8, +25.7] n=691 · 3% +11.11% [−6.1, +29.1] n=474 · 5% +0.21%
+[−20.5, +23.9] n=272.
+
+> **The rule selects legs that do much better than unselected ones — about
+> +15 points — and that is not the same as a positive return.** Both periods'
+> point estimates are positive; neither interval excludes zero; the
+> registered verdict is **NOT SUPPORTED at this n**, exactly as I predicted in
+> the registration, though for a narrower reason than I expected.
+
+**A REGISTERED REFUTER FIRED.** Section 7: *"a positive pooled result that
+disappears when the anchor estimator changes."* The holdout primary is
+**+5.91% under Shin, +11.90% under power, and −3.95% under proportional.** The
+sign depends on the de-vig.
+
+**ODDS 1.50–2.20, reported separately as asked:** holdout 2% **n=108, +21.36%
+[+4.7, +38.4]**; 3% n=54, +19.24% [−5.1, +42.7]. Development 2% n=127, +14.06%
+[−1.8, +29.0]. **That holdout interval excludes zero and it is a SECONDARY
+look — one of about thirty declared.** It supports nothing on its own; it is
+the row a forward test would be registered on.
+
+**AND THE POOLED FIGURE LEANS ON ONE PLATFORM, WHICH IS UNEXPLAINED.** *(Post-hoc;
+the registered test ran once and stands.)* Three books on the Kambi platform —
+`unibet_se`, `unibet_nl`, `leovegas_se`:
+
+| | n | win rate | anchor fair | |
+|---|---|---|---|---|
+| Kambi family, 1X2 Home | 163 | **39.9%** | 33.0% | +6.9pp |
+| Kambi family, 1X2 Away | 273 | **33.7%** | 24.3% | **+9.4pp** |
+| all other bookmakers, 1X2 Home | 259 | 53.3% | 56.3% | −3.0pp |
+
+A calibrated anchor rules that out as a pricing edge — it is right to 0.06pp
+on 252,745 pairs and wrong by 7–10pp on these, in both periods, ~4 standard
+errors. **With the family removed the holdout primary is −4.26% [−27.3,
++19.3]** and development +1.16%. **Reported as UNEXPLAINED, not as an edge.**
+What would settle it: the per-bookmaker `last_update` The Odds API returns and
+this scraper does not store.
+
+**THE BOOKS SUPPLYING QUALIFYING PRICES, listed and stopped** (holdout, ≥2%,
+n≥15): `unibet_se` 101 · `Bet365` 100 · `1xBet` 129 · `unibet_nl` 81 ·
+`onexbet` 47 · `coolbet` 43 · `leovegas_se` 34 · `gtbets` 15; and the two
+exchanges `betfair_ex_eu` 139, `matchbook` 136 — commission not in the price,
+depth `UNAVAILABLE`. **Which are usable is Niki's answer.**
+
+### `RESIDUAL HARNESS` — per-feature deltas
+
+`outcome ~ logit(fair) as offset + one coefficient`, no intercept, walk-forward
+by month, feature standardised on the train fold. Δ = log-loss(model) −
+log-loss(market); negative would mean information beyond the price.
+
+**Positive control: zero features reproduces the market EXACTLY — Δ = 0.00000
+on both targets.** And driven on synthetic data: a planted coefficient of 0.5
+is recovered; pure noise is not.
+
+| target home-win · n=4,001, **6 folds**, scored from 2026-05-01, market LL 0.61308 | Δ log-loss | 95% CI | β (std) | 95% CI |
+|---|---|---|---|---|
+| Elo difference | +0.00023 | [−0.00033, +0.00082] | +0.057 | [−0.019, +0.132] |
+| rest difference | +0.00019 | [−0.00013, +0.00050] | −0.011 | [−0.081, +0.059] |
+| form difference | +0.00033 | [−0.00118, +0.00188] | **+0.079** | **[+0.008, +0.150]** |
+| stored model probability ᵃ | +0.00026 | [−0.00155, +0.00206] | +0.034 | [−0.091, +0.160] |
+
+ᵃ *a SELECTED subset: 1,009 settled picks with an anchor price, 474 scored,
+**2 folds**. These legs were picked because the model disagreed with the
+market.*
+
+> **No candidate adds information beyond the price.** `form_diff` is the
+> harness earning its keep: an in-sample coefficient whose interval excludes
+> zero and an out-of-sample delta that does not improve. That is the
+> difference between "significant" and "useful", and it is now a number.
+
+**Six to seven monthly folds over one eight-month odds era is thin**, and is
+stated beside every figure rather than once.
+
+### THE TWO COMPONENT MEASUREMENTS — measured, not fixed
+
+**ELO.** Replica control first: my chronological pass against the deployed
+`EloRatingSystem.fit()` — **1,450 teams, max rating difference 0.000000000.**
+1X2 log-loss out of sample, n=34,639 from 2023-07-01, draw curve refit monthly
+on prior matches only:
+
+| regression · draw curve | log-loss | vs deployed | 95% CI |
+|---|---|---|---|
+| **calendar-year · fixed (DEPLOYED)** | **1.01941** | — | — |
+| calendar-year · fitted | 1.01775 | −0.00165 | [−0.00223, −0.00106] |
+| season boundary · fixed | 1.01809 | −0.00132 | [−0.00193, −0.00070] |
+| **season boundary · fitted** | **1.01644** | **−0.00297** | **[−0.00382, −0.00210]** |
+
+Both defects are real and both are small: together **0.003 nats**, against a
+gap to the market of roughly ten times that. The fitted curve puts draws at
+29.9% for evenly matched sides against the deployed 28.0%.
+
+> **`matches.season` MIXES TWO LABEL FORMATS IN 31 LEAGUES, AND IT INVERTED MY
+> FIRST MEASUREMENT.** Keyed on the stored label, 492 of 1,343 teams
+> flip-flopped between `2023/2024` and `2023` and were regressed **7,840 times
+> against 3,221 real transitions** — and the season variant measured
+> **+0.0058 WORSE** than deployed. The defect was mine. The key is now derived
+> from the date and the league's own fixture calendar, and nothing reads the
+> stored label.
+
+*Stated limitation: the summer-league rule also classes
+`bulgaria/efbet-league` and `netherlands/eerste-divisie` as calendar-year.*
+
+**xG.** Coverage today **4.6%** (1,794 of 39,361 completed matches), between
+0% and 11.6% per league. An Understat backfill would raise it to **24.7%** —
+and only by taking **five** leagues to ~100%; the other twenty-five are
+untouched.
+
+> **THE BACKFILL IS NOT PROPOSED. Understat's terms are UNOBTAINED.**
+> `understat.com` returned a maintenance placeholder — *"We will come back
+> soon"* — on 2026-11-12, and a search found only third-party scrapers and
+> libraries, none quoting the site's own position. Unclear is not permission.
+> Nothing was scraped.
+
+### WHAT THIS STAGE DID NOT DO
+
+Adopted nothing. `elo_system.py` still regresses on the calendar year and
+still uses `max(0.15, 0.28 − |diff|/2000)` — a test pins both. No estimator
+replaces `market_spec.devig` in the prediction path: `src/evaluation/devig.py`
+is imported by measurement scripts only. No venue, no rule, no threshold.
+Census 152→153, non-gating 1073→1104, gate unchanged at 1760.
+
+*Recorded 2026-11-12. `src/evaluation/devig.py`, `scripts/sharp_anchor.py`,
+`scripts/residual_harness.py`, `tests/test_sharp_anchor.py` (31 tests),
+`docs/sharp-anchor-preregistration.md` (`7cbbddd`).*
