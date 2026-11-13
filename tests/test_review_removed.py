@@ -88,21 +88,42 @@ def _service(config) -> MatchBriefingService:
     return svc
 
 
-def test_the_REVIEW_IS_OFF_in_the_DEPLOYED_config():
-    """`config.example.yaml`, because CI copies it over the local file."""
-    b = yaml.safe_load(pathlib.Path(EXAMPLE).read_text(
-        encoding="utf-8"))["briefings"]
-    assert b["enabled"] is False
-    assert b["finalize_picks"] is False
-    # `api_fallback` IS LEFT AS IT WAS, deliberately. It was set false here
-    # first, and `test_pick_review.py::test_claude_code_short_circuits_after_
-    # session_limit` went red: with the fallback off, an exhausted session is
-    # NOT short-circuited and every remaining unit respawns a doomed process
-    # (2 spawns where 1 is asserted). That is a latent defect in a path the
-    # two flags above now close, and it is REPORTED, not fixed -- so the edit
-    # that exposed it was withdrawn rather than the test relaxed. The driven
-    # control below shows no call is made whatever this key holds.
-    assert "api_fallback" in b
+#: The values the `briefings:` block held when it was DELETED at s5.23
+#: (2026-11-13), read from config.example.yaml at commit 3db1099.
+BRIEFINGS_HELD = {"enabled": False, "finalize_picks": False,
+                  "api_fallback": True, "backend": "claude_code",
+                  "language": "Bulgarian"}
+
+
+def test_the_BRIEFINGS_BLOCK_IS_DELETED_from_the_DEPLOYED_config():
+    """s5.23: deleted rather than tracked. `config.example.yaml`, because CI
+    copies it over the local file."""
+    cfg = yaml.safe_load(pathlib.Path(EXAMPLE).read_text(encoding="utf-8"))
+    assert "betting" in cfg, "anchor: the deployed config was read"
+    assert set(cfg).isdisjoint({"briefings"}), sorted(cfg)
+
+
+def test_every_CODE_DEFAULT_equals_the_value_its_DELETED_KEY_held():
+    """Deleting the block must change nothing. From the AST of
+    `match_briefing.py`: every `config.get("briefings.X", default)` names a
+    key that was in the block, and its default is the value that key held --
+    so the review stays off, the fallback stays as it was, and nothing that
+    reads one of these keys behaves differently with the block gone. The
+    first two defaults were True; left that way, deleting the block would
+    have switched the review back ON."""
+    src = pathlib.Path("src/reporting/match_briefing.py").read_text(
+        encoding="utf-8")
+    reads = {}
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") \
+                == "get" and node.args and isinstance(node.args[0],
+                                                      ast.Constant) \
+                and str(node.args[0].value).startswith("briefings."):
+            key = node.args[0].value.split(".", 1)[1]
+            assert len(node.args) == 2, f"briefings.{key} has no default"
+            reads[key] = ast.literal_eval(node.args[1])
+    assert set(reads) == set(BRIEFINGS_HELD), sorted(reads)
+    assert reads == BRIEFINGS_HELD
 
 
 def test_DRIVEN_no_Claude_call_is_made_under_the_deployed_config():
@@ -117,6 +138,7 @@ def test_KNOWN_WRONG_the_same_driver_TRIPS_when_the_review_is_ON(tmp_path):
     hit a tripwire -- otherwise the test above passes because the traps are
     not on the path, not because the path is closed."""
     cfg = yaml.safe_load(pathlib.Path(EXAMPLE).read_text(encoding="utf-8"))
+    cfg.setdefault("briefings", {})
     cfg["briefings"]["enabled"] = True
     cfg["briefings"]["finalize_picks"] = True
     f = tmp_path / "on.yaml"
@@ -126,35 +148,18 @@ def test_KNOWN_WRONG_the_same_driver_TRIPS_when_the_review_is_ON(tmp_path):
         asyncio.run(svc.finalize_picks_with_claude([_Pick()]))
 
 
-def test_the_CALL_SITE_IS_GATED_ON_BOTH_FLAGS():
-    """From the AST: the one call to `finalize_picks_with_claude` in the
-    picks path sits inside an `if` that reads both `briefings.enabled` and
-    `briefings.finalize_picks`. So with either false the service is not even
-    constructed."""
+def test_the_PICKS_PATH_HAS_NO_REVIEW_CALL_SITE():
+    """s5.23: the call site is gone, not gated. From the AST of the agent:
+    no call to `finalize_picks_with_claude` anywhere -- ANCHORED by the
+    manual `--briefing` command, which still constructs the service, so a
+    scan that found nothing because it read the wrong file would fail
+    here."""
     src = pathlib.Path("src/agent/betting_agent.py").read_text(
         encoding="utf-8")
-    tree = ast.parse(src)
-    guarded = 0
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        body_calls = [c for c in ast.walk(node) if isinstance(c, ast.Call)
-                      and getattr(c.func, "attr", "")
-                      == "finalize_picks_with_claude"]
-        if not body_calls:
-            continue
-        test_src = ast.get_source_segment(src, node.test) or ""
-        if ("briefings.enabled" in test_src
-                and "briefings.finalize_picks" in test_src):
-            guarded += 1
-    all_calls = [c for c in ast.walk(tree) if isinstance(c, ast.Call)
-                 and getattr(c.func, "attr", "")
-                 == "finalize_picks_with_claude"]
-    assert len(all_calls) == 1, (
-        f"{len(all_calls)} call sites reach the review; one was audited")
-    assert guarded >= 1, (
-        "the review call is no longer inside an `if` reading both flags, so "
-        "the config switch does not close it")
+    calls = [getattr(c.func, "attr", None) or getattr(c.func, "id", "")
+             for c in ast.walk(ast.parse(src)) if isinstance(c, ast.Call)]
+    assert "MatchBriefingService" in calls
+    assert calls.count("finalize_picks_with_claude") == 0
 
 
 def test_the_REASON_IS_A_NUMBER_and_the_parts_add_up():
@@ -205,18 +210,17 @@ def test_KNOWN_WRONG_the_workflow_scan_SEES_a_planted_entry():
     assert not _claude_tokens(planted) <= set(UNUSED_AFTER_REMOVAL)
 
 
-def test_the_COHORT_MOVED_BY_THE_REVISION_and_the_GAP_IS_RECORDED():
-    """No `briefings.*` key is tracked, so the flag moves no fingerprint: the
-    cohort moves by the revision bump alone, and that gap is reported."""
-    from src.models.model_version import CODE_REVISION, TRACKED_KEYS
-    from tests.experiment_pins import (CODE_REVISION_PIN,
-                                       FROZEN_MODEL_VERSION)
-    assert CODE_REVISION == CODE_REVISION_PIN == "s5.22"
-    assert FROZEN_MODEL_VERSION.endswith("7f9e82")
-    tracked_briefings = [k for k in TRACKED_KEYS if k.startswith("briefings.")]
-    assert tracked_briefings == [], (
-        "a briefings key is now tracked; the reported gap has been closed "
-        "and the s5.22 entry's wording needs restating")
+def test_the_REVIEW_REMOVAL_is_the_PREVIOUS_cohort_and_its_GAP_is_RECORDED():
+    """s5.22 moved by the revision bump alone, because no `briefings.*` key
+    was tracked. At s5.23 the keys are deleted, not tracked -- so the gap is
+    closed by removal, and the record of it stays."""
+    from src.models.model_version import TRACKED_KEYS
+    from tests.experiment_pins import (PREVIOUS_CODE_REVISION,
+                                       PREVIOUS_MODEL_VERSION)
+    assert PREVIOUS_CODE_REVISION == "s5.22"
+    assert PREVIOUS_MODEL_VERSION.endswith("7f9e82")
+    assert "betting.selection_mode" in TRACKED_KEYS, "anchor: keys were read"
+    assert [k for k in TRACKED_KEYS if k.startswith("briefings.")] == []
 
 
 # ---------------------------------------------------------------- the save
@@ -263,10 +267,10 @@ def test_DRIVEN_picks_are_STILL_SAVED_one_per_fixture_and_UNREVIEWED(tmp_path):
     assert deployed["max_picks_per_match"] == 1
 
 
-def test_the_SAVE_HAPPENS_BEFORE_the_review_site_in_the_picks_path():
-    """From the AST of `main()`: the `get_daily_picks` call (which saves)
-    precedes the gated review block. So closing the gate removes a step that
-    ran AFTER the save and leaves the save itself untouched."""
+def test_the_PICKS_PATH_SAVES_and_SENDS_with_NO_review_between():
+    """From the AST of `main()`: picks are produced by `get_daily_picks` and
+    sent by `send_daily_picks`, and nothing that reviews them is called in
+    between, because nothing that reviews them is called at all."""
     src = pathlib.Path("src/agent/betting_agent.py").read_text(
         encoding="utf-8")
     tree = ast.parse(src)
@@ -275,12 +279,9 @@ def test_the_SAVE_HAPPENS_BEFORE_the_review_site_in_the_picks_path():
         return [c.lineno for c in ast.walk(tree) if isinstance(c, ast.Call)
                 and getattr(c.func, "attr", "") == attr]
 
-    review = _lines("finalize_picks_with_claude")
-    assert len(review) == 1
-    saves_before = [ln for ln in _lines("get_daily_picks") if ln < review[0]]
-    assert len(saves_before) >= 1, (
-        "no get_daily_picks call precedes the review site; the order this "
-        "control describes has changed")
+    assert len(_lines("get_daily_picks")) >= 1
+    assert len(_lines("send_daily_picks")) >= 1
+    assert _lines("finalize_picks_with_claude") == []
 
 
 # ---------------------------------------------------------------- the card

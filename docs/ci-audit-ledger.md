@@ -38936,3 +38936,87 @@ writes, so it belongs on the capture path.
 *Recorded 2026-11-13. `src/data/pick_runs.py`, `src/data/models.py`
 (`PickRun`), `scripts/pipeline_loss_alert.py`, `src/agent/betting_agent.py`,
 `src/reporting/telegram_bot.py`, `tests/test_zero_pick_states.py`.*
+
+---
+
+## 2026-11-13 (III) — STAGE 32 PART B: `SWITCHED` — `confident_value` at P_min 0.54, cohort s5.23
+
+One switch, one bump. `cohort_status.py` reads **`s5.23 /
+stage5_baseline_20260807.5bca73`** (was `s5.22 / 7f9e82`).
+
+### The decision, recorded in the operator's words
+
+**Switched — not because an edge was found. None was.** It is switched
+because the standard rule's hit rate is bought with prices below 1.70 that he
+has rejected.
+
+| Stage 31 holdout, kickoffs 2026-09-01 … 11-09, grain = pick | n | hit rate | avg odds | ROI |
+|---|---|---|---|---|
+| standard rule (the model's pick, as saved) | 1,456 | 58.3% [55.8, 60.9] | **1.63** | **−5.5% [−9.6, −1.2]** |
+| `confident_value`, P_min 0.54 | 448 | 57.4% [52.7, 61.8] | 1.73 | −0.5% [−8.5, +7.2] |
+
+**Expected on the holdout, and therefore going forward: ~57% hit rate at
+~1.73, ROI near zero with an interval that includes zero.** 74% of the
+standard rule's holdout picks were below 1.70.
+
+### What changed, in one commit
+
+* `config.example.yaml`: `selection_mode: confident_value`, `p_min: 0.54`,
+  `min_price: 1.70` (CI copies it over the local file).
+* **`TRACKED_KEYS` gains the selection keys**, so the fingerprint moves with
+  the switch: `betting.selection_mode`, `…confident_value.min_price`,
+  `…p_min` — the three named — **and `…require_agreement` and `…weights`**,
+  because each changes which leg is picked and leaving one out would repeat
+  the `briefings.*` gap. A driven test changes each of the five and requires
+  the fingerprint to move.
+* **`briefings.*` was never fingerprinted — and is deleted, not tracked.**
+  The block could not simply be removed while the review's call site read
+  it: two of its code defaults were `True`, so deleting the keys would have
+  switched the review **back on**. So the call site is removed from the
+  picks path and every remaining default is set to the value its key held
+  (`enabled` False, `finalize_picks` False, `api_fallback` True, `backend`
+  claude_code, `language` Bulgarian); a test reads every `briefings.*`
+  default from the AST and requires equality with the deleted values.
+* `CODE_REVISION` **s5.22 → s5.23**; invariant 6b and the four revision pins
+  moved in this commit, the argument beside each.
+
+### The controls — driven on the deployed path
+
+`_cfg()` with **no override** is `config.example.yaml` as CI ships it.
+
+| control | how |
+|---|---|
+| no pick below 1.70 | three slates — a qualifying one, a short-priced one where the 1.40 favourite is by far the likeliest, a long-priced one: every pick ≥ 1.70 |
+| none below 0.54 | every pick's blended probability ≥ 0.54 on the same slates |
+| at most one per fixture | ≤ 1 pick per call on every slate |
+| empty list on a day with nothing qualifying | no odds, no anchor, the short slate: `[]`, no error |
+| a qualifying fixture gets its pick | the positive half, so the bounds are not met by an empty list |
+| flag off is byte-identical | the key `standard` and the key absent, against `find_value_bets` directly; the deployed file differs |
+
+### The standard rule keeps being computed and stored — never sent
+
+Under `confident_value`, `_recommendations_for_fixture` also runs the
+standard rule for every fixture — `find_value_bets`, then the forced pick if
+that found nothing — and after the real picks are saved,
+`_save_standard_shadow` stores its top pick per fixture in a new table,
+**`shadow_picks`**: ranked by `standard_rank_key`, now one module-level
+definition that `finalize_picks` uses too. Never in `saved_picks`, never on
+the card, never staked; graded on read against the match score, so
+settlement is untouched.
+
+Driven on scratch SQLite: the new mode stores the standard pick for a fixture
+where it picked (and the two differ) and for one where it picked nothing (a
+forced standard pick); `saved_picks` stays empty; a re-run writes nothing new;
+the standard mode stores nothing (known-wrong control); a standard rule that
+raises costs the real pick nothing.
+
+*Not reproduced by the shadow, stated:* the fixture-identity grouping of twin
+rows and the picks already saved earlier the same day, both of which
+`finalize_picks` applies to real picks. The exposure cap is 0 in the deployed
+config and the correlation filter needs two picks on one match. The sharded
+path stores no shadow; CI runs unsharded.
+
+*Recorded 2026-11-13. `config/config.example.yaml`,
+`src/models/model_version.py`, `tests/experiment_pins.py`,
+`src/agent/betting_agent.py`, `src/data/models.py` (`ShadowPick`),
+`src/reporting/match_briefing.py`, `tests/test_standard_shadow.py`.*

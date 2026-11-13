@@ -13,9 +13,10 @@ this file pins the rule; the second half drives the flag:
                  fixture, and a fixture with nothing qualifying yields NO
                  picks and NO error
 
-NOTHING IS SWITCHED ON. `betting.selection_mode` is `standard` in the deployed
-config, the new keys are not in TRACKED_KEYS, and the fingerprint is the one
-Part G left.
+SWITCHED ON AT s5.23 (Stage 32, 2026-11-13). `betting.selection_mode` is
+`confident_value` in the deployed config, the selection keys are in
+TRACKED_KEYS, and the controls below are driven ON THE DEPLOYED PATH -- the
+YAML exactly as shipped, no override.
 """
 import ast
 import pathlib
@@ -324,15 +325,14 @@ def _cfg(over=None, drop=()):
     return SimpleNamespace(get=get, data=data, betting=data["betting"])
 
 
-def test_the_DEPLOYED_config_says_STANDARD_and_carries_the_two_numbers():
+def test_the_DEPLOYED_config_is_SWITCHED_with_the_operators_numbers():
     c = _cfg()
-    assert c.get("betting.selection_mode") == cv.MODE_STANDARD
-    assert cv.mode_of(c) == cv.MODE_STANDARD
-    assert c.get("betting.confident_value.min_price") == 1.70
-    assert c.get("betting.confident_value.p_min") in cv.P_MIN_GRID
+    assert c.get("betting.selection_mode") == cv.MODE_CONFIDENT_VALUE
+    assert cv.mode_of(c) == cv.MODE_CONFIDENT_VALUE
     rule = cv.rule_from_config(c)
-    assert rule.lo == 1.70 and rule.p_min == c.get(
-        "betting.confident_value.p_min")
+    assert (rule.lo, rule.p_min, rule.require_agreement) == (1.70, 0.54,
+                                                             False)
+    assert rule.hi is None, "rule C: no upper bound on the taken price"
 
 
 def test_an_ABSENT_key_is_STANDARD_and_a_TYPO_is_REFUSED():
@@ -364,19 +364,48 @@ def test_MALFORMED_WEIGHTS_are_REFUSED():
                 _cfg({"betting.confident_value.weights": bad}))
 
 
-def test_NOTHING_IS_SWITCHED_ON_and_the_fingerprint_did_not_move():
+SELECTION_KEYS = ("betting.selection_mode",
+                  "betting.confident_value.min_price",
+                  "betting.confident_value.p_min",
+                  "betting.confident_value.require_agreement",
+                  "betting.confident_value.weights")
+
+
+def test_SWITCHED_the_selection_keys_are_TRACKED_and_the_cohort_is_s5_23():
     from src.models.model_version import (CODE_REVISION, TRACKED_KEYS,
                                           model_version)
     from src.utils.config import Config
     from tests.experiment_pins import (CODE_REVISION_PIN,
                                        FROZEN_MODEL_VERSION)
-    assert CODE_REVISION == CODE_REVISION_PIN
+    assert CODE_REVISION == CODE_REVISION_PIN == "s5.23"
     assert model_version(Config(EXAMPLE)) == FROZEN_MODEL_VERSION
-    new_keys = [k for k in TRACKED_KEYS
-                if "selection_mode" in k or "confident_value" in k]
-    assert new_keys == [], (
-        "the selection-mode keys are tracked now. That is what SWITCHING "
-        "requires, with a cohort bump -- it is not part of wiring the flag")
+    assert FROZEN_MODEL_VERSION.endswith("5bca73")
+    assert set(SELECTION_KEYS) <= set(TRACKED_KEYS)
+
+
+@pytest.mark.parametrize("key, value", [
+    ("betting.selection_mode", "standard"),
+    ("betting.confident_value.p_min", 0.56),
+    ("betting.confident_value.min_price", 1.80),
+    ("betting.confident_value.require_agreement", True),
+    ("betting.confident_value.weights", {"1X2": {"market": 1.0}}),
+])
+def test_DRIVEN_changing_ANY_selection_key_MOVES_THE_FINGERPRINT(key, value,
+                                                                tmp_path):
+    """The point of tracking them. `briefings.*` changed which pick was saved
+    on 27.9% of reviewed picks and moved nothing; these cannot."""
+    from src.models.model_version import fingerprint
+    from src.utils.config import Config
+    base = fingerprint(Config(EXAMPLE))
+    data = yaml.safe_load(pathlib.Path(EXAMPLE).read_text(encoding="utf-8"))
+    node = data
+    parts = key.split(".")
+    for part in parts[:-1]:
+        node = node[part]
+    node[parts[-1]] = value
+    f = tmp_path / "moved.yaml"
+    f.write_text(yaml.safe_dump(data), encoding="utf-8")
+    assert fingerprint(Config(str(f))) != base, key
 
 
 # ═══════════════════════════ the flag: driven ═══════════════════════════════
@@ -433,28 +462,73 @@ GOOD = (_rows("Pinnacle", home=1.86, draw=3.70, away=4.60, over=1.84,
 
 
 def test_FLAG_OFF_the_recommendations_are_BYTE_IDENTICAL():
-    """Three configs that all mean `standard` -- the key absent, the key
-    explicit, and the deployed file -- against `find_value_bets` called
-    directly. The known-wrong half: with the flag ON the result differs, so
-    the equality is not of two paths that both do nothing."""
-    deployed = _cfg()
-    direct = _agent(deployed, GOOD).value_calculator.find_value_bets(
+    """Two configs that mean `standard` -- the key explicit, and the key
+    absent -- against `find_value_bets` called directly. Since s5.23 the
+    deployed file is the ON case, and it differs, so the equality is not of
+    two paths that both do nothing."""
+    standard = _cfg({"betting.selection_mode": "standard"})
+    direct = _agent(standard, GOOD).value_calculator.find_value_bets(
         PRED, _odds_data(GOOD), "A vs B", {}, home_team_name="A",
         away_team_name="B", match_id=7, league="england/premier-league")
     assert direct, "the standard rule returned nothing: the equality is vacuous"
     absent = _cfg(drop=("betting.selection_mode",))
     assert absent.get("betting.selection_mode") is None
-    for config in (deployed,
-                   _cfg({"betting.selection_mode": "standard"}),
-                   absent):
+    for config in (standard, absent):
         recs, confident = _select(config, GOOD)
         assert confident is False
         assert repr(recs) == repr(direct)
     on, confident = _select(
-        _cfg({"betting.selection_mode": "confident_value",
-              "betting.confident_value.p_min": 0.50}), GOOD)
+        _cfg({"betting.confident_value.p_min": 0.50}), GOOD)
     assert confident is True
     assert on and repr(on) != repr(direct)
+
+
+# ═══════════════ the controls, DRIVEN ON THE DEPLOYED PATH (s5.23) ══════════
+#
+# `_cfg()` with NO override is config.example.yaml as CI ships it.
+
+def test_DEPLOYED_no_pick_below_1_70_and_none_below_0_54():
+    for rows in (GOOD, SHORT, OVER_LONG):
+        recs, confident = _select(_cfg(), rows)
+        assert confident is True
+        assert len(recs) <= 1, "at most one pick per fixture"
+        for rec in recs:
+            assert rec.odds >= 1.70, rec
+            assert rec.predicted_probability >= 0.54, rec
+
+
+def test_DEPLOYED_a_qualifying_fixture_GETS_its_one_pick():
+    """The positive half, so the bounds above are not satisfied by an empty
+    list: Over 2.5 at a median of 1.85 with an anchor fair near 0.55."""
+    recs, _ = _select(_cfg(), QUALIFIES)
+    assert len(recs) == 1
+    assert recs[0].odds >= 1.70 and recs[0].predicted_probability >= 0.54
+
+
+def test_DEPLOYED_a_day_with_NOTHING_QUALIFYING_is_an_EMPTY_LIST():
+    for rows in ([], _rows("Bet365") + _rows("1xBet"), SHORT):
+        recs, confident = _select(_cfg(), rows)
+        assert recs == [] and confident is True
+
+
+# 1X2 short, totals short: the favourite at 1.40 is the likeliest leg and
+# nothing at >= 1.70 reaches 0.54.
+SHORT = (_rows("Pinnacle", home=1.40, draw=4.90, away=8.00, over=1.45,
+               under=2.85)
+         + _rows("Bet365", home=1.42, draw=4.75, away=7.50, over=1.44,
+                 under=2.80))
+# long prices everywhere: nothing reaches 0.54 at all
+OVER_LONG = (_rows("Pinnacle", home=2.60, draw=3.30, away=2.80, over=2.10,
+                   under=1.76)
+             + _rows("Bet365", home=2.55, draw=3.25, away=2.75, over=2.05,
+                     under=1.75))
+# Under 2.5 at a median ~1.74 with a Pinnacle fair of ~0.55
+QUALIFIES = (_rows("Pinnacle", home=2.60, draw=3.30, away=2.80, over=2.25,
+                   under=1.72)
+             + _rows("Bet365", home=2.55, draw=3.25, away=2.75, over=2.20,
+                     under=1.74)
+             + _rows("1xBet", home=2.58, draw=3.20, away=2.78, over=2.22,
+                     under=1.76))
 
 
 def test_FLAG_ON_one_pick_at_or_above_1_70_and_at_or_above_P_MIN():
@@ -514,18 +588,29 @@ def test_FLAG_ON_the_FORCED_PICK_does_not_refill_a_zero_pick_fixture():
     tree = ast.parse(src)
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
               and n.name == "_recommendations_for_fixture")
+    # The `if` blocks that call `_forced_pick` AND assign `recommendations`.
+    # Since s5.23 there is a second call, inside `if confident:`, for the
+    # standard-rule SHADOW -- it assigns `shadow`, never `recommendations`.
+    def _assigns_recs(node):
+        return any(isinstance(a, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "recommendations"
+            for t in a.targets) for a in ast.walk(node))
     guards = [ast.get_source_segment(src, n.test) or "" for n in ast.walk(fn)
-              if isinstance(n, ast.If) and any(
+              if isinstance(n, ast.If) and _assigns_recs(n) and any(
                   isinstance(c, ast.Call)
                   and getattr(c.func, "attr", "") == "_forced_pick"
                   for c in ast.walk(n))]
     assert guards == ["not recommendations and not confident"], guards
+    forced_calls = [c for c in ast.walk(fn) if isinstance(c, ast.Call)
+                    and getattr(c.func, "attr", "") == "_forced_pick"]
+    assert len(forced_calls) == 2, "one for the pick, one for the shadow"
 
 
 def test_a_ZERO_PICK_DAY_puts_NOTHING_in_front_of_the_client():
-    """The client channel carries the card, the settlement and performance.
-    An empty card is not one of them: `send_daily_picks([])` sends the
-    client nothing, and what it does send goes to the OPERATOR channel."""
+    """With NO recorded outcome an empty card is operator content:
+    `send_daily_picks([])` sends the client nothing. Stage 32 added the one
+    case that reaches the client -- a recorded NONE_QUALIFIED or NO_FIXTURES
+    -- in tests/test_zero_pick_states.py."""
     import asyncio
 
     from src.reporting import telegram_bot as tb

@@ -207,6 +207,35 @@ class MatchAnalysis:
     injury_report: Dict
 
 
+#: The STANDARD rule's ranking: EV x confidence x agreement bonus x
+#: contrarian bonus, made total by (match_id, selection). Contrarian picks
+#: (the model disagrees with the market) get a boost when backed by strong
+#: model agreement. Module level since Stage 32 so `finalize_picks` and the
+#: stored standard-rule shadow rank by ONE definition.
+_AGREEMENT_BONUS = {"unanimous": 1.15, "solo": 1.05, "majority": 1.0,
+                    "split": 0.85, "unknown": 0.95}
+
+
+def _contrarian_bonus(r):
+    """1.0 for normal, up to 1.10 for contrarian + unanimous."""
+    cv = getattr(r, "contrarian_value", 0) or 0
+    if cv >= 1.3 and r.model_agreement == "unanimous":
+        return 1.10
+    if cv >= 1.3 and r.model_agreement == "majority":
+        return 1.05
+    return 1.0
+
+
+def standard_rank_key(r):
+    # The score alone is not a total order: ties are common, and Python's
+    # sort is stable, so (match_id, selection) makes the ranking total and
+    # therefore reproducible across fixture iteration order and sharding.
+    score = (r.expected_value * r.confidence
+             * _AGREEMENT_BONUS.get(r.model_agreement, 1.0)
+             * _contrarian_bonus(r))
+    return (-score, r.match_id, r.selection)
+
+
 class FootballBettingAgent:
     """Main agent that orchestrates all components for betting predictions.
 
@@ -1099,11 +1128,42 @@ class FootballBettingAgent:
                 coverage_score=coverage_score, low_coverage=low_coverage)
             if best:
                 recommendations = [best]
+        if confident:
+            # Stage 32 Part B: THE STANDARD RULE KEEPS BEING COMPUTED. Its
+            # candidates for this fixture -- `find_value_bets`, then the
+            # forced pick if that found nothing, exactly as `standard` would
+            # -- are stashed for `_save_standard_shadow`, which stores the
+            # top one in `shadow_picks`. NEVER returned, saved as a pick or
+            # sent: `recommendations` above is the only thing the caller
+            # gets. Failure here must not cost the real pick, so it is caught.
+            try:
+                shadow = self.value_calculator.find_value_bets(
+                    predictions, odds_data, match_name, context,
+                    home_team_name=home_team_name,
+                    away_team_name=away_team_name,
+                    match_id=match_id, league=league,
+                )
+                if not shadow:
+                    best = self._forced_pick(
+                        predictions, odds_data, match_name, context,
+                        home_team_name=home_team_name,
+                        away_team_name=away_team_name,
+                        match_id=match_id, league=league,
+                        coverage_score=coverage_score,
+                        low_coverage=low_coverage, shadow=True)
+                    shadow = [best] if best else []
+                if not hasattr(self, "_standard_shadow"):
+                    self._standard_shadow = {}
+                self._standard_shadow[match_id] = list(shadow)
+            except Exception as _sh_e:                # noqa: BLE001
+                logger.warning(
+                    f"standard-rule shadow not computed for {match_name}: "
+                    f"{_sh_e}")
         return recommendations, confident
 
     def _forced_pick(self, predictions, odds_data, match_name, context, *,
                      home_team_name, away_team_name, match_id, league,
-                     coverage_score, low_coverage):
+                     coverage_score, low_coverage, shadow=False):
         """The STANDARD rule's forced pick for a fixture with no value bet,
         or None. Extracted VERBATIM from `analyze_fixture` (Stage 32 Part A)
         so that "flag on -> zero forced picks" can be driven rather than read
@@ -1154,6 +1214,8 @@ class FootballBettingAgent:
             _basis = "market favourite (thin data)" if low_coverage else "model EV"
             _kind = ("WC pick-every-match" if _is_national
                      else f"Club pick (coverage {coverage_score:.0%})")
+            if shadow:
+                _kind = "[standard-rule shadow, NOT a pick] " + _kind
             logger.info(
                 f"{_kind}: {match_name} → {best.selection} "
                 f"@ {best.odds:.2f} (EV {best.expected_value:+.1%}, "
@@ -1498,6 +1560,7 @@ class FootballBettingAgent:
         # that far". None until a return point sets it.
         from src.data import pick_runs as _pr
         self.last_pick_run = None
+        self._standard_shadow = {}
 
         # Stage 10.3 — preflight the attribution table BEFORE anything else.
         #
@@ -1972,11 +2035,62 @@ class FootballBettingAgent:
             )
             return all_recommendations, [], []
 
-        return self.finalize_picks(
-            all_recommendations, target,
-            max_picks_per_match=(
-                max_picks_per_match if max_picks_per_match is not None
-                else int(self.config.get("betting.max_picks_per_match", 1))))
+        _cap = (max_picks_per_match if max_picks_per_match is not None
+                else int(self.config.get("betting.max_picks_per_match", 1)))
+        result = self.finalize_picks(all_recommendations, target,
+                                     max_picks_per_match=_cap)
+        # Stage 32 Part B: AFTER the real picks are saved, and only if the
+        # mode computed a shadow. It cannot affect them: they are already
+        # written, and it never raises.
+        self._save_standard_shadow(target, _cap)
+        return result
+
+    def _save_standard_shadow(self, target, cap: int = 1) -> int:
+        """Store the STANDARD rule's top pick per fixture in `shadow_picks`.
+
+        Ranked by `standard_rank_key`, the key `finalize_picks` uses, and
+        capped at `cap` per match. What it does NOT reproduce, stated: the
+        fixture-identity grouping of twin rows and the picks already saved
+        earlier today, both of which `finalize_picks` applies to the real
+        picks. The exposure cap is 0 (disabled) in the deployed config and the
+        correlation filter only acts on two picks for one match, which a cap
+        of 1 never holds. Returns the number of rows written; never raises.
+        """
+        shadow = getattr(self, "_standard_shadow", None) or {}
+        if not shadow:
+            return 0
+        try:
+            from src.data.models import ShadowPick
+            from src.models.model_version import model_version as _mv
+            version = _mv(self.config)
+            written = 0
+            with self.db.get_session() as s:
+                existing = {mid for (mid,) in s.query(ShadowPick.match_id)
+                            .filter(ShadowPick.pick_date == target,
+                                    ShadowPick.rule == "standard").all()}
+                for mid, recs in sorted(shadow.items()):
+                    if mid in existing or not recs:
+                        continue
+                    for r in sorted(recs, key=standard_rank_key)[:max(cap, 1)]:
+                        s.add(ShadowPick(
+                            pick_date=target, match_id=int(mid),
+                            rule="standard", market=r.market,
+                            selection=r.selection, odds=float(r.odds),
+                            predicted_probability=float(
+                                r.predicted_probability),
+                            expected_value=float(r.expected_value),
+                            confidence=float(r.confidence),
+                            model_agreement=r.model_agreement or "",
+                            is_forced=bool(getattr(r, "is_forced", False)),
+                            live_model_version=version))
+                        written += 1
+                s.commit()
+            logger.info(f"standard-rule shadow: {written} pick(s) stored for "
+                        f"{target} (not sent, not staked)")
+            return written
+        except Exception as exc:                      # noqa: BLE001
+            logger.warning(f"standard-rule shadow not stored: {exc}")
+            return 0
 
     def finalize_picks(self, all_recommendations, target,
                        max_picks_per_match: int = 1):
@@ -1999,20 +2113,9 @@ class FootballBettingAgent:
         Returns:
             (final_picks, newly_saved_picks, picks_dropped_by_the_exposure_cap)
         """
-        # Sort order: EV × confidence × agreement bonus × contrarian bonus.
-        # Contrarian picks (model significantly disagrees with market) get
-        # a boost when backed by strong model agreement — these are genuine
-        # edges the market is mispricing, not model errors.
-        _agreement_bonus = {"unanimous": 1.15, "solo": 1.05, "majority": 1.0, "split": 0.85, "unknown": 0.95}
-
-        def _contrarian_bonus(r):
-            """1.0 for normal, up to 1.10 for contrarian + unanimous."""
-            cv = getattr(r, "contrarian_value", 0) or 0
-            if cv >= 1.3 and r.model_agreement == "unanimous":
-                return 1.10
-            if cv >= 1.3 and r.model_agreement == "majority":
-                return 1.05
-            return 1.0
+        # Sort order: EV × confidence × agreement bonus × contrarian bonus --
+        # `standard_rank_key`, module level since Stage 32 so the stored
+        # standard-rule shadow ranks by the SAME key and cannot drift from it.
 
         # Log contrarian picks for visibility
         for r in all_recommendations:
@@ -2031,11 +2134,7 @@ class FootballBettingAgent:
         # and under sharding it changed them systematically (shard file order
         # instead of fixture order). (match_id, selection) makes the ranking
         # total and therefore reproducible.
-        def _rank_key(r):
-            score = (r.expected_value * r.confidence
-                     * _agreement_bonus.get(r.model_agreement, 1.0)
-                     * _contrarian_bonus(r))
-            return (-score, r.match_id, r.selection)
+        _rank_key = standard_rank_key
 
         all_recommendations.sort(key=_rank_key)
 
@@ -5074,24 +5173,13 @@ async def main():
                 else:
                     print("No value picks found for today.")
             else:
-                # Claude reviews EVERY pick (WC every-match + club value picks),
-                # making the final KEEP/CHANGE call on each tracked bet. No
-                # briefing article is posted (briefings.send_to_telegram=false);
-                # the picks summary below is the only Telegram output and it
-                # reflects Claude's finalized selection. Runs before the send so
-                # switches are reflected; no-ops if briefings are disabled or no
-                # Claude auth is present (model picks sent as-is).
-                if agent.config.get("briefings.enabled", True) and agent.config.get(
-                    "briefings.finalize_picks", True
-                ):
-                    try:
-                        from src.reporting.match_briefing import MatchBriefingService
-                        reviewer = MatchBriefingService(agent)
-                        await reviewer.finalize_picks_with_claude(new_picks or picks)
-                    except Exception as _rev_e:
-                        logger.warning(
-                            f"Claude pick review failed — sending model picks as-is: {_rev_e}"
-                        )
+                # THE CLAUDE PICK REVIEW IS GONE FROM THIS PATH. Switched off
+                # at s5.22 (2026-11-12) -- it reviewed 67.3% of picks, so one
+                # cohort carried two rules -- and its call site removed at
+                # s5.23 together with the `briefings:` config block it read.
+                # The keys could not simply be deleted while this read them:
+                # their code defaults were True, so deleting them would have
+                # switched the review back ON.
                 # WC mode kept the bulk summary suppressed while briefings were
                 # authoritative; with briefings off, the summary IS the output.
                 _suppress_summary = agent.config.get(

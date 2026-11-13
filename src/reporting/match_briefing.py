@@ -513,7 +513,10 @@ class MatchBriefingService:
     # ---- internals -----------------------------------------------------------
 
     def _enabled(self) -> bool:
-        if not self.config.get("briefings.enabled", True):
+        # Stage 32 (s5.23): the `briefings:` config block is DELETED. Each
+        # default below is the value its key held when it went, so deleting
+        # the block changed nothing -- a test reads every key both ways.
+        if not self.config.get("briefings.enabled", False):
             logger.info("Briefings disabled via config")
             return False
         backend = self._resolve_backend()
@@ -708,7 +711,7 @@ class MatchBriefingService:
         # Menu of selections Claude may switch the pick to (real odds only).
         odds_data, home_name, away_name = self._match_odds_and_teams(match_id)
         menu = []
-        finalize = self.config.get("briefings.finalize_picks", True)
+        finalize = self.config.get("briefings.finalize_picks", False)
         if finalize and odds_data:
             try:
                 menu = self.agent.value_calculator.available_selections(

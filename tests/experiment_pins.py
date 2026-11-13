@@ -338,29 +338,53 @@ History:
                     RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS
                     here because rule 7 orders the bump; the argument is this
                     entry.
+
+    s5.23 2026-11-13  THE SELECTION RULE IS SWITCHED to `confident_value`,
+                    P_min 0.54, taken price >= 1.70. One switch, one bump.
+
+                    THE OPERATOR'S DECISION, IN HIS WORDS: not because an edge
+                    was found -- none was -- but because the standard rule's
+                    hit rate is bought with prices below 1.70 that he has
+                    rejected. Stage 31 holdout, grain=pick: standard 58.3% at
+                    1.63, ROI -5.5% [-9.6, -1.2]; the new rule 57.4% at 1.73,
+                    ROI -0.5% [-8.5, +7.2], 448 picks in 56 days. EXPECTED:
+                    ~57% at ~1.73, ROI near zero, its interval including zero.
+
+                    THE FINGERPRINT MOVES WITH THE SWITCH THIS TIME. The mode,
+                    min_price, p_min, require_agreement and the blend weights
+                    are TRACKED_KEYS, so `7f9e82 -> 5bca73` is carried by the
+                    config as well as the bump. `briefings.*` was never
+                    tracked and is deleted, not tracked: the review's call
+                    site went with it, and every code default equals the value
+                    its key held.
+
+                    The standard rule is still computed and stored in
+                    `shadow_picks`, never sent. RULE 8 EXEMPTS INVARIANT 6b
+                    AND THE FOUR REVISION PINS here because rule 7 orders the
+                    bump; the argument is this entry.
 """
 
 #: Must equal src.models.model_version.CODE_REVISION.
 #:
-#: MOVED s5.21 -> s5.22 on 2026-11-12: the Claude pick review is REMOVED.
-#: It reviewed 67.3% of the last 30 days' picks and changed 27.9% of those,
-#: so it was selection-affecting on some days and absent on others. Invariant
-#: 6b pins this to a literal precisely so a bump has to argue; the argument is
-#: the s5.22 entry above, and no test is relaxed.
-CODE_REVISION_PIN = "s5.22"
+#: MOVED s5.22 -> s5.23 on 2026-11-13: the selection rule is SWITCHED to
+#: `confident_value` at P_min 0.54, on the operator's decision -- not for an
+#: edge (none was found) but because the standard rule's hit rate is bought
+#: with prices below 1.70. Invariant 6b pins this to a literal so a bump has
+#: to argue; the argument is the s5.23 entry above, and no test is relaxed.
+CODE_REVISION_PIN = "s5.23"
 
 #: Must equal model_version(config.example.yaml).
 #:
-#: MOVED on 2026-11-12, by the `s5.22` revision bump ALONE: `52678c ->
-#: 7f9e82`. The config change that removed the review moved NOTHING, because
-#: no `briefings.*` key is tracked -- which is the gap the s5.22 entry reports.
-FROZEN_MODEL_VERSION = "stage5_baseline_20260807.7f9e82"
+#: MOVED on 2026-11-13: `7f9e82 -> 5bca73`, by the `s5.23` bump AND by the
+#: config -- the selection keys are tracked now, so the switch is in the
+#: fingerprint, which the review's removal never was.
+FROZEN_MODEL_VERSION = "stage5_baseline_20260807.5bca73"
 
 #: The previous cohort, kept so a reader can see what moved and when.
 #: NOTE: ee60cd labels TWO configurations — 16 picks made by 098a368 on 09-16
 #: and 12 by 889f8ba on 09-17. That is the defect the always-bump rule closes.
-PREVIOUS_CODE_REVISION = "s5.21"
-PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.52678c"
+PREVIOUS_CODE_REVISION = "s5.22"
+PREVIOUS_MODEL_VERSION = "stage5_baseline_20260807.7f9e82"
 
 
 #: How many completed-match queries are exempt from the training-exclusion

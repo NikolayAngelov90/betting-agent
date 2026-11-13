@@ -425,13 +425,20 @@ NOTHING = _rows("Pinnacle", 2.35, 3.40, 3.10) + _rows("Bet365", 2.30, 3.35,
 
 
 def test_DRIVEN_the_NEW_MODE_makes_ZERO_FORCED_PICKS():
+    """Since s5.23 the standard rule is still COMPUTED for every fixture and
+    stored as a shadow -- so the forced pick IS built once, and it lands in
+    the shadow, never in the recommendations the caller saves and sends."""
     calls = []
-    recs, confident = _finish(_agent(_cfg({
-        "betting.selection_mode": "confident_value"}), NOTHING), NOTHING,
-        calls)
+    agent = _agent(_cfg({"betting.selection_mode": "confident_value"}),
+                   NOTHING)
+    recs, confident = _finish(agent, NOTHING, calls)
     assert confident is True
-    assert recs == [] and calls == [], (
+    assert recs == [], (
         "the new mode forced a pick onto a fixture its rule declined")
+    assert calls == [1], "the standard rule's forced pick is computed once"
+    shadow = agent._standard_shadow[7]
+    assert [r.reasoning for r in shadow] == ["forced"], (
+        "the forced pick should be in the standard-rule shadow")
 
 
 def test_KNOWN_WRONG_the_STANDARD_mode_DOES_force_one_on_the_same_fixture():

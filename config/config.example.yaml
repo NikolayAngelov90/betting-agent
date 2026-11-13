@@ -306,7 +306,7 @@ betting:
   # highest-ranked one by the system's own ordering
   # (EV x confidence x agreement x contrarian).
   max_picks_per_match: 1
-  # ── SELECTION MODE. Stage 31 Part E, 2026-11-12. NOT SWITCHED ON. ──────
+  # ── SELECTION MODE. Wired Stage 31 (2026-11-12); SWITCHED ON at s5.23. ─
   #
   # `standard` is the rule that has always run. `confident_value` is a
   # different rule, wired behind this flag and OFF: one pick per fixture, the
@@ -314,10 +314,19 @@ betting:
   # at least `min_price` and whose blended probability is at least `p_min`.
   # No daily count -- a day on which nothing qualifies produces no picks.
   #
-  # These keys are deliberately NOT in TRACKED_KEYS, so wiring them moves no
-  # fingerprint. SWITCHING the mode is a selection change: it needs the keys
-  # tracked and a cohort bump in the same commit. See the decision table in
-  # docs/ci-audit-ledger.md before changing either line.
+  # SWITCHED 2026-11-13, cohort s5.23. The operator's decision, recorded in
+  # his words: NOT because an edge was found -- none was -- but because the
+  # standard rule's hit rate is bought with prices below 1.70 that he has
+  # rejected. Expected on the holdout: ~57% hit rate at ~1.73, ROI near zero
+  # with an interval that includes zero (Stage 31: 57.4% [52.7, 61.8] at
+  # 1.73, ROI -0.5% [-8.5, +7.2], 448 picks in 56 days).
+  #
+  # EVERY KEY BELOW IS IN TRACKED_KEYS (selection_mode, min_price, p_min,
+  # require_agreement, weights), so changing any of them moves the cohort.
+  # The standard rule is still computed for every fixture and stored in
+  # `shadow_picks` -- never sent, never staked -- so the paired comparison
+  # continues prospectively. Prospective registration:
+  # docs/confident-value-prospective-registration.md.
   #
   # WHAT THE NEW MODE DOES NOT DO, stated (Stage 32 Part A, driven in
   # tests/test_zero_pick_states.py):
@@ -332,12 +341,13 @@ betting:
   # A day on which nothing qualifies is a STATE (`pick_runs.NONE_QUALIFIED`),
   # not a failure: the loss alert does not count it and the client gets one
   # plain line.
-  selection_mode: standard
+  selection_mode: confident_value
   confident_value:
     min_price: 1.70           # the operator's definition of a good price
-    # NOT A RECOMMENDATION. The midpoint of the registered grid
-    # {0.50, 0.52, 0.54, 0.56, 0.58}; the decision table marks a cell or
-    # marks none, and this number has to be set from it by a person.
+    # SET BY THE OPERATOR, 2026-11-13. The decision table marked no cell; 0.54
+    # is his choice, not a recommendation. NOT 0.56: that cell read 62.6% on
+    # the holdout and failed its development echo (56.1% on 244 picks), so no
+    # threshold is moved on a single period again.
     p_min: 0.54
     require_agreement: false
     # Blend weights per family, fitted on development with the DEPLOYED Elo
@@ -424,52 +434,11 @@ notifications:
   # sent; the summary shows the finalized (possibly switched) selection.
   suppress_picks_summary: false
 
-# AI match briefings (Claude Opus 4.8 + server-side web search).
-# Requires ANTHROPIC_API_KEY env var (GitHub secret). When unset, briefing
-# commands no-op gracefully so the rest of the pipeline is unaffected.
-briefings:
-  # REVIEW REMOVED 2026-11-12 (cohort s5.22). The Claude KEEP/CHANGE step did
-  # not cover every pick: the Pro session limit and the API balance both run
-  # out, so picks were finalised under TWO rules. Measured over the last 30
-  # days: 682 picks, 459 reviewed (67.3%), 223 NOT reviewed (32.7%) -- seven
-  # of 22 pick-days wholly unreviewed. Its paired value was never measurable.
-  # The saved pick is the model's pick. See the s5.22 entry in
-  # tests/experiment_pins.py.
-  enabled: false              # master switch for the Claude pick review
-  # send_to_telegram: post the full briefing ARTICLE to Telegram. false = Claude
-  # still researches each match and finalizes the pick (KEEP/CHANGE), but no
-  # article is posted — only the daily picks summary goes out. This is the
-  # "predictions only" mode: keep Claude's per-match check, drop the briefings.
-  send_to_telegram: false
-  language: Bulgarian         # language the briefing prose is written in (when posted)
-  # backend: which Claude to use for the research + briefing.
-  #   claude_code   — headless Claude Code CLI billed to the Claude Pro
-  #                   subscription (CLAUDE_CODE_OAUTH_TOKEN secret). $0 extra.
-  #                   Runs on Sonnet. Falls back to anthropic_api if the token
-  #                   is missing but ANTHROPIC_API_KEY is set.
-  #   anthropic_api — direct API (ANTHROPIC_API_KEY), Opus 4.8, per-token credits.
-  # 2026-07-22: back to claude_code — subscription FIRST ($0 billing), and when
-  # the shared Pro 5-hour session limit is hit mid-run the `claude` CLI returns
-  # empty, so api_fallback (below) covers that single briefing via the paid API.
-  # Net effect: use the subscription until it's exhausted, then spend credits.
-  # (Was pinned to anthropic_api 2026-07-16 to spare the Pro budget; that hold
-  # is lifted.)
-  backend: claude_code
-  # api_fallback: when the claude_code backend comes back empty (most often the
-  # shared Claude Pro 5-hour session limit), retry that single briefing via the
-  # Anthropic API so the match still gets covered. Requires funded ANTHROPIC_API_KEY
-  # credits; if the balance is empty it simply fails gracefully (no briefing, as
-  # before). Set false to never spend API credits.
-  api_fallback: true
-  # finalize_picks: the briefing LLM makes the FINAL call on each WC bet — it can
-  # KEEP the model's pick or CHANGE to a different selection with real bookmaker
-  # odds (no veto: a bet is always placed; goal = best prediction at odds > 1.50).
-  # The saved pick is updated to the decision and a code-generated footer shows
-  # the final tracked bet, so the message can never contradict the DB.
-  finalize_picks: false
-  # Claude reviews EVERY saved pick before it is sent — WC every-match picks and
-  # club-league value picks alike — as part of the --picks step.
-
+# briefings: DELETED at s5.23 (2026-11-13). The Claude pick review was
+# switched off at s5.22 and its call site removed at s5.23; every key
+# the block held now defaults, in code, to the value it held here, so
+# deleting it changed nothing (tests/test_review_removed.py reads each
+# key both ways). briefings.* was never fingerprinted.
 logging:
   level: INFO
   log_file: logs/betting_agent.log

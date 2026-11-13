@@ -76,6 +76,17 @@ TRACKED_KEYS: List[str] = [
     # which picks exist, so it must split the cohort.
     "betting.max_picks_per_match",
     "betting.gates",
+    # Stage 32 (s5.23): the selection MODE and every number the
+    # `confident_value` rule selects on. The directive named the mode, P_min
+    # and the price floor; `require_agreement` and the blend `weights` are
+    # tracked too, because each changes which leg is picked, and leaving one
+    # out would repeat the `briefings.*` gap -- a selection-affecting setting
+    # that moves no fingerprint.
+    "betting.selection_mode",
+    "betting.confident_value.min_price",
+    "betting.confident_value.p_min",
+    "betting.confident_value.require_agreement",
+    "betting.confident_value.weights",
 ]
 
 #: Bumped by hand only when the CODE path changes in a way config cannot express
@@ -1335,7 +1346,35 @@ TRACKED_KEYS: List[str] = [
 #:       threshold is as it was, `paper_trading_mode` stays true.
 #:       RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS here because
 #:       rule 7 orders the bump; the argument is this entry.
-CODE_REVISION = "s5.22"
+#:
+#: s5.23 — 2026-11-13. THE SELECTION RULE IS SWITCHED: `confident_value`.
+#:       One switch, one bump. `betting.selection_mode: confident_value`,
+#:       `p_min: 0.54`, `min_price: 1.70` in config.example.yaml.
+#:
+#:       THE OPERATOR'S DECISION, RECORDED IN HIS WORDS: not because an edge
+#:       was found -- none was -- but because the standard rule's hit rate is
+#:       bought with prices below 1.70 that he has rejected. Stage 31 holdout,
+#:       kickoffs 2026-09-01..11-09, grain=pick: the standard rule 58.3% at
+#:       average odds 1.63, ROI -5.5% [-9.6, -1.2], 74% of its picks below
+#:       1.70; `confident_value` at P_min 0.54 57.4% [52.7, 61.8] at 1.73,
+#:       ROI -0.5% [-8.5, +7.2], 448 picks. EXPECTED: ~57% at ~1.73, ROI near
+#:       zero with an interval that includes zero.
+#:
+#:       WHAT ELSE MOVED, AND IT SELECTS NOTHING. The selection keys enter
+#:       TRACKED_KEYS (mode, min_price, p_min, require_agreement, weights), so
+#:       the fingerprint now moves with them -- which is what makes the switch
+#:       visible in it at all. The dead `briefings:` config block is deleted
+#:       with the review's call site; its keys were never fingerprinted, and
+#:       every code default now equals the value the key held, so deleting it
+#:       changed no behaviour. The standard rule is still computed for every
+#:       fixture and stored in `shadow_picks` -- never sent, never staked.
+#:
+#:       WHAT THE NEW MODE DOES NOT DO: no forced picks, no `excluded_markets`,
+#:       none of the standard gates. Driven in tests/test_zero_pick_states.py.
+#:
+#:       RULE 8 EXEMPTS INVARIANT 6b AND THE FOUR REVISION PINS here because
+#:       rule 7 orders the bump; the argument is this entry.
+CODE_REVISION = "s5.23"
 
 
 def _stable(value: Any) -> Any:

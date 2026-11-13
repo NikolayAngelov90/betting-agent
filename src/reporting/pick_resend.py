@@ -69,7 +69,7 @@ from sqlalchemy import text
 CENSUS_TABLES = (
     "api_budget", "injuries", "injury_observations", "matches", "odds",
     "odds_snapshots", "pick_observations", "pick_runs", "players",
-    "saved_picks", "team_former_names", "teams",
+    "saved_picks", "shadow_picks", "team_former_names", "teams",
 )
 
 # Card fields the store does not hold. Keyed to how the gap is reported.

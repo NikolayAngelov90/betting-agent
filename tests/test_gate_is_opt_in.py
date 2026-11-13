@@ -182,7 +182,12 @@ from scripts.capture_critical import (
 #: record every picks run now writes (`pick_runs`) on scratch SQLite, the
 #: loss alert's reads, and the selection method `analyze_fixture` calls --
 #: a regression in any of them is exactly what should stop a run.
-CENSUS = {"files": 158, "capture_critical": 82, "not_critical": 76}
+#: RE-MEASURED 2026-11-13 (III), Stage 32 Part B: files 158 -> 159,
+#: `capture_critical` 82 -> 83, not_critical UNCHANGED at 76.
+#: `test_standard_shadow.py` belongs on the capture path: it drives the
+#: shadow write that now runs inside every picks run, and its failure mode
+#: -- a shadow that costs the real pick -- is a capture-path failure.
+CENSUS = {"files": 159, "capture_critical": 83, "not_critical": 76}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -471,8 +476,14 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       and the new mode's "no forced picks, no excluded_markets" is
     #       driven against the standard mode doing the opposite. Every test is
     #       deterministic: scratch SQLite, the YAML, the AST.
-    assert len(gate) == 1837, (
-        f"the gating selection is {len(gate)}, recorded 1837 — say what moved")
+    #   +6 on 2026-11-13 (III): test_standard_shadow.py, Stage 32 Part B. The
+    #       standard rule keeps being computed under `confident_value` and its
+    #       top pick per fixture is stored in `shadow_picks` -- never saved as
+    #       a pick, never sent. Driven on scratch SQLite, with the standard
+    #       mode as the known-wrong control and a raising standard rule that
+    #       must cost the real pick nothing.
+    assert len(gate) == 1843, (
+        f"the gating selection is {len(gate)}, recorded 1843 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the
@@ -620,8 +631,13 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       pins the measured record, including the registered rule's own
     #       defect: it marks a cell with ONE winning pick.
     #       GATE UNCHANGED at 1797.
-    assert len(nong) == 1169, (
-        f"the non-gating selection is {len(nong)}, recorded 1169")
+    #   +8 on 2026-11-13 (III): test_confident_value.py at the switch -- the
+    #       controls DRIVEN ON THE DEPLOYED PATH (no pick below 1.70, none
+    #       below 0.54, one per fixture, an empty list when nothing
+    #       qualifies) and a parametrised proof that changing ANY of the five
+    #       tracked selection keys moves the fingerprint.
+    assert len(nong) == 1177, (
+        f"the non-gating selection is {len(nong)}, recorded 1177")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

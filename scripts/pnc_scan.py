@@ -102,6 +102,12 @@ HUMAN_INVOKED: Dict[str, str] = {
 #:
 #: An empty reason is not accepted; the test suite asserts every entry has one.
 DECLARED_INTENTIONAL: Dict[str, str] = {
+    "src/reporting/match_briefing.py:REVIEW_CONCURRENCY":
+        "THE CLAUDE PICK REVIEW IS DEAD CODE ON PURPOSE, AND ONLY FOR NOW. It was switched off at s5.22 and its one automatic call site removed at s5.23 (2026-11-13), which is exactly why this scan now finds the review's internals unreachable -- the scan is right. The code is kept because deleting the review machinery and its tests (test_pick_review, test_review_parallel_identity) is a separate decision the operator has not taken; the manual `--briefing` CLI still constructs the service. Delete these entries in the same commit that deletes the code.",
+    "src/reporting/match_briefing.py:_one":
+        "THE CLAUDE PICK REVIEW IS DEAD CODE ON PURPOSE, AND ONLY FOR NOW. It was switched off at s5.22 and its one automatic call site removed at s5.23 (2026-11-13), which is exactly why this scan now finds the review's internals unreachable -- the scan is right. The code is kept because deleting the review machinery and its tests (test_pick_review, test_review_parallel_identity) is a separate decision the operator has not taken; the manual `--briefing` CLI still constructs the service. Delete these entries in the same commit that deletes the code.",
+    "src/reporting/match_briefing.py:_sync_recs_from_db":
+        "THE CLAUDE PICK REVIEW IS DEAD CODE ON PURPOSE, AND ONLY FOR NOW. It was switched off at s5.22 and its one automatic call site removed at s5.23 (2026-11-13), which is exactly why this scan now finds the review's internals unreachable -- the scan is right. The code is kept because deleting the review machinery and its tests (test_pick_review, test_review_parallel_identity) is a separate decision the operator has not taken; the manual `--briefing` CLI still constructs the service. Delete these entries in the same commit that deletes the code.",
     "src/data/h1_window.py:RETIRED":
         "IT IS CONSUMED, and this entry records a SCAN LIMITATION rather than "
         "an intention. `odds_quota` reads it as `_h1_window.RETIRED` through "

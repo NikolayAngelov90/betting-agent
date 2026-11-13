@@ -13,9 +13,9 @@ books of the sharp anchor's feed, inside one snapshot -- is at least
 the qualifying leg with the highest blended probability. No daily count; a day
 on which nothing qualifies produces no picks, and that is not an error.
 
-WHAT IT IS NOT. It is not switched on. `betting.selection_mode` defaults to
-`standard`, under which nothing in this module is reached. Switching needs the
-keys added to TRACKED_KEYS and a cohort bump.
+SWITCHED ON at s5.23 (2026-11-13) in config.example.yaml, with its keys in
+TRACKED_KEYS. An ABSENT `betting.selection_mode` still means `standard`, under
+which nothing in this module is reached.
 
 Pure: standard library plus `src.evaluation.devig` and `src.data.market_spec`,
 no database, no clock, no network.

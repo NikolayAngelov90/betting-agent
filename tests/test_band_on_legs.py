@@ -347,7 +347,11 @@ COHORTS = {
     # s5.22, 2026-11-12: the Claude pick review removed. Same floor, a FOURTH
     # cohort -- the saved pick is now the model's pick on every day, where
     # s5.21 and its predecessors mixed reviewed and unreviewed days.
-    "s5.22": {"fingerprint": "7f9e82", "min_odds": 1.50, "last": None},
+    "s5.22": {"fingerprint": "7f9e82", "min_odds": 1.50, "last": "2026-11-13"},
+    # s5.23, 2026-11-13: the selection rule switched to `confident_value`.
+    # Same `betting.min_odds`, which the new mode does not read -- its own
+    # floor is the 1.70 taken price.
+    "s5.23": {"fingerprint": "5bca73", "min_odds": 1.50, "last": None},
 }
 
 
@@ -368,10 +372,10 @@ def test_the_THREE_COHORTS_ARE_DISTINCT_and_may_not_be_pooled():
                                        FROZEN_MODEL_VERSION,
                                        PREVIOUS_CODE_REVISION,
                                        PREVIOUS_MODEL_VERSION)
-    assert CODE_REVISION_PIN == "s5.22"
-    assert FROZEN_MODEL_VERSION.endswith(COHORTS["s5.22"]["fingerprint"])
-    assert PREVIOUS_CODE_REVISION == "s5.21"
-    assert PREVIOUS_MODEL_VERSION.endswith(COHORTS["s5.21"]["fingerprint"])
+    assert CODE_REVISION_PIN == "s5.23"
+    assert FROZEN_MODEL_VERSION.endswith(COHORTS["s5.23"]["fingerprint"])
+    assert PREVIOUS_CODE_REVISION == "s5.22"
+    assert PREVIOUS_MODEL_VERSION.endswith(COHORTS["s5.22"]["fingerprint"])
 
 
 def test_KNOWN_WRONG_POOLING_THEM_WOULD_HIDE_THE_ROUND_TRIP():

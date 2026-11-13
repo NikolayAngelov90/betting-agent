@@ -668,3 +668,43 @@ class PickRun(Base):
     def __repr__(self):
         return (f"<PickRun({self.pick_date} {self.outcome} "
                 f"{self.picks_saved}/{self.fixtures_evaluated})>")
+
+
+class ShadowPick(Base):
+    """Stage 32 Part B -- the pick the STANDARD rule would have made.
+
+    Under `confident_value` the standard rule is still computed for every
+    fixture and its top pick is stored HERE -- never in `saved_picks`, never
+    sent, never staked -- so the paired comparison the switch was decided on
+    continues prospectively, on the same fixtures, from the first day.
+
+    It is graded on read (`FootballBettingAgent._grade_selection` against the
+    match score), so settlement is untouched. One row per (day, match, rule).
+    """
+
+    __tablename__ = 'shadow_picks'
+
+    id = Column(Integer, primary_key=True)
+    pick_date = Column(Date, nullable=False)
+    match_id = Column(Integer, ForeignKey('matches.id'), nullable=False)
+    rule = Column(String(32), nullable=False)
+    market = Column(String(50))
+    selection = Column(String(100))
+    odds = Column(Float)
+    predicted_probability = Column(Float)
+    expected_value = Column(Float)
+    confidence = Column(Float)
+    model_agreement = Column(String(20))
+    is_forced = Column(Boolean, default=False)
+    #: the LIVE cohort the shadow was computed beside
+    live_model_version = Column(String(64))
+    created_at = Column(DateTime, nullable=False, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('pick_date', 'match_id', 'rule',
+                         name='uq_shadow_pick_day_match_rule'),
+    )
+
+    def __repr__(self):
+        return (f"<ShadowPick({self.pick_date} {self.rule} {self.match_id} "
+                f"{self.selection} @ {self.odds})>")
