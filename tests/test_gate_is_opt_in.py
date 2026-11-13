@@ -161,7 +161,22 @@ from scripts.capture_critical import (
 #: at 74. `test_quote_age.py` BELONGS on the capture path and is there
 #: by four routes (database, models, price_history, scrapers): it tests
 #: the odds WRITE path itself, which is what the gate exists to protect.
-CENSUS = {"files": 155, "capture_critical": 81, "not_critical": 74}
+#: RE-MEASURED 2026-11-13, Stage 31 (the confident_value rule and its
+#: backtest): files 155 -> 157, not_critical 74 -> 76, `capture_critical`
+#: UNCHANGED at 81. Both new files are non-critical by the classifier's
+#: own reading (critical=False, via=[]):
+#:   test_confident_value.py -- the rule, and the flag driven on a bare
+#:     agent with a real calculator. `src.betting.*` and the agent are
+#:     not on CAPTURE_PATH, and its config double is built from the YAML
+#:     rather than through a database-backed object.
+#:   test_confident_backtest.py -- the fit driven on synthetic sets and
+#:     the measured record. The script keeps every database import inside
+#:     its functions.
+#: THE TRADE, STATED: the flag-off byte-identity control therefore does
+#: NOT gate a run. That is the right side for it while the flag is off
+#: -- a non-gating failure costs no card -- and it should be revisited
+#: in the commit that switches the mode.
+CENSUS = {"files": 157, "capture_critical": 81, "not_critical": 76}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -580,8 +595,20 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       reproduces the market exactly, a planted feature is found, noise
     #       is not. GATE UNCHANGED at 1760: `src/evaluation/devig.py` is pure
     #       stdlib and both scripts import their database work in functions.
-    assert len(nong) == 1104, (
-        f"the non-gating selection is {len(nong)}, recorded 1104")
+    #   +65 on 2026-11-13: Stage 31. test_confident_value.py (38) pins the
+    #       confident_value rule -- the median taken price inside one
+    #       snapshot, the pool, agreement, one pick per fixture, the 26-cell
+    #       grid -- and DRIVES the flag: off is byte-identical to
+    #       `find_value_bets` on a fixture where it returns a pick, on gives
+    #       no pick below 1.70, none below P_min, at most one per fixture and
+    #       an empty list when nothing qualifies. test_confident_backtest.py
+    #       (27) drives the weight fit on sets with a known answer (a
+    #       calibrated market takes the weight; a planted model is found) and
+    #       pins the measured record, including the registered rule's own
+    #       defect: it marks a cell with ONE winning pick.
+    #       GATE UNCHANGED at 1797.
+    assert len(nong) == 1169, (
+        f"the non-gating selection is {len(nong)}, recorded 1169")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

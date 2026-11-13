@@ -38518,3 +38518,328 @@ snapshot reader.
 *Recorded 2026-11-12. `src/data/models.py`, `src/data/price_history.py`,
 `src/scrapers/theodds_scraper.py`, `scripts/quote_age.py`,
 `tests/test_quote_age.py` (24 tests).*
+
+---
+
+## 2026-11-13 — STAGE 31: confident picks at a good price — `BLEND`, `AGREEMENT`, `BACKTEST`, `PRICES`, `FLAG WIRED`, `DECISION TABLE`
+
+Measurement, then wiring behind a flag. **Nothing in this entry is switched
+on.** `cohort_status.py` reads **`s5.22 / 7f9e82`**, where Part G left it.
+Pre-registration **`4fcdd83`**, committed before any outcome was read; the
+holdout was opened **once**. Parts G (`3c1133e`) and A (`9fe8085`) are
+recorded in the two entries above.
+
+**What the first run on the new code did** (`measured` 2026-11-13, run
+07:27Z on `4fcdd83`): the migration added `odds_snapshots.book_last_update`
+at 07:29:49Z; **95 quotes arrived stamped, all `FRESH`** (median age 5–86 s
+across 21 books, Pinnacle 34 s); the 113,949 API-Football quotes stay
+`UNEVALUATED`. One fixture, one pick saved and sent, `review_action` NULL,
+cohort `7f9e82`, and not one `match_briefing` line in the log.
+
+Population for everything below: completed club fixtures with a same-feed
+Pinnacle leg set, rows after kickoff dropped. Development 2026-02-28 … 08-31
+(3,293 fixtures loaded, 3,069 with pickable legs, 31,990 legs); **holdout
+2026-09-01 … 11-09** (1,545 / 1,540 / 17,938). Grain: one pick per fixture
+per cell; legs for the agreement test. Method: fixture bootstrap, 4,000
+draws. `measured` 2026-11-12.
+
+**Outcome-free control, run before the registration was committed:** the leg
+sets the backtest builds equal the Stage 30 loader's on the real table —
+**225,581 sets, 0 differing**.
+
+### `BLEND` — the market takes ~100%, and that is the finding
+
+Linear pool per family, fitted by exhaustive search on the simplex at step
+0.01, on development:
+
+| family | sets | market | Elo | Poisson | 95% CI on the market weight |
+|---|---|---|---|---|---|
+| 1X2 — corrected Elo | 2,322 | **0.93** | 0.06 | 0.01 | [0.81, 1.00] |
+| 1X2 — **deployed** Elo | 2,322 | **0.94** | 0.04 | 0.02 | [0.82, 1.00] |
+| over/under | 7,403 | **1.00** | — | 0.00 | [0.88, 1.00] |
+| BTTS | 671 | **1.00** | — | 0.00 | [0.44, 1.00] |
+| team goals | 7,461 | **0.97** | — | 0.03 | [0.86, 1.00] |
+
+> **The models add no measurable information beyond the price.** "Market
+> only" lies inside every weight interval. Out of sample the blend is never
+> better: walk-forward on development 1X2 **+0.0017** log-loss
+> [−0.0013, +0.0046] (three folds), over/under +0.0004, team goals +0.0002;
+> frozen on the holdout 1X2 **+0.0005** [−0.0006, +0.0015] and team goals
+> **+0.0002 [+0.00001, +0.0005] — worse than the market**, narrowly.
+
+It is carried forward anyway as the registered probability, as the directive
+orders. **ML's share is `UNEVALUATED`**: no out-of-sample per-leg ML
+probability exists — one is stored only on the 2,961 saved picks, legs chosen
+*because* the model disagreed with the price. BTTS has **no** holdout sets
+(no anchor carries it there) and one walk-forward observation; its weight is
+a development figure with an interval from 0.44 to 1.00.
+
+*The fit can find a model when there is one* — driven on synthetic sets: a
+calibrated market against noise takes ≥ 0.95; a planted model that knows more
+than a blurred market takes ≥ 0.80.
+
+### `AGREEMENT` — verdict: raises the hit rate, by choosing shorter prices
+
+Legs priced ≥ 1.70, holdout, pooled (1X2: market, Elo and Poisson; binary
+families: market and Poisson):
+
+| | n | hit rate | predicted | avg odds | ROI |
+|---|---|---|---|---|---|
+| all rank it first | 1,278 | **50.7%** [47.9, 53.5] | 49.9% | **1.94** | −3.7% [−9.3, +1.8] |
+| they do not | 10,429 | 31.4% [30.6, 32.2] | 31.5% | **3.41** | −10.1% [−12.7, −7.5] |
+
+Difference **+19.3 pp [+16.1, +22.4]** — the registered verdict is `RAISES`,
+on both periods and in every family with data. **But read the odds column.**
+A leg the market ranks first is the favourite; the two groups are different
+prices, and both are calibrated to within a point of their predicted rate.
+Agreement is selecting price, not information.
+
+> **Inside the selection rule the filter adds nothing.** Where price and
+> probability are already bounded, the holdout hit rate with the filter is
+> 56.0 / 56.8 / 56.5 / 61.9% against 56.6 / 56.5 / 57.4 / 62.6% without it
+> (`P_min` 0.50 … 0.56) — within a point, on fewer picks.
+
+*(The ROI and predicted columns were added after the holdout was opened —
+hard rule 2 requires them and my first run printed only hit rate and odds.
+The re-run reproduced the first opening on 402 of 404 registered figures; the
+other two are 1e-15 rounding in a delta that is zero by construction.)*
+
+### `BACKTEST` — the grid, and the current rule beside it
+
+Eligible leg: taken price ≥ 1.70, where *taken* is the pipeline's median
+inside one snapshot of the anchor's feed — never the best price across books.
+One pick per fixture. **Holdout**, 56 days with fixtures:
+
+| `P_min` | n | hit rate | predicted | avg odds | ROI | picks/day median (range) | zero-pick days |
+|---|---|---|---|---|---|---|---|
+| 0.50 | 1,114 | 56.6% [53.6, 59.4] | 53.4% | 1.79 | +1.1% [−4.2, +6.2] | 14.5 (0–71) | 2 |
+| 0.52 | 793 | 56.5% [53.1, 59.9] | 54.4% | 1.76 | −0.6% [−6.7, +5.4] | 11 (0–43) | 4 |
+| 0.54 | 448 | 57.4% [52.7, 61.8] | 55.6% | 1.73 | −0.5% [−8.5, +7.2] | 6.5 (0–21) | 5 |
+| 0.56 | 147 | **62.6% [55.1, 70.1]** | 56.7% | 1.71 | +7.4% [−5.7, +20.3] | 2 (0–9) | 15 |
+| 0.58 | 5 | 60.0% [20, 100] | 59.4% | 1.74 | +5.6% [−66, +77] | 0 (0–1) | **51** |
+
+With the agreement filter: 725 / 532 / 322 / 118 / 4 picks, hit rates as
+above. **Development** (136 days): 54.1 / 54.8 / 55.8 / 56.1% on 2,269 /
+1,660 / 992 / 244 picks, predicted 53.5 / 54.4 / 55.4 / 56.6%, ROI −3.6 /
+−3.9 / −3.3 / −4.0%.
+
+**Lane 1 is rule C.** No leg with blended probability ≥ 0.50 exists at a
+taken price of 2.00 or more, in either period, so the ten lane-1 cells are
+the ten C cells to the pick. The 26 registered cells are 16 distinct ones.
+
+**The current rule on the same fixtures** (the model's pick, as saved):
+
+| holdout | n | hit rate | predicted | avg odds | ROI |
+|---|---|---|---|---|---|
+| all picks | 1,456 | **58.3%** [55.8, 60.9] | **62.8%** | **1.63** | **−5.5% [−9.6, −1.2]** |
+| below 1.70 | 1,084 | 59.2% [56.2, 62.1] | 64.0% | 1.56 | −8.1% [−12.8, −3.6] |
+| 1.70–2.00 | 326 | 55.2% [49.7, 60.7] | 59.2% | 1.79 | −1.1% [−10.8, +8.5] |
+| 2.00–2.50 | 41 | 58.5% [43.9, 73.2] | 62.5% | 2.12 | +24.0% [−7.8, +55.3] |
+| 2.50–3.50 | 5 | 60.0% [20, 100] | 61.3% | 2.54 | +52.2% [−50, +154] |
+
+Paired, on fixtures both rules picked: −1.5 pp [−5.5, +2.5] at 0.50 (1,053
+fixtures), −1.1 [−5.6, +3.6] at 0.52, +0.5 [−5.4, +6.6] at 0.54, +4.4
+[−5.8, +14.6] at 0.56 (137). **No paired difference excludes zero.**
+
+Three things the table says that a single column would hide:
+
+* **The current rule's hit rate is bought with price.** 58.3% at 1.63 loses
+  5.5% and the interval excludes zero; three quarters of its picks are below
+  1.70. The new rule's 56–57% at 1.73–1.79 is roughly break-even. Hit rate
+  alone ranks them the wrong way round.
+* **The current rule is overconfident by 4.5 points** (62.8% predicted, 58.3%
+  realised; 61.5% against 53.3% on development). The blend's predicted rate
+  sits *below* its realised rate on the holdout and on it on development.
+* **The 0.56 cell is the one that looks like something, and development does
+  not echo it**: 62.6% on 147 holdout picks, 56.1% on 244 development picks
+  against a predicted 56.6%. That was a registered refuter. Its lower bound,
+  55.1%, is under the current rule's 58.3%.
+
+**The arithmetic ceiling.** The taken price carries a mean margin of 9.5%
+over the anchor's fair price on eligible legs (median 8.3%), so a leg with no
+edge at 1.70 wins **53.7%** — 58.8% at zero margin. Every cell from 0.50 to
+0.54 sits between those two numbers on both periods.
+
+**Zero-pick days are part of the rule.** At 0.54: 5 of 56 days, all five on
+days with fewer than 10 fixtures (median 1 pick on those days, 6 on 10–40
+fixture days, 18 above 40). At 0.56: 15 of 56. At 0.58: 51 of 56.
+
+**Market mix** at 0.54 (448 picks): Over 2.5 154 · Under 2.5 73 · Under 3.5
+57 · Home Win 45 · Home Over 1.5 35 · Away Over 0.5 24 · **Over 3.5 20** ·
+Away Over 1.5 15 · Away Win 14 · others 11. `Over 3.5` is on the current
+rule's `excluded_markets`; the new rule does not apply that list.
+
+**Sensitivities.** Without the three Kambi-family books Stage 30 could not
+explain: every cell within a point (0.56: 62.3% on 146). With the pipeline's
+cross-feed median instead of the same-snapshot one: 60.9% on 115 at 0.56.
+
+**The higher-odds lane has nothing in it.** Lane 2 (2.00–3.50, on
+`p × price ≥ 1 + e`): **9, 3 and 1 picks** in 56 days at e = 0.00 / 0.02 /
+0.05, and 1 / 0 / 0 with the agreement filter. A blend that is the market
+does not claim an edge at a long price.
+
+**The pre-experiment period restated** — 1,018 picks to 2026-08-05 (the
+directive's count exactly), 1,012 settled and valid, 132 pick-days:
+
+| band | as saved: n · hit · predicted · ROI | with today's gates: n · hit · ROI |
+|---|---|---|
+| below 1.70 | 349 · 61.9% · 67.6% · −4.8% | 116 · 56.9% · −9.0% |
+| 1.70–2.00 | 267 · 51.7% · 60.5% · −5.2% | 187 · 51.3% · −5.0% |
+| 2.00–2.50 | 278 · 45.3% · 54.0% · 0.0% | 147 · 51.7% · +12.0% [−5.3, +29.5] |
+| 2.50–3.50 | 111 · 31.5% · 48.3% · −12.2% | 20 · 35.0% · −6.5% |
+| all | 1,012 · 51.2% · 59.8% · −3.9% [−9.9, +2.1] | 470 · 52.1% · −0.8% [−9.4, +8.2] |
+
+**The blocker, measured on those real picks.** `max_odds` 10.0 permits long
+prices; the confidence gate — 0.55 with a sliding scale down to a
+**hard-coded 0.52** — removes them. Of the picks that clear every *other*
+gate of today, the confidence gate alone removes **3 of 190 (2%)** in
+1.70–2.00, **101 of 248 (41%)** in 2.00–2.50 and **87 of 107 (81%)** in
+2.50–3.50 — 0.02, 0.77 and 0.66 picks per pick-day. At 2.50 a probability of
+0.52 is a claimed edge of +30%. *(My registered version of this count, with
+the blend standing in for the ensemble, came out at ~0: under a blend that is
+the market no leg clears the 5% EV gate in the first place, so there was
+nothing left for the confidence gate to remove. The count above replaces it
+and is labelled as not registered.)*
+
+### `PRICES REAL OR SLOW` — unevaluated at the median; and a per-book answer
+
+No outcome is read here. 317 fixtures where the Odds-API Pinnacle was seen at
+two pre-kickoff instants ≥ 1 h apart (median gap 9.9 h), 1,427 legs,
+September–November.
+
+> **The registered primary cannot be answered: the median beats the anchor's
+> fair price on 2 of 1,427 legs.** The mechanical verdict on two legs is
+> `SLOW` and I am not reporting it as one. The population the question is
+> about — a *generous median* — barely exists. A leg qualifies at `P_min` by
+> being a low-margin favourite, not by the median being generous.
+
+Per book — each book's own price where it beats the anchor's fair at the
+first instant, price ≥ 1.70 (descriptive in the registration; ~25 books):
+
+| book | n | avg price | edge at the instant | **edge at the anchor's close** | |
+|---|---|---|---|---|---|
+| `matchbook` (exchange) | 187 | 4.83 | +1.7% | **−1.6% [−2.9, −0.3]** | `SLOW` |
+| `betfair_ex_eu` (exchange) | 183 | 5.10 | +1.8% | **−1.4% [−2.8, −0.0]** | `SLOW` |
+| `unibet_se` | 99 | 5.22 | +2.6% | **+2.8% [+1.0, +4.7]** | `REAL` |
+| `unibet_nl` | 93 | 5.33 | +2.9% | **+2.6% [+0.6, +4.9]** | `REAL` |
+| `onexbet` | 64 | 4.46 | +1.9% | **+3.3% [+1.2, +6.1]** | `REAL` |
+| `leovegas_se` | 37 | 3.66 | +2.1% | **+3.0% [+1.3, +4.9]** | `REAL` |
+| `coolbet` | 72 | 4.77 | +1.6% | +1.0% [−0.7, +2.7] | unresolved |
+
+The exchanges' apparent edge is gone by the close, before commission. The
+three Kambi-family books — the ones Stage 30 flagged — **keep theirs against
+Pinnacle's last price**: they were not simply slow relative to the anchor.
+That narrows Stage 30's unexplained anomaly; it does not close it. These are
+**long prices** (average 3.7–5.3), where the result rests on Shin's estimate
+of a longshot's fair probability; four `REAL` rows among ~25 books is more
+than chance alone predicts and is not corrected for it; and it says nothing
+about whether a stake is accepted.
+
+**The fresh subset is n = 0** for this analysis — none of its 20,565 book
+quotes carries a stamp. The first stamped quotes arrived this morning.
+
+### `FLAG WIRED` — `betting.selection_mode`, off
+
+`standard` (the default, and what the deployed config says) calls
+`find_value_bets` exactly as before. `confident_value` returns at most one
+pick per fixture from `src/betting/confident_value.py` — **the same module
+the backtest reads**, so the rule that was measured is the rule that would
+run. `min_price` (1.70) and `p_min` come from `config.example.yaml`; the
+ensemble's outputs are still computed and are recorded on the pick.
+
+| control | how it is driven |
+|---|---|
+| flag off → byte-identical | the key absent, the key `standard`, and the deployed file, each against `find_value_bets` called directly — `repr` equal, on a fixture where the standard rule **does** return a pick. With the flag on the result differs. |
+| no pick below 1.70 | a 1.40 favourite with by far the highest probability is not picked |
+| none below `P_min` | raising `p_min` above every leg returns `[]` |
+| at most one per fixture | three books, five markets, one pick |
+| zero-pick is not an error | no odds, no anchor, and no timestamps each return `[]`; the forced-pick block is guarded so it cannot refill the fixture |
+| the client on a zero-pick day | `send_daily_picks([])` puts nothing on the client channel |
+| a typo cannot select a rule | an unknown mode raises; malformed weights are refused |
+
+`p_min: 0.54` in the config is the midpoint of the grid and **not a
+recommendation**; the comment beside it says so.
+
+### `DECISION TABLE`
+
+Holdout. One row per cell; lanes never pooled. **Nothing is recommended.**
+
+| cell | hit rate | avg odds | ROI | picks/day median (range) | clears the current rule's 58.3%? |
+|---|---|---|---|---|---|
+| **C = lane 1**, `P_min` 0.50 | 56.6% [53.6, 59.4] | 1.79 | +1.1% | 14.5 (0–71) | no |
+| 0.52 | 56.5% [53.1, 59.9] | 1.76 | −0.6% | 11 (0–43) | no |
+| 0.54 | 57.4% [52.7, 61.8] | 1.73 | −0.5% | 6.5 (0–21) | no |
+| 0.56 | 62.6% [55.1, 70.1] | 1.71 | +7.4% | 2 (0–9) | no — lower bound 55.1% |
+| 0.58 | 60.0% [20, 100] | 1.74 | +5.6% | 0 (0–1) | no |
+| 0.50 + agreement | 56.0% [52.4, 59.7] | 1.78 | −0.3% | 9 (0–43) | no |
+| 0.52 + agreement | 56.8% [52.4, 60.9] | 1.76 | −0.3% | 7 (0–32) | no |
+| 0.54 + agreement | 56.5% [51.2, 61.8] | 1.73 | −2.1% | 4 (0–17) | no |
+| 0.56 + agreement | 61.9% [53.4, 70.3] | 1.71 | +6.1% | 2 (0–7) | no |
+| 0.58 + agreement | 50.0% [0, 100] | 1.75 | −10.7% | 0 (0–1) | no |
+| **lane 2**, e 0.00 | 33.3% [0, 66.7] | 2.63 | −3.4% | 0 (0–3) | no — 9 picks |
+| e 0.02 | 33.3% [0, 100] | 2.66 | +14.8% | 0 (0–1) | no — 3 picks |
+| e 0.05 | 0% | 2.36 | −100% | 0 (0–1) | no — 1 pick |
+| e 0.00 + agreement | 100% | 2.50 | +150% | 0 (0–1) | **marked by the rule as written — void, 1 pick** |
+
+> **No cell is marked on a real interval.** The rule as I registered it marks
+> one: lane 2, e = 0.00 with agreement — **a single winning pick**. A
+> bootstrap of identical outcomes has zero width, so one win "clears"
+> anything. I registered no minimum n. The mark is reported as the rule
+> produced it and flagged as having no interval behind it; that is a defect
+> in my registration, not a result.
+
+36 comparisons were declared; 1.8 false positives are expected at 95% if
+nothing is true. None survived to need the correction.
+
+**A mixed card, as arithmetic only** — lane 1 at 0.54 (57.4%) with lane 2 at
+e = 0.00 (33.3% on nine picks): 55.0% at 90/10, 51.4% at 75/25, 45.4% at
+50/50. The second number in each sum rests on nine picks.
+
+**The cohort bump switching would require.** One commit: `selection_mode`
+set to `confident_value`; `betting.selection_mode` and every
+`betting.confident_value.*` key added to `TRACKED_KEYS` (the invariant
+permits `betting.*`); `CODE_REVISION` **s5.22 → s5.23**; invariant 6b and
+the four revision pins moved with the argument beside each. And these are
+open before that commit, listed and left:
+
+1. **`zero_pick_streak` would count a legitimate zero-pick day as a loss.**
+   It defines the loss as "a card and zero picks". Under this rule that is 5
+   to 51 days in 56.
+2. **A client sees nothing on a zero-pick day.** The existing rule is that an
+   empty card is operator content. Whether silence is right for a rule that
+   has zero-pick days by design is the operator's call.
+3. **The current gates are not applied** in the new mode — `excluded_markets`,
+   `min_odds`, the EV and confidence gates, forced picks, and
+   `wc_pick_every_match`. The backtest ran without them, so the flag does too.
+4. **The corrected Elo is not deployed.** The flag reads the deployed one and
+   the deployed-Elo weights; on 1X2 the difference is 0.04 against 0.06.
+5. **The prediction I registered was right, which means there is no finding
+   to switch on**: a market-only probability, a break-even return at
+   1.70–1.80, and a current rule that loses 5.5% at 1.63. The case for
+   switching is that the current rule's hit rate is bought with a price the
+   operator has said is not a good one — not that the new rule has an edge.
+
+### Ratchets and census
+
+Census 155→157 files, both new files non-gating by the classifier's own
+reading (`test_confident_value.py` 38 tests, `test_confident_backtest.py`
+27); gate unchanged at 1797, non-gating 1104→1169. So the flag-off
+byte-identity control does not gate a run — right while the flag is off, and
+to be revisited in the commit that switches it. `confident_backtest.py` is
+declared as a snapshot reader. The falsy-zero ratchet fired on four lines of
+the new script and was fixed, not raised.
+
+**One defect of mine caught by an existing test.** The branch that words the
+no-picks line first called `mode_of()`, which refuses an unknown mode — so a
+zero-pick day could raise, the one day the directive says must not.
+`test_sharding`, which runs `main()` behind a mocked config, went red. The
+branch now compares the raw config value and calls nothing that can refuse; a
+test pins that from the AST. The sharding test was not touched.
+
+The weekday schedule-margin test is still red, as before this stage.
+
+*Recorded 2026-11-13. `src/betting/confident_value.py`,
+`scripts/confident_backtest.py`, `src/agent/betting_agent.py`,
+`config/config.example.yaml`, `tests/test_confident_value.py`,
+`tests/test_confident_backtest.py`,
+`docs/confident-value-preregistration.md` (`4fcdd83`).*

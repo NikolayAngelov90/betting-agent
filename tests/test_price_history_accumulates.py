@@ -225,6 +225,17 @@ _SNAPSHOT_READERS = {
     "quote_age.py": (
         "the freshness census: counts quotes by the age of the bookmaker's "
         "own last_update. Reads timestamps only; feeds no prediction"),
+    # the CLOSING-EDGE measurement, Stage 31 Part D, 2026-11-12. Registered in
+    # docs/confident-value-preregistration.md before it ran. It reads prices
+    # and timestamps to ask whether a price that beats the sharp anchor at
+    # one instant still beats it at the anchor's last pre-kickoff quote. No
+    # score, no pick, no result -- and it is a script: the selection module
+    # `src/betting/confident_value.py`, which the pipeline flag reads, does
+    # not name this table and is not excused by this entry (the scan keys on
+    # the file NAME, which is why the two files are named differently).
+    "confident_backtest.py": (
+        "Part D: the closing edge of generous prices on fixtures with a "
+        "price path. Measures the history; feeds no prediction"),
     # the RESEARCH consumer, wired 2026-10-10
     "h1_collection_check.py": (
         "H1's analysis. It MEASURES the price path; it does not feed a "

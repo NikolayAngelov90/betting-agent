@@ -966,6 +966,105 @@ class FootballBettingAgent:
             )
         return skip
 
+    def _select_recommendations(self, predictions, odds_data, match_name,
+                                context, *, home_team_name, away_team_name,
+                                match_id, league, kickoff=None,
+                                home_id=None, away_id=None):
+        """`(recommendations, confident_mode)` for one fixture.
+
+        Stage 31 Part E. ONE SWITCH, READ IN ONE PLACE.
+
+        `betting.selection_mode: standard` (the default; an absent key means
+        the same) returns `find_value_bets(...)` with the arguments it has
+        always had, so the picks are byte-identical to the code before this
+        method existed -- a test drives that equality.
+
+        `confident_value` returns at most ONE pick: the leg with the highest
+        BLENDED probability among those whose taken price is at least
+        `betting.confident_value.min_price` and whose blended probability is
+        at least `betting.confident_value.p_min`. An empty list is a valid
+        answer and is not an error. The ensemble's own outputs are still
+        computed by the caller and are recorded on the pick.
+
+        The rule itself lives in `src.betting.confident_value`, which the
+        backtest reads too. Nothing about it is implemented here.
+        """
+        from src.betting import confident_value as _cv
+        if _cv.mode_of(self.config) != _cv.MODE_CONFIDENT_VALUE:
+            return self.value_calculator.find_value_bets(
+                predictions, odds_data, match_name, context,
+                home_team_name=home_team_name, away_team_name=away_team_name,
+                match_id=match_id, league=league,
+            ), False
+
+        rows = self._odds_rows_with_time(match_id, kickoff)
+        sets, _refused = _cv.build_sets(rows)
+        priced = _cv.slots(sets)
+        # Poisson has an OPINION only on teams its fit has seen. The backtest
+        # drops the source for an unseen team instead of taking the
+        # league-average number `predict()` would return, and so does this.
+        poisson_pred = predictions.get("poisson")
+        known = getattr(getattr(getattr(self, "predictor", None), "poisson",
+                                None), "_team_strengths", None)
+        if known is not None and home_id is not None and away_id is not None \
+                and (home_id not in known or away_id not in known):
+            poisson_pred = None
+        legs = _cv.legs_for_fixture(
+            match_id, priced,
+            {"elo": predictions.get("elo"), "poisson": poisson_pred},
+            _cv.weights_from_config(self.config))
+        rule = _cv.rule_from_config(self.config)
+        chosen = _cv.select(legs, rule)
+
+        ensemble = predictions.get("ensemble", {})
+        recommendations = []
+        for leg in chosen:
+            market, market_key = _cv.PICKABLE[leg.selection]
+            rec = self.value_calculator._build_pick(
+                predictions, ensemble, context or {}, match_name, match_id,
+                league, odds_data, market, leg.selection, leg.p, market_key,
+                leg.taken, home_team_name=home_team_name,
+                away_team_name=away_team_name)
+            # What the RULE saw, kept beside what the ensemble said: the
+            # anchor's fair probability and book count that priced the leg,
+            # and the ensemble's own probability for the same selection.
+            rec.market_probability = round(leg.fair, 4)
+            rec.market_books = leg.books
+            _ens = ensemble.get(market_key)
+            rec.reasoning = (
+                f"[confident_value] blended p={leg.p:.3f} at taken "
+                f"{leg.taken:.2f}; anchor fair {leg.fair:.3f} "
+                f"({leg.books} books, {leg.feed}); agreement="
+                f"{'yes' if leg.agree else 'no'}; ensemble p="
+                + (f"{_ens:.3f}" if isinstance(_ens, (int, float)) else "n/a")
+                + ". " + (rec.reasoning or ""))
+            recommendations.append(rec)
+        logger.info(
+            f"confident_value: {match_name} -> {len(legs)} pickable leg(s), "
+            f"{len(recommendations)} pick(s) at price>={rule.lo:.2f}, "
+            f"p>={rule.p_min:.2f}")
+        return recommendations, True
+
+    def _odds_rows_with_time(self, match_id: int, kickoff=None) -> list:
+        """`(bookmaker, market_type, selection, odds_value, timestamp)` for a
+        fixture, PRE-KICKOFF rows only.
+
+        Read only by the `confident_value` mode, which needs the timestamp to
+        tell one snapshot from two; the standard path never calls this, so it
+        costs the default mode no query. A row with no timestamp is dropped:
+        a price that cannot be placed in a snapshot cannot be compared with
+        the anchor.
+        """
+        with self.db.get_session() as session:
+            rows = session.query(
+                Odds.bookmaker, Odds.market_type, Odds.selection,
+                Odds.odds_value, Odds.timestamp,
+            ).filter_by(match_id=match_id).all()
+        return [(r.bookmaker, r.market_type, r.selection, r.odds_value,
+                 r.timestamp) for r in rows
+                if r.timestamp is not None
+                and (kickoff is None or r.timestamp < kickoff)]
+
     def _should_force_pick(self, league: str, coverage_score: float) -> bool:
         """Whether a fixture with NO value pick still gets a forced tracked pick.
 
@@ -1127,11 +1226,16 @@ class FootballBettingAgent:
         if hasattr(self.predictor, "pick_calibration") and self.predictor.pick_calibration:
             context["pick_calibration"] = self.predictor.pick_calibration
 
-        # Find value bets
-        recommendations = self.value_calculator.find_value_bets(
+        # Find value bets. Stage 31 Part E: the SELECTION MODE decides which
+        # rule answers. `standard` -- the default, and the only mode the
+        # deployed config names -- is `find_value_bets`, called exactly as it
+        # was. `confident_value` is a different rule behind a flag that is
+        # off; see `_select_recommendations`.
+        recommendations, _confident = self._select_recommendations(
             predictions, odds_data, match_name, context,
             home_team_name=home_team_name, away_team_name=away_team_name,
-            match_id=match_id, league=league,
+            match_id=match_id, league=league, kickoff=match_date,
+            home_id=home_id, away_id=away_id,
         )
 
         # Forced picks: when a fixture produces no value bet, still save the
@@ -1144,7 +1248,12 @@ class FootballBettingAgent:
         #      disables). Prevents whole no-pick days (2026-07-08: 7 qualifying
         #      fixtures, 0 picks) without betting blind on minnows the model
         #      has never seen. Claude's review still verifies/switches it.
-        if not recommendations:
+        # `and not _confident`: the forced pick exists to keep the STANDARD
+        # rule from producing whole no-pick days. Under `confident_value` a
+        # fixture where nothing clears the price and the probability floor is
+        # the rule's answer, and refilling it here would put back exactly the
+        # picks the rule declined.
+        if not recommendations and not _confident:
             from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
             _is_national = league in NATIONAL_TEAM_LEAGUES
             if self._should_force_pick(league, coverage["score"]):
@@ -4840,7 +4949,26 @@ async def main():
 
 
             if not picks:
-                print("No value picks found for today.")
+                # Under `confident_value` this is the RULE's answer on a day
+                # when nothing cleared the price and the probability floor --
+                # not a failure, and it must not read like one. The line the
+                # standard mode prints is unchanged, byte for byte.
+                #
+                # A PLAIN COMPARISON, NOT `mode_of()`. `mode_of` REFUSES an
+                # unknown value, which is right where a rule is being chosen
+                # and wrong here: this branch only words a message, and the
+                # first version let it raise on a zero-pick day -- the one
+                # day that must not error. `test_sharding` caught it with a
+                # mocked config. Anything that is not exactly the new mode
+                # prints the standard line.
+                from src.betting import confident_value as _cv_mode
+                if agent.config.get("betting.selection_mode", None) \
+                        == _cv_mode.MODE_CONFIDENT_VALUE:
+                    print("No picks today: no leg met the confident_value "
+                          "rule (taken price and blended probability). This "
+                          "is a valid outcome of the rule, not a failure.")
+                else:
+                    print("No value picks found for today.")
             else:
                 # Claude reviews EVERY pick (WC every-match + club value picks),
                 # making the final KEEP/CHANGE call on each tracked bet. No

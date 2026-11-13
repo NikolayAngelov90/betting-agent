@@ -306,6 +306,34 @@ betting:
   # highest-ranked one by the system's own ordering
   # (EV x confidence x agreement x contrarian).
   max_picks_per_match: 1
+  # ── SELECTION MODE. Stage 31 Part E, 2026-11-12. NOT SWITCHED ON. ──────
+  #
+  # `standard` is the rule that has always run. `confident_value` is a
+  # different rule, wired behind this flag and OFF: one pick per fixture, the
+  # leg with the highest BLENDED probability among those whose taken price is
+  # at least `min_price` and whose blended probability is at least `p_min`.
+  # No daily count -- a day on which nothing qualifies produces no picks.
+  #
+  # These keys are deliberately NOT in TRACKED_KEYS, so wiring them moves no
+  # fingerprint. SWITCHING the mode is a selection change: it needs the keys
+  # tracked and a cohort bump in the same commit. See the decision table in
+  # docs/ci-audit-ledger.md before changing either line.
+  selection_mode: standard
+  confident_value:
+    min_price: 1.70           # the operator's definition of a good price
+    # NOT A RECOMMENDATION. The midpoint of the registered grid
+    # {0.50, 0.52, 0.54, 0.56, 0.58}; the decision table marks a cell or
+    # marks none, and this number has to be set from it by a person.
+    p_min: 0.54
+    require_agreement: false
+    # Blend weights per family, fitted on development with the DEPLOYED Elo
+    # (the one the pipeline can read). Each vector must be non-negative and
+    # sum to 1; a malformed one is refused, not repaired.
+    weights:
+      "1X2": {market: 0.94, elo: 0.04, poisson: 0.02}
+      over_under: {market: 1.00, poisson: 0.00}
+      btts: {market: 1.00, poisson: 0.00}
+      team_goals: {market: 0.97, poisson: 0.03}
   # WC mode: save a tracked pick for EVERY World Cup match even when no value
   # edge exists (highest-EV selection, staked at the Kelly minimum). National-team
   # competitions only — club leagues keep value-only discipline. Set false to
