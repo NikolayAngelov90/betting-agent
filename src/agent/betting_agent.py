@@ -1065,6 +1065,102 @@ class FootballBettingAgent:
                 if r.timestamp is not None
                 and (kickoff is None or r.timestamp < kickoff)]
 
+    def _recommendations_for_fixture(self, predictions, odds_data, match_name,
+                                     context, *, home_team_name,
+                                     away_team_name, match_id, league,
+                                     kickoff, home_id, away_id,
+                                     coverage_score, low_coverage):
+        """`(recommendations, confident_mode)` for one analysed fixture.
+
+        Stage 32 Part A. Everything `analyze_fixture` does to turn
+        predictions into picks, in one place, so the two promises the
+        operator asked for are DRIVEN rather than read off the source:
+
+          * `confident_value` makes NO forced pick. A fixture where nothing
+            clears the price and the probability floor gets no pick; refilling
+            it would put back exactly the picks the rule declined.
+          * `confident_value` does NOT apply `excluded_markets`. The rule was
+            backtested without it, so it runs without it.
+
+        Under `standard` this is `find_value_bets` and then, if that found
+        nothing, the forced pick -- byte for byte what it was.
+        """
+        recommendations, confident = self._select_recommendations(
+            predictions, odds_data, match_name, context,
+            home_team_name=home_team_name, away_team_name=away_team_name,
+            match_id=match_id, league=league, kickoff=kickoff,
+            home_id=home_id, away_id=away_id,
+        )
+        if not recommendations and not confident:
+            best = self._forced_pick(
+                predictions, odds_data, match_name, context,
+                home_team_name=home_team_name, away_team_name=away_team_name,
+                match_id=match_id, league=league,
+                coverage_score=coverage_score, low_coverage=low_coverage)
+            if best:
+                recommendations = [best]
+        return recommendations, confident
+
+    def _forced_pick(self, predictions, odds_data, match_name, context, *,
+                     home_team_name, away_team_name, match_id, league,
+                     coverage_score, low_coverage):
+        """The STANDARD rule's forced pick for a fixture with no value bet,
+        or None. Extracted VERBATIM from `analyze_fixture` (Stage 32 Part A)
+        so that "flag on -> zero forced picks" can be driven rather than read
+        off the source; the caller decides whether a forced pick is allowed.
+
+        When a fixture produces no value bet, still save the single best
+        bettable selection so the match gets a tracked pick -- for two fixture
+        classes:
+          1. National-team competitions (WC): EVERY match gets a pick
+             (betting.wc_pick_every_match).
+          2. Club fixtures where the model actually KNOWS the teams --
+             coverage >= betting.club_pick_min_coverage (default 0.75; 0
+             disables). Prevents whole no-pick days (2026-07-08: 7 qualifying
+             fixtures, 0 picks) without betting blind on minnows the model has
+             never seen.
+        """
+        from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
+        _is_national = league in NATIONAL_TEAM_LEAGUES
+        if not self._should_force_pick(league, coverage_score):
+            return None
+        # On low-coverage WC fixtures the model is essentially blind, so let
+        # the MARKET pick the favourite (maximise win rate) instead of chasing
+        # the model's noisy EV.
+        # Club forced-pick quality floors. Both are outcome-derived gates
+        # fitted on 41 settled picks; neither survived walk-forward validation
+        # (club_pick_min_ev's excluded cohort returned +4.3% in the holdout and
+        # the gate cost 1.95pp of overall holdout ROI; club_pick_min_blend cost
+        # 0.46pp). They are declared in gate_registry and default to OFF -- set
+        # betting.gates.* to re-enable. WC pick-every-match was never floored.
+        _blend_floor = 0.0
+        if not _is_national and _gate_enabled(self.config, "club_pick_min_blend"):
+            _blend_floor = float(
+                self.config.get("betting.club_pick_min_blend", 0.55) or 0)
+        _ev_floor = None
+        if not _is_national and _gate_enabled(self.config, "club_pick_min_ev"):
+            _ev_cfg = self.config.get("betting.club_pick_min_ev", -0.05)
+            _ev_floor = None if _ev_cfg is None else float(_ev_cfg)
+        best = self.value_calculator.find_best_bet(
+            predictions, odds_data, match_name, context,
+            home_team_name=home_team_name, away_team_name=away_team_name,
+            match_id=match_id, league=league,
+            prefer_market=bool(low_coverage),
+            min_blend_prob=_blend_floor,
+            min_forced_ev=_ev_floor,
+        )
+        if best:
+            best.is_forced = True  # one-per-match guard in _save_picks
+            _basis = "market favourite (thin data)" if low_coverage else "model EV"
+            _kind = ("WC pick-every-match" if _is_national
+                     else f"Club pick (coverage {coverage_score:.0%})")
+            logger.info(
+                f"{_kind}: {match_name} → {best.selection} "
+                f"@ {best.odds:.2f} (EV {best.expected_value:+.1%}, "
+                f"conf {best.confidence:.0%}; {_basis})"
+            )
+        return best
+
     def _should_force_pick(self, league: str, coverage_score: float) -> bool:
         """Whether a fixture with NO value pick still gets a forced tracked pick.
 
@@ -1226,75 +1322,15 @@ class FootballBettingAgent:
         if hasattr(self.predictor, "pick_calibration") and self.predictor.pick_calibration:
             context["pick_calibration"] = self.predictor.pick_calibration
 
-        # Find value bets. Stage 31 Part E: the SELECTION MODE decides which
-        # rule answers. `standard` -- the default, and the only mode the
-        # deployed config names -- is `find_value_bets`, called exactly as it
-        # was. `confident_value` is a different rule behind a flag that is
-        # off; see `_select_recommendations`.
-        recommendations, _confident = self._select_recommendations(
+        # The selection, in ONE method a test can drive (Stage 32 Part A):
+        # the mode decides the rule, and only the STANDARD rule may force a
+        # pick onto a fixture with none. See `_recommendations_for_fixture`.
+        recommendations, _confident = self._recommendations_for_fixture(
             predictions, odds_data, match_name, context,
             home_team_name=home_team_name, away_team_name=away_team_name,
             match_id=match_id, league=league, kickoff=match_date,
             home_id=home_id, away_id=away_id,
-        )
-
-        # Forced picks: when a fixture produces no value bet, still save the
-        # single best bettable selection so the match gets a tracked pick —
-        # for two fixture classes:
-        #   1. National-team competitions (WC): EVERY match gets a pick
-        #      (betting.wc_pick_every_match).
-        #   2. Club fixtures where the model actually KNOWS the teams —
-        #      coverage >= betting.club_pick_min_coverage (default 0.75; 0
-        #      disables). Prevents whole no-pick days (2026-07-08: 7 qualifying
-        #      fixtures, 0 picks) without betting blind on minnows the model
-        #      has never seen. Claude's review still verifies/switches it.
-        # `and not _confident`: the forced pick exists to keep the STANDARD
-        # rule from producing whole no-pick days. Under `confident_value` a
-        # fixture where nothing clears the price and the probability floor is
-        # the rule's answer, and refilling it here would put back exactly the
-        # picks the rule declined.
-        if not recommendations and not _confident:
-            from src.models.poisson_model import NATIONAL_TEAM_LEAGUES
-            _is_national = league in NATIONAL_TEAM_LEAGUES
-            if self._should_force_pick(league, coverage["score"]):
-                # On low-coverage WC fixtures the model is essentially blind, so
-                # let the MARKET pick the favourite (maximise win rate) instead of
-                # chasing the model's noisy EV. The briefing LLM (live web
-                # research) can still CHANGE the selection afterward.
-                # Club forced-pick quality floors. Both are outcome-derived gates
-                # fitted on 41 settled picks; neither survived walk-forward
-                # validation (club_pick_min_ev's excluded cohort returned +4.3%
-                # in the holdout and the gate cost 1.95pp of overall holdout ROI;
-                # club_pick_min_blend cost 0.46pp). They are declared in
-                # gate_registry and default to OFF — set betting.gates.* to
-                # re-enable. WC pick-every-match was never floored.
-                _blend_floor = 0.0
-                if not _is_national and _gate_enabled(self.config, "club_pick_min_blend"):
-                    _blend_floor = float(
-                        self.config.get("betting.club_pick_min_blend", 0.55) or 0)
-                _ev_floor = None
-                if not _is_national and _gate_enabled(self.config, "club_pick_min_ev"):
-                    _ev_cfg = self.config.get("betting.club_pick_min_ev", -0.05)
-                    _ev_floor = None if _ev_cfg is None else float(_ev_cfg)
-                best = self.value_calculator.find_best_bet(
-                    predictions, odds_data, match_name, context,
-                    home_team_name=home_team_name, away_team_name=away_team_name,
-                    match_id=match_id, league=league,
-                    prefer_market=bool(low_coverage),
-                    min_blend_prob=_blend_floor,
-                    min_forced_ev=_ev_floor,
-                )
-                if best:
-                    best.is_forced = True  # one-per-match guard in _save_picks
-                    recommendations = [best]
-                    _basis = "market favourite (thin data)" if low_coverage else "model EV"
-                    _kind = ("WC pick-every-match" if _is_national
-                             else f"Club pick (coverage {coverage['score']:.0%})")
-                    logger.info(
-                        f"{_kind}: {match_name} → {best.selection} "
-                        f"@ {best.odds:.2f} (EV {best.expected_value:+.1%}, "
-                        f"conf {best.confidence:.0%}; {_basis})"
-                    )
+            coverage_score=coverage["score"], low_coverage=low_coverage)
 
         for rec in recommendations:
             rec.match_date = match_date
@@ -1456,6 +1492,12 @@ class FootballBettingAgent:
             Tuple of (picks, new_picks, dropped_picks)
         """
         target = target_date or date.today()
+        # Stage 32 Part A: WHAT THIS RUN CONCLUDED, set at every return. Read
+        # by `main()` to record the day (`src/data/pick_runs.py`), so the
+        # loss alert can tell "evaluated, nothing qualified" from "never got
+        # that far". None until a return point sets it.
+        from src.data import pick_runs as _pr
+        self.last_pick_run = None
 
         # Stage 10.3 — preflight the attribution table BEFORE anything else.
         #
@@ -1517,6 +1559,8 @@ class FootballBettingAgent:
                     f"Today's picks already generated ({_existing} picks). "
                     f"Use --force to regenerate."
                 )
+                self.last_pick_run = {"stage": _pr.STAGE_ALREADY_GENERATED,
+                                      "fixtures": None, "errors": 0}
                 return [], [], []
 
         league_label = f" (leagues: {', '.join(leagues)})" if leagues else ""
@@ -1616,6 +1660,8 @@ class FootballBettingAgent:
 
         if not fixture_ids:
             logger.info(f"No fixtures found for {target}")
+            self.last_pick_run = {"stage": _pr.STAGE_NO_FIXTURES,
+                                  "slate": 0, "fixtures": 0, "errors": 0}
             return [], [], []
 
         # ── API-Football odds fallback ─────────────────────────────────────────
@@ -1823,6 +1869,7 @@ class FootballBettingAgent:
         # Feature engineering costs ~1s × 146 DB queries on Neon.  Fixtures with
         # zero odds can never produce an EV bet — skip them before analysis to avoid
         # wasting the full 45-minute CI budget on a large Sunday fixture slate.
+        _slate = len(fixture_ids)
         with self.db.get_session() as session:
             odds_fixture_ids = []
             no_odds_count = 0
@@ -1856,6 +1903,10 @@ class FootballBettingAgent:
 
         if not fixture_ids:
             logger.info("No fixtures with bookmaker odds for analysis")
+            self.last_pick_run = {
+                "stage": (_pr.STAGE_SHARD if shards and shards > 1
+                          else _pr.STAGE_NO_PRICED_FIXTURES),
+                "slate": _slate, "fixtures": 0, "errors": 0}
             return [], [], []
 
         # Bulk-preload all DB data for the fixture loop in a single batch.
@@ -1887,9 +1938,11 @@ class FootballBettingAgent:
 
         all_recommendations = []
         _skipped_coverage = 0
+        _analysis_errors = 0
         for mid, result in zip(fixture_ids, analyses):
             if isinstance(result, Exception):
                 logger.error(f"Error analyzing match {mid}: {result}")
+                _analysis_errors += 1
                 continue
             if not result.predictions:
                 _skipped_coverage += 1  # analyze_fixture bailed on zero coverage
@@ -1907,6 +1960,11 @@ class FootballBettingAgent:
         # candidates instead, and the collect step runs the global phase
         # once over the union. Extracted rather than duplicated so the
         # sharded and unsharded paths cannot drift apart.
+        self.last_pick_run = {
+            "stage": (_pr.STAGE_SHARD if shards and shards > 1
+                      else _pr.STAGE_EVALUATED),
+            "slate": _slate, "fixtures": len(fixture_ids),
+            "errors": _analysis_errors}
         if shards and shards > 1:
             logger.info(
                 f"Shard {shard}/{shards}: {len(all_recommendations)} candidate "
@@ -4920,6 +4978,12 @@ async def main():
                 agent._recent_roi = None
                 agent._recent_roi_n = 0
                 agent._auto_calibrate_ev_threshold()
+                # Stage 32: the shards evaluated the fixtures and this
+                # process did not see how many, so a zero here cannot be
+                # recorded as "none qualified" -- `fixtures: None` makes it
+                # INCOMPLETE, which the loss alert treats as a loss.
+                agent.last_pick_run = {"stage": "EVALUATED", "slate": None,
+                                       "fixtures": None, "errors": 0}
                 picks, new_picks, dropped_picks = agent.finalize_picks(
                     candidates, date.today()
                 )
@@ -4948,25 +5012,65 @@ async def main():
                 )
 
 
+            # ── STAGE 32 PART A: RECORD WHAT THIS RUN CONCLUDED ABOUT THE DAY.
+            #
+            # One row per run in `pick_runs`, read by the loss alert to tell
+            # "evaluated, nothing qualified" (a state) from "never got that
+            # far" (a failure). `classify` returns None for an idempotent skip
+            # or a shard, which conclude nothing about the day. Never raises.
+            from src.data import pick_runs as _pick_runs
+            _stage = getattr(agent, "last_pick_run", None)
+            if not isinstance(_stage, dict):
+                _stage = None
+            _outcome = _pick_runs.classify(_stage, len(picks or []))
+            _mode_raw = agent.config.get("betting.selection_mode", None)
+            if _outcome is not None:
+                try:
+                    from src.models.model_version import \
+                        model_version as _mv
+                    _version = _mv(agent.config)
+                except Exception:                     # noqa: BLE001
+                    _version = ""
+                _pick_runs.record(
+                    agent.db, pick_date=date.today(),
+                    selection_mode=str(_mode_raw or "standard"),
+                    outcome=_outcome,
+                    fixtures_on_slate=(_stage or {}).get("slate"),
+                    fixtures_evaluated=(_stage or {}).get("fixtures"),
+                    analysis_errors=int((_stage or {}).get("errors", 0) or 0),
+                    picks_saved=len(picks or []),
+                    model_version=_version)
+
             if not picks:
-                # Under `confident_value` this is the RULE's answer on a day
-                # when nothing cleared the price and the probability floor --
-                # not a failure, and it must not read like one. The line the
-                # standard mode prints is unchanged, byte for byte.
-                #
                 # A PLAIN COMPARISON, NOT `mode_of()`. `mode_of` REFUSES an
                 # unknown value, which is right where a rule is being chosen
-                # and wrong here: this branch only words a message, and the
-                # first version let it raise on a zero-pick day -- the one
-                # day that must not error. `test_sharding` caught it with a
-                # mocked config. Anything that is not exactly the new mode
-                # prints the standard line.
+                # and wrong here: this branch only words a message, and a
+                # zero-pick day is the one day that must not error.
+                # `test_sharding` caught the first version with a mocked
+                # config. Anything that is not exactly the new mode prints the
+                # standard line, byte for byte.
                 from src.betting import confident_value as _cv_mode
-                if agent.config.get("betting.selection_mode", None) \
-                        == _cv_mode.MODE_CONFIDENT_VALUE:
-                    print("No picks today: no leg met the confident_value "
-                          "rule (taken price and blended probability). This "
-                          "is a valid outcome of the rule, not a failure.")
+                if _mode_raw == _cv_mode.MODE_CONFIDENT_VALUE:
+                    if _outcome in _pick_runs.EVALUATED_EMPTY:
+                        print(f"No picks today ({_outcome}): the day was "
+                              f"evaluated in full and no fixture met the "
+                              f"confident_value rule. This is a valid "
+                              f"outcome of the rule, not a failure.")
+                        # The client hears ONE plain line -- and only on
+                        # this branch. A run that broke never reaches it, so
+                        # a failure is never announced as a quiet day.
+                        if agent.telegram.enabled and not agent.config.get(
+                                "notifications.suppress_picks_summary", False):
+                            try:
+                                await agent.telegram.send_daily_picks(
+                                    [], no_picks_outcome=_outcome)
+                            except Exception as _np_e:  # noqa: BLE001
+                                logger.warning(
+                                    f"zero-pick line not sent: {_np_e}")
+                    else:
+                        print(f"No picks today, and the day was NOT evaluated "
+                              f"in full (outcome {_outcome}). This is not the "
+                              f"rule's answer; nothing was sent to the client.")
                 else:
                     print("No value picks found for today.")
             else:

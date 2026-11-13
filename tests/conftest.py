@@ -175,6 +175,8 @@ PRODUCTION_STATE_PATHS = (
     ("src.reporting.match_briefing", "_SENT_PATH", "file"),
     ("src.reporting.telegram_bot", "_PICKS_SENT_STATE", "file"),
     ("src.reporting.telegram_bot", "_COLD_STREAK_STATE", "file"),
+    # Stage 32: the date the client's zero-pick line was last sent.
+    ("src.reporting.telegram_bot", "_NO_PICKS_NOTICE_STATE", "file"),
     ("src.scrapers.barren_leagues", "DEFAULT_PATH", "file"),
     ("src.scrapers.historical_loader", "CACHE_FILE", "file"),
     ("src.scrapers.theodds_scraper", "_CREDITS_STATE_PATH", "file"),

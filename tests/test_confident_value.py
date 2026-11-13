@@ -505,23 +505,21 @@ def test_FLAG_ON_no_anchor_no_odds_and_no_timestamp_each_give_ZERO_PICKS():
 
 
 def test_FLAG_ON_the_FORCED_PICK_does_not_refill_a_zero_pick_fixture():
-    """From the AST of the analysis function: the forced-pick block is
-    guarded on the confident flag, so a fixture where nothing qualifies
-    stays at zero picks instead of being topped up by the old rule."""
+    """From the AST of `_recommendations_for_fixture` (Stage 32): the one
+    `_forced_pick` call is guarded on the confident flag. The DRIVEN version
+    is `tests/test_zero_pick_states.py::test_DRIVEN_the_NEW_MODE_makes_ZERO_
+    FORCED_PICKS`, with the standard mode as its known-wrong control."""
     src = pathlib.Path("src/agent/betting_agent.py").read_text(
         encoding="utf-8")
     tree = ast.parse(src)
-    guards = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        if any(isinstance(c, ast.Call)
-               and getattr(c.func, "attr", "") == "_should_force_pick"
-               for c in ast.walk(node)):
-            guards.append(ast.get_source_segment(src, node.test) or "")
-    assert guards, "the forced-pick block was not found"
-    assert any("_confident" in g and "not recommendations" in g
-               for g in guards), guards
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+              and n.name == "_recommendations_for_fixture")
+    guards = [ast.get_source_segment(src, n.test) or "" for n in ast.walk(fn)
+              if isinstance(n, ast.If) and any(
+                  isinstance(c, ast.Call)
+                  and getattr(c.func, "attr", "") == "_forced_pick"
+                  for c in ast.walk(n))]
+    assert guards == ["not recommendations and not confident"], guards
 
 
 def test_a_ZERO_PICK_DAY_puts_NOTHING_in_front_of_the_client():
@@ -582,9 +580,13 @@ def test_the_ZERO_PICK_LINE_cannot_raise_whatever_the_config_holds():
     calls = {getattr(c.func, "attr", None) or getattr(c.func, "id", "")
              for stmt in branch.body
              for c in ast.walk(stmt) if isinstance(c, ast.Call)}
-    assert calls == {"get", "print"}, (
+    # Stage 32 added the client line, so the branch now SENDS -- but it
+    # still never VALIDATES the mode, which is what could raise.
+    assert "get" in calls, "anchor: the branch reads the config"
+    assert calls.isdisjoint({"mode_of", "rule_from_config"}), (
         f"the no-picks branch calls {sorted(calls)}; it must only read the "
         f"config, never validate it")
+    assert calls <= {"get", "print", "send_daily_picks", "warning"}, calls
     # the two lines it can print, and the standard one is unchanged
     texts = "".join(c.value for stmt in branch.body for c in ast.walk(stmt)
                     if isinstance(c, ast.Constant) and isinstance(c.value, str))

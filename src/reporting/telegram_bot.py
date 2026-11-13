@@ -46,6 +46,26 @@ NL = chr(10)
 _PICKS_SENT_STATE = Path("data/models/picks_sent_date.txt")
 
 
+def settlement_summary_line(picks) -> str:
+    """`Hit rate W/N (x%) · average odds o · return r per 1-unit pick`.
+
+    Pure. Over win/loss picks only; a void is neither a hit nor a miss and
+    returns its stake. Returns a plain statement, not an empty string, when
+    nothing was settled -- an empty line would read as a missing figure.
+    """
+    settled = [p for p in picks if p.get("result") in ("win", "loss")
+               and p.get("odds")]
+    n = len(settled)
+    if n == 0:
+        return "Hit rate, average odds and return: nothing settled."
+    wins = sum(1 for p in settled if p["result"] == "win")
+    avg_odds = sum(float(p["odds"]) for p in settled) / n
+    ret = sum((float(p["odds"]) - 1.0) if p["result"] == "win" else -1.0
+              for p in settled) / n
+    return (f"Hit rate {wins}/{n} ({wins / n:.0%}) · average odds "
+            f"{avg_odds:.2f} · return {ret:+.1%} per 1-unit pick")
+
+
 def _picks_sent_today() -> bool:
     """Return True if picks were already sent to Telegram today."""
     if _PICKS_SENT_STATE.exists():
@@ -57,6 +77,34 @@ def _mark_picks_sent_today() -> None:
     """Write today's date to the state file after a successful Telegram send."""
     _PICKS_SENT_STATE.parent.mkdir(parents=True, exist_ok=True)
     _PICKS_SENT_STATE.write_text(date.today().isoformat())
+
+
+# Stage 32 Part A. The date the zero-pick line was last sent, so a re-run
+# on the same day does not repeat it. data/models/ survives between runs
+# (the models cache), as `_PICKS_SENT_STATE` does.
+_NO_PICKS_NOTICE_STATE = Path("data/models/no_picks_notice_date.txt")
+
+
+def no_picks_line(outcome: str, day: date = None):
+    """The ONE line a client reads on a day with no picks, or None.
+
+    Only two outcomes earn it, and both mean the day was looked at in full:
+    NONE_QUALIFIED (matches existed, none met the criteria) and NO_FIXTURES
+    (there were no matches). Every other zero -- a run that broke, an
+    evaluation that raised, a slate with no prices -- returns None, and the
+    client hears nothing, because "no picks" would then be a false statement.
+
+    CLIENT LANGUAGE. No "pipeline", "run", "rule", "fixture", "error" or
+    "model": a test renders both lines and refuses those words.
+    """
+    day = day or date.today()
+    when = day.strftime("%d %b %Y")
+    if outcome == "NONE_QUALIFIED":
+        return f"No picks today ({when}): no match met the criteria."
+    if outcome == "NO_FIXTURES":
+        return (f"No picks today ({when}): there are no matches in the "
+                f"leagues we cover.")
+    return None
 
 
 _COLD_STREAK_STATE = Path("data/models/cold_streak_alerted_date.txt")
@@ -176,7 +224,7 @@ class TelegramNotifier:
                 logger.error(f"Failed to initialize Telegram bot: {e}")
         return self._bot
 
-    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None, no_injury_data: bool = False, injury_data_stale: bool = False, injury_budget_exhausted: bool = False, force: bool = False, paper_mode: bool = False, experiment=None):
+    async def send_daily_picks(self, picks: List[BetRecommendation], stats: dict = None, dropped_picks: list = None, no_injury_data: bool = False, injury_data_stale: bool = False, injury_budget_exhausted: bool = False, force: bool = False, paper_mode: bool = False, experiment=None, no_picks_outcome: str = None):
         """Send daily picks summary via Telegram with rich formatting.
 
         ``paper_mode`` prefixes an unmistakable banner. This message IS this
@@ -192,6 +240,35 @@ class TelegramNotifier:
             return
 
         if not picks:
+            # ── STAGE 32: A ZERO-PICK DAY THE RULE PRODUCED IS CLIENT CONTENT.
+            #
+            # Under `confident_value` a day with no picks is a designed
+            # outcome, and the people who read this channel should hear it in
+            # one plain line rather than read silence as a broken service.
+            # The caller passes the RECORDED outcome; only an outcome that
+            # means "looked at in full" produces a line (`no_picks_line`).
+            # Anything else falls through to the operator path below,
+            # unchanged.
+            line = no_picks_line(no_picks_outcome) if no_picks_outcome else None
+            if line is not None:
+                try:
+                    already = (_NO_PICKS_NOTICE_STATE.exists()
+                               and _NO_PICKS_NOTICE_STATE.read_text().strip()
+                               == date.today().isoformat())
+                except Exception:                     # noqa: BLE001
+                    already = False
+                if already:
+                    logger.info("zero-pick line already sent today")
+                    return
+                await self._send_chunked(line, "", report="no picks today",
+                                         to=self.chat_id)
+                try:
+                    _NO_PICKS_NOTICE_STATE.parent.mkdir(parents=True,
+                                                        exist_ok=True)
+                    _NO_PICKS_NOTICE_STATE.write_text(date.today().isoformat())
+                except Exception as _ne:              # noqa: BLE001
+                    logger.warning(f"Could not write the zero-pick state: {_ne}")
+                return
             # AN EMPTY CARD IS OPERATOR CONTENT, NOT CLIENT CONTENT.
             #
             # "No value picks found for today" cannot tell a reader a QUIET
@@ -497,8 +574,15 @@ class TelegramNotifier:
         label = yesterday.strftime('%d %b %Y') if yesterday_picks else "Recent"
         if picks_to_show:
             header = f"<b>📊 Settlement Report - {label}</b>\n"
-            profit_emoji = "📈" if profit >= 0 else "📉"
-            header += f"Batch: {wins}W-{losses}L ({win_rate:.0%}) {profit_emoji} {profit:+.1f}%\n"
+            # This REPLACES "Batch: 4W-3L (57%) +x%", whose figure was a
+            # stake-weighted share of bankroll: beside a per-unit return the
+            # message would have carried two different "returns".
+            # Stage 32 Part C: HIT RATE, AVERAGE ODDS AND RETURN, TOGETHER.
+            # A hit rate alone ranked two rules the wrong way round in Stage
+            # 31 (58.3% at 1.63 lost 5.5%), so none of the three is shown
+            # without the other two. Return is per 1-unit pick on the settled
+            # win/loss picks; voids are left out of all three.
+            header += settlement_summary_line(picks_to_show) + "\n"
         else:
             # Only pending picks to report — no settled batch header
             header = f"<b>📊 Settlement Report - {label}</b>\n"

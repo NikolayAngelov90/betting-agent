@@ -71,6 +71,78 @@ class DayLoss(NamedTuple):
     #: False when the card is 0 AND the update step never ran, so "no
     #: fixtures" and "we never looked" are not the same row.
     card_discovered: bool = True
+    #: Stage 32: what the picks run RECORDED about the day
+    #: (`src/data/pick_runs.py`), latest row wins. None = no row, which is a
+    #: run that never got far enough to say -- read as a failure.
+    outcome: Optional[str] = None
+    fixtures_evaluated: Optional[int] = None
+
+
+# ══════════ THREE STATES, PRINTED DIFFERENTLY. Stage 32 Part A, 2026-11-13 ═══
+#
+# A day with a card and no pick used to be ONE state: a loss. Under
+# `confident_value` the rule has zero-pick days by design (5 of 56 holdout
+# days at P_min 0.54), so that day is now three:
+#
+#   PICKS MADE            at least one pick saved
+#   NO FIXTURE QUALIFIED  the run evaluated the whole slate without an error
+#                         and nothing met the rule -- or there was nothing to
+#                         evaluate. A STATE: it ends a streak, it is not one.
+#   PIPELINE FAILED       anything else. No recorded outcome, an INCOMPLETE
+#                         evaluation, or fixtures with no price at all (a
+#                         broken odds feed looks exactly like that).
+#
+# The burden of proof sits with "nothing qualified": it needs a row saying
+# the evaluation completed. Silence stays a loss.
+STATE_PICKS_MADE = "PICKS MADE"
+STATE_NONE_QUALIFIED = "NO FIXTURE QUALIFIED"
+STATE_PIPELINE_FAILED = "PIPELINE FAILED"
+STATES = (STATE_PICKS_MADE, STATE_NONE_QUALIFIED, STATE_PIPELINE_FAILED)
+
+#: Recorded outcomes that mean "evaluated completely, and the answer was
+#: nothing". Kept equal to `src.data.pick_runs.EVALUATED_EMPTY` by a test;
+#: literal here so this script imports nothing from `src` at load.
+EVALUATED_EMPTY = ("NONE_QUALIFIED", "NO_FIXTURES")
+
+
+def day_state(r: DayLoss) -> str:
+    """One of `STATES`. Pure."""
+    if r.picks > 0:
+        return STATE_PICKS_MADE
+    if r.outcome in EVALUATED_EMPTY:
+        return STATE_NONE_QUALIFIED
+    if r.card == 0 and r.card_discovered:
+        return STATE_NONE_QUALIFIED      # a real empty card, as before
+    return STATE_PIPELINE_FAILED
+
+
+def format_day_states(rows: List[DayLoss]) -> str:
+    """One line per day, each state worded differently, so a reader never has
+    to infer which of the three a zero is."""
+    out = []
+    for r in rows:
+        st = day_state(r)
+        if st == STATE_PICKS_MADE:
+            detail = f"{r.picks} pick(s) saved from a card of {r.card}"
+        elif st == STATE_NONE_QUALIFIED:
+            if r.outcome == "NO_FIXTURES" or (r.card == 0 and r.outcome is None):
+                detail = "no fixtures to evaluate - not a loss"
+            else:
+                n = r.fixtures_evaluated
+                detail = (f"{'all ' + str(n) if n is not None else 'every'} "
+                          f"fixture(s) evaluated, none met the rule - "
+                          f"a state, not a loss")
+        else:
+            why = {None: "no completed evaluation was recorded",
+                   "INCOMPLETE": "the evaluation raised on at least one "
+                                 "fixture, so 'none qualified' cannot be "
+                                 "claimed",
+                   "NO_PRICED_FIXTURES": "fixtures existed but none had a "
+                                         "bookmaker price"}.get(
+                r.outcome, f"recorded outcome {r.outcome}")
+            detail = f"card {r.card}, no picks: {why} - A LOSS"
+        out.append(f"  {r.day}  {st:<20s}  {detail}")
+    return chr(10).join(out)
 
 
 def _in_tz(day: _dt.date, minutes_utc: int, tz_name: str = OPERATOR_TZ):
@@ -96,10 +168,11 @@ def zero_pick_streak(rows: List[DayLoss]) -> List[DayLoss]:
     """
     out: List[DayLoss] = []
     for r in reversed(rows):
-        if r.picks > 0:
+        # Stage 32: a day is in the streak only if its state is a FAILURE.
+        # PICKS MADE and NO FIXTURE QUALIFIED both end it -- the second
+        # includes the old "real empty card" case.
+        if day_state(r) != STATE_PIPELINE_FAILED:
             break
-        if r.card == 0 and r.card_discovered:
-            break                       # a real empty card: nothing was lost
         out.append(r)
     return list(reversed(out))
 
@@ -136,7 +209,9 @@ def format_loss_alert(streak: List[DayLoss],
     for r in streak:
         card = (f"{r.card} fixtures" if r.card_discovered
                 else f"card NEVER DISCOVERED (the update step did not run)")
-        lines.append(f"  {r.day}  {card}  picks saved: {r.picks}")
+        lines.append(f"  {r.day}  {card}  picks saved: {r.picks}  "
+                     f"[{day_state(r)}: recorded outcome "
+                     f"{r.outcome or 'NONE - the run never said'}]")
     if undiscovered:
         lines.append(f"  {len(undiscovered)} day(s) have NO card size because "
                      f"nothing looked - that is not the same as no fixtures.")
@@ -217,8 +292,8 @@ def format_loss_alert(streak: List[DayLoss],
     return chr(10).join(lines)
 
 
-def load_recent(days: int = 10, today: Optional[_dt.date] = None
-                ) -> Tuple[List[DayLoss], Optional[int], str]:
+def load_recent(days: int = 10, today: Optional[_dt.date] = None,
+                session=None) -> Tuple[List[DayLoss], Optional[int], str]:
     """`(rows, earliest_kickoff_min, basis)` from the database.
 
     Read-only. Returns an empty list rather than raising when the database is
@@ -226,6 +301,11 @@ def load_recent(days: int = 10, today: Optional[_dt.date] = None
     failure.
     """
     today = today or _dt.date.today()
+    # `session`: a caller-owned session (a test's scratch SQLite). When one
+    # is given NOTHING is loaded from `.env` and `get_db()` is never called,
+    # so a test of this reader cannot reach the production database.
+    if session is not None:
+        return _read_days(session, days, today)
     # LOADED INSIDE THE FUNCTION, never at import. A module-level
     # `load_dotenv()` undoes conftest's DATABASE_URL strip and has previously
     # let a test suite reach production. Without it `get_db()` silently falls
@@ -244,36 +324,66 @@ def load_recent(days: int = 10, today: Optional[_dt.date] = None
             continue
     try:
         from src.data.database import get_db
-        from sqlalchemy import text
     except Exception:                               # pragma: no cover
         return [], None, ""
+    try:
+        with get_db().get_session() as s:
+            return _read_days(s, days, today)
+    except Exception as exc:                        # noqa: BLE001
+        print(f"loss alert: database unreadable ({type(exc).__name__}) - "
+              f"reporting without card sizes")
+        return [], None, ""
+
+
+def _read_days(s, days: int, today: _dt.date
+               ) -> Tuple[List[DayLoss], Optional[int], str]:
+    """The reads, on a session the caller owns."""
+    from sqlalchemy import text
     rows: List[DayLoss] = []
     earliest: Optional[int] = None
     try:
-        with get_db().get_session() as s:
-            for back in range(days, -1, -1):
-                d = today - _dt.timedelta(days=back)
-                nxt = d + _dt.timedelta(days=1)
-                card = s.execute(text(
-                    "SELECT count(*) FROM matches "
-                    "WHERE match_date >= :a AND match_date < :b"),
-                    {"a": d.isoformat(), "b": nxt.isoformat()}).scalar() or 0
-                picks = s.execute(text(
-                    "SELECT count(*) FROM saved_picks "
-                    "WHERE created_at >= :a AND created_at < :b"),
-                    {"a": d.isoformat(), "b": nxt.isoformat()}).scalar() or 0
-                rows.append(DayLoss(d, int(card), int(picks),
-                                    card_discovered=bool(card)))
-            ko = s.execute(text(
-                "SELECT min(match_date) FROM matches "
+        # Stage 32: the latest recorded outcome per day. A database that
+        # predates the table reads as NO ROW for every day -- which is
+        # the conservative reading (every zero-pick day stays a loss),
+        # not an error.
+        outcomes = {}
+        try:
+            for d_, oc, fe in s.execute(text(
+                    "SELECT pick_date, outcome, fixtures_evaluated "
+                    "FROM pick_runs WHERE pick_date >= :a "
+                    "ORDER BY recorded_at"),
+                    {"a": (today - _dt.timedelta(days=days)).isoformat()}):
+                key = d_ if isinstance(d_, _dt.date) else \
+                    _dt.date.fromisoformat(str(d_)[:10])
+                outcomes[key] = (oc, fe)
+        except Exception:                       # noqa: BLE001
+            s.rollback()
+            outcomes = {}
+        for back in range(days, -1, -1):
+            d = today - _dt.timedelta(days=back)
+            nxt = d + _dt.timedelta(days=1)
+            card = s.execute(text(
+                "SELECT count(*) FROM matches "
                 "WHERE match_date >= :a AND match_date < :b"),
-                {"a": today.isoformat(),
-                 "b": (today + _dt.timedelta(days=1)).isoformat()}).scalar()
-            if ko is not None:
-                from scripts.schedule_deadline import as_datetime
-                ko = as_datetime(ko)
-                if ko is not None and not ko.microsecond:
-                    earliest = ko.hour * 60 + ko.minute
+                {"a": d.isoformat(), "b": nxt.isoformat()}).scalar() or 0
+            picks = s.execute(text(
+                "SELECT count(*) FROM saved_picks "
+                "WHERE created_at >= :a AND created_at < :b"),
+                {"a": d.isoformat(), "b": nxt.isoformat()}).scalar() or 0
+            oc, fe = outcomes.get(d, (None, None))
+            rows.append(DayLoss(d, int(card), int(picks),
+                                card_discovered=bool(card),
+                                outcome=oc, fixtures_evaluated=fe))
+        ko = s.execute(text(
+            "SELECT min(match_date) FROM matches "
+            "WHERE match_date >= :a AND match_date < :b"),
+            {"a": today.isoformat(),
+             "b": (today + _dt.timedelta(days=1)).isoformat()}).scalar()
+        if ko is not None:
+            from scripts.schedule_deadline import as_datetime
+            ko = as_datetime(ko)
+            if ko is not None and not ko.microsecond:
+                earliest = ko.hour * 60 + ko.minute
     except Exception as exc:                        # noqa: BLE001
         print(f"loss alert: database unreadable ({type(exc).__name__}) - "
               f"reporting without card sizes")
@@ -285,8 +395,11 @@ def load_recent(days: int = 10, today: Optional[_dt.date] = None
 def main() -> int:
     rows, earliest, basis = load_recent()
     streak = zero_pick_streak(rows)
+    # The three states, every run, so a zero is never left to inference.
+    print("pipeline_loss days (latest recorded outcome per day):")
+    print(format_day_states(rows[-7:]))
     if not streak:
-        print("pipeline_loss[0 consecutive zero-pick days with a card]")
+        print("pipeline_loss[0 consecutive PIPELINE FAILED days]")
         return 0
     body = format_loss_alert(
         streak, earliest, basis,

@@ -38843,3 +38843,96 @@ The weekday schedule-margin test is still red, as before this stage.
 `config/config.example.yaml`, `tests/test_confident_value.py`,
 `tests/test_confident_backtest.py`,
 `docs/confident-value-preregistration.md` (`4fcdd83`).*
+
+---
+
+## 2026-11-13 (II) — STAGE 32 PART A: `GAPS CLOSED` — a zero-pick day is a state
+
+Before the switch, the three gaps Stage 31 named. No selection change:
+`cohort_status.py` still reads **`s5.22 / 7f9e82`** at this commit.
+
+### 1. The loss alert — three states, printed differently, all three driven
+
+Every picks run now writes one row to a new table, `pick_runs`: what it
+evaluated and what it concluded (`src/data/pick_runs.py`).
+
+| recorded outcome | when | loss alert state |
+|---|---|---|
+| `PICKS_MADE` | at least one pick saved | **PICKS MADE** |
+| `NONE_QUALIFIED` | every fixture on the slate evaluated, **no error**, none met the rule | **NO FIXTURE QUALIFIED** — a state, ends a streak |
+| `NO_FIXTURES` | nothing to evaluate | **NO FIXTURE QUALIFIED** ("no fixtures to evaluate") |
+| `NO_PRICED_FIXTURES` | fixtures existed, none had a bookmaker price | **PIPELINE FAILED** |
+| `INCOMPLETE` | analysis raised on ≥ 1 fixture and no pick saved | **PIPELINE FAILED** |
+| *(no row)* | the run never got far enough to say | **PIPELINE FAILED** |
+
+> **The burden of proof sits with "nothing qualified".** It needs a row
+> saying the evaluation completed without an error. Silence stays a loss;
+> so does a slate with no prices, because a broken odds feed looks exactly
+> like that.
+
+Driven on scratch SQLite through `load_recent(session=...)` — which loads no
+`.env` and never calls `get_db()`, so the test cannot reach production: three
+days in, three states out (PICKS MADE / NO FIXTURE QUALIFIED / PIPELINE
+FAILED), and the streak is only the last. Known-wrong control: the same days
+with no recorded outcome are **all** losses, which is what the alert said
+before. A database without the table is read conservatively — every zero-pick
+day stays a loss, no error. The alert now prints the last seven days' states
+on every run.
+
+*Found on the way:* before this, a day with **zero** fixtures read as "card
+never discovered" and counted as a loss — the international window
+(2026-11-10 … 12) would have alerted for three days had the step run. A
+`NO_FIXTURES` row now makes it a state.
+
+### 2. The client on a zero-pick day — one plain line, rendered in a test
+
+| outcome | the client reads |
+|---|---|
+| `NONE_QUALIFIED` | `No picks today (13 Nov 2026): no match met the criteria.` |
+| `NO_FIXTURES` | `No picks today (13 Nov 2026): there are no matches in the leagues we cover.` |
+| anything else | **nothing** — the operator path, unchanged |
+
+Both lines are one line, ≤ 90 characters, and a test refuses "pipeline",
+"run", "rule", "fixture", "error", "fail", "model", "cohort", "card",
+"evaluated", "confident", "alert", "operator" in them. A re-run the same day
+does not repeat the line. The sender is `send_daily_picks` with a new
+`no_picks_outcome` argument, so the client-sender census is unchanged; the
+call in `main()` sits inside `if _outcome in EVALUATED_EMPTY` (pinned from the
+AST), so **a failure is never announced as a quiet day**.
+
+### 3. No forced picks, no `excluded_markets` — driven, not read off the source
+
+The selection tail of `analyze_fixture` moved into one method a test can
+call, `_recommendations_for_fixture`; the forced-pick block moved verbatim
+into `_forced_pick` (a line-by-line check found every executable line; the
+three that differ are the caller's assignment and the coverage parameter).
+
+| driven | new mode | standard mode (known-wrong control) |
+|---|---|---|
+| a fixture where nothing reaches p ≥ 0.54 at ≥ 1.70, forced pick available | **0 picks, the forced pick never called** | 1 forced pick |
+| Over 3.5 the best qualifying leg (`over_3.5` is in `excluded_markets`) | **Over 3.5 picked** at ≥ 1.70, p ≥ 0.54 | excluded |
+
+The config comment says so in words beside `selection_mode`: no forced picks
+(the club floors were fitted on 41 settled picks and neither survived
+walk-forward — `gate_registry`), no `excluded_markets`, none of the standard
+gates; a day with nothing qualifying is a state.
+
+### Also in this commit
+
+**The settlement message** reports hit rate, average odds and return
+together — `Hit rate 2/4 (50%) · average odds 1.79 · return −11.2% per 1-unit
+pick`, voids left out of all three. It **replaces** the old
+`Batch: 4W-3L (57%) +x%` line, whose figure was a stake-weighted share of
+bankroll: beside a per-unit return the message would have carried two
+different "returns". *(Part C asks for this; it is here because it is a
+client-message change like the zero-pick line.)*
+
+Ratchets that fired on this work, fixed and not raised: the production-state
+guard (the new date file is redirected in tests), two negative checks over
+AST sets (each now has a positive anchor in the same test). Census 157 → 158,
+gate 1797 → **1837**: `test_zero_pick_states.py` drives the record every run
+writes, so it belongs on the capture path.
+
+*Recorded 2026-11-13. `src/data/pick_runs.py`, `src/data/models.py`
+(`PickRun`), `scripts/pipeline_loss_alert.py`, `src/agent/betting_agent.py`,
+`src/reporting/telegram_bot.py`, `tests/test_zero_pick_states.py`.*

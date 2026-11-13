@@ -632,3 +632,39 @@ class InjuryObservation(Base):
     def __repr__(self):
         return (f"<InjuryObservation(team={self.team_id} {self.status} "
                 f"at {self.observed_at})>")
+
+
+class PickRun(Base):
+    """Stage 32 Part A -- what one picks run concluded about its day.
+
+    The loss alert reads this to tell a day the rule EVALUATED and found
+    nothing qualifying (a state) from a day the pipeline never finished
+    evaluating (a failure). Append-only: a re-run adds a row and the latest
+    row for a day is the one that counts. Vocabulary and the classifier live
+    in `src/data/pick_runs.py`.
+
+    Cohort-neutral: it records an outcome and selects nothing.
+    """
+
+    __tablename__ = 'pick_runs'
+
+    id = Column(Integer, primary_key=True)
+    pick_date = Column(Date, nullable=False)
+    recorded_at = Column(DateTime, nullable=False, default=utcnow)
+    selection_mode = Column(String(32))
+    outcome = Column(String(32), nullable=False)
+    #: fixtures found for the day before the odds filter; None = not reached
+    fixtures_on_slate = Column(Integer, nullable=True)
+    #: fixtures actually analysed; None = not reached
+    fixtures_evaluated = Column(Integer, nullable=True)
+    analysis_errors = Column(Integer, nullable=False, default=0)
+    picks_saved = Column(Integer, nullable=False, default=0)
+    model_version = Column(String(64))
+
+    __table_args__ = (
+        Index('ix_pick_runs_date', 'pick_date', 'recorded_at'),
+    )
+
+    def __repr__(self):
+        return (f"<PickRun({self.pick_date} {self.outcome} "
+                f"{self.picks_saved}/{self.fixtures_evaluated})>")

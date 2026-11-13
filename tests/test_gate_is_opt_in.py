@@ -176,7 +176,13 @@ from scripts.capture_critical import (
 #: NOT gate a run. That is the right side for it while the flag is off
 #: -- a non-gating failure costs no card -- and it should be revisited
 #: in the commit that switches the mode.
-CENSUS = {"files": 157, "capture_critical": 81, "not_critical": 76}
+#: RE-MEASURED 2026-11-13 (II), Stage 32 Part A: files 157 -> 158,
+#: `capture_critical` 81 -> 82, not_critical UNCHANGED at 76.
+#: `test_zero_pick_states.py` BELONGS on the capture path: it drives the
+#: record every picks run now writes (`pick_runs`) on scratch SQLite, the
+#: loss alert's reads, and the selection method `analyze_fixture` calls --
+#: a regression in any of them is exactly what should stop a run.
+CENSUS = {"files": 158, "capture_critical": 82, "not_critical": 76}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -458,8 +464,15 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       and a pre-column database gains the column through the existing
     #       nullable migration. It changes what the capture path WRITES, so a
     #       regression here is exactly what should stop a run.
-    assert len(gate) == 1797, (
-        f"the gating selection is {len(gate)}, recorded 1797 — say what moved")
+    #   +40 on 2026-11-13: test_zero_pick_states.py, Stage 32 Part A. A
+    #       zero-pick day is a STATE: the run records what it concluded, the
+    #       loss alert prints three states and counts only PIPELINE FAILED,
+    #       the client hears one plain line only on a day evaluated in full,
+    #       and the new mode's "no forced picks, no excluded_markets" is
+    #       driven against the standard mode doing the opposite. Every test is
+    #       deterministic: scratch SQLite, the YAML, the AST.
+    assert len(gate) == 1837, (
+        f"the gating selection is {len(gate)}, recorded 1837 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the

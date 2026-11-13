@@ -318,6 +318,20 @@ betting:
   # fingerprint. SWITCHING the mode is a selection change: it needs the keys
   # tracked and a cohort bump in the same commit. See the decision table in
   # docs/ci-audit-ledger.md before changing either line.
+  #
+  # WHAT THE NEW MODE DOES NOT DO, stated (Stage 32 Part A, driven in
+  # tests/test_zero_pick_states.py):
+  #   * NO FORCED PICKS. `club_pick_min_coverage` and `wc_pick_every_match`
+  #     refill a no-pick fixture under `standard` only. The club forced-pick
+  #     floors were fitted on 41 settled picks and neither survived
+  #     walk-forward (see src/betting/gate_registry.py).
+  #   * NO `excluded_markets`. That list came from small settled samples too,
+  #     and the rule was backtested without it, so it runs without it.
+  #   * None of the standard gates (min_odds, min_expected_value,
+  #     min_confidence) -- its own two numbers below are its only floors.
+  # A day on which nothing qualifies is a STATE (`pick_runs.NONE_QUALIFIED`),
+  # not a failure: the loss alert does not count it and the client gets one
+  # plain line.
   selection_mode: standard
   confident_value:
     min_price: 1.70           # the operator's definition of a good price
