@@ -1141,6 +1141,189 @@ def decision_table(holdout: dict, variant: str = "corrected") -> dict:
                 0.05 * DECLARED_COMPARISONS}
 
 
+# ══════════ STAGE 32 PART C: WHEN CAN 57% BE TOLD APART? ═════════════════════
+#
+# Pure arithmetic for the prospective registration. One-sample, two-sided 5%,
+# against a FIXED reference rate. Two definitions, both reported, because they
+# answer different questions and are routinely confused:
+#
+#   "expected interval excludes the reference" -- the n at which, if the true
+#   rate IS `p`, the expected 95% interval just stops containing `ref`. That
+#   is 50% power: half the time it will not have yet.
+#
+#   "80% power" -- the n at which a true `p` is detected four times in five.
+#
+# The comparison with the standard rule's 58.3% is ONE-SAMPLE here, as if
+# 58.3% were known. It is not: it is itself an estimate (1,456 picks, CI
+# [55.8, 60.9]) and the prospective pair will be measured with error on both
+# sides, which roughly DOUBLES these n. Stated, not computed.
+Z_975 = 1.959963984540054
+Z_80 = 0.8416212335729143
+
+
+def n_to_separate(p: float, ref: float, power: float = 0.5) -> int:
+    """Picks needed to tell a true hit rate `p` from a fixed `ref`."""
+    import math
+    if p == ref:
+        raise ValueError("p equals ref: no n separates them")
+    d = abs(p - ref)
+    if power == 0.5:
+        return math.ceil(Z_975 ** 2 * p * (1 - p) / d ** 2)
+    if power == 0.8:
+        return math.ceil(((Z_975 * math.sqrt(ref * (1 - ref))
+                           + Z_80 * math.sqrt(p * (1 - p))) / d) ** 2)
+    raise ValueError("power must be 0.5 or 0.8")
+
+
+def date_reached(n: int, start, picks_per_day: float):
+    """The calendar date `n` picks are reached at a constant rate."""
+    import math
+    return start + _dt.timedelta(days=math.ceil(n / picks_per_day))
+
+
+#: The rates the dates are computed at, per CALENDAR day, at P_min 0.54.
+#: `measured` 2026-11-12: holdout 448 picks over 70 days (2026-09-01..11-09);
+#: development + holdout 1,440 over 255 days (the development period carries
+#: the summer break, so it is the conservative rate).
+PICKS_PER_CALENDAR_DAY = {"holdout": 448 / 70, "dev+holdout": 1440 / 255}
+
+
+# ══════════ THE PROSPECTIVE REPORT — what the registration measures ═════════
+#
+# docs/confident-value-prospective-registration.md section 3, executable:
+# the s5.23 picks (hit rate, average odds and ROI together, predicted beside
+# realised), picks per day from `pick_runs` with zero-pick days counted, the
+# standard-rule shadow from `shadow_picks` graded on read, the pair on shared
+# fixtures, and how far the count is from the n's in section 4.
+
+def summarise_settled(rows: List[dict]) -> dict:
+    """Pure. `rows`: `{"won", "odds", "p"}` per settled win/loss pick, one
+    per fixture. Hit rate, average odds and ROI together; predicted beside."""
+    n = len(rows)
+    if n == 0:
+        return {"n": 0}
+    hits = [r["won"] for r in rows]
+    ret = [r["won"] * r["odds"] - 1.0 for r in rows]
+    ps = [r["p"] for r in rows if r.get("p") is not None]
+    return {"n": n, "hit_rate": sum(hits) / n, "hit_ci95": _boot_mean(hits),
+            "predicted_hit_rate": (sum(ps) / len(ps)) if ps else None,
+            "avg_odds": sum(r["odds"] for r in rows) / n,
+            "roi": sum(ret) / n, "roi_ci95": _boot_mean(ret)}
+
+
+def paired_settled(live: Dict[int, dict], shadow: Dict[int, dict]) -> dict:
+    """Pure. Both keyed by match_id. On fixtures where BOTH settled: the
+    differences live minus shadow, in hit rate and in return, with CIs."""
+    common = sorted(set(live) & set(shadow))
+    if not common:
+        return {"fixtures": 0}
+    dh = [live[m]["won"] - shadow[m]["won"] for m in common]
+    dr = [(live[m]["won"] * live[m]["odds"] - 1.0)
+          - (shadow[m]["won"] * shadow[m]["odds"] - 1.0) for m in common]
+    return {"fixtures": len(common),
+            "live": summarise_settled([live[m] for m in common]),
+            "shadow": summarise_settled([shadow[m] for m in common]),
+            "hit_diff": sum(dh) / len(dh), "hit_diff_ci95": _boot_mean(dh),
+            "roi_diff": sum(dr) / len(dr), "roi_diff_ci95": _boot_mean(dr)}
+
+
+def separation_progress(n: int, start, today) -> dict:
+    """Pure. The registered n's, how far the count is from each, and the
+    date each is reached at the rate observed SO FAR (or the registered
+    rates while nothing is observed)."""
+    days = max((today - start).days + 1, 1)
+    observed = n / days if n else None
+    out = {"picks": n, "days": days, "observed_per_day": observed,
+           "targets": {}}
+    for name, ref in (("ceiling_53.7", 0.537), ("standard_58.3", 0.583)):
+        for power in (0.5, 0.8):
+            need = n_to_separate(0.57, ref, power)
+            rates = ({"observed": observed} if observed
+                     else dict(PICKS_PER_CALENDAR_DAY))
+            out["targets"][f"{name}@{int(power * 100)}%"] = {
+                "need": need, "remaining": max(need - n, 0),
+                "reached_on": {k: str(date_reached(need, start, v))
+                               for k, v in rates.items()}}
+    return out
+
+
+#: The first day the switched rule picks. The registration's dates start here.
+PROSPECTIVE_START = _dt.date(2026, 11, 15)
+
+
+def prospective(cohort: Optional[str] = None,
+                today: Optional[_dt.date] = None) -> dict:
+    """The registered measurement on the live database. Read-only."""
+    _load_env()
+    from sqlalchemy import text
+
+    from src.agent.betting_agent import FootballBettingAgent
+    from src.data.database import get_db
+    from src.models.model_version import model_version
+    from src.utils.config import Config
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cohort = cohort or model_version(
+        Config(os.path.join(here, "config", "config.example.yaml")))
+    today = today or _dt.date.today()
+    grade = FootballBettingAgent._grade_selection
+    db = get_db()
+    assert db.is_postgres, "refusing to measure against the SQLite fallback"
+    # The two Stage 32 tables are created by the FIRST run on the new code.
+    # Before it they do not exist, and that is reported as its own state --
+    # "not installed" -- never as zero days or zero shadow picks.
+    from sqlalchemy import inspect as _inspect
+    present = set(_inspect(db.engine).get_table_names())
+    missing = sorted({"pick_runs", "shadow_picks"} - present)
+    with db.get_session() as s:
+        live_rows = s.execute(text("""
+            SELECT match_id, odds, predicted_probability, result
+            FROM saved_picks
+            WHERE model_version = :v AND disposition IS NULL
+              AND evidence_status IS NULL
+        """), {"v": cohort}).fetchall()
+        runs = [] if "pick_runs" in missing else s.execute(text("""
+            SELECT pick_date, outcome, picks_saved, fixtures_evaluated
+            FROM pick_runs WHERE model_version = :v ORDER BY recorded_at
+        """), {"v": cohort}).fetchall()
+        shadow_rows = [] if "shadow_picks" in missing else s.execute(text("""
+            SELECT sp.match_id, sp.selection, sp.odds,
+                   sp.predicted_probability, m.home_goals, m.away_goals
+            FROM shadow_picks sp JOIN matches m ON m.id = sp.match_id
+            WHERE sp.live_model_version = :v AND sp.rule = 'standard'
+        """), {"v": cohort}).fetchall()
+    live = {int(mid): {"won": 1 if res == "win" else 0, "odds": float(o),
+                       "p": p}
+            for mid, o, p, res in live_rows if res in ("win", "loss") and o}
+    shadow = {}
+    for mid, sel, o, p, hg, ag in shadow_rows:
+        if hg is None or ag is None or not o:
+            continue
+        res = grade(sel, int(hg), int(ag))
+        if res in ("win", "loss"):
+            shadow[int(mid)] = {"won": 1 if res == "win" else 0,
+                                "odds": float(o), "p": p}
+    latest = {}
+    for d, oc, ps, fe in runs:
+        latest[d] = (oc, ps, fe)
+    by_outcome = Counter(oc for oc, _ps, _fe in latest.values())
+    counts = [ps for oc, ps, _fe in latest.values()
+              if oc in ("PICKS_MADE", "NONE_QUALIFIED", "NO_FIXTURES")]
+    return {
+        "cohort": cohort, "today": str(today),
+        "tables_not_installed": missing,
+        "live": summarise_settled(list(live.values())),
+        "picks_saved_total": len(live_rows),
+        "days_recorded": len(latest), "days_by_outcome": dict(by_outcome),
+        "picks_per_day": ({"median": statistics.median(counts),
+                           "min": min(counts), "max": max(counts)}
+                          if counts else None),
+        "shadow": summarise_settled(list(shadow.values())),
+        "paired": paired_settled(live, shadow),
+        "separation": separation_progress(len(live), PROSPECTIVE_START,
+                                          today),
+    }
+
+
 #: THE MEASURED RECORD. Written from the run outputs by a generator, not
 #: typed: every figure below is the number the run printed. `measured`
 #: 2026-11-12; population, n and method are inside the record.
@@ -2182,6 +2365,8 @@ def main() -> int:
     ap.add_argument("--gates", action="store_true")
     ap.add_argument("--measured", action="store_true",
                     help="print the recorded results; runs nothing")
+    ap.add_argument("--prospective", action="store_true",
+                    help="the registered s5.23 measurement, read-only")
     ap.add_argument("--cache", default=None)
     ap.add_argument("--weights", default=None,
                     help="JSON written by --dev; required by --open-holdout")
@@ -2207,6 +2392,8 @@ def main() -> int:
         r = pre_experiment()
     elif a.measured:
         r = MEASURED
+    elif a.prospective:
+        r = prospective()
     else:
         ap.error("choose a step")
     text = json.dumps(r, indent=1, default=str)

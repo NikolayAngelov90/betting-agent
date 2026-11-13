@@ -636,8 +636,12 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       below 0.54, one per fixture, an empty list when nothing
     #       qualifies) and a parametrised proof that changing ANY of the five
     #       tracked selection keys moves the fingerprint.
-    assert len(nong) == 1177, (
-        f"the non-gating selection is {len(nong)}, recorded 1177")
+    #   +6 on 2026-11-13 (IV): test_confident_backtest.py, Stage 32 Part C --
+    #       the prospective registration's arithmetic (when 57% can be told
+    #       from 58.3% and from 53.7%), the registration quoting exactly what
+    #       the functions produce, and the pure parts of `--prospective`.
+    assert len(nong) == 1183, (
+        f"the non-gating selection is {len(nong)}, recorded 1183")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

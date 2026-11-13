@@ -403,3 +403,93 @@ def test_the_BLOCKER_is_the_CONFIDENCE_GATE_and_it_is_measured_on_REAL_picks():
     proxy = M["blocker_blend_proxy_holdout"]
     assert proxy["2.00-2.50"]["at_or_above_052"] == 0
     assert proxy["2.50-3.50"]["at_or_above_052"] == 0
+
+
+# ═════════════ STAGE 32 PART C: the prospective registration's arithmetic ═══
+
+def test_N_TO_SEPARATE_57_from_the_two_references():
+    assert bt.n_to_separate(0.57, 0.537, 0.5) == 865
+    assert bt.n_to_separate(0.57, 0.537, 0.8) == 1785
+    assert bt.n_to_separate(0.57, 0.583, 0.5) == 5572
+    assert bt.n_to_separate(0.57, 0.583, 0.8) == 11319
+    # more power, more picks; a closer reference, more picks
+    assert bt.n_to_separate(0.57, 0.583, 0.8) > bt.n_to_separate(
+        0.57, 0.583, 0.5) > bt.n_to_separate(0.57, 0.537, 0.8)
+    with pytest.raises(ValueError):
+        bt.n_to_separate(0.57, 0.57)
+    with pytest.raises(ValueError):
+        bt.n_to_separate(0.57, 0.537, power=0.9)
+
+
+def test_the_DATES_follow_from_the_rate_and_the_start():
+    start = dt.date(2026, 11, 15)
+    r = bt.PICKS_PER_CALENDAR_DAY
+    assert r["holdout"] == pytest.approx(6.4)
+    assert r["dev+holdout"] == pytest.approx(1440 / 255)
+    assert str(bt.date_reached(865, start, r["holdout"])) == "2027-03-31"
+    assert str(bt.date_reached(865, start, r["dev+holdout"])) == "2027-04-18"
+    assert str(bt.date_reached(1785, start, r["holdout"])) == "2027-08-21"
+    assert str(bt.date_reached(11319, start, r["dev+holdout"])) == "2032-05-12"
+
+
+def test_the_REGISTRATION_quotes_the_figures_the_functions_produce():
+    # whitespace normalised: Markdown wraps a phrase across lines
+    doc = " ".join(pathlib.Path(
+        "docs/confident-value-prospective-registration.md").read_text(
+            encoding="utf-8").split())
+    start = dt.date(2026, 11, 15)
+    r = bt.PICKS_PER_CALENDAR_DAY
+    for ref in (0.537, 0.583):
+        for power in (0.5, 0.8):
+            n = bt.n_to_separate(0.57, ref, power)
+            assert f"{n:,} picks" in doc, (ref, power, n)
+            for rate in r.values():
+                assert str(bt.date_reached(n, start, rate)) in doc
+    for needle in ("not because an edge was found", "None was",
+                   "No threshold is changed on a single period again",
+                   "56.1% on 244 picks", "5bca73", "2026-11-15",
+                   "hit rate, average odds and ROI"):
+        assert needle.lower() in doc.lower(), needle
+
+
+def test_the_PROSPECTIVE_SUMMARY_keeps_hit_odds_and_roi_together():
+    rows = [{"won": 1, "odds": 1.80, "p": 0.56},
+            {"won": 0, "odds": 1.75, "p": 0.55},
+            {"won": 1, "odds": 1.72, "p": 0.57}]
+    s = bt.summarise_settled(rows)
+    assert s["n"] == 3
+    assert s["hit_rate"] == pytest.approx(2 / 3)
+    assert s["predicted_hit_rate"] == pytest.approx(0.56)
+    assert s["avg_odds"] == pytest.approx((1.80 + 1.75 + 1.72) / 3)
+    assert s["roi"] == pytest.approx((0.80 - 1.0 + 0.72) / 3)
+    for k in ("hit_ci95", "roi_ci95"):
+        assert len(s[k]) == 2
+    assert bt.summarise_settled([]) == {"n": 0}
+
+
+def test_the_PAIR_is_only_over_fixtures_BOTH_rules_settled():
+    live = {1: {"won": 1, "odds": 1.8, "p": .55},
+            2: {"won": 0, "odds": 1.7, "p": .55},
+            3: {"won": 1, "odds": 1.9, "p": .56}}
+    shadow = {2: {"won": 1, "odds": 1.5, "p": .7},
+              3: {"won": 1, "odds": 1.6, "p": .7},
+              9: {"won": 0, "odds": 1.4, "p": .7}}
+    p = bt.paired_settled(live, shadow)
+    assert p["fixtures"] == 2
+    assert p["hit_diff"] == pytest.approx(((0 - 1) + (1 - 1)) / 2)
+    assert p["roi_diff"] == pytest.approx(((-1.0 - 0.5) + (0.9 - 0.6)) / 2)
+    assert bt.paired_settled(live, {}) == {"fixtures": 0}
+
+
+def test_SEPARATION_PROGRESS_uses_the_registered_rates_until_picks_exist():
+    start = dt.date(2026, 11, 15)
+    zero = bt.separation_progress(0, start, start)
+    t = zero["targets"]["ceiling_53.7@50%"]
+    assert (t["need"], t["remaining"]) == (865, 865)
+    assert t["reached_on"] == {"holdout": "2027-03-31",
+                               "dev+holdout": "2027-04-18"}
+    later = bt.separation_progress(70, start, start + dt.timedelta(days=9))
+    assert later["observed_per_day"] == pytest.approx(7.0)
+    assert set(later["targets"]["standard_58.3@80%"]["reached_on"]) == {
+        "observed"}
+    assert later["targets"]["ceiling_53.7@50%"]["remaining"] == 795

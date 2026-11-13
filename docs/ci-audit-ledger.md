@@ -39020,3 +39020,81 @@ path stores no shadow; CI runs unsharded.
 `src/models/model_version.py`, `tests/experiment_pins.py`,
 `src/agent/betting_agent.py`, `src/data/models.py` (`ShadowPick`),
 `src/reporting/match_briefing.py`, `tests/test_standard_shadow.py`.*
+
+---
+
+## 2026-11-13 (IV) — STAGE 32 PART C: `REGISTERED` — the prospective registration for s5.23
+
+`docs/confident-value-prospective-registration.md`, committed **before the
+first s5.23 pick** (the first scheduled run on the switch is the one on
+**2026-11-15** — the 2026-11-14 run started at 06:49 UTC on `e0cacb6`, the
+previous code, because the switch had not been pushed; its picks are s5.22).
+Its hash is this commit's.
+
+### What it registers
+
+**The claim, and the only one: ~57% hit rate at ~1.73, ROI near zero with an
+interval that includes zero.** Not an edge; a positive return over a short
+period is not evidence of one.
+
+| quantity | expected | Stage 31 holdout source |
+|---|---|---|
+| hit rate | ~57% | 57.4% [52.7, 61.8], 448 picks |
+| **predicted** hit rate (mean blended probability) | ~55.6% | — measured beside the realised one, always |
+| average taken odds | ~1.73 | 1.73 |
+| ROI per 1-unit pick | ~0, interval including zero | −0.5% [−8.5, +7.2] |
+| picks per calendar day | 5.6–6.4 | dev+holdout 1,440 / 255 days; holdout 448 / 70 |
+| zero-pick days | ~1 in 11 days with fixtures | 5 of 56, all on days with < 10 fixtures |
+
+Measured from `saved_picks` (cohort `5bca73`), `pick_runs` (zero-pick days
+counted; a day with no row is a failed run) and `shadow_picks` (the standard
+rule, graded on read, paired on shared fixtures — hit rate never alone).
+**Executable:** `python -m scripts.confident_backtest --prospective`. On the
+night of the switch it reads cohort `5bca73`, 0 picks, and both new tables
+**not installed** — created by the first run on the new code; the report says
+so rather than reporting zero days.
+
+### When 57% can be told apart
+
+One-sample, two-sided 5%, true rate 57%, against a **fixed** reference;
+dates from 2026-11-15 at 6.4 and 5.6 picks per calendar day
+(`n_to_separate`, `date_reached`, tested):
+
+| from | expected interval excludes it (50% power) | 80% power |
+|---|---|---|
+| **53.7% zero-edge ceiling** | **865 picks — 2027-03-31 … 04-17** | **1,785 — 2027-08-21 … 09-27** |
+| **standard rule's 58.3%** | 5,572 — 2029-04-04 … 07-28 | 11,319 — 2031-09-19 … 2032-05-12 |
+
+> **The hit-rate comparison with the standard rule cannot be decided on any
+> useful horizon** — 2½ to 5½ years, and roughly double that because 58.3%
+> is itself an estimate. What can be read is hit rate *at the price*, which
+> is ROI, beside the shadow. **Against the zero-edge ceiling the answer comes
+> in months.**
+
+### The rule it adds
+
+**No threshold is changed on a single period again.** The P_min 0.56 cell
+read 62.6% on 147 holdout picks and failed its development echo (56.1% on
+244, predicted 56.6%). A change to any tracked selection key needs a
+pre-registration, the change to hold on two periods, and its own bump.
+
+Pre-declared against the rule: realised below predicted beyond the interval;
+the hit-rate interval's upper bound below 53.7%; average odds drifting off
+the registered range; the shadow's ROI interval entirely above the live
+rule's; a `NONE_QUALIFIED` day with many fixtures. None of them changes a
+threshold; each opens a registered stage.
+
+### On the split of commits
+
+The Part B commit on its own fails one ratchet: `test_pnc_detector` tables
+0 → 1, because `shadow_picks` is written there and read by nothing. This
+commit adds its reader, `--prospective`, and clears it. The two are pushed
+together and CI only ever runs the tip, so no run sees the intermediate
+state. The consumer scan also found, correctly, that removing the review's
+call site at s5.23 orphaned three of its internals; they are declared in
+`pnc_scan.DECLARED_INTENTIONAL` with that reason — the review code is kept
+until the operator decides to delete it.
+
+*Recorded 2026-11-13. `docs/confident-value-prospective-registration.md`,
+`scripts/confident_backtest.py` (`n_to_separate`, `date_reached`,
+`--prospective`), `tests/test_confident_backtest.py` (+6).*
