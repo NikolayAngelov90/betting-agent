@@ -39098,3 +39098,113 @@ until the operator decides to delete it.
 *Recorded 2026-11-13. `docs/confident-value-prospective-registration.md`,
 `scripts/confident_backtest.py` (`n_to_separate`, `date_reached`,
 `--prospective`), `tests/test_confident_backtest.py` (+6).*
+
+---
+
+## 2026-11-13 (V) — STAGE 32 PART D: `CLEANED` — what the review left
+
+No selection change; the cohort stays **`s5.23 / 5bca73`**.
+
+### The workflow
+
+Removed from `daily-picks.yml`: the `npm install -g @anthropic-ai/claude-code`
+step and the `briefings-sent` cache **restore** and **save** steps. The review
+was the only writer of `data/briefings_sent.json` and the only user of the
+CLI; the freeze reader in `finalize_picks` now finds no file and skips, as it
+always did on a day with no review.
+
+**Listed, not deleted — the operator's action:** the repository secrets
+`ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`, and the two job-`env` lines
+that pass them in. Nothing on the picks path reads either; the env lines now
+carry a comment saying so. A test parses the workflow YAML: the three steps
+are gone and the two env names are still there.
+
+*Left as it is, stated:* the picks step is still named "Generate, review, and
+send picks". The name is the key of every past run's step in the
+time-to-picks series; renaming it would empty that history.
+
+### The duration constant's membership rule — fixed
+
+`_time_to_picks` counted a picks step **skipped** because the test gate had
+failed: such a step still carries `completedAt`, seconds after the gate.
+Three of the twelve runs behind `FULL_CARD_PICKS_3SD = 64.59` were skipped
+steps (2026-10-27, 11-02, 11-04 at 7.05, 5.05 and 5.72 min). **The rule is
+now `conclusion == "success"`**; a failed step produced no picks either.
+
+`measured` 2026-11-13, scheduled weekday runs, live run history, minutes:
+
+| regime | membership | n | mean | sd | max | mean+3sd |
+|---|---|---|---|---|---|---|
+| parallel review (`cccb0e6` … before `3c1133e`) | success only | **13** | 30.09 | 6.75 | 40.35 | **50.34** |
+| **no review** (`3c1133e` …) | success only | **1** | 19.83 | — | 19.83 | — |
+
+### The review's removal is a new regime — the series restarts
+
+The parallel series now **ends** at `3c1133e`; the no-review series starts
+there, at n = 1. Regimes are not pooled. Until it reaches n ≥ 10 the margin
+keeps the existing constants (`FULL_CARD_PICKS_MAX` 40.35, `_3SD` 64.59) and
+**every place that prints them now says the margin is CONSERVATIVE**: they
+come from a regime that still carried the review, with three skipped steps
+counted, so they overstate. The constants are not re-derived — n = 1 is not a
+bound — and the cron is **not** moved.
+
+### The standing red — acknowledged on its mechanism, with no date
+
+`test_the_weekday_cron_CLEARS_the_stated_margin`, red since Stage 30 at
+**+56 min against 60**.
+
+* **What moved** (its own message asks): the **lag series** — GitHub's
+  scheduler lateness — mean 337.4 → 353.1, sd 42.1 → 46.7, max 389.75 →
+  411.62. Not the duration term, not the deadline.
+* **The mechanism.** The test's duration term is the **serial-review** series
+  (n = 79, mean+3sd **85.54**). The corrected parallel regime reads **50.34**,
+  and it still carried the review, so it is itself an upper bound on today.
+  The test's duration term overstates by **at least 35.2 minutes**, against a
+  **4-minute** shortfall.
+
+`weekday_margin_shortfall_is_acknowledged(binding, n)` holds while **both**
+hold — the no-review series below n = 10, and the shortfall no larger than
+that 35.2 — and returns:
+
+| state | when |
+|---|---|
+| `ACKNOWLEDGED` | both hold — today: shortfall 4.0 min, n = 1 |
+| `LAPSED` | the no-review series reached n ≥ 10: re-derive, then read |
+| `EXCEEDS` | the shortfall is larger than the conservatism — a deterioration the duration term cannot explain |
+| `UNEVALUATED` | the series could not be read; "n < 10" is not granted on "n unknown" |
+| `CLEAR` | nothing to acknowledge |
+
+**No date anywhere in it** — a test refuses a review/expiry field. The
+clearing action is the re-derivation. The test passes live today on
+`ACKNOWLEDGED`. **The daily audit now prints the same
+acknowledgement every run**, computed by one shared definition of the test's
+figure (`serial_term_weekday_margin`, which the test asserts it agrees with):
+
+`weekday-margin test acknowledgement[ACKNOWLEDGED] margin +55.8m vs 60m --
+shortfall 4.2m <= the 35.2m conservatism of a superseded duration term; the
+no-review series is at n=1/10.` (`measured` 2026-11-14.)
+
+### A second red on the same quantity — NOT acknowledged, reported
+
+The daily audit's own finding `margin.schedule` is **RELAPSED: weekday
++12.3 min against its floor of 30.** Its duration term is the 64.59 constant,
+which overstates by 64.59 − 50.34 = **14.25 min** — less than its
+**17.7-min** shortfall. So the mechanism does **not** explain it: even on the
+corrected figure the margin is +26.4, under 30. That red is the lag series,
+and the only lever left that the stage did not rule out is the cron, which it
+did. **Left red. Niki's.**
+
+*Corrected in passing:* the audit's picks-bound block printed the **serial**
+population's description (n = 4, full-card) beside 40.35, which is the
+**parallel** regime's max substituted on 2026-11-06 — a label pinned to the
+constant's original producer. It now names the population the constants
+describe.
+
+Ratchets: the workflow's `continue-on-error` census 11 → **10**, a removal
+(the install step carried it); the consumer scan found the acknowledgement
+consumed only by tests until the audit printed it. Census: gate 1843 →
+1844, non-gating 1183 → 1198; no new files.
+
+*Recorded 2026-11-13. `.github/workflows/daily-picks.yml`,
+`scripts/ci_audit.py`, `tests/test_cron_split_by_daytype.py`,
+`tests/test_picks_bound_series.py`, `tests/test_review_removed.py`.*

@@ -272,9 +272,11 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      # UNUSED since the Claude pick review was removed (off at s5.22, call
+      # site deleted at s5.23, 2026-11-13). Listed, not deleted: removing the
+      # two repository secrets -- and then these two lines -- is the
+      # OPERATOR'S action. Nothing on the picks path reads either now.
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      # Claude Pro subscription auth for briefings (claude_code backend, $0 extra).
-      # Generate locally with `claude setup-token`.
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       # Use the secret when configured; otherwise fall back to the explicit
       # dev opt-in so existing CI runs don't break before the secret is added.
@@ -549,23 +551,12 @@ jobs:
               print('WARNING: fewer than 100 completed matches — ML training may be skipped')
           PYEOF
 
-      # Restore BEFORE picks: get_daily_picks reads the final:<match_id> freeze
-      # markers from this file — restoring after picks let a second run
-      # regenerate picks behind briefing decisions (only dedup caught it).
-      - name: Restore briefings-sent guard
-        uses: actions/cache/restore@v5
-        with:
-          path: data/briefings_sent.json
-          key: briefings-sent-${{ github.run_id }}
-          restore-keys: |
-            briefings-sent-
-
-      # Claude Code CLI must be installed BEFORE picks: the --picks step now runs
-      # Claude's per-match review (KEEP/CHANGE) on every pick before sending the
-      # summary. No separate briefing step — briefing articles are not posted.
-      - name: Install Claude Code CLI (pick review via Pro subscription)
-        run: npm install -g @anthropic-ai/claude-code
-        continue-on-error: true
+      # Stage 32 Part D (2026-11-13): the `briefings-sent` cache RESTORE and the
+      # Claude Code CLI install were removed. The Claude pick review was the
+      # only writer of data/briefings_sent.json and the only user of the CLI;
+      # it was switched off at s5.22 and its call site removed at s5.23. The
+      # freeze reader in `finalize_picks` now finds no file and skips, as it
+      # always did on a day with no review.
 
       # Scaling this step: analysis is per-fixture and parallelises, but the
       # phase after it (ranking, per-match cap, correlation filter, and the
@@ -589,13 +580,6 @@ jobs:
         run: python -m src.agent.betting_agent --picks --force
         timeout-minutes: 150
         continue-on-error: true
-
-      - name: Save briefings-sent guard
-        if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/briefings_sent.json
-          key: briefings-sent-${{ github.run_id }}
 
       - name: Scrape Flashscore results for all leagues (post-picks)
         id: results

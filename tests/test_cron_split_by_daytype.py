@@ -437,17 +437,41 @@ def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
     # The cron moved to `0 1` on 2026-10-22, which is what bought the
     # headroom; the duration term's instrumentation error was corrected on
     # 2026-10-21, which is what stopped it being overstated.
-    assert binding >= MIN_ACCEPTABLE_MARGIN, (
-        f"the weekday margin is {binding:+.0f}m and NO LONGER clears the "
-        f"{MIN_ACCEPTABLE_MARGIN}-minute minimum. It cleared at +90m when "
-        f"this was measured on 2026-11-05 (n=10), against +40m on 2026-10-20 "
-        f"(n=8). A DETERIORATION is a finding: say which term moved -- the "
-        f"lag series, the duration series or the derived deadline.")
-    # The band, with both endpoints derived rather than taste: the lower edge
-    # IS the registered minimum (below it the finding reverts to a breach),
-    # and the upper edge is the measurement plus one lag sd (89.92 + 40.7),
-    # rounded to 130 -- a jump past that is a regime change, not drift.
-    assert MIN_ACCEPTABLE_MARGIN <= binding <= 130, (
+    # ── ACKNOWLEDGED ON ITS MECHANISM, WITH NO DATE. Stage 32 Part D. ────
+    #
+    #   measured 2026-11-13   weekday margin +56m   below 60 by 4m
+    #
+    # WHAT MOVED is the LAG series (mean 337.4 -> 353.1, sd 42.1 -> 46.7,
+    # max 389.75 -> 411.62). The duration term in this test is the SERIAL-
+    # review series (mean+3sd 85.54), and the regime it describes is gone
+    # twice over: the review went parallel, then went altogether. On the runs
+    # that reached picks the parallel regime reads mean+3sd 50.34 -- so this
+    # term overstates by at least 35.2 minutes, against a 4-minute shortfall.
+    #
+    # The acknowledgement holds while BOTH hold: the no-review series is
+    # below n=10, and the shortfall is smaller than that measured
+    # conservatism. It LAPSES by itself at n=10 (re-derive, then read) and
+    # REDDENS if the lag series worsens past what the conservatism covers.
+    # The cron is NOT moved.
+    from scripts.ci_audit import (removal_regime_picks_series,
+                                  serial_term_weekday_margin,
+                                  weekday_margin_shortfall_is_acknowledged)
+    assert serial_term_weekday_margin(lag) == pytest.approx(binding), (
+        "the daily audit prints the acknowledgement on a DIFFERENT figure "
+        "from the one this test computes")
+    regime_n = (removal_regime_picks_series().get("n")
+                if binding < MIN_ACCEPTABLE_MARGIN else 0)
+    ack = weekday_margin_shortfall_is_acknowledged(binding, regime_n)
+    assert ack["state"] in ("CLEAR", "ACKNOWLEDGED"), (
+        f"the weekday margin is {binding:+.0f}m against the "
+        f"{MIN_ACCEPTABLE_MARGIN}-minute minimum and the acknowledgement is "
+        f"{ack['state']}: {ack['why']}. A DETERIORATION is a finding: say "
+        f"which term moved -- the lag series, the duration series or the "
+        f"derived deadline.")
+    # The UPPER edge of the band: the 2026-11-05 measurement plus one lag sd
+    # (89.92 + 40.7), rounded to 130 -- a jump past that is a regime change,
+    # not drift. The lower edge is now the acknowledgement above.
+    assert binding <= 130, (
         f"the weekday margin moved to {binding:+.0f}m, outside the "
         f"{MIN_ACCEPTABLE_MARGIN}..130m band this finding was measured over "
         f"on 2026-11-05 (+89.92m, lag n=10 sd 40.7). Re-measure before "

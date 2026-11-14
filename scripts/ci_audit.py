@@ -1928,6 +1928,35 @@ PICKS_BOUND_NEW_POPULATION = (
 PARALLEL_REVIEW_SINCE = "cccb0e6"
 PARALLEL_REVIEW_SINCE_UTC = "2026-10-21T21:29"
 
+#: ── THE REVIEW'S REMOVAL IS A NEW REGIME. Stage 32 Part D, 2026-11-13. ────
+#:
+#: The Claude review was 29% of the picks step's analysis-plus-review time
+#: (mean 2.27 min where it ran, measured 2026-11-12). Its removal at `3c1133e`
+#: CLOSES the parallel-review regime and opens the next, and regimes are not
+#: pooled: the parallel series now ends at this commit, and the series the
+#: margin will be re-derived from starts here at n=0.
+#:
+#: UNTIL THAT SERIES REACHES `MIN_N_TO_REDERIVE_PICKS_BOUND`, THE MARGIN IS
+#: CONSERVATIVE AND IS LABELLED SO: its duration term comes from a regime that
+#: still carried the review -- an UPPER bound on the new one, since removing a
+#: step can only shorten a run.
+REVIEW_REMOVED_SINCE = "3c1133e"
+REVIEW_REMOVED_SINCE_UTC = "2026-11-12T17:02"
+PICKS_BOUND_REMOVAL_POPULATION = (
+    "time-to-picks over ALL-CARD weekday runs whose picks step SUCCEEDED, "
+    "NO-REVIEW regime (first in 3c1133e, 2026-11-12 17:02 UTC); starts at "
+    "n=0 because regimes are not pooled")
+
+#: `measured` 2026-11-13 from the live run history, weekday scheduled runs,
+#: picks step `success` only, minutes:
+#:   parallel regime (cccb0e6 .. before 3c1133e)  n=13  mean 30.09  sd 6.75
+#:                                                max 40.35  mean+3sd 50.34
+#:   no-review regime (3c1133e ..)                n=1   19.83
+#:   excluded, picks step SKIPPED                 2026-10-27 / 11-02 / 11-04
+PARALLEL_REGIME_CORRECTED = {"n": 13, "mean": 30.09, "sd": 6.75,
+                             "max": 40.35, "mean_plus_3sd": 50.34,
+                             "measured": "2026-11-13"}
+
 
 def _as_datetime(s):
     """A GitHub ISO-8601 timestamp as an aware `datetime`, or `None`.
@@ -1951,20 +1980,38 @@ _PICKS_SERIES_CACHE: Dict[int, dict] = {}
 
 
 def parallel_regime_picks_series(limit: int = 120):
+    """The PARALLEL-REVIEW regime: runs whose commit contains
+    `PARALLEL_REVIEW_SINCE` and NOT `REVIEW_REMOVED_SINCE`. Closed since
+    Stage 32 -- it is the record the live constant was derived from."""
+    return _regime_picks_series(PARALLEL_REVIEW_SINCE, REVIEW_REMOVED_SINCE,
+                                PICKS_BOUND_NEW_POPULATION, limit)
+
+
+def removal_regime_picks_series(limit: int = 120):
+    """The NO-REVIEW regime, from `REVIEW_REMOVED_SINCE`. The series the
+    margin's duration term will be re-derived from at n >= 10."""
+    return _regime_picks_series(REVIEW_REMOVED_SINCE, None,
+                                PICKS_BOUND_REMOVAL_POPULATION, limit)
+
+
+def _regime_picks_series(since: str, until, regime: str, limit: int = 120):
     """`{'n','mean','sd','mean_plus_3sd','max','to_ten','members'}`.
 
     Time-to-picks for every scheduled weekday `daily-picks` run whose commit
-    CONTAINS `PARALLEL_REVIEW_SINCE`. `git merge-base --is-ancestor` decides
-    membership, so a run on a branch that predates the change cannot sneak in
-    on a later timestamp.
+    CONTAINS `since` and, when `until` is given, does NOT contain `until` --
+    one regime, bounded at both ends. Membership is decided from the commit
+    graph, so a run on a branch that predates the change cannot sneak in on a
+    later timestamp. Only a picks step that SUCCEEDED counts
+    (`_time_to_picks`).
 
     Returns `n=0` and `mean_plus_3sd=None` when the series is empty, which is
     the honest state and NOT a zero.
     """
     import statistics
 
-    if limit in _PICKS_SERIES_CACHE:
-        return _PICKS_SERIES_CACHE[limit]
+    _cache_key = (since, until, limit)
+    if _cache_key in _PICKS_SERIES_CACHE:
+        return _PICKS_SERIES_CACHE[_cache_key]
 
     # AN UNREADABLE `gh` IS UNEVALUATED, NOT AN EMPTY SERIES -- AND IT TOOK
     # TWO GOES. The first version wrote `json.loads(_sh(...) or "[]")`, which
@@ -1977,7 +2024,7 @@ def parallel_regime_picks_series(limit: int = 120):
     # `test_an_EMPTY_series_is_n0_and_an_UNREADABLE_gh_is_UNEVALUATED`.
     def _unevaluated(reason):
         return {"n": None, "members": [], "state": "UNEVALUATED",
-                "regime": PICKS_BOUND_NEW_POPULATION,
+                "regime": regime,
                 "needed": MIN_N_TO_REDERIVE_PICKS_BOUND,
                 "mean": None, "sd": None, "mean_plus_3sd": None, "max": None,
                 "to_ten_weeks": None, "to_ten_date": "UNEVALUATED",
@@ -1999,9 +2046,12 @@ def parallel_regime_picks_series(limit: int = 120):
     # spawns, twice per audit (the clock and the margin alert both ask), which
     # timed out a test file. The set of commits CONTAINING the change is one
     # `rev-list`, and membership is then a lookup.
-    _descendants = {PARALLEL_REVIEW_SINCE[:7]} | {
-        c[:7] for c in _sh("git", "rev-list",
-                           f"{PARALLEL_REVIEW_SINCE}..HEAD").split()}
+    _descendants = {since[:7]} | {
+        c[:7] for c in _sh("git", "rev-list", f"{since}..HEAD").split()}
+    # the regime's END: a run whose commit contains `until` belongs to the
+    # next regime, and regimes are not pooled
+    _after = set() if until is None else ({until[:7]} | {
+        c[:7] for c in _sh("git", "rev-list", f"{until}..HEAD").split()})
     vals, members = [], []
     for r in rows:
         if r.get("event") != "schedule":
@@ -2011,6 +2061,8 @@ def parallel_regime_picks_series(limit: int = 120):
             continue
         if sha[:7] not in _descendants:
             continue                         # the run predates the change
+        if sha[:7] in _after:
+            continue                         # the run is the NEXT regime
         started = _as_datetime(r.get("createdAt"))
         if started is None or started.weekday() >= 5:
             continue
@@ -2019,8 +2071,8 @@ def parallel_regime_picks_series(limit: int = 120):
             vals.append(ttp)
             members.append(r["databaseId"])
     n = len(vals)
-    out = {"n": n, "members": members,
-           "regime": PICKS_BOUND_NEW_POPULATION,
+    out = {"n": n, "members": members, "since": since, "until": until,
+           "regime": regime,
            "needed": MIN_N_TO_REDERIVE_PICKS_BOUND}
     if not vals:
         out.update({"mean": None, "sd": None, "mean_plus_3sd": None,
@@ -2038,12 +2090,22 @@ def parallel_regime_picks_series(limit: int = 120):
     out["to_ten_date"] = (
         (_dt.date.today() + _dt.timedelta(days=round(missing / 5.0 * 7)))
         .isoformat() if missing else "reached")
-    _PICKS_SERIES_CACHE[limit] = out
+    _PICKS_SERIES_CACHE[_cache_key] = out
     return out
 
 
 def _time_to_picks(run_id: str, started):
-    """Minutes from run start to the picks step completing, or None."""
+    """Minutes from run start to the picks step completing, or None.
+
+    ── ONLY A PICKS STEP THAT SUCCEEDED IS A TIME-TO-PICKS. Stage 32 Part D.
+    A step SKIPPED because the test gate failed still carries `completedAt`
+    -- a few seconds after the gate -- and this counted it: three of the
+    twelve runs behind `FULL_CARD_PICKS_3SD = 64.59` were skipped steps
+    (2026-10-27, 11-02, 11-04 at 7.05, 5.05, 5.72 min). They lowered the mean
+    and widened the spread; on the runs that reached picks the same regime
+    reads mean+3sd 50.34 on n=13. A failed step produced no picks either, so
+    it does not count. `conclusion == "success"` is the membership rule.
+    """
     try:
         jobs = json.loads(_sh("gh", "run", "view", run_id, "--json", "jobs")
                           or "{}").get("jobs") or []
@@ -2051,7 +2113,8 @@ def _time_to_picks(run_id: str, started):
         return None
     for j in jobs:
         for st in j.get("steps") or []:
-            if st.get("name") == PICKS_STEP_NAME and st.get("completedAt"):
+            if st.get("name") == PICKS_STEP_NAME and st.get("completedAt") \
+                    and st.get("conclusion") == PICKS_STEP_COUNTED:
                 done = _as_datetime(st["completedAt"])
                 if done is not None:
                     return (done - started).total_seconds() / 60.0
@@ -2059,8 +2122,107 @@ def _time_to_picks(run_id: str, started):
 
 
 #: The step whose completion ends "time to picks". Everything after it is
-#: yesterday's business and cannot affect today's kickoff.
+#: yesterday's business and cannot affect today's kickoff. (The name still
+#: says "review": it is the KEY of every past run's step, so renaming it
+#: would empty the history. There has been no review in it since s5.22.)
 PICKS_STEP_NAME = "Generate, review, and send picks"
+#: The only conclusion that makes a step a time-to-picks. Stage 32 Part D.
+PICKS_STEP_COUNTED = "success"
+
+
+#: ── THE STANDING WEEKDAY-MARGIN RED, ACKNOWLEDGED ON ITS MECHANISM. ──────
+#:
+#: Stage 32 Part D, 2026-11-13. NO DATE, by instruction and by the rule this
+#: project already learned: a review date fires on a day when nothing has
+#: happened. The acknowledgement holds while the MECHANISM holds, and lapses
+#: by itself when it stops:
+#:
+#:   1. the margin's duration term is a SUPERSEDED regime's -- the no-review
+#:      series has not reached `MIN_N_TO_REDERIVE_PICKS_BOUND` -- AND
+#:   2. the shortfall below the 60-minute minimum is SMALLER than the measured
+#:      conservatism of that duration term.
+#:
+#: THE CONSERVATISM, MEASURED. `tests/test_cron_split_by_daytype.py` puts
+#: `MARGIN_RUN_DURATIONS_BY_DAYTYPE["weekday"]` -- the SERIAL-review series,
+#: n=79 -- into its duration term: mean+3sd 85.54 min. The parallel regime,
+#: picks step `success` only, reads mean+3sd 50.34 on n=13 (measured
+#: 2026-11-13), and it still carried the review, so it is itself an upper
+#: bound on the no-review regime. 85.54 - 50.34 = 35.20 minutes the test's
+#: duration term is known to overstate by, at least.
+#:
+#: WHAT MOVED, since the red's own message asks: the LAG series (GitHub's
+#: scheduler lateness), mean 337.4 -> 353.1, sd 42.1 -> 46.7, max 389.75 ->
+#: 411.62. Not the duration term, not the deadline. The cron is NOT moved.
+#:
+#: CLEARING ACTION: let the no-review series reach n >= 10 and re-derive the
+#: duration term from it. At that point condition 1 fails, the acknowledgement
+#: lapses, and the margin is read against the real series.
+DURATION_TERM_CONSERVATISM = {
+    "test_duration_term_mean_plus_3sd": 85.54,
+    "best_estimate_mean_plus_3sd": PARALLEL_REGIME_CORRECTED["mean_plus_3sd"],
+    "conservatism_min": round(85.54
+                              - PARALLEL_REGIME_CORRECTED["mean_plus_3sd"], 2),
+    "measured": "2026-11-13",
+    "mechanism": ("the margin's duration term is the SERIAL-review series "
+                  "while the no-review series is below n=10"),
+    "clearing_action": ("re-derive the duration term from the no-review "
+                        "series once it reaches n>=10"),
+}
+
+
+def serial_term_weekday_margin(lag) -> Optional[float]:
+    """The weekday margin as `test_the_weekday_cron_CLEARS_the_stated_margin`
+    computes it: the derived weekday deadline less the worse of max+max and
+    mean+3sd+mean+3sd, with the SERIAL duration series as its duration term.
+    One definition, so the test and the daily audit cannot disagree about
+    the figure the acknowledgement below is granted on. None below n=2."""
+    import statistics
+    lag = [] if lag is None else list(lag)
+    if len(lag) < 2:
+        return None
+    du = MARGIN_RUN_DURATIONS_BY_DAYTYPE["weekday"]
+    lm, lsd = statistics.mean(lag), statistics.pstdev(lag)
+    dm, dsd = statistics.mean(du), statistics.pstdev(du)
+    ready = max(max(lag) + max(du), (lm + 3 * lsd) + (dm + 3 * dsd))
+    return DEADLINE_MIN_BY_DAYTYPE["weekday"] - ready
+
+
+def weekday_margin_shortfall_is_acknowledged(binding: float,
+                                             regime_n) -> dict:
+    """`{"state", "why"}` for a weekday margin below the minimum.
+
+    ACKNOWLEDGED  both mechanism conditions hold.
+    LAPSED        the no-review series reached n>=10: re-derive, then read.
+    EXCEEDS       the shortfall is larger than the measured conservatism: a
+                  real deterioration that the duration term cannot explain.
+    UNEVALUATED   the series could not be read: an acknowledgement resting
+                  on "n < 10" cannot be granted on "n unknown".
+    CLEAR         nothing to acknowledge.
+    """
+    if binding >= MIN_ACCEPTABLE_MARGIN_MIN:
+        return {"state": "CLEAR", "why": "the margin clears the minimum"}
+    shortfall = MIN_ACCEPTABLE_MARGIN_MIN - binding
+    cons = DURATION_TERM_CONSERVATISM["conservatism_min"]
+    if regime_n is None:
+        return {"state": "UNEVALUATED",
+                "why": "the no-review series could not be read, so its n is "
+                       "unknown and 'n < 10' cannot be asserted"}
+    if regime_n >= MIN_N_TO_REDERIVE_PICKS_BOUND:
+        return {"state": "LAPSED",
+                "why": f"the no-review series is at n={regime_n} >= "
+                       f"{MIN_N_TO_REDERIVE_PICKS_BOUND}: re-derive the "
+                       f"duration term from it, then read the margin"}
+    if shortfall > cons:
+        return {"state": "EXCEEDS",
+                "why": f"the shortfall {shortfall:.1f}m is larger than the "
+                       f"{cons}m the duration term is known to overstate "
+                       f"by -- a deterioration it cannot explain"}
+    return {"state": "ACKNOWLEDGED",
+            "why": f"shortfall {shortfall:.1f}m <= the {cons}m conservatism "
+                   f"of a superseded duration term; the no-review series is "
+                   f"at n={regime_n}/{MIN_N_TO_REDERIVE_PICKS_BOUND}. "
+                   f"Clearing action: "
+                   f"{DURATION_TERM_CONSERVATISM['clearing_action']}"}
 
 
 def format_picks_bound_status(s: dict) -> str:
@@ -2071,27 +2233,39 @@ def format_picks_bound_status(s: dict) -> str:
             f"  {s.get('reason', 'the series could not be read')}",
             f"  margin uses    : the OLD constant, {FULL_CARD_PICKS_MAX} min",
         ])
+    _since = s.get("since") or REVIEW_REMOVED_SINCE
     if s["n"] == 0:
         body = (f"n=0 -- the series is EMPTY, which is not a zero. No "
-                f"scheduled weekday run has yet carried {PARALLEL_REVIEW_SINCE}")
+                f"scheduled weekday run has yet carried {_since}")
     else:
         body = (f"n={s['n']} mean={s['mean']:.1f} sd={s['sd']:.1f} "
                 f"mean+3sd={s['mean_plus_3sd']:.1f} max={s['max']:.1f}")
     return chr(10).join([
-        f"picks_bound[REGIME CHANGE IN PROGRESS]",
-        f"  since          : {PARALLEL_REVIEW_SINCE} "
-        f"({PARALLEL_REVIEW_SINCE_UTC} UTC)",
+        f"picks_bound[REGIME CHANGE IN PROGRESS] -- the margin is "
+        f"CONSERVATIVE until this series is re-derived",
+        f"  since          : {_since} "
+        f"({REVIEW_REMOVED_SINCE_UTC if _since == REVIEW_REMOVED_SINCE else PARALLEL_REVIEW_SINCE_UTC} UTC)",
         f"  new population : {body}",
         f"                   {s['regime']}",
         f"  needed         : n>={s['needed']} "
         + (f"-> ~{s['to_ten_weeks']} weeks, about {s['to_ten_date']} "
            f"(simulated from ~5 scheduled weekday runs/week)"
            if s["to_ten_date"] != "reached" else "-> REACHED, re-derive now"),
-        f"  margin uses    : the OLD constant, {FULL_CARD_PICKS_MAX} min",
-        f"                   {PICKS_BOUND_OLD_POPULATION}",
-        f"  so the margin is CONSERVATIVE: that figure is a full-card MAX from "
-        f"the SERIAL regime, and the parallel review cut the picks step's sd "
-        f"11.71 -> 2.37. The true margin is very probably BETTER than reported.",
+        # CORRECTED 2026-11-13: this line printed PICKS_BOUND_OLD_POPULATION
+        # (the SERIAL full-card n=4 description) beside 40.35, which is the
+        # PARALLEL regime's max substituted on 2026-11-06 -- a label pinned
+        # to the constant's original producer, still printing after the
+        # producer changed.
+        f"  margin uses    : the constants {FULL_CARD_PICKS_MAX} max / "
+        f"{FULL_CARD_PICKS_3SD} mean+3sd, from the",
+        f"                   {PICKS_BOUND_NEW_POPULATION}",
+        f"  retired before : {PICKS_BOUND_OLD_POPULATION}",
+        f"  so the margin is CONSERVATIVE: that constant came from the "
+        f"PARALLEL-REVIEW regime with three SKIPPED picks steps counted as "
+        f"runs (on the runs that reached picks the same regime reads "
+        f"mean+3sd {PARALLEL_REGIME_CORRECTED['mean_plus_3sd']} on n="
+        f"{PARALLEL_REGIME_CORRECTED['n']}), and the review it carried is "
+        f"gone. The true margin is very probably BETTER than reported.",
     ])
 
 
@@ -4086,7 +4260,7 @@ def main() -> int:
     print(format_pattern_selftest(_pst))
     # THE REGIME CLOCK, every run, so it is visible rather than remembered.
     print()
-    print(format_picks_bound_status(parallel_regime_picks_series()))
+    print(format_picks_bound_status(removal_regime_picks_series()))
     if _pst["failed"]:
         alarmed.append(
             f"{len(_pst['failed'])} registered pattern(s) FAIL the self-test: "
@@ -4370,6 +4544,24 @@ def main() -> int:
     print(format_series_census(_by_type, _crons))
     print()
     print(format_schedule_margins(_margins))
+    # Stage 32 Part D: the WEEKDAY-MARGIN TEST's acknowledgement, printed
+    # every day with its mechanism and its state, so it is read rather than
+    # remembered. It covers the TEST's figure (serial duration term); the
+    # audit's own `margin.schedule` finding above is classified separately
+    # and is NOT acknowledged by it.
+    _wm = serial_term_weekday_margin(
+        [l for _d, l in (_by_type.get("weekday") or [])])
+    if _wm is None:
+        print("weekday-margin test acknowledgement[UNEVALUATED] the weekday "
+              "lag series is too short to compute the test's margin")
+    else:
+        _wn = (removal_regime_picks_series().get("n")
+               if _wm < MIN_ACCEPTABLE_MARGIN_MIN else 0)
+        _wa = weekday_margin_shortfall_is_acknowledged(_wm, _wn)
+        print(f"weekday-margin test acknowledgement[{_wa['state']}] "
+              f"margin {_wm:+.1f}m vs {MIN_ACCEPTABLE_MARGIN_MIN}m -- "
+              f"{_wa['why']}. Mechanism: "
+              f"{DURATION_TERM_CONSERVATISM['mechanism']}; no date.")
 
     # ── A RUN THAT NEVER FIRED, AND A FILE GITHUB REFUSED ───────────────────
     # Both printed EVERY run. Neither had any detector before 2026-10-13, and

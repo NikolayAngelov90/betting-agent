@@ -264,8 +264,13 @@ def test_continue_on_error_is_still_set_on_every_core_step():
     # which is precisely why it needs reporting rather than a colour. It also
     # reads and writes files under `data/models`, so it can fail on its own
     # without that meaning anything about the pipeline.
-    assert len(guarded) == 11, (
-        f"{len(guarded)} steps carry continue-on-error, expected 11 — if a step "
+    # 11 -> 10 on 2026-11-13, A REMOVAL, NOT A LOSS. Stage 32 Part D deleted
+    # `Install Claude Code CLI (pick review via Pro subscription)`, which
+    # carried the flag so a failed npm install could not halt the picks. The
+    # review it served was switched off at s5.22 and its call site removed
+    # at s5.23; nothing on the picks path needs the CLI.
+    assert len(guarded) == 10, (
+        f"{len(guarded)} steps carry continue-on-error, expected 10 — if a step "
         "lost it, the job now HALTS there instead of merely reporting red; if "
         "one gained it, name it here and say why")
     assert "Check the MODEL, not the retrain step" in guarded, (

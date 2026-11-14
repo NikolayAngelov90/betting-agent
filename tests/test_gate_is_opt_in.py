@@ -482,8 +482,12 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       a pick, never sent. Driven on scratch SQLite, with the standard
     #       mode as the known-wrong control and a raising standard rule that
     #       must cost the real pick nothing.
-    assert len(gate) == 1843, (
-        f"the gating selection is {len(gate)}, recorded 1843 — say what moved")
+    #   +1 on 2026-11-13 (V): test_review_removed.py, Stage 32 Part D -- the
+    #       review-era workflow steps are gone and the two credentials are
+    #       LISTED, parsed from the workflow YAML. The file was already
+    #       capture-critical (via `src.data.models`).
+    assert len(gate) == 1844, (
+        f"the gating selection is {len(gate)}, recorded 1844 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the
@@ -640,8 +644,14 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       the prospective registration's arithmetic (when 57% can be told
     #       from 58.3% and from 53.7%), the registration quoting exactly what
     #       the functions produce, and the pure parts of `--prospective`.
-    assert len(nong) == 1183, (
-        f"the non-gating selection is {len(nong)}, recorded 1183")
+    #   +15 on 2026-11-13 (V): test_picks_bound_series.py, Stage 32 Part D --
+    #       a picks step that did not SUCCEED is not a run (four conclusions
+    #       plus the known-wrong success), the review's removal ending one
+    #       regime and starting the next, and the weekday-margin
+    #       acknowledgement driven through all five of its states, with no
+    #       date anywhere in it.
+    assert len(nong) == 1198, (
+        f"the non-gating selection is {len(nong)}, recorded 1198")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

@@ -56,12 +56,23 @@ def test_the_timestamp_helper_returns_NONE_rather_than_RAISING(raw):
 
 # ── the series, on runs that count ─────────────────────────────────────────
 
-def _fake_sh(runs, step_times, descendants=("cccb0e6", "deadbee")):
-    """A `_sh` that answers the three commands the series issues."""
+def _fake_sh(runs, step_times, descendants=("cccb0e6", "deadbee"),
+             removal_descendants=(), conclusions=None):
+    """A `_sh` that answers the commands the series issues.
+
+    Stage 32: `git rev-list X..HEAD` answers PER COMMIT -- the parallel
+    regime's start and the review-removal commit that ends it have different
+    descendants -- and each picks step carries a `conclusion`, `success`
+    unless `conclusions` says otherwise."""
+    conclusions = conclusions or {}
+
     def _sh(*args):
         if args[:3] == ("gh", "run", "list"):
             return json.dumps(runs)
         if args[:2] == ("git", "rev-list"):
+            rng = args[2]
+            if rng.startswith(ci.REVIEW_REMOVED_SINCE):
+                return chr(10).join(removal_descendants)
             return chr(10).join(descendants)
         if args[:3] == ("gh", "run", "view"):
             run_id = args[3]
@@ -69,7 +80,8 @@ def _fake_sh(runs, step_times, descendants=("cccb0e6", "deadbee")):
             if done is None:
                 return json.dumps({"jobs": []})
             return json.dumps({"jobs": [{"steps": [
-                {"name": ci.PICKS_STEP_NAME, "completedAt": done}]}]})
+                {"name": ci.PICKS_STEP_NAME, "completedAt": done,
+                 "conclusion": conclusions.get(run_id, "success")}]}]})
         return ""
     return _sh
 
@@ -195,3 +207,85 @@ def test_KNOWN_WRONG_a_name_that_does_not_exist_is_caught_at_IMPORT():
         "the helper the two call sites need is gone again")
     assert "as_datetime(r.get" not in src.replace("_as_datetime(r.get", ""), (
         "a call to the UNPREFIXED name is back")
+
+
+
+# ── Stage 32 Part D: the membership rule and the regime split ──────────────
+
+@pytest.mark.parametrize("conclusion", ["skipped", "failure", "cancelled",
+                                        None])
+def test_a_picks_step_that_did_not_SUCCEED_is_NOT_a_run(monkeypatch,
+                                                        conclusion):
+    """Three of the twelve runs behind 64.59 were SKIPPED steps -- the test
+    gate failed, the picks step never ran, and it still carried a
+    `completedAt` a few seconds later (7.05, 5.05, 5.72 min)."""
+    runs = [{"databaseId": 1, "createdAt": "2026-10-27T03:00:00Z",
+             "event": "schedule", "headSha": "deadbeef"}]
+    monkeypatch.setattr(ci, "_sh", _fake_sh(
+        runs, {"1": "2026-10-27T03:07:03Z"},
+        conclusions={"1": conclusion}))
+    s = ci.parallel_regime_picks_series()
+    assert s["n"] == 0, f"a {conclusion} picks step was counted as a run"
+
+
+def test_KNOWN_WRONG_the_same_run_SUCCEEDING_is_counted(monkeypatch):
+    runs = [{"databaseId": 1, "createdAt": "2026-10-27T03:00:00Z",
+             "event": "schedule", "headSha": "deadbeef"}]
+    monkeypatch.setattr(ci, "_sh", _fake_sh(
+        runs, {"1": "2026-10-27T03:30:00Z"}))
+    assert ci.parallel_regime_picks_series()["n"] == 1
+
+
+def test_the_REVIEW_REMOVAL_ends_one_regime_and_starts_the_next(monkeypatch):
+    """A run on a commit containing 3c1133e belongs to the NO-REVIEW series
+    and not to the parallel one. Regimes are not pooled."""
+    runs = [{"databaseId": 1, "createdAt": "2026-11-12T03:00:00Z",
+             "event": "schedule", "headSha": "deadbeef"},
+            {"databaseId": 2, "createdAt": "2026-11-13T03:00:00Z",
+             "event": "schedule", "headSha": "4fcdd83aaaa"}]
+    sh = _fake_sh(runs, {"1": "2026-11-12T03:19:27Z",
+                         "2": "2026-11-13T03:19:50Z"},
+                  descendants=("cccb0e6", "deadbee", "4fcdd83"),
+                  removal_descendants=("4fcdd83",))
+    monkeypatch.setattr(ci, "_sh", sh)
+    par = ci.parallel_regime_picks_series()
+    rem = ci.removal_regime_picks_series()
+    assert par["members"] == [1] and rem["members"] == [2]
+    assert (par["since"], par["until"]) == (ci.PARALLEL_REVIEW_SINCE,
+                                            ci.REVIEW_REMOVED_SINCE)
+    assert (rem["since"], rem["until"]) == (ci.REVIEW_REMOVED_SINCE, None)
+    assert ci.REVIEW_REMOVED_SINCE == "3c1133e"
+
+
+@pytest.mark.parametrize("binding, n, state", [
+    (70.0, 1, "CLEAR"),
+    (56.0, 1, "ACKNOWLEDGED"),
+    (56.0, 9, "ACKNOWLEDGED"),
+    (56.0, 10, "LAPSED"),
+    (56.0, None, "UNEVALUATED"),
+    (60.0 - 35.2, 1, "ACKNOWLEDGED"),
+    (60.0 - 35.3, 1, "EXCEEDS"),
+    (-10.0, 1, "EXCEEDS"),
+])
+def test_the_ACKNOWLEDGEMENT_holds_on_its_MECHANISM_and_has_NO_DATE(
+        binding, n, state):
+    ack = ci.weekday_margin_shortfall_is_acknowledged(binding, n)
+    assert ack["state"] == state, ack
+    c = ci.DURATION_TERM_CONSERVATISM
+    assert c["conservatism_min"] == pytest.approx(85.54 - 50.34)
+    assert set(c).isdisjoint({"review", "review_date", "expires", "until"}), (
+        "an acknowledgement with a DATE fires on a day when nothing happened")
+    assert "re-derive" in c["clearing_action"]
+
+
+def test_the_CONSERVATISM_is_the_figure_the_TEST_puts_in_its_duration_term():
+    """85.54 is not typed from memory: it is mean+3sd of the series the
+    weekday-margin test reads."""
+    import statistics
+    du = ci.MARGIN_RUN_DURATIONS_BY_DAYTYPE["weekday"]
+    m3 = statistics.mean(du) + 3 * statistics.pstdev(du)
+    assert m3 == pytest.approx(
+        ci.DURATION_TERM_CONSERVATISM["test_duration_term_mean_plus_3sd"],
+        abs=0.01)
+    assert ci.PARALLEL_REGIME_CORRECTED["mean_plus_3sd"] == pytest.approx(
+        ci.DURATION_TERM_CONSERVATISM["best_estimate_mean_plus_3sd"])

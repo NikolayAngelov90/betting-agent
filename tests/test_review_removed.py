@@ -46,12 +46,14 @@ UNUSED_AFTER_REMOVAL = {
                          "repository secret behind it",
     "CLAUDE_CODE_OAUTH_TOKEN": "env entry on the job (daily-picks.yml) and "
                                "the repository secret behind it",
+    # REMOVED from daily-picks.yml at s5.23 (Stage 32 Part D); kept in the
+    # map so a re-added install step is still a DECLARED entry, not new.
     "@anthropic-ai/claude-code": "the `npm install -g` step before picks",
 }
 #: Not a credential and not Claude-named, so the scan below cannot see it:
 #: the `briefings-sent` cache restore/save pair. The review was the only
-#: WRITER of data/briefings_sent.json; the freeze reader in `finalize_picks`
-#: still reads it and now always finds nothing for today.
+#: WRITER of data/briefings_sent.json. REMOVED at s5.23 (Stage 32 Part D),
+#: asserted below; the freeze reader in `finalize_picks` finds no file.
 ALSO_INERT = "the briefings-sent guard cache restore/save steps"
 
 _CLAUDE_TOKEN = r"ANTHROPIC_[A-Z0-9_]+|CLAUDE_[A-Z0-9_]+|@anthropic-ai/[a-z0-9-]+"
@@ -386,3 +388,24 @@ def test_the_TIME_REMOVED_is_recorded_with_its_population():
     assert t["margin_constants_substituted"] is False, (
         "the margin's duration constants were re-pointed. That is an "
         "authorised, forward-only substitution, not part of the removal")
+
+
+
+def test_PART_D_the_review_era_STEPS_are_GONE_and_the_SECRETS_are_LISTED():
+    """Stage 32 Part D. The npm install of the Claude Code CLI and the
+    `briefings-sent` cache pair are removed from daily-picks.yml; the two
+    credentials remain as env lines, LISTED as unused -- deleting the
+    secrets is the operator's action. Parsed as YAML, not matched as text."""
+    wf = yaml.safe_load(pathlib.Path(
+        ".github/workflows/daily-picks.yml").read_text(encoding="utf-8"))
+    steps = [st for job in wf["jobs"].values()
+             for st in job.get("steps", [])]
+    names = [st.get("name", "") for st in steps]
+    assert "Generate, review, and send picks" in names, "anchor: steps read"
+    runs = [str(st.get("run", "")) for st in steps]
+    assert [n for n in names if "briefings-sent" in n
+            or "Claude Code" in n] == []
+    assert [r for r in runs if "@anthropic-ai/claude-code" in r] == []
+    env = {k for job in wf["jobs"].values() for k in (job.get("env") or {})}
+    assert {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} <= env, (
+        "the credentials are listed for the operator, not deleted by us")
