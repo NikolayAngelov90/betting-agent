@@ -187,7 +187,16 @@ from scripts.capture_critical import (
 #: `test_standard_shadow.py` belongs on the capture path: it drives the
 #: shadow write that now runs inside every picks run, and its failure mode
 #: -- a shadow that costs the real pick -- is a capture-path failure.
-CENSUS = {"files": 159, "capture_critical": 83, "not_critical": 76}
+#: RE-MEASURED 2026-11-14, Stage 33 Part A: files 159 -> 160,
+#: `capture_critical` UNCHANGED at 83, not_critical 76 -> 77.
+#: `test_first_run_check.py` is non-critical by the classifier's own reading
+#: (critical=False, via=[]) and that is the right side: it drives a
+#: READ-ONLY verifier a person runs after a picks run; its failure must not
+#: be able to stop one. The new reference-state controls are added to
+#: `test_reference_deadline.py`, which was already capture-critical (via
+#: `src.scrapers`); they are hermetic (injected fetches, the network
+#: function monkeypatched to raise).
+CENSUS = {"files": 160, "capture_critical": 83, "not_critical": 77}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -486,8 +495,23 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       review-era workflow steps are gone and the two credentials are
     #       LISTED, parsed from the workflow YAML. The file was already
     #       capture-critical (via `src.data.models`).
-    assert len(gate) == 1844, (
-        f"the gating selection is {len(gate)}, recorded 1844 — say what moved")
+    #   +8 on 2026-11-14: test_reference_deadline.py, Stage 33. An empty
+    #       reference on a day with nothing scheduled is the state
+    #       NO_SCHEDULED_FIXTURES (the provider's own 10-day schedule has
+    #       rows later); a failed fetch, a dark provider, a failed probe and
+    #       two disagreeing answers still redden. Verified BY NODE ID against
+    #       d06327c: exactly these 8 added, none removed. Hermetic: injected
+    #       fetches, the network function monkeypatched to raise.
+    #   +2 the same day: NETWORK-FREE, PROVED BY TEST. Each of the 8 runs
+    #       under `no_network` (the socket layer replaced, every attempt
+    #       recorded, the test failed at teardown on any); one control that
+    #       a REAL reach is caught on both production paths although both
+    #       swallow the exception, and one that each of the 8 carries the
+    #       blocker (counted from its marks, so the 8 is derived). Also run
+    #       once under a PROCESS-WIDE block from configure: 8 passed, 0
+    #       attempts. Verified BY NODE ID: 10 added, none removed.
+    assert len(gate) == 1854, (
+        f"the gating selection is {len(gate)}, recorded 1854 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the
@@ -650,8 +674,21 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       regime and starting the next, and the weekday-margin
     #       acknowledgement driven through all five of its states, with no
     #       date anywhere in it.
-    assert len(nong) == 1198, (
-        f"the non-gating selection is {len(nong)}, recorded 1198")
+    #   +28 on 2026-11-14, Stage 33, verified BY NODE ID against d06327c
+    #       (28 added, none removed):
+    #       19 test_first_run_check.py (Part A) -- the read-only verifier of
+    #          the first s5.23 run, driven on the log's real line format:
+    #          each selection check fails alone, the zero-pick path passes
+    #          only recorded, error-free and delivered, and a log with no
+    #          runtime line is UNEVALUATED, never a pass.
+    #        9 test_picks_bound_series.py (Part C) -- the audit's
+    #          `margin.schedule` acknowledged on its mechanism: driven 0.001
+    #          min either side of the boundary, LAPSED at n=10, UNEVALUATED
+    #          on an unknown n, CLEAR, the conservatism derived from its
+    #          stored runs, and the audit reddening on every state but
+    #          ACKNOWLEDGED.
+    assert len(nong) == 1226, (
+        f"the non-gating selection is {len(nong)}, recorded 1226")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 
