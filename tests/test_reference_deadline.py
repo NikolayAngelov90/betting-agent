@@ -308,10 +308,244 @@ def test_COULD_NOT_LOOK_and_FOUND_NOTHING_are_DIFFERENT_states():
 def test_the_states_are_ENUMERATED():
     assert set(sd.REFERENCE_STATES) == {
         sd.REF_OK, sd.REF_NO_FIXTURE, sd.REF_EMPTY_RESPONSE, sd.REF_NO_KEY,
-        sd.REF_FETCH_FAILED}
+        sd.REF_FETCH_FAILED, sd.REF_NO_SCHEDULED}
     assert set(sd.REF_UNEVALUATED) == {sd.REF_NO_KEY, sd.REF_FETCH_FAILED}
+    assert set(sd.REF_ANSWERED) == {sd.REF_OK, sd.REF_NO_FIXTURE,
+                                    sd.REF_NO_SCHEDULED}
+    assert not set(sd.REF_ANSWERED) & set(sd.REF_UNEVALUATED)
+    assert sd.REF_EMPTY_RESPONSE not in sd.REF_ANSWERED
     for s in sd.REFERENCE_STATES:
         assert s == s.upper()
+
+
+# ── AN EMPTY DAY IS NOT AN EMPTY PROVIDER. Stage 33, 2026-11-14. ─────────────
+#
+# The live check reddened on 11 of 13 Reminders runs, 2026-11-08..11-14, all
+# inside the men's FIFA window of 9-17 November 2026. The provider was
+# answering; the days were empty. Every control below drives `_answered`,
+# the predicate the live check asserts.
+
+def _answered(ref):
+    return ref["state"] in sd.REF_ANSWERED
+
+
+# ── NO NETWORK, ENFORCED BY THE TESTS THEMSELVES. Stage 33, 2026-11-14. ─────
+#
+# These tests sit in the GATE (this file is capture-critical via
+# `src.scrapers`), so a provider outage must not be able to fail them. Each
+# runs on a RECORDED response shape only, and proves it: the socket layer is
+# replaced for the duration of the test, every attempt is RECORDED, and the
+# fixture fails the test at teardown if any was made.
+#
+# RECORDED, NOT MERELY RAISED, because `reference_earliest` catches every
+# exception and returns `FETCH_FAILED`: a test that reached the network would
+# see an ordinary failed fetch and could still pass -- the parametrised case
+# whose expected state IS `FETCH_FAILED` would pass either way.
+# `test_KNOWN_WRONG_a_REAL_reach_is_CAUGHT_even_when_swallowed` is the
+# control that the blocker bites on both production paths.
+
+class _NetworkBlocked(OSError):
+    pass
+
+
+class _Blocker:
+    """Replaces the socket layer (urllib, http.client, httpx and requests
+    all connect through it) and records each attempt."""
+
+    def __init__(self, monkeypatch):
+        import socket
+
+        self.attempts = []
+
+        def make(name):
+            def blocked(*_a, **_k):
+                self.attempts.append(name)
+                raise _NetworkBlocked(f"network blocked: {name}")
+            return blocked
+        monkeypatch.setattr(socket.socket, "connect", make("socket.connect"))
+        monkeypatch.setattr(socket.socket, "connect_ex",
+                            make("socket.connect_ex"))
+        monkeypatch.setattr(socket, "create_connection",
+                            make("socket.create_connection"))
+        monkeypatch.setattr(socket, "getaddrinfo", make("socket.getaddrinfo"))
+
+
+@pytest.fixture
+def network_blocker(monkeypatch):
+    return _Blocker(monkeypatch)
+
+
+@pytest.fixture
+def no_network(network_blocker):
+    yield network_blocker
+    assert network_blocker.attempts == [], (
+        f"a gating test reached for the network: {network_blocker.attempts}. "
+        f"It must run on a recorded response shape, or move to the `live` "
+        f"(non-gating) selection.")
+
+
+def test_KNOWN_WRONG_a_REAL_reach_is_CAUGHT_even_when_swallowed(
+        network_blocker):
+    """The blocker must bite on BOTH production paths, though both swallow
+    the exception: the day's fetch and the schedule probe."""
+    ref = sd.reference_earliest(ASKED, api_key="planted-not-a-key")
+    assert ref["state"] == sd.REF_FETCH_FAILED
+    assert len(network_blocker.attempts) >= 1, (
+        "the real fetch path reached past the blocker uncounted")
+    seen = len(network_blocker.attempts)
+    probe = sd.schedule_probe(ASKED, "planted-not-a-key",
+                              sd._reference_schedule_fetch)
+    assert probe["state"] == sd.PROBE_FAILED
+    assert len(network_blocker.attempts) > seen, (
+        "the real probe path reached past the blocker uncounted")
+
+
+#: The Stage 33 gate tests, each of which must take `no_network`. Their
+#: collected node count is 8 (one parametrised five ways).
+NETWORK_FREE_GATE_TESTS = {
+    "test_KNOWN_WRONG_TODAYS_empty_response_in_the_FIFA_window_does_NOT_redden": 1,
+    "test_KNOWN_WRONG_a_FAILED_or_DARK_provider_STILL_reddens": 5,
+    "test_an_INJECTED_fetch_never_reaches_the_network_for_the_probe": 1,
+    "test_the_PROBE_is_asked_only_when_the_day_is_EMPTY": 1,
+}
+
+
+def test_every_Stage_33_gate_test_RUNS_UNDER_the_blocker():
+    """Executed, not read: each function's own marks are inspected, and the
+    parametrisation is counted, so the 8 is derived."""
+    import sys
+
+    mod = sys.modules[__name__]
+    nodes = 0
+    for name, expected in NETWORK_FREE_GATE_TESTS.items():
+        fn = getattr(mod, name)
+        marks = getattr(fn, "pytestmark", [])
+        used = {a for m in marks if m.name == "usefixtures" for a in m.args}
+        assert "no_network" in used, f"{name} does not run under the blocker"
+        params = [m for m in marks if m.name == "parametrize"]
+        n = len(params[0].args[1]) if params else 1
+        assert n == expected, (name, n)
+        nodes += n
+    assert nodes == 8, f"{nodes} gate nodes, the census recorded 8"
+
+
+ASKED = dt.date(2026, 11, 15)
+EMPTY_ASK = {"filters": {"dateFrom": "2026-11-15", "dateTo": "2026-11-16"},
+             "matches": []}
+
+
+def _row(code, utc):
+    return {"competition": {"code": code}, "status": "TIMED", "utcDate": utc}
+
+
+#: The provider's schedule for 2026-11-15..11-24 as `measured` 2026-11-14,
+#: one row per competition-day (the real ask returned 87 rows).
+MEASURED_SCHEDULE = {
+    "filters": {"dateFrom": "2026-11-15", "dateTo": "2026-11-24"},
+    "matches": [_row("BSA", "2026-11-18T22:00:00Z"),
+                _row("BSA", "2026-11-19T22:00:00Z"),
+                _row("BSA", "2026-11-20T22:00:00Z"),
+                _row("BL1", "2026-11-20T19:30:00Z"),
+                _row("FL1", "2026-11-20T19:45:00Z"),
+                _row("PD", "2026-11-20T20:00:00Z"),
+                _row("PL", "2026-11-21T12:30:00Z"),
+                _row("ELC", "2026-11-21T15:00:00Z")]}
+
+
+def _schedule(payload):
+    calls = []
+
+    def f(date_from, date_to, key):
+        calls.append((date_from, date_to))
+        return payload
+    f.calls = calls
+    return f
+
+
+@pytest.mark.usefixtures("no_network")
+def test_KNOWN_WRONG_TODAYS_empty_response_in_the_FIFA_window_does_NOT_redden():
+    """2026-11-14 07:29 UTC: `EMPTY_RESPONSE` for 2026-11-15 reddened the
+    Reminders run. The provider's own schedule had rows from 11-18."""
+    sched = _schedule(MEASURED_SCHEDULE)
+    ref = sd.reference_earliest(ASKED, fetch=_fetch(EMPTY_ASK),
+                                schedule_fetch=sched)
+    assert ref["state"] == sd.REF_NO_SCHEDULED
+    assert _answered(ref), "the empty FIFA-window day still reddens"
+    assert ref["schedule_probe"]["next_scheduled"] == "2026-11-18"
+    assert ref["schedule_probe"]["next_covered"] == "2026-11-20", (
+        "BSA is served but not mapped; the first COVERED day is 11-20")
+    # one probe, over the provider's 10-day limit, from the asked date
+    assert sched.calls == [(ASKED, dt.date(2026, 11, 24))]
+    c = sd.combined_deadline(ASKED, ref)
+    assert c["deadline_min"] == c["constant_min"], "an empty day moved it"
+    assert c["reference_verified"] is True and c["reference_answered"] is True
+    line = sd.format_reference_deadline(c)
+    assert "ref=NO_SCHEDULED_FIXTURES" in line and "NOT ANSWERED" not in line
+    assert "next_scheduled=2026-11-18" in line, line
+
+
+@pytest.mark.usefixtures("no_network")
+@pytest.mark.parametrize("label, fetch, schedule, state", [
+    ("the fetch itself fails",
+     "boom", MEASURED_SCHEDULE, "FETCH_FAILED"),
+    ("the probe fails",
+     EMPTY_ASK, "boom", "EMPTY_RESPONSE"),
+    ("nothing in ten days either",
+     EMPTY_ASK, {"filters": {"dateFrom": "2026-11-15",
+                             "dateTo": "2026-11-24"}, "matches": []},
+     "EMPTY_RESPONSE"),
+    ("the probe has rows ON the asked days",
+     EMPTY_ASK, {"filters": {"dateFrom": "2026-11-15",
+                             "dateTo": "2026-11-24"},
+                 "matches": [_row("PL", "2026-11-16T15:00:00Z")]},
+     "FETCH_FAILED"),
+    ("the probe answers a different range",
+     EMPTY_ASK, {"filters": {"dateFrom": "2026-11-16",
+                             "dateTo": "2026-11-25"},
+                 "matches": [_row("PL", "2026-11-21T15:00:00Z")]},
+     "EMPTY_RESPONSE"),
+])
+def test_KNOWN_WRONG_a_FAILED_or_DARK_provider_STILL_reddens(label, fetch,
+                                                            schedule, state):
+    def boom(*_a):
+        raise OSError("connection reset")
+
+    ref = sd.reference_earliest(
+        ASKED, fetch=boom if fetch == "boom" else _fetch(fetch),
+        schedule_fetch=boom if schedule == "boom" else _schedule(schedule))
+    assert ref["state"] == state, (label, ref.get("reason"))
+    assert not _answered(ref), f"{label}: reads as answered"
+    c = sd.combined_deadline(ASKED, ref)
+    assert c["reference_answered"] is False
+    assert "NOT ANSWERED" in sd.format_reference_deadline(c)
+
+
+@pytest.mark.usefixtures("no_network")
+def test_an_INJECTED_fetch_never_reaches_the_network_for_the_probe(
+        monkeypatch):
+    """Every pre-existing hermetic test injects `fetch` alone. The probe must
+    not turn those into network calls."""
+    def network(*_a):
+        raise AssertionError("the schedule probe reached the network")
+
+    monkeypatch.setattr(sd, "_reference_schedule_fetch", network)
+    ref = sd.reference_earliest(ASKED, fetch=_fetch(EMPTY_ASK))
+    assert ref["state"] == sd.REF_EMPTY_RESPONSE
+    assert ref["schedule_probe"]["state"] == sd.PROBE_NOT_PROBED
+    assert not _answered(ref)
+
+
+@pytest.mark.usefixtures("no_network")
+def test_the_PROBE_is_asked_only_when_the_day_is_EMPTY():
+    sched = _schedule(MEASURED_SCHEDULE)
+    ref = sd.reference_earliest(
+        dt.date(2026, 11, 21),
+        fetch=_fetch({"filters": {"dateFrom": "2026-11-21"},
+                      "matches": [_row("PL", "2026-11-21T12:30:00Z")]}),
+        schedule_fetch=sched)
+    assert ref["state"] == sd.REF_OK and _answered(ref)
+    assert sched.calls == [], "a day with rows paid for a second call"
+    assert "schedule_probe" not in ref
 
 
 # ── COVERAGE IS REPORTED, NOT ASSUMED ───────────────────────────────────────
@@ -451,7 +685,9 @@ def test_LIVE_the_reference_answers_for_TOMORROW_and_our_table_does_not():
         pytest.skip(f"{sd.REFERENCE_KEY_ENV} not set here")
     tomorrow = dt.date.today() + dt.timedelta(days=1)
     ref = sd.reference_earliest(tomorrow)
-    assert ref["state"] in (sd.REF_OK, sd.REF_NO_FIXTURE), (
+    # THE SAME PREDICATE THE KNOWN-WRONG CONTROLS BELOW DRIVE. Stage 33: a
+    # day with nothing scheduled is a state; a failed fetch is not.
+    assert _answered(ref), (
         f"the reference did not answer for D+1: {ref.get('reason')}")
     assert ref["dropped"]["other_day"] == 0 or ref["state"] == sd.REF_NO_FIXTURE
     c = sd.combined_deadline(tomorrow, ref)

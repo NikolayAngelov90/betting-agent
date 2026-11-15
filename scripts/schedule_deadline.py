@@ -729,6 +729,8 @@ REF_NO_FIXTURE = "NO_FIXTURE"       #: rows came back, NONE for the asked date
 REF_EMPTY_RESPONSE = "EMPTY_RESPONSE"  #: the provider returned no rows at all
 REF_NO_KEY = "NO_KEY"               #: we could not ask
 REF_FETCH_FAILED = "FETCH_FAILED"   #: we asked and could not read the answer
+#: no rows for the asked days, AND the provider's own schedule has rows later
+REF_NO_SCHEDULED = "NO_SCHEDULED_FIXTURES"
 #: FOUR STATES WHERE THERE ARE FOUR FACTS. `NO_FIXTURE` and `EMPTY_RESPONSE`
 #: were one state until 2026-10-19, and they are not the same claim: an empty
 #: response says the provider has nothing anywhere near that query, while
@@ -737,7 +739,56 @@ REF_FETCH_FAILED = "FETCH_FAILED"   #: we asked and could not read the answer
 #: dated 2027-04-03. Conflating them hides exactly the case where the provider
 #: answered a different question.
 REFERENCE_STATES = (REF_OK, REF_NO_FIXTURE, REF_EMPTY_RESPONSE, REF_NO_KEY,
-                    REF_FETCH_FAILED)
+                    REF_FETCH_FAILED, REF_NO_SCHEDULED)
+
+#: ── AN EMPTY DAY IS NOT AN EMPTY PROVIDER. Stage 33, 2026-11-14. ─────────
+#:
+#: `EMPTY_RESPONSE` reddened the Reminders live check on 11 of 13 runs from
+#: 2026-11-08 to 11-14, every one in the men's FIFA international window of
+#: 9-17 November 2026 (FIFA International Match Calendar). `measured`
+#: 2026-11-14 over `dateFrom/dateTo` asks: the provider held NO row of any
+#: competition on 11-09..11-13 or 11-15..11-17, two Brasileirao rows on 11-14
+#: (a league it serves but we do not map), Brasileirao again from 11-18, and
+#: the first rows of a covered league on 11-20 (BL1, FL1, PD), with the full
+#: slate on 11-21. The provider was answering throughout; the days were
+#: empty.
+#:
+#: So when the asked days come back empty, the provider's OWN schedule is
+#: asked once more, over `SCHEDULE_PROBE_DAYS` from the asked date:
+#:
+#:   rows only on LATER days     -> `NO_SCHEDULED_FIXTURES`: it answers, and
+#:                                  nothing is scheduled on the asked days. A
+#:                                  STATE, like `NO_FIXTURE`.
+#:   rows ON the asked days      -> `FETCH_FAILED`: its two answers disagree
+#:   no rows in the whole range  -> `EMPTY_RESPONSE`, as before: nothing for
+#:                                  ten days is a dark provider until shown
+#:                                  otherwise
+#:   the probe fails or echoes a different range -> `EMPTY_RESPONSE`, as
+#:                                  before: liveness was not shown
+#:
+#: KEYED ON THE PROVIDER'S SCHEDULE, NOT ON A LIST OF WINDOW DATES: a list
+#: would have to be extended before every window, and a remedy that must be
+#: remembered is not one. What this cannot see, stated: a provider that keeps
+#: a later schedule but silently loses one day's rows reads as this state --
+#: the same exposure `NO_FIXTURE` already carries.
+#:
+#: `REF_ANSWERED` is the set where the provider answered the question asked.
+#: The live check asserts membership in it; `EMPTY_RESPONSE`, `FETCH_FAILED`
+#: and `NO_KEY` stay outside it.
+REF_ANSWERED = (REF_OK, REF_NO_FIXTURE, REF_NO_SCHEDULED)
+
+#: The provider's limit, `measured` 2026-11-14: a 16-day `dateFrom/dateTo`
+#: ask returned HTTP 400 "Specified period must not exceed 10 days"; the
+#: 10-day ask 2026-11-15..11-24 (inclusive) returned 87 rows.
+SCHEDULE_PROBE_DAYS = 10
+
+PROBE_ROWS_LATER = "ROWS_LATER"
+PROBE_ROWS_ON_ASKED_DAYS = "ROWS_ON_ASKED_DAYS"
+PROBE_EMPTY = "EMPTY"
+PROBE_FAILED = "FAILED"
+#: an injected `fetch` with no `schedule_fetch`: a hermetic caller is never
+#: given a network call it did not ask for
+PROBE_NOT_PROBED = "NOT_PROBED"
 
 #: The two that mean "could not look", which is NOT "found nothing". Both fall
 #: to the constant, and they print differently because their remedies differ:
@@ -763,7 +814,94 @@ def _reference_fetch(day: _dt.date, api_key: str, timeout: float = 15.0):
         return _json.loads(resp.read().decode("utf-8"))
 
 
-def reference_earliest(day: _dt.date, fetch=None, api_key: str = None) -> dict:
+def _reference_schedule_fetch(date_from: _dt.date, date_to: _dt.date,
+                              api_key: str, timeout: float = 15.0):
+    """GET `/matches?dateFrom=..&dateTo=..`. Returns the payload, or raises.
+    Stdlib only, for the same reason as `_reference_fetch`."""
+    import json as _json
+    import urllib.request
+
+    url = (f"{REFERENCE_BASE}/matches?dateFrom={date_from.isoformat()}"
+           f"&dateTo={date_to.isoformat()}")
+    req = urllib.request.Request(url, headers={"X-Auth-Token": api_key})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read().decode("utf-8"))
+
+
+def schedule_probe(day: _dt.date, api_key: str, schedule_fetch) -> dict:
+    """Does the provider hold a schedule beyond the asked days?
+
+    Asked only after `date=day` returned NO ROWS. `date=day` is the window
+    `[day, day+1]` (see `reference_earliest`), so a row on either of those
+    days here means the provider's two answers disagree.
+    """
+    from src.scrapers.footballdata_competitions import COMPETITION_MAP
+
+    date_to = day + _dt.timedelta(days=SCHEDULE_PROBE_DAYS - 1)
+    out = {"range": [day.isoformat(), date_to.isoformat()],
+           "n_rows": 0, "next_scheduled": None, "next_covered": None}
+    try:
+        payload = schedule_fetch(day, date_to, api_key)
+    except Exception as exc:                      # noqa: BLE001 - any failure
+        out["state"] = PROBE_FAILED
+        out["why"] = f"the schedule probe did not answer: {type(exc).__name__}"
+        return out
+    if not isinstance(payload, dict):
+        out["state"] = PROBE_FAILED
+        out["why"] = "the schedule probe returned no payload"
+        return out
+    echo = payload.get("filters")
+    echo = echo if isinstance(echo, dict) else {}
+    asked_range = {"dateFrom": day.isoformat(), "dateTo": date_to.isoformat()}
+    for k, v in asked_range.items():
+        if echo.get(k) is not None and echo.get(k) != v:
+            out["state"] = PROBE_FAILED
+            out["why"] = (f"the schedule probe echoed {k}={echo.get(k)!r} for "
+                          f"a request of {v}: it answered a different range")
+            return out
+    rows = payload.get("matches")
+    rows = rows if isinstance(rows, list) else []
+    out["n_rows"] = len(rows)
+    asked = {day, day + _dt.timedelta(days=1)}
+    on_asked, later, covered = 0, [], []
+    for m in rows:
+        ko = as_datetime((m or {}).get("utcDate") if isinstance(m, dict)
+                         else None)
+        if ko is None:
+            continue
+        if ko.date() in asked:
+            on_asked += 1
+        elif day < ko.date() <= date_to:
+            later.append(ko.date())
+            code = ((m.get("competition") or {}).get("code")
+                    if isinstance(m.get("competition"), dict) else None)
+            league = COMPETITION_MAP.get(code) if code is not None else None
+            if league is not None and not league.startswith("world/"):
+                covered.append(ko.date())
+    if on_asked:
+        out["state"] = PROBE_ROWS_ON_ASKED_DAYS
+        out["why"] = (f"the schedule probe holds {on_asked} row(s) ON the "
+                      f"asked days, which `date={day}` returned empty: the "
+                      f"provider's two answers disagree")
+        return out
+    if not later:
+        out["state"] = PROBE_EMPTY
+        out["why"] = (f"no row of any competition in the {SCHEDULE_PROBE_DAYS} "
+                      f"days {out['range'][0]}..{out['range'][1]} either")
+        return out
+    out["state"] = PROBE_ROWS_LATER
+    out["next_scheduled"] = min(later).isoformat()
+    out["next_covered"] = min(covered).isoformat() if covered else None
+    out["why"] = (f"{len(later)} row(s) later in the provider's schedule, the "
+                  f"first on {out['next_scheduled']}"
+                  + (f", the first in a covered league on "
+                     f"{out['next_covered']}" if covered else
+                     ", none yet in a covered league"))
+    return out
+
+
+def reference_earliest(day: _dt.date, fetch=None, api_key: str = None,
+                       schedule_fetch=None) -> dict:
     """Earliest covered kickoff for `day` per the reference, with its coverage.
 
     `fetch` is injectable so every branch is testable without a network, and
@@ -840,14 +978,39 @@ def reference_earliest(day: _dt.date, fetch=None, api_key: str = None) -> dict:
     matches = (payload or {}).get("matches") or []
     out["n_raw"] = len(matches)
     if not matches:
+        from src.scrapers.footballdata_competitions import REFERENCE_LEAGUES
+        out["leagues_absent"] = sorted(REFERENCE_LEAGUES)
+        # AN EMPTY DAY IS NOT AN EMPTY PROVIDER: ask its own schedule. A
+        # hermetic caller (injected `fetch`, no `schedule_fetch`) is never
+        # handed a network call.
+        if schedule_fetch is None and fetch is not None:
+            probe = {"state": PROBE_NOT_PROBED,
+                     "why": "the schedule was not probed (an injected fetch "
+                            "with no schedule_fetch)"}
+        else:
+            probe = schedule_probe(day, key, schedule_fetch
+                                   if schedule_fetch is not None
+                                   else _reference_schedule_fetch)
+        out["schedule_probe"] = probe
+        if probe["state"] == PROBE_ROWS_LATER:
+            out["state"] = REF_NO_SCHEDULED
+            out["reason"] = (
+                f"{REFERENCE_NAME} has NOTHING SCHEDULED on {day} or the day "
+                f"after, and it is answering: {probe['why']}. A STATE, not a "
+                f"failure - the days are empty, the provider is not.")
+            return out
+        if probe["state"] == PROBE_ROWS_ON_ASKED_DAYS:
+            out["state"] = REF_FETCH_FAILED
+            out["reason"] = (f"{REFERENCE_NAME} returned no rows for {day} "
+                             f"but {probe['why']}. Treated as a failed fetch.")
+            return out
         out["state"] = REF_EMPTY_RESPONSE
         out["reason"] = (f"{REFERENCE_NAME} returned NO ROWS AT ALL for "
                          f"{day}. Distinct from 'rows came back and none was "
                          f"for the day we asked about' - that is NO_FIXTURE "
                          f"and it is how a provider answers a different "
-                         f"question.")
-        from src.scrapers.footballdata_competitions import REFERENCE_LEAGUES
-        out["leagues_absent"] = sorted(REFERENCE_LEAGUES)
+                         f"question. Schedule probe {probe['state']}: "
+                         f"{probe['why']}.")
         return out
     rows = []
     for m in matches:
@@ -946,6 +1109,14 @@ def combined_deadline(day: _dt.date, ref: dict) -> dict:
     # `exposure["max"]` minutes LATER than the first kickoff we bet, because
     # the reference sees 9 of 30 leagues.
     out["exposure"] = coverage_exposure(day)
+    # Did the provider answer the question asked? Printed on the audit line,
+    # asserted by the live check. Distinct from `reference_verified`, which
+    # also holds for `EMPTY_RESPONSE` (it looked, and got nothing).
+    out["reference_answered"] = ref.get("state") in REF_ANSWERED
+    _probe = ref.get("schedule_probe")
+    _probe = _probe if isinstance(_probe, dict) else {}
+    out["next_scheduled"] = _probe.get("next_scheduled")
+    out["next_covered"] = _probe.get("next_covered")
     rmin = ref.get("min")
     if rmin is None:
         out["deadline_min"] = const_min
@@ -957,7 +1128,8 @@ def combined_deadline(day: _dt.date, ref: dict) -> dict:
                else "")
             + (ref.get("reason") or ""))
         out["reference_verified"] = ref.get("state") in (REF_NO_FIXTURE,
-                                                         REF_EMPTY_RESPONSE)
+                                                         REF_EMPTY_RESPONSE,
+                                                         REF_NO_SCHEDULED)
         return out
     out["deadline_min"] = min(rmin, const_min)
     out["bound_by"] = "REFERENCE" if rmin < const_min else "CONSTANT"
@@ -989,11 +1161,16 @@ def format_reference_deadline(c: dict) -> str:
         f"day_ahead_deadline[serves={c['serves']} {c['day_type']} "
         f"deadline={hm(c['deadline_min'])} bound_by={c['bound_by']} "
         f"ref={c['reference_state']}"
+        + ("(NOT ANSWERED)" if c.get("reference_answered") is False else "")
         + (f"@{hm(c['reference_min'])}" if c.get("reference_min") is not None
            else "")
         + f" coverage={c['coverage']} present={len(c.get('leagues_present') or [])}"
         f" absent={len(absent)} usable={c.get('n_usable')} "
-        f"dropped={c.get('dropped')}]"
+        f"dropped={c.get('dropped')}"
+        + (f" next_scheduled={c['next_scheduled']} "
+           f"next_covered={c.get('next_covered')}"
+           if c.get("next_scheduled") is not None else "")
+        + "]"
         + (f"{chr(10)}  residual[coverage exposure {e['day_type']}: "
            f"p99={e['p99']}m max={e['max']}m over60={e['over60']}/{e['n']}d "
            f"-> effective minimum {e['effective_min']}m = "

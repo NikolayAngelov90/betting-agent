@@ -346,10 +346,14 @@ def test_FOUR_STATES_where_there_are_FOUR_FACTS():
 
 
 def test_the_states_are_ENUMERATED_and_all_five_are_reachable():
+    # SIX since Stage 33 (2026-11-14): `NO_SCHEDULED_FIXTURES`, an empty day
+    # from a provider whose own schedule has rows later. The node id is kept
+    # so gate membership does not move; its reachability is driven in
+    # tests/test_reference_deadline.py.
     assert set(sd.REFERENCE_STATES) == {
         sd.REF_OK, sd.REF_NO_FIXTURE, sd.REF_EMPTY_RESPONSE, sd.REF_NO_KEY,
-        sd.REF_FETCH_FAILED}
-    assert len(set(sd.REFERENCE_STATES)) == 5
+        sd.REF_FETCH_FAILED, sd.REF_NO_SCHEDULED}
+    assert len(set(sd.REFERENCE_STATES)) == 6
 
 
 # ── PART B, THE SWEEP: THE WEATHER READ HAD THE SAME SHAPE ──────────────────

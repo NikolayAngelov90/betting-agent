@@ -289,3 +289,79 @@ def test_the_CONSERVATISM_is_the_figure_the_TEST_puts_in_its_duration_term():
         abs=0.01)
     assert ci.PARALLEL_REGIME_CORRECTED["mean_plus_3sd"] == pytest.approx(
         ci.DURATION_TERM_CONSERVATISM["best_estimate_mean_plus_3sd"])
+
+
+# ── Stage 33 Part C: the AUDIT's margin finding, on its mechanism ──────────
+
+def test_the_AUDIT_CONSERVATISM_is_DERIVED_from_its_stored_runs():
+    """Not typed: mean+3sd of the 13 stored runs, with and without each
+    run's own review minutes, against the live constant."""
+    import statistics
+    runs = ci.PARALLEL_REGIME_RUNS_TTP_AND_REVIEW
+    assert len(runs) == 13
+    m3 = lambda v: statistics.mean(v) + 3 * statistics.pstdev(v)  # noqa
+    c = ci.AUDIT_DURATION_CONSERVATISM
+    assert c["corrected_membership_mean_plus_3sd"] == pytest.approx(50.34)
+    assert c["corrected_review_removed_mean_plus_3sd"] == pytest.approx(46.90)
+    assert c["conservatism_min"] == pytest.approx(
+        ci.FULL_CARD_PICKS_3SD - m3([t - r for _d, t, r in runs]))
+    assert c["conservatism_min"] == pytest.approx(17.69, abs=0.005)
+    # the review took 0.00-2.73 min on these runs -- NOT 5-21
+    assert max(r for _d, _t, r in runs) < 3.0
+
+
+def _cons():
+    return ci.AUDIT_DURATION_CONSERVATISM["conservatism_min"]
+
+
+@pytest.mark.parametrize("over, n, state", [
+    (-0.001, 1, "ACKNOWLEDGED"),     # just inside what the mechanism covers
+    (+0.001, 1, "EXCEEDS"),          # just past it: lateness grew
+    (-5.0, 9, "ACKNOWLEDGED"),
+    (-5.0, 10, "LAPSED"),            # the no-review series can be re-derived
+    (-5.0, None, "UNEVALUATED"),
+])
+def test_DRIVEN_both_ways_at_the_BOUNDARY(over, n, state):
+    """`over` is the shortfall minus the coverage: negative is covered,
+    positive is not. The comparison is UNROUNDED -- on 2026-11-14 the two
+    agreed to 0.016 min."""
+    binding = ci.MARGIN_ALARM_MIN - (_cons() + over)
+    ack = ci.audit_margin_shortfall_is_acknowledged(binding, n)
+    assert ack["state"] == state, ack
+
+
+def test_a_CLEARING_margin_needs_no_acknowledgement():
+    assert ci.audit_margin_shortfall_is_acknowledged(
+        ci.MARGIN_ALARM_MIN + 1, 1)["state"] == "CLEAR"
+
+
+def test_the_2026_11_14_reading_is_ACKNOWLEDGED_and_one_second_more_is_NOT():
+    """+12.3225 against 30 on 2026-11-14: covered by 0.016 min."""
+    assert ci.audit_margin_shortfall_is_acknowledged(12.3225, 1)[
+        "state"] == "ACKNOWLEDGED"
+    assert ci.audit_margin_shortfall_is_acknowledged(12.30, 1)[
+        "state"] == "EXCEEDS"
+    assert ci.audit_margin_shortfall_is_acknowledged(12.12, 1)[
+        "state"] == "EXCEEDS", "the 2026-11-13 reading was 0.19 short"
+
+
+def test_the_AUDIT_reddens_on_every_state_but_ACKNOWLEDGED():
+    """From the AST of `main`: the `margin.schedule` finding is keyed --
+    and so can redden -- only in the `else` of `if _mech["state"] ==
+    "ACKNOWLEDGED"`. ANCHORED: the finding key is found exactly once."""
+    import ast
+    import pathlib
+    src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    keyed = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, "attr", "") == "append" and n.args
+             and isinstance(n.args[0], ast.Tuple) and n.args[0].elts
+             and isinstance(n.args[0].elts[0], ast.Constant)
+             and n.args[0].elts[0].value == "margin.schedule"]
+    assert len(keyed) == 1
+    guards = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+              and (ast.get_source_segment(src, n.test) or "")
+              == '_mech["state"] == "ACKNOWLEDGED"']
+    assert len(guards) == 1
+    in_else = {id(c) for stmt in guards[0].orelse for c in ast.walk(stmt)}
+    assert id(keyed[0]) in in_else

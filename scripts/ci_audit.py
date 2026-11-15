@@ -2187,22 +2187,23 @@ def serial_term_weekday_margin(lag) -> Optional[float]:
     return DEADLINE_MIN_BY_DAYTYPE["weekday"] - ready
 
 
-def weekday_margin_shortfall_is_acknowledged(binding: float,
-                                             regime_n) -> dict:
-    """`{"state", "why"}` for a weekday margin below the minimum.
+def _mechanism_ack(binding: float, minimum: float, conservatism: float,
+                   regime_n) -> dict:
+    """`{"state", "why"}` for a margin below `minimum`, acknowledged on a
+    MECHANISM and never on a date.
 
-    ACKNOWLEDGED  both mechanism conditions hold.
-    LAPSED        the no-review series reached n>=10: re-derive, then read.
-    EXCEEDS       the shortfall is larger than the measured conservatism: a
-                  real deterioration that the duration term cannot explain.
-    UNEVALUATED   the series could not be read: an acknowledgement resting
-                  on "n < 10" cannot be granted on "n unknown".
-    CLEAR         nothing to acknowledge.
+    ACKNOWLEDGED  the no-review series is below n=10 AND the shortfall is no
+                  larger than the measured `conservatism` of the duration term
+    LAPSED        the no-review series reached n>=10: re-derive, then read
+    EXCEEDS       the shortfall is larger than the conservatism -- lateness
+                  has grown past what the mechanism covers
+    UNEVALUATED   the series could not be read; "n < 10" is not granted on
+                  "n unknown"
+    CLEAR         nothing to acknowledge
     """
-    if binding >= MIN_ACCEPTABLE_MARGIN_MIN:
+    if binding >= minimum:
         return {"state": "CLEAR", "why": "the margin clears the minimum"}
-    shortfall = MIN_ACCEPTABLE_MARGIN_MIN - binding
-    cons = DURATION_TERM_CONSERVATISM["conservatism_min"]
+    shortfall = minimum - binding
     if regime_n is None:
         return {"state": "UNEVALUATED",
                 "why": "the no-review series could not be read, so its n is "
@@ -2212,17 +2213,100 @@ def weekday_margin_shortfall_is_acknowledged(binding: float,
                 "why": f"the no-review series is at n={regime_n} >= "
                        f"{MIN_N_TO_REDERIVE_PICKS_BOUND}: re-derive the "
                        f"duration term from it, then read the margin"}
-    if shortfall > cons:
+    if shortfall > conservatism:
         return {"state": "EXCEEDS",
-                "why": f"the shortfall {shortfall:.1f}m is larger than the "
-                       f"{cons}m the duration term is known to overstate "
-                       f"by -- a deterioration it cannot explain"}
+                "why": f"the shortfall {shortfall:.2f}m is larger than the "
+                       f"{conservatism:.2f}m the duration term is measured to "
+                       f"overstate by -- {shortfall - conservatism:.3f}m "
+                       f"the mechanism does not cover"}
     return {"state": "ACKNOWLEDGED",
-            "why": f"shortfall {shortfall:.1f}m <= the {cons}m conservatism "
-                   f"of a superseded duration term; the no-review series is "
-                   f"at n={regime_n}/{MIN_N_TO_REDERIVE_PICKS_BOUND}. "
-                   f"Clearing action: "
-                   f"{DURATION_TERM_CONSERVATISM['clearing_action']}"}
+            "why": f"shortfall {shortfall:.2f}m <= the {conservatism:.2f}m "
+                   f"conservatism of a superseded duration term; the "
+                   f"no-review series is at n={regime_n}/"
+                   f"{MIN_N_TO_REDERIVE_PICKS_BOUND}. Clearing action: "
+                   f"re-derive the duration term from the no-review series "
+                   f"once it reaches n>=10"}
+
+
+def weekday_margin_shortfall_is_acknowledged(binding: float,
+                                             regime_n) -> dict:
+    """The weekday-margin TEST's acknowledgement (Stage 32 Part D): minimum
+    60, conservatism of the SERIAL duration term it uses."""
+    return _mechanism_ack(binding, MIN_ACCEPTABLE_MARGIN_MIN,
+                          DURATION_TERM_CONSERVATISM["conservatism_min"],
+                          regime_n)
+
+
+#: ── THE AUDIT'S OWN `margin.schedule`, ON ITS MECHANISM. Stage 33 Part C. ─
+#:
+#: The audit's margin uses `FULL_CARD_PICKS_3SD = 64.59` and alarms below
+#: `MARGIN_ALARM_MIN` = 30. Two measured mechanisms say that constant
+#: overstates today's time-to-picks:
+#:
+#:   1. MEMBERSHIP. Three of its runs were SKIPPED picks steps. On the 13
+#:      weekday runs of the parallel regime whose picks step SUCCEEDED:
+#:      mean+3sd 50.34 (`measured` 2026-11-13).
+#:   2. THE REVIEW'S REMOVAL. The same 13 runs, each less its OWN review
+#:      minutes read from its log (`measured` 2026-11-12; where the review
+#:      ran it took 0.23-6.43 min, mean 2.27, n=14 runs): mean+3sd 46.90.
+#:
+#: 64.59 - 46.90 = 17.69 minutes, the conservatism this acknowledgement may
+#: spend and no more. NOT 5-21 minutes: that figure is the whole picks
+#: step's duration from the older profile, not the review's share of it.
+#:
+#: AT THE TIME OF WRITING IT HOLDS BY ONE SECOND. On 2026-11-14 the weekday
+#: margin read +12.32 against 30, a 17.68-minute shortfall, against 17.69
+#: minutes covered: 0.016 min to spare, which is below the 0.01-min precision
+#: the per-run times are stored at. Any growth in GitHub's lateness turns it
+#: EXCEEDS and the finding reddens -- the correct reading of a mechanism that
+#: covers the gap almost exactly. No date. The cron is NOT moved.
+PARALLEL_REGIME_RUNS_TTP_AND_REVIEW = (
+    # (day, time-to-picks min, that run's own review min); weekday, success
+    ("2026-10-22", 35.10, 1.78), ("2026-10-23", 36.88, 2.22),
+    ("2026-10-26", 28.75, 0.58), ("2026-10-28", 34.48, 1.13),
+    ("2026-10-29", 23.43, 0.53), ("2026-10-30", 31.73, 1.72),
+    ("2026-11-03", 30.45, 1.27), ("2026-11-05", 39.40, 2.73),
+    ("2026-11-06", 40.35, 1.73), ("2026-11-09", 27.00, 0.23),
+    ("2026-11-10", 24.30, 0.00), ("2026-11-11", 19.87, 0.00),
+    ("2026-11-12", 19.45, 0.00),
+)
+def _m3sd(values) -> float:
+    import statistics
+    return statistics.mean(values) + 3 * statistics.pstdev(values)
+
+
+# DERIVED from the stored runs, not typed: a figure that has to be kept in
+# step with its inputs by hand is a figure that drifts (recomputed 2026-11-14,
+# it was 46.90 from these values where 46.89 had been typed from a
+# higher-precision run).
+_CORRECTED_MEMBERSHIP = round(_m3sd(
+    [t for _d, t, _r in PARALLEL_REGIME_RUNS_TTP_AND_REVIEW]), 2)
+_CORRECTED_REVIEW_REMOVED = round(_m3sd(
+    [t - r for _d, t, r in PARALLEL_REGIME_RUNS_TTP_AND_REVIEW]), 2)
+AUDIT_DURATION_CONSERVATISM = {
+    "constant_mean_plus_3sd": FULL_CARD_PICKS_3SD,
+    "corrected_membership_mean_plus_3sd": _CORRECTED_MEMBERSHIP,
+    "corrected_review_removed_mean_plus_3sd": _CORRECTED_REVIEW_REMOVED,
+    # UNROUNDED, and compared unrounded: on 2026-11-14 the shortfall and the
+    # coverage agreed to 0.016 min, so a rounded comparison would have let
+    # the second decimal decide the state. Rounded only where printed.
+    "conservatism_min": FULL_CARD_PICKS_3SD - _m3sd(
+        [t - r for _d, t, r in PARALLEL_REGIME_RUNS_TTP_AND_REVIEW]),
+    "measured": "2026-11-14",
+    "population": ("weekday scheduled daily-picks runs of the parallel-review "
+                   "regime (cccb0e6 .. before 3c1133e) whose picks step "
+                   "SUCCEEDED, n=13; review minutes per run from each run's "
+                   "log timestamps"),
+}
+
+
+def audit_margin_shortfall_is_acknowledged(binding: float,
+                                           regime_n) -> dict:
+    """The audit's `margin.schedule` acknowledgement: minimum
+    `MARGIN_ALARM_MIN`, conservatism of `FULL_CARD_PICKS_3SD`."""
+    return _mechanism_ack(binding, MARGIN_ALARM_MIN,
+                          AUDIT_DURATION_CONSERVATISM["conservatism_min"],
+                          regime_n)
 
 
 def format_picks_bound_status(s: dict) -> str:
@@ -4833,29 +4917,32 @@ def main() -> int:
                      else f" ({_pb_ack['to_ten_date']})"))
         else:
             # RULE 3: a margin computed from a RETIRED REGIME'S constant is
-            # labelled wherever it appears, the alert included. The operator
-            # dispatching by hand needs to know what he is insuring against.
-            _pb = parallel_regime_picks_series()
-            # ── KEYED, SO A KNOWN FIGURE PRINTS INSTEAD OF REDDENING. ─────
-            #
-            # This is the finding that reddened `ci-audit` every day for two
-            # weeks. It now carries its key and its FIGURE from here, and
-            # `_emit_alarms` classifies it NEW / DETERIORATED / UNACKNOWLEDGED
-            # / UNCHANGED against `KNOWN_FINDINGS["margin.schedule"]`. Only
-            # the first three earn a red; UNCHANGED prints with its figure and
-            # its review date.
-            _keyed.append(("margin.schedule", _margin["binding"],
-                f"schedule margin {_margin['binding']:+.0f}m "
-                f"< {MARGIN_ALARM_MIN}m - CONSERVATIVE: computed from "
-                f"FULL_CARD_PICKS_MAX={FULL_CARD_PICKS_MAX}m, a full-card MAX "
-                f"from the RETIRED SERIAL review regime (n=4, 2026-10-01). "
-                f"The parallel review cut the picks step's sd 11.71 -> 2.37, "
-                f"so the true margin is very probably BETTER than this. The "
-                f"replacement series is at n={_pb['n']}/"
-                f"{MIN_N_TO_REDERIVE_PICKS_BOUND}"
-                + (f", ~{_pb['to_ten_weeks']} weeks to go (about "
-                   f"{_pb['to_ten_date']})" if _pb["to_ten_date"] != "reached"
-                   else ", READY TO RE-DERIVE")))
+            # labelled wherever it appears, the alert included.
+            # Stage 33 Part C: THE MECHANISM, before any red. It covers the
+            # measured conservatism of the duration term and nothing more,
+            # with no date; `ACKNOWLEDGED` prints, every other state reddens
+            # and says which it is.
+            _pb = removal_regime_picks_series()
+            _mech = audit_margin_shortfall_is_acknowledged(
+                _margin["binding"], _pb.get("n"))
+            if _mech["state"] == "ACKNOWLEDGED":
+                print(f"note: schedule margin {_margin['binding']:+.1f}m < "
+                      f"{MARGIN_ALARM_MIN}m is ACKNOWLEDGED ON ITS MECHANISM "
+                      f"-- {_mech['why']}")
+            else:
+                _keyed.append(("margin.schedule", _margin["binding"],
+                    f"schedule margin {_margin['binding']:+.1f}m "
+                    f"< {MARGIN_ALARM_MIN}m - mechanism acknowledgement "
+                    f"{_mech['state']}: {_mech['why']}. The duration term is "
+                    f"FULL_CARD_PICKS_3SD={FULL_CARD_PICKS_3SD}m (parallel "
+                    f"regime, skipped steps counted); measured conservatism "
+                    f"{AUDIT_DURATION_CONSERVATISM['conservatism_min']}m. The "
+                    f"no-review series is at n={_pb.get('n')}/"
+                    f"{MIN_N_TO_REDERIVE_PICKS_BOUND}"
+                    + (f", about {_pb['to_ten_date']}"
+                       if _pb.get("to_ten_date") not in (None, "reached",
+                                                         "UNEVALUATED")
+                       else "")))
 
     if listing_warning:
         # Printed AGAIN under the table: the number a reader carries away is
