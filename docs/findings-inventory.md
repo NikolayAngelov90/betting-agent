@@ -395,32 +395,47 @@ not fall at all**: odds capture lives in `--update`, which is the stage that
 ## 5. `WITHHELD` — registered 2026-11-15, not performed
 
 The README was rewritten on 2026-11-15, its first change since the public
-repository's stale version. The operator decided that two results go into it
-**as their arithmetic only**, with every figure measured on API-Football or
-Flashscore data removed:
+repository's stale version. The operator decided that four of its results go
+into it **as their finding, method and arithmetic only**, with every figure
+computed from API-Football or Flashscore prices removed. Items 2 and 3 were
+withheld in `bdc34da`, items 1 and 5 in `717b7f1`. **All four share ONE
+restoration condition**, below.
 
 | README item | what stays | what is withheld |
 |---|---|---|
+| 1, models vs market | the finding (the in-house models add no information over the margin-free price), each test's method and date | every log-loss delta and interval, the per-fold priced-match counts, the residual harness's n, the holdout fixture count |
 | 2, de-vigging | the method: `gap = M · (p − 1/n) / (1 + M)`, and the synthetic book (proportional worst gap 2.76pp on a calibrated 3-way book at 6.6% equal-share margin; the matching estimator 0.00) | the band table, leg counts, gaps and intervals, both the 2026-11-11 measurement and its 2026-11-12 correction |
 | 3, cost | the statement that our cost exceeds every inefficiency found, and the population (settled paper picks from 2026-08-11, n = 1,639, our own record) | the 6.40% relative / 3.70pp cost and every per-book figure |
+| 5, no-edge level | the principle `1 / (o × (1 + m))` and the break-even `1 / 1.70 = 58.8%`, which are arithmetic | the measured margin `m` (9.48%), the no-edge level it gives (53.7%), and the pick counts and dates to separate 57% from it (865 / 1,785), which back-solve to `m` |
 
-**THE CONDITION FOR RESTORING THEM — registered here, NOT performed:**
+**THE CONDITION FOR RESTORING ALL FOUR — registered here, NOT performed:**
 
-1. **The band test re-run under Shin AND power de-vigging**, beside
-   proportional-net-of-artefact, on a source whose terms permit publication:
+1. **The chosen source's terms re-checked and quoted with a fetch date,
+   first.** football-data.co.uk's terms have **never been checked**. The Odds
+   API's were fetched 2026-11-11 and must be re-fetched if they are more than
+   a few months old when the work starts.
+2. **One publishable price source for everything below**:
    **football-data.co.uk** closing odds or **The Odds API** (its historical
-   endpoint is paid). This is the re-run the 2026-11-12 correction already
-   required before the band table counts as evidence of mispricing, so one
-   piece of work settles both.
-2. **The per-book cost table rebuilt on the same publishable source**, with
-   our own taken-price cost restated on it.
-3. **The chosen source's terms re-checked and quoted with a fetch date
-   first.** football-data.co.uk's terms have **never been checked**; The Odds
-   API's were fetched 2026-11-11 and must be re-fetched if more than a few
-   months old when the work starts.
+   endpoint is paid).
+3. **Item 2:** the band test re-run under Shin AND power de-vigging, beside
+   proportional-net-of-artefact. This is the re-run the 2026-11-12 correction
+   already required before the band table counts as evidence of mispricing,
+   so one piece of work settles both.
+4. **Item 3:** the per-book cost table rebuilt, with our own taken-price cost
+   restated on it.
+5. **Item 1:** the walk-forward log-loss comparison, the blend sweep, the
+   residual harness and the blend fit re-run with that source's price as the
+   market.
+6. **Item 5:** the margin of the taken price over a margin-free price
+   re-measured. The no-edge level and the separation counts are then
+   recomputed from it with `scripts/confident_backtest.n_to_separate`.
 
-Until all three are done the README carries the arithmetic and the
-withholding note, and nothing else. `tests/test_readme_matches_config.py`
+**The four return together, once all six steps are done.** They rest on the
+same provider prices, so restoring one item from a re-run of its own step
+alone would leave the README quoting two price sources side by side. Until
+then the README carries the finding, the method and the withholding note,
+and nothing else. `tests/test_readme_matches_config.py`
 fails if a withheld figure reappears in it.
 
-*Registered 2026-11-15. Nothing measured, nothing published.*
+*Registered 2026-11-15 for items 2 and 3, extended the same day to items 1
+and 5. Nothing measured, nothing published.*

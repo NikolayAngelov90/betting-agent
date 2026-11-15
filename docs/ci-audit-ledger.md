@@ -39486,3 +39486,133 @@ once the test anchored its haystack. The secrets guard scans `README.md` (918
 files) and passes.
 
 *Recorded 2026-11-15.*
+
+---
+
+## 2026-11-15 (IV) — `README COMMITS`: `bdc34da` and `717b7f1`, and all four withheld figures under one condition
+
+Two commits to the public README, both on `main`. No selection, threshold or
+model change: `s5.23 / 5bca73`, re-read after each edit.
+
+**`bdc34da` — the rewrite.** Its content is recorded in (III) above, which
+went into the same commit before it had a hash. In summary:
+
+* the old README checked claim by claim: 14 TRUE, 28 STALE, 1
+  SIMULATED-AS-FACT;
+* a 249-line replacement;
+* items 2 (de-vigging) and 3 (cost) cut to their arithmetic;
+* the config comment "Measured on production history … 256 credits/month …
+  worst day of 46" relabelled `SIMULATED`;
+* `tests/test_readme_matches_config.py`, 17 tests;
+* suite 3107 passed, 1 skipped.
+
+**`717b7f1` — items 1 and 5 withheld too.**
+
+* **Item 1** keeps the finding: the in-house models add no information over
+  the margin-free price, by three tests with their methods and dates. Every
+  log-loss delta, interval and priced-match count is removed. They are
+  computed from provider prices.
+* **Item 5.** The 53.7% no-edge level **cannot be stated without a provider
+  input**: it is `1 / (1.70 × 1.0948)`, and 0.0948 is the margin of the
+  taken price, measured on provider prices. The README states the principle
+  `1 / (o × (1 + m))` and the break-even `1 / 1.70 = 58.8%`, which is pure
+  arithmetic. It withholds the margin, the level, and the separation counts
+  865 / 1,785 with their dates. **The counts are withheld too because they
+  back-solve to the margin**: a withheld input that can be recovered from a
+  published output is not withheld.
+* The README test's withheld list covers them, with five more known-wrong
+  controls. Non-gating 1243 → 1248: 5 added by node-id diff against
+  `bdc34da`, 0 removed. The gate is identical at 1854 by node id. Suite 3112
+  passed, 1 skipped. The README is 252 lines.
+
+**One restoration condition for all four**, registered in
+`docs/findings-inventory.md` §5, which now covers items 1 and 5 as well as 2
+and 3:
+
+1. the source's terms checked first;
+2. one publishable price source (football-data.co.uk closing odds or The
+   Odds API);
+3. the band test under Shin and power;
+4. the per-book cost table rebuilt;
+5. item 1's comparisons re-run with that price as the market;
+6. the margin re-measured.
+
+**The four figures return together.** Restoring one from its own step would
+leave the README quoting two price sources side by side.
+
+---
+
+## 2026-11-15 (V) — `VISIBILITY`: the repository stays public
+
+**The operator's decision: the repository stays public.** Nothing was
+changed. The measurements behind it, taken 2026-11-15:
+
+**1. Going private would not unpublish `docs/`.** The repository has **one
+public fork**. GitHub's documentation on changing visibility
+(<https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility>,
+fetched 2026-11-15) says *"Public forks are not made private"* and *"GitHub
+will detach public forks of the public repository and put them into a new
+network."* So the history, and every figure the README now withholds,
+stays public whatever the setting. The README's withholding governs what
+the front page asserts. It never unpublished anything, and visibility could
+not either.
+
+**2. It would cost about $18 a month, or stop the runs mid-month.**
+
+* *Measured* 2026-10-16 13:00 → 2026-11-15 13:00 UTC: **504 runs, 3,025
+  billable minutes**. Each job is rounded up to the whole minute, all on
+  Linux. Per workflow:
+
+  | workflow | billable minutes |
+  |---|---|
+  | daily picks | 1,642 |
+  | H1 collection | 544 |
+  | audit | 441 |
+  | closing lines | 138 |
+  | reminders | 108 |
+  | non-gating tests | 107 |
+  | paper report | 30 |
+  | probe | 15 |
+
+  H1's cron covers 1–8 November only and fires again in 2027. Without it the
+  total is ≈2,480.
+* *GitHub's terms* (<https://docs.github.com/en/billing/concepts/product-billing/github-actions>
+  and <https://docs.github.com/en/billing/reference/actions-runner-pricing>,
+  fetched 2026-11-15):
+  * standard runners are free in public repositories;
+  * private repositories get an included $12/month on GitHub Free and $18
+    on Pro, with Linux 2-core at $0.006/min;
+  * jobs are rounded up to the whole minute;
+  * *"If your account does not have a valid payment method on file, usage
+    is blocked once you consume the included compute usage."*
+* 3,025 min ≈ **$18.15**, against **$12 (≈2,000 min) on Free** and $18
+  (≈3,000) on Pro. Without H1 it is ≈ $14.89, still above Free. **On Free
+  with no payment method, the runs, the daily card included, would stop
+  partway through each month.** The account plan is not readable by the
+  token used here.
+
+**3. It would halve the runner every timing was measured on.** GitHub's
+runner reference
+(<https://docs.github.com/en/actions/reference/runners/github-hosted-runners>,
+fetched 2026-11-15) gives `ubuntu-latest` as **4 CPU / 16 GB on public
+repositories and 2 CPU / 8 GB on private ones**. Every duration in this
+ledger was taken on the 4-core runner:
+
+* time-to-picks;
+* the schedule margin;
+* the duration term and its acknowledgement;
+* the 3,025 minutes above.
+
+On a private repository each of these would need re-measuring before it
+could be trusted.
+
+**Also measured, none of it decisive:**
+
+* `actions: read` is declared in `ci-audit.yml` and `reminders.yml`, pinned
+  by tests, and no other workflow reads run data;
+* no branch protection, no rulesets, no Pages;
+* secret scanning and push protection are already off;
+* 14-day traffic: 74 views from 7 unique visitors, and 650 clones from 133
+  unique cloners (CI checkouts probably included, so not separable).
+
+*Recorded 2026-11-15. No visibility, workflow, config or code change.*
