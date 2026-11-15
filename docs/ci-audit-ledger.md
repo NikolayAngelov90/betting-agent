@@ -39208,3 +39208,196 @@ consumed only by tests until the audit printed it. Census: gate 1843 →
 *Recorded 2026-11-13. `.github/workflows/daily-picks.yml`,
 `scripts/ci_audit.py`, `tests/test_cron_split_by_daytype.py`,
 `tests/test_picks_bound_series.py`, `tests/test_review_removed.py`.*
+
+---
+
+## 2026-11-15 (I) — STAGE 33 PART A: `FIRST RUN VERIFIED` — the first s5.23 run, on a FIFA-window slate
+
+Run **43687476436**, scheduled, `headSha` **`d06327c`**, started 06:53:30 UTC,
+success. It executed exactly the Stage 32 code: nothing was pushed to `main`
+before it (the Stage 33 work waited on branch `stage-33-pending`, and no
+workflow triggers on a push — every one is `schedule`, `workflow_dispatch` or
+`workflow_run`; 0 repository webhooks; Pages not configured).
+
+Verified with `python -m scripts.first_run_check --day 2026-11-15`, read-only,
+against production and the run log. Every check is PASS, FAIL or UNEVALUATED,
+never collapsed. **All ten PASS:**
+
+| check | reading |
+|---|---|
+| cohort | 2 of 2 picks `stage5_baseline_20260807.5bca73` |
+| price floor | 0 of 2 below 1.70; min 1.75 |
+| probability floor | 0 of 2 below 0.54; min 0.5412 |
+| one per fixture | 2 fixtures, 2 picks |
+| `pick_runs` | 1 row: `PICKS_MADE`, slate **4**, evaluated 4, errors 0, mode `confident_value`, recorded 07:15:30 |
+| client delivery | `REPORT_DELIVERY report=daily picks chunks=1 sent=1 failed=none` |
+| no review call | 0 review/Claude runtime lines |
+| no forced picks | 0 forced-pick runtime lines outside the shadow |
+| shadow stored | 4 rows, rule `standard`, 4 fixtures |
+| shadow not a pick | rows live only in `shadow_picks`; same selection on 0 fixtures |
+
+**The slate: 4 fixtures, all `spain/laliga2`** (fixture query 07:14 UTC). The
+men's FIFA window runs 9-17 November 2026; every tier-1 league logged "no
+matches scheduled today". The lower leagues keep playing in a window: the
+day before held 29 fixtures (League One 12, League Two 12, LaLiga2 5)
+against ~100 on a normal Saturday (`measured` 2026-11-14, production
+`matches`, distinct fixtures per kickoff date).
+
+**The picks, predicted beside the price** (blended probability, taken =
+cross-book median; realised: not yet settled, kickoffs 13:00 and 17:30 UTC):
+
+| fixture | selection | taken | blended p | p x taken - 1 |
+|---|---|---|---|---|
+| Tenerife v Ceuta | Home Win | 1.75 | 0.5455 | -4.5% |
+| Eibar v Cadiz | Over 2.5 Goals | 1.75 | 0.5412 | -5.3% |
+| **2 picks** | | **avg 1.75** | **mean 0.5434** | **-4.9%** |
+
+The saved `predicted_probability` IS the blended p: the agent passes
+`leg.p` to `_build_pick`, and the stored EV equals p x taken - 1 on both
+rows. The rule selects on price and probability, not edge — both picks are
+priced below the blend's fair value, as the registration expected ("not
+because an edge was found").
+
+**The standard rule on the same fixtures (`shadow_picks`, never sent):**
+Away Over 0.5 @ 1.53 / 1.53 / 1.55 and a forced BTTS Yes @ 1.655 — **all
+four below 1.70**, avg odds 1.566, ensemble-predicted mean p 0.6604
+(predicted return +3.1% by the ensemble's own probabilities, which Stage 31
+measured as 4.5pp overconfident). This is the trade the switch made, on its
+first day.
+
+**The settlement format, exercised by the new code on day one.** This run
+settled the 20 picks of 2026-11-14 (old cohort `7f9e82`: 11 W, 8 L, 1 V)
+and delivered the report (`chunks=1 sent=1 failed=none`). The client text
+is not in the log; its summary line, rebuilt from the stored rows with the
+same function: `Hit rate 11/19 (58%) · average odds 1.59 · return -9.3% per
+1-unit pick` (predicted mean p 0.6112 on the 19 win/loss picks). The first
+settlement of **s5.23** picks is the 2026-11-16 run.
+
+**The zero-pick path was NOT exercised at day level** — picks were made. At
+fixture level 2 of 4 fixtures qualified nothing (Granada v Las Palmas,
+Eldense v Sabadell).
+
+`python -m scripts.confident_backtest --prospective`, first output: both
+tables installed; 1 day recorded (`PICKS_MADE`), 2 picks saved; settled
+s5.23 picks n=0 and graded shadow n=0 (no fixture finished) — so the
+separation targets are untouched: 865 / 1,785 picks against the 53.7%
+ceiling, 5,572 / 11,319 against the standard rule's 58.3%.
+
+*Seen, recorded:* the log line `Found 2 high-confidence picks ... (EV
+threshold: 5.0%)` is standard-rule wording printed under `confident_value`,
+whose picks carry negative EV by design. Cosmetic; selection is unaffected.
+*And:* `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are **absent** from
+the repository's secrets (names listed 2026-11-15) and resolved empty in the
+job environment on both 2026-11-14 and 11-15. Part B removes the two env
+lines.
+
+### The checker, and the defect it had first
+
+`scripts/first_run_check.py`. Its first version filtered log lines on the
+step name; `gh run view --log` labels the picks step's lines `UNKNOWN STEP`,
+so it found **no** forced pick on 2026-11-14, a run that made 16. It now
+keys on loguru's `| LEVEL |` runtime format, with positive controls on real
+logs (11-06, review ON: 68 review lines; 11-14: 16 forced picks). The
+zero-pick path passes only recorded, error-free and delivered; a run whose
+log holds no runtime line is UNEVALUATED. Dry run on 2026-11-14 (old code):
+cohort, price floor (16 of 20 below 1.70), probability floor (3 of 20 below
+0.54) and forced picks FAIL, as they should.
+
+### The reference: an empty day is not an empty provider
+
+The Reminders live check `test_LIVE_the_reference_answers_for_TOMORROW`
+went red on **13 of 15** Reminders runs 2026-11-08 07:23 .. 11-15 07:31
+UTC (grain: run; source: each run's log), every one in the window, on
+`EMPTY_RESPONSE`; the two that passed (both 11-13) asked about 11-14,
+which held two Brasileirao rows. Against the FIFA International Match Calendar (window
+9-17 November 2026) and the provider's own schedule (`measured` 2026-11-14,
+`dateFrom/dateTo` asks): no row of any competition on 11-09..11-13 or
+11-15..11-17, Brasileirao (served, not mapped) on 11-14 and from 11-18,
+covered leagues from **11-20**, full slate **11-21**. The provider was
+answering; the days were empty.
+
+New state **`NO_SCHEDULED_FIXTURES`**: when the asked days return nothing,
+the provider's own schedule is asked once over 10 days (its limit — a
+16-day ask returned HTTP 400). Rows only on later days → the state, which
+counts as answered. Still red: a failed fetch, ten empty days, a failed
+probe, a probe that answers a different range, and a probe holding rows on
+the asked days (the two answers disagree). Keyed on the provider's
+schedule, not on window dates — a list of windows would have to be
+remembered. What it cannot see: a provider that keeps a later schedule but
+loses one day's rows; `NO_FIXTURE` carries the same exposure. Live,
+2026-11-14: 11-15 reads `NO_SCHEDULED_FIXTURES`, next scheduled 11-18, next
+covered 11-20; 11-21 reads `OK@12:30`.
+
+**Network-free, proved by test, not by reading.** The 8 new gate tests run
+under `no_network`: the socket layer replaced, every attempt recorded, the
+test failed at teardown on any — recorded and not merely raised, because
+`reference_earliest` turns any exception into `FETCH_FAILED`, so the
+parametrised case expecting `FETCH_FAILED` would pass even if it had
+reached the network. Controls: a planted real reach is caught on both
+production paths although both swallow the exception; each of the 8 carries
+the blocker (counted from its marks). Mutation: routing the `FETCH_FAILED`
+case through the real fetch left its body passing and the guard failed it
+(`['socket.create_connection']`); file restored byte-identical. Run once
+under a process-wide block from `pytest_configure`: 8 passed, 0 attempts.
+
+Census, **verified by node id** against `d06327c`: gate 1844 → **1854** (10
+added, none removed); non-gating 1198 → **1226** (28 added, none removed:
+19 checker, 9 Part C); files 159 → 160 (`test_first_run_check.py`,
+non-critical — a read-only verifier must not stop a run). Fingerprint
+`5bca73` unchanged (computed with `Config`, at `d06327c` and on the
+branch).
+
+**Still owed before Part B:** the first settlement of s5.23 picks (the
+2026-11-16 run: `--day 2026-11-15 --settlement 2026-11-16`), and the first
+NORMAL slate — **2026-11-21** — with its settlement on 11-22.
+
+## 2026-11-15 (II) — STAGE 33 PART C: `MARGIN ACKNOWLEDGED` — on its mechanism, no date
+
+The audit's `margin.schedule`: weekday **+12.3225 min against its 30-minute
+floor** (`measured` 2026-11-15, the audit's own computation, lag series by
+day type, serving 2026-11-16).
+
+**The directive's premise was wrong and was not used.** "The review's
+removal shortens time-to-picks by a measured 5-21 min": 5-21 is the whole
+picks step's duration from an older profile. The review's own share, read
+from each run's log timestamps, was 0.23-6.43 min (mean 2.27, n=14
+scheduled runs 2026-10-22..11-12). The operator chose the measured
+mechanism only.
+
+**The mechanism.** The duration term is `FULL_CARD_PICKS_3SD = 64.59`
+(parallel regime, skipped steps counted). On the 13 weekday runs of that
+regime whose picks step SUCCEEDED, each less its own review minutes,
+mean+3sd is **46.90**. The constant overstates by **17.6935 min** — derived
+unrounded from the stored runs, and that is all the acknowledgement may
+spend.
+
+`audit_margin_shortfall_is_acknowledged(binding, n)`:
+
+| state | when |
+|---|---|
+| `ACKNOWLEDGED` | no-review series below n=10 AND shortfall <= 17.69 |
+| `LAPSED` | the no-review series reached n >= 10: re-derive, then read |
+| `EXCEEDS` | the shortfall outgrew the mechanism — lateness grew past what it covers |
+| `UNEVALUATED` | the series could not be read; "n < 10" is not granted on "n unknown" |
+| `CLEAR` | the margin clears 30 |
+
+Only `ACKNOWLEDGED` prints instead of reddening (an AST test pins that
+`margin.schedule` is keyed only in the else branch). No date anywhere.
+Driven both ways at the boundary: 0.001 min over the conservatism →
+EXCEEDS, under → ACKNOWLEDGED; n=9 ACKNOWLEDGED, n=10 LAPSED.
+
+**It holds by about one second.** Shortfall 17.6775 against 17.6935: 0.016
+min to spare, below the 0.01-min precision of the stored inputs — so the
+comparison is unrounded and the display is not. It is expected to read
+EXCEEDS on the next slow weekday start; that is the mechanism working, not
+a regression. The cron is not moved.
+
+*Corrected:* while choosing, I told the operator this would read EXCEEDS
+"0.18 min short". That used the 2026-11-13 reading (+12.12); the live
+reading since 2026-11-14 is +12.3225, and it reads ACKNOWLEDGED. Today's
+11-15 audit (on `d06327c`, before this merge) still reddened on it.
+
+*Recorded 2026-11-15. `scripts/first_run_check.py`, `scripts/ci_audit.py`,
+`scripts/schedule_deadline.py`, `tests/test_first_run_check.py`,
+`tests/test_picks_bound_series.py`, `tests/test_reference_deadline.py`,
+`tests/test_coverage_residual.py`, `tests/test_gate_is_opt_in.py`.*
