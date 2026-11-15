@@ -389,3 +389,38 @@ not fall at all**: odds capture lives in `--update`, which is the stage that
 *Compiled 2026-11-12 on 2026-11-11 measurements. Nothing published.
 `cohort_status.py` reads
 `s5.21 / 52678c`, unmoved: this stage reads.*
+
+---
+
+## 5. `WITHHELD` — registered 2026-11-15, not performed
+
+The README was rewritten on 2026-11-15, its first change since the public
+repository's stale version. The operator decided that two results go into it
+**as their arithmetic only**, with every figure measured on API-Football or
+Flashscore data removed:
+
+| README item | what stays | what is withheld |
+|---|---|---|
+| 2, de-vigging | the method: `gap = M · (p − 1/n) / (1 + M)`, and the synthetic book (proportional worst gap 2.76pp on a calibrated 3-way book at 6.6% equal-share margin; the matching estimator 0.00) | the band table, leg counts, gaps and intervals, both the 2026-11-11 measurement and its 2026-11-12 correction |
+| 3, cost | the statement that our cost exceeds every inefficiency found, and the population (settled paper picks from 2026-08-11, n = 1,639, our own record) | the 6.40% relative / 3.70pp cost and every per-book figure |
+
+**THE CONDITION FOR RESTORING THEM — registered here, NOT performed:**
+
+1. **The band test re-run under Shin AND power de-vigging**, beside
+   proportional-net-of-artefact, on a source whose terms permit publication:
+   **football-data.co.uk** closing odds or **The Odds API** (its historical
+   endpoint is paid). This is the re-run the 2026-11-12 correction already
+   required before the band table counts as evidence of mispricing, so one
+   piece of work settles both.
+2. **The per-book cost table rebuilt on the same publishable source**, with
+   our own taken-price cost restated on it.
+3. **The chosen source's terms re-checked and quoted with a fetch date
+   first.** football-data.co.uk's terms have **never been checked**; The Odds
+   API's were fetched 2026-11-11 and must be re-fetched if more than a few
+   months old when the work starts.
+
+Until all three are done the README carries the arithmetic and the
+withholding note, and nothing else. `tests/test_readme_matches_config.py`
+fails if a withheld figure reappears in it.
+
+*Registered 2026-11-15. Nothing measured, nothing published.*

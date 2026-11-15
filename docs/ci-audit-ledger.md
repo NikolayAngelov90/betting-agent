@@ -39401,3 +39401,88 @@ reading since 2026-11-14 is +12.3225, and it reads ACKNOWLEDGED. Today's
 `scripts/schedule_deadline.py`, `tests/test_first_run_check.py`,
 `tests/test_picks_bound_series.py`, `tests/test_reference_deadline.py`,
 `tests/test_coverage_residual.py`, `tests/test_gate_is_opt_in.py`.*
+
+---
+
+## 2026-11-15 (III) — `README REWRITTEN`: the public front page matches the system, and two results are withheld
+
+The repository is public and its README described a system that no longer
+existed. No selection, threshold or model change: `s5.23 / 5bca73`, unmoved,
+re-read after every edit with `model_version(Config(...))`.
+
+### PART A — the old README's claims against `main`
+
+43 claims, each checked against the code and config at `611884e` (figures
+re-read from production, read-only, 2026-11-15): **14 TRUE, 28 STALE,
+1 SIMULATED-AS-FACT, 0 NEVER TRUE.** The stale ones include the Claude pick
+review (off since s5.22), weather (deleted 2026-10-20), "14 sections", two
+picks per match (now one), the 1.50 floor and market exclusions (not applied
+by `confident_value`), the `37 9` cron, the SQLite fallback (refused), and
+migrations 001–006 (now 010). **The drawdown circuit breaker's keys are in
+config and no code on `main` reads them.**
+
+**The simulated-as-fact figure was not the one expected.** The README's 212
+credits/month had carried a `SIMULATED` label since Stage 14. The figure
+stated as fact was **"a Stage-3 egress pass cut usage ~97%"**, an estimate
+from bytes-per-row × row counts (`docs/egress-audit-pass2.md:219`) that the
+README's own Stage 14 correction said nothing measures. And one more,
+outside the README: `config.example.yaml` said "Measured on production
+history … ~256 credits/month with a worst observed day of 46". Both are
+simulator output; that comment is now relabelled `SIMULATED` with its source.
+Comment only: the fingerprint did not move.
+
+**Re-measured, the pre-paper record is 1,067 settled picks, not 1,074**:
+51.5% at average odds 1.94, return −4.12% [−10.1, +2.2]. The population
+excludes voids and marked picks; picks have been re-marked since 2026-09-01.
+
+### PART B — the new README, 249 lines
+
+The sections are: what this is (paper trading, no live wager ever), how
+picks are made now (every value from `config.example.yaml`), pipeline,
+what was measured, setup, data sources with terms, disclaimer. Every figure
+carries its date and n and is labelled measured or simulated.
+
+**Corrections to the directive, made in the text:**
+
+* the 1X2 market weight is **0.94**, not 0.93 (0.93 is the corrected-Elo fit,
+  not deployed), so the README says 94–100%;
+* the weights were fitted on development (2026-02-28 … 08-31) and tested
+  frozen on the holdout, which is not "fitted out of sample";
+* the 30–40% band survived only net of the proportional method's artefact;
+  the Shin/power re-run was never done.
+
+### `WITHHELD` — the operator's decision
+
+Under the strictest reading of the terms check, two market-wide results rest
+on API-Football and Flashscore data. **Item 2 (de-vigging) keeps only the
+method:** the analytic gap `M·(p − 1/n)/(1 + M)` and the synthetic book.
+**Item 3 (cost) keeps only the statement** that our cost exceeds every
+inefficiency found. Every band figure, leg count, gap, interval, the 6.40% and
+every per-book figure are removed. Figures from our own paper record stay.
+
+**The condition for restoring them is registered, not performed**, in
+`docs/findings-inventory.md` §5: the band test re-run under Shin and power
+and the per-book cost table rebuilt, both on football-data.co.uk closing odds
+or The Odds API, with that source's terms checked first.
+
+### The test, and the trap it nearly fell into
+
+`tests/test_readme_matches_config.py`, 17 tests:
+
+* the README's selection values against the config, with ten known-wrong
+  controls;
+* no withheld figure in the README, with four known-wrong controls.
+
+> **Importing `anchored` from `tests/conftest.py` made the file
+> CAPTURE-CRITICAL.** conftest imports `src.data.odds_quota`, so the import
+> graph put a README check in the gate, where a stale README could stop a
+> picks run. Reverted; the sentinel is written inline. The classifier reads
+> it `critical=False, via=[]`.
+
+Census 160 → 161 files, not_critical 77 → 78. Non-gating 1226 → 1243: 17
+added, all in the new file, 0 removed, by node-id diff against `611884e`.
+The gate is identical at 1854 by node id. The matcher ratchet held at 39
+once the test anchored its haystack. The secrets guard scans `README.md` (918
+files) and passes.
+
+*Recorded 2026-11-15.*

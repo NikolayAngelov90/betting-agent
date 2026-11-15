@@ -410,9 +410,17 @@ betting:
 # 1X2 (h2h) and 473 on Over/Under lines (totals).
 #
 # The free tier is 500 credits/month. The budget below is deliberately lower so
-# an unusually busy fixture month cannot exhaust it. Measured on production
-# history, the Stage 6 design costs ~256 credits/month with a worst observed day
-# of 46.
+# an unusually busy fixture month cannot exhaust it.
+#
+# SIMULATED, NOT MEASURED (relabelled 2026-11-15). This comment used to read
+# "Measured on production history, the Stage 6 design costs ~256 credits/month
+# with a worst observed day of 46". Both figures come from
+# scripts/simulate_odds_quota.py replaying the selection rules over past picks,
+# not from production spend. The 256 is the 2-hourly row of the Stage 6
+# parameter-choice table (docs/stage6-odds-api-optimization-2026-08-10.md); the
+# worst day of 46 is the same simulator's output, the figure the README carried
+# as "measured" until its Stage 14 correction. The SIMULATED note above, at the
+# closing-capture keys, describes the same table.
 #
 # Enforcement is claim-before-spend in the api_budget table (a month is keyed by
 # its first day), so concurrent workers cannot both spend the last credit and a

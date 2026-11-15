@@ -196,7 +196,13 @@ from scripts.capture_critical import (
 #: `test_reference_deadline.py`, which was already capture-critical (via
 #: `src.scrapers`); they are hermetic (injected fetches, the network
 #: function monkeypatched to raise).
-CENSUS = {"files": 160, "capture_critical": 83, "not_critical": 77}
+#: RE-MEASURED 2026-11-15, README rewrite: files 160 -> 161,
+#: `capture_critical` UNCHANGED at 83, not_critical 77 -> 78.
+#: `test_readme_matches_config.py` is non-critical by the classifier's
+#: own reading (critical=False, via=[]) and that is the right side: it
+#: compares README.md with config.example.yaml, and a stale README must
+#: never be able to stop a picks run.
+CENSUS = {"files": 161, "capture_critical": 83, "not_critical": 78}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -687,8 +693,14 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #          on an unknown n, CLEAR, the conservatism derived from its
     #          stored runs, and the audit reddening on every state but
     #          ACKNOWLEDGED.
-    assert len(nong) == 1226, (
-        f"the non-gating selection is {len(nong)}, recorded 1226")
+    #   2026-11-15, README rewrite: +17, every one in
+    #   test_readme_matches_config.py (node-id diff against 611884e: 17
+    #   added, 0 removed; the gate identical at 1854 by node id) --
+    #   the README's selection values checked against the config with
+    #   ten known-wrong controls, and the operator's WITHHELD figures
+    #   kept out of it with four.
+    assert len(nong) == 1243, (
+        f"the non-gating selection is {len(nong)}, recorded 1243")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 
