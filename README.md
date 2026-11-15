@@ -93,24 +93,27 @@ configuration, so the example file is what runs in production.
 
 Every figure below says what it is, how many observations it rests on and
 when it was taken. *Measured* means read from recorded outcomes;
-*simulated* means a replay of a rule over past fixtures.
+*simulated* means a replay of a rule over past fixtures. Figures computed
+from bookmaker prices supplied by providers whose terms do not permit
+publication are **withheld**: the finding and its method are stated, the
+numbers are not (see [Data sources](#data-sources)).
 
 **1. The in-house models add no information beyond the market price.**
+Each test compares log-loss against the margin-free price. Its figures are
+withheld because they are computed from provider prices.
 
-* *Measured 2026-10-23.* Walk-forward test, home/draw/away log-loss, five
-  folds from 2025-08-01 to 2026-07-01, 1,035–2,081 matches per fold. Priced
-  matches fall in only three of the folds, all in one odds period.
-  Every mix of model and market scored worse than the market alone. The
-  penalty shrank steadily as the market's weight rose, reaching zero at 100%
-  (at 80% market: +0.0024 nats, interval +0.0000 to +0.0048).
+* *Measured 2026-10-23.* Walk-forward test of home/draw/away log-loss, five
+  folds from 2025-08-01 to 2026-07-01. Priced matches fall in only three of
+  the folds, all in one odds period. Every mix of model and market scored
+  worse than the market alone. The penalty shrank steadily as the market's
+  weight rose, reaching zero at 100%.
 * *Measured 2026-11-12.* Each candidate feature tested against the price,
-  walk-forward by month: home-win outcomes, n = 4,001, six folds scored from
-  2026-05-01. Elo difference, rest difference, recent form and the stored
-  model probability each failed to improve out-of-sample log-loss. Every
-  interval included zero.
+  walk-forward by month, on home-win outcomes scored from 2026-05-01. Elo
+  difference, rest difference, recent form and the stored model probability
+  each failed to improve out-of-sample log-loss.
 * *Measured 2026-11-12.* The blend weights above, fitted per family: "market
-  only" lies inside every weight's 95% interval. On the held-out period
-  (1,545 fixtures) the blend was never better than the market.
+  only" lies inside every weight's 95% interval. On the held-out fixtures
+  the blend was never better than the market.
 
 **2. Proportional de-vigging manufactures a favourite–longshot pattern.**
 Removing the bookmaker's margin *proportionally* (dividing each implied
@@ -161,20 +164,20 @@ of an edge. For comparison, *measured*: the previous rule's picks as
 actually saved on the same fixtures were 1,456 picks, 58.3% (55.8–60.9)
 against 62.8% predicted, at 1.63, with a return of −5.5% (−9.6 to −1.2).
 
-A pick at 1.70 has no edge if it wins 53.7% of the time, given the measured
-9.48% margin of the taken price. If the true rate is 57%, the 95% interval
-is expected to exclude 53.7% after **865 picks, around 2027-03-31 to
-2027-04-18** (50% power), and **1,785 picks, around 2027-08-21 to
-2027-09-28** (80% power). Both are counted from 2026-11-15 at 5.6–6.4 picks
-per day. Telling 57% apart from the previous rule's 58.3% would take five to
-eleven thousand picks, which is years.
+**The no-edge level, as a principle.** A pick at price *o* has no edge when
+it wins exactly as often as the price implies once the margin is removed.
+That is about 1 / (*o* × (1 + *m*)), where *m* is the margin of the taken
+price over a margin-free price, so at 1.70 it is 1 / (1.70 × (1 + *m*)). To
+return money at all, a pick at 1.70 must win more than 1 / 1.70 = 58.8% of
+the time. The measured *m*, the no-edge level it gives, and the number of
+picks needed to tell 57% apart from that level are **withheld**, because *m*
+is computed from provider prices. Telling 57% apart from the previous rule's
+58.3% would take five to eleven thousand picks, which is years.
 
-Detail:
-[the decision paper](docs/decision-2026-11-01.md) ·
+Detail: [the decision paper](docs/decision-2026-11-01.md) ·
 [the predictive audit](docs/predictive-audit-2026-08-07.md) ·
 [the current rule's registration](docs/confident-value-prospective-registration.md) ·
-[the ledger](docs/ci-audit-ledger.md), which records every stage with its
-corrections.
+[the ledger](docs/ci-audit-ledger.md), which records every stage with its corrections.
 
 ## Setup
 
@@ -204,10 +207,9 @@ repository secrets, never in a file in this repository:
 | `TELEGRAM_OPERATOR_CHAT_ID` | the chat that receives operational alerts |
 | `MODEL_HMAC_KEY` | integrity check on saved ML model files |
 
-Without `DATABASE_URL` the program refuses to start rather than silently
-using an empty database. `BETTING_AGENT_ALLOW_SQLITE=1` opts in to a local
-SQLite file. The test suite sets it and removes `DATABASE_URL`, so tests
-never reach production.
+Without `DATABASE_URL` the program refuses to start; `BETTING_AGENT_ALLOW_SQLITE=1`
+opts in to a local SQLite file. The test suite sets it and removes
+`DATABASE_URL`, so tests never reach production.
 
 ```bash
 python -m src.agent.betting_agent --update     # fixtures and odds
@@ -216,8 +218,7 @@ python -m src.agent.betting_agent --settle     # grade
 python -m pytest tests/
 ```
 
-Every configuration key, with the reason for its value, is in
-[`config/config.example.yaml`](config/config.example.yaml).
+Every configuration key, with its reason, is in [`config/config.example.yaml`](config/config.example.yaml).
 
 ## Data sources
 
@@ -230,13 +231,15 @@ Every configuration key, with the reason for its value, is in
 | [football-data.co.uk](https://www.football-data.co.uk/) | historical results and odds (CSV) | not yet checked |
 
 **This README publishes no data from Flashscore or API-Football**: no odds,
-results, rows or tables. Two market-wide results measured on their data are
-withheld: the de-vigging band test and the cost of betting (items 2 and 3
-above). They return only after a re-run on football-data.co.uk closing odds
-or The Odds API, with that source's terms checked first. The full terms
-check, with the clauses quoted and the fetch dates, is in
-[`docs/findings-inventory.md`](docs/findings-inventory.md), and so is the
-re-run's registration.
+results, rows or tables. Figures computed from prices that include their
+data are withheld: the log-loss comparisons (item 1), the de-vigging band
+test (item 2), the cost of betting (item 3), and the measured margin with
+the no-edge level that follows from it (item 5). They return only after a
+re-run on football-data.co.uk closing odds or The Odds API, with that
+source's terms checked first. The terms check, with clauses quoted and fetch
+dates, and the registered re-run for items 2 and 3 are in
+[`docs/findings-inventory.md`](docs/findings-inventory.md). Items 1 and 5
+wait on the same re-run.
 
 Football data provided by the Football-Data.org API.
 

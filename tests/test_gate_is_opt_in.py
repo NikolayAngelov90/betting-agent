@@ -699,8 +699,11 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #   the README's selection values checked against the config with
     #   ten known-wrong controls, and the operator's WITHHELD figures
     #   kept out of it with four.
-    assert len(nong) == 1243, (
-        f"the non-gating selection is {len(nong)}, recorded 1243")
+    #   2026-11-15, items 1 and 5 withheld too: +5, every one a
+    #   known-wrong control in the same file (node-id diff against
+    #   bdc34da: 5 added, 0 removed; the gate identical at 1854).
+    assert len(nong) == 1248, (
+        f"the non-gating selection is {len(nong)}, recorded 1248")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

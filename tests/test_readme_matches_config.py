@@ -184,11 +184,20 @@ def test_KNOWN_WRONG_a_single_changed_value_is_REPORTED(old, new, expect):
 # docs/findings-inventory.md section 5. A withholding that must be remembered
 # is not a withholding, so it is checked here.
 
-#: Figures from the band test, its correction and the cost measurement.
-#: "0.94" alone is NOT listed: it is also the deployed 1X2 market weight.
+#: Figures from the band test, its correction and the cost measurement
+#: (items 2 and 3, withheld 2026-11-15), then the log-loss comparisons and
+#: the measured margin with everything derived from it (items 1 and 5,
+#: withheld the same day). "0.94" alone is NOT listed: it is also the
+#: deployed 1X2 market weight.
 WITHHELD = ("52,737", "52737", "10,700", "8,830", "4,039", "−0.94", "-0.94",
             "0.94 points", "0.94-point", "−1.92", "-1.92", "6.40",
-            "3.70 points", "3.70pp", "1.628")
+            "3.70 points", "3.70pp", "1.628",
+            # item 1: log-loss deltas and the priced-match counts
+            "0.0024", "0.0048", "1,035", "2,081", "4,001", "1,545",
+            # item 5: the measured margin, the no-edge level, and the pick
+            # counts and dates computed from that level
+            "9.48", "0.0948", "53.7", "865 picks", "1,785", "2027-03-31",
+            "2027-08-21")
 
 
 def withheld_in(text: str) -> list:
@@ -197,15 +206,20 @@ def withheld_in(text: str) -> list:
 
 def test_no_WITHHELD_figure_is_in_the_README():
     text = README.read_text(encoding="utf-8")
-    # the anchors: both withholding notes are where the figures would be
+    # the anchors: each withholding note is where its figures would be
     assert "**Its figures, and those of its correction, are withheld**" in text
     assert "**The figures are withheld**" in text
+    assert "Its figures are\nwithheld because they are computed" in text
+    assert "are **withheld**, because *m*" in text
     assert withheld_in(text) == []
 
 
 @pytest.mark.parametrize("planted", [
     "**6.40% relative**", "52,737 price legs", "win 0.94 points less often",
-    "(interval −1.92 to −0.02)"])
+    "(interval −1.92 to −0.02)",
+    "(at 80% market: +0.0024 nats)", "home-win outcomes, n = 4,001",
+    "wins 53.7% of the time", "the measured 9.48% margin",
+    "after **865 picks, around 2027-03-31"])
 def test_KNOWN_WRONG_a_WITHHELD_figure_put_back_is_FOUND(planted):
     text = README.read_text(encoding="utf-8") + "\n" + planted + "\n"
     assert withheld_in(text), f"{planted!r} was not detected"
