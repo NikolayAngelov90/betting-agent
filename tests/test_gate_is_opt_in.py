@@ -516,8 +516,15 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       blocker (counted from its marks, so the 8 is derived). Also run
     #       once under a PROCESS-WIDE block from configure: 8 passed, 0
     #       attempts. Verified BY NODE ID: 10 added, none removed.
-    assert len(gate) == 1854, (
-        f"the gating selection is {len(gate)}, recorded 1854 — say what moved")
+    #   +1 2026-11-16: the 11-16 Reminders red replayed. A probe row on
+    #       day+1 is the LATER schedule, not a disagreement (live input
+    #       refuted the `[day, day+1]` premise). Verified BY NODE ID against
+    #       2d5c788: 2 added, 1 removed -- the new control, and one
+    #       parametrised case renamed "asked days" -> "asked day", which now
+    #       plants its row on the asked day itself. Hermetic, under
+    #       `no_network`.
+    assert len(gate) == 1855, (
+        f"the gating selection is {len(gate)}, recorded 1855 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the

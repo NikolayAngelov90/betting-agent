@@ -39616,3 +39616,181 @@ could be trusted.
   unique cloners (CI checkouts probably included, so not separable).
 
 *Recorded 2026-11-15. No visibility, workflow, config or code change.*
+
+---
+
+## 2026-11-16 — `11-15 REPORTED`, `REMINDERS CLASSIFIED`, `FIRST SETTLEMENT`
+
+Nothing in this entry changes selection: `s5.23 / 5bca73`, re-read
+after the fix.
+
+### `11-15 REPORTED` — every run created after 07:32 UTC on 2026-11-15
+
+Read from `gh run list` on 2026-11-16, ~10:15 UTC. Scheduled starts are the
+cron's nominal minute, in UTC.
+
+| created (UTC) | workflow | event | run | sha | result | nominal → actual |
+|---|---|---|---|---|---|---|
+| 11-15 17:15 | Paper Trading Report | schedule | 43740090833 | `2d5c788` | success | 10:23 → 17:15 (+6h52) |
+| 11-15 17:16 | CI Audit | workflow_run | 43740140057 | `2d5c788` | success | — |
+| 11-15 17:25 | Closing Line Capture | schedule | 43741032984 | `2d5c788` | success | slot not identifiable |
+| 11-15 17:26 | CI Audit | workflow_run | 43741111797 | `2d5c788` | success | — |
+| 11-15 17:40 | Closing Line Capture | schedule | 43742475557 | `2d5c788` | success | slot not identifiable |
+| 11-15 17:41 | CI Audit | workflow_run | 43742531666 | `2d5c788` | success | — |
+| 11-15 18:41 | CI Audit | schedule | 43748136122 | `2d5c788` | success | 12:00 → 18:41 (+6h41) |
+| 11-15 19:18 | Reminders | schedule | 43751648793 | `2d5c788` | success | 13:00 → 19:18 (+6h18) |
+| 11-15 23:22 | Closing Line Capture | schedule | 43774423286 | `2d5c788` | success | slot not identifiable |
+| 11-15 23:22 | CI Audit | workflow_run | 43774489201 | `2d5c788` | success | — |
+| 11-16 07:26 | Daily Betting Picks | schedule | 43823901573 | `2d5c788` | success | 01:00 → 07:26 (+6h27) |
+| 11-16 07:51 | Reminders | workflow_run | 43826813999 | `2d5c788` | **failure** | — |
+| 11-16 07:51 | CI Audit | workflow_run | 43826814006 | `2d5c788` | success | — |
+| 11-16 07:51 | Non-Gating Tests | workflow_run | 43826814026 | `2d5c788` | success | — |
+
+**Closing lines ran 3 times for 8 scheduled slots on 2026-11-15**: 10:47,
+then 11:17 to 23:17 every two hours. A run record does not say which slot
+fired it, and two runs 15 minutes apart cannot both be the 17:17 slot. So the
+attribution is stated as not identifiable rather than guessed.
+
+**The audit: all five 11-15 audits printed the weekday margin as
+ACKNOWLEDGED ON ITS MECHANISM**, reading "+12.3m < 30m … shortfall 17.68m
+<= the 17.69m conservatism", the no-review series at n=1/10. All five
+read the reference for 2026-11-16 as `NO_SCHEDULED_FIXTURES`, with the next
+scheduled row on 11-18 and the next in a covered league on 11-20. On
+11-16 the audit printed "+28.6m … shortfall 1.35m … ACKNOWLEDGED"; the
+weekday-margin test acknowledgement read +56.0m vs 60m at n=2/10.
+
+**A defect, mine from Part C, in every one of the six:** each also printed a
+`!! SCHEDULE MARGIN +12 min is below the 30-minute threshold` line. The
+date-keyed acknowledgement check prints `!!` before the Part C mechanism check
+runs, so a run with no finding carries one marked line. That breaks "a line
+is marked only if it also alarms". The verdict was right and nothing alerted;
+only the log lies. Reported, not fixed: this stage changes nothing outside
+its scope.
+
+**Reminders 11-15 (19:18, on `2d5c788`): the reference test PASSED**, asking
+for 2026-11-16. Its log does not print the state of a passing test. The
+same-day audits read `NO_SCHEDULED_FIXTURES` for that date, and the fixed
+function, driven live on 2026-11-16 at 10:24 UTC, reads
+`NO_SCHEDULED_FIXTURES` for it too.
+
+### `REMINDERS CLASSIFIED` — 2026-11-16, run 43826813999 on `2d5c788`
+
+**The failing test, verbatim:**
+`tests/test_reference_deadline.py::test_LIVE_the_reference_answers_for_TOMORROW_and_our_table_does_not`
+— "the reference did not answer for D+1: football-data.org returned no rows
+for 2026-11-17 but the schedule probe holds 4 row(s) ON the asked days, which
+`date=2026-11-17` returned empty: the provider's two answers disagree.
+Treated as a failed fetch." The other nine selected reminders passed or
+skipped. 5 collection errors are the known unrelated imports.
+
+**The workflow marked it `REMINDER DUE` — "This red is a VERDICT, not a
+failure". The mark is wrong for this test.** It is the live reference check,
+not a self-expiring reminder; it has no date and no acknowledgement. The
+workflow classifies on pytest's exit code over the whole `calendar or live`
+selection, so any live failure reads as a reminder reaching its date.
+Recorded, not changed.
+
+**Classification: MACHINERY — a defect in the Stage 33 fix, which does not
+hold on live input.** What the provider returned, `measured` 2026-11-16
+10:15 UTC, read-only, no key printed:
+
+| ask | echoed filters | rows |
+|---|---|---|
+| `date=2026-11-17` | `dateFrom 2026-11-17, dateTo 2026-11-18` | **0** |
+| `dateFrom=2026-11-17&dateTo=2026-11-18` | same | **0** |
+| `date=2026-11-18` | `dateFrom 2026-11-18, dateTo 2026-11-19` | 4, all 11-18 (BSA 22:30–23:30), **none** of 11-19's |
+| `dateFrom=2026-11-17&dateTo=2026-11-26` | same | 119, first 4 on 11-18 (BSA), first covered 11-20 |
+
+**The provider answered correctly:** nothing on 11-17, the FIFA window, and
+a schedule from 11-18. **Where the fix failed:**
+`scripts/schedule_deadline.py:865`,
+`asked = {day, day + _dt.timedelta(days=1)}`. It rested on the 2026-10-19
+reading that `date=X` is the window `[X, X+1]` *inclusive*, in which
+`date=2027-04-02` returned 39 rows dated 04-03. Today the same echoed
+`dateTo` is exclusive. **The window is not stable**, so a probe row on
+11-18 was read as "ON the asked days" of an empty 11-17. Yesterday it passed
+only because 11-16's first later row was on 11-18, two days out.
+
+**Clearing action — named and driven:**
+
+1. **Only the asked DAY is asked.** `asked = {day}`. The reference answers
+   only about `day`, since `reference_earliest` drops every other day's row
+   and counts it. Whichever window `date=day` covered, a row on `day+1` says
+   nothing about `day`, and is the later schedule. The docstrings record
+   both measurements.
+2. **The 11-16 red is replayed as a gate control**,
+   `test_KNOWN_WRONG_a_row_on_DAY_PLUS_ONE_is_the_LATER_schedule`, on the
+   recorded shape. It is under `no_network`.
+   * Mutation check: with the old line put back, it fails with that morning's
+     exact message ("holds 2 row(s) ON the asked day … disagree"). Restored
+     byte-identical.
+   * The same schedule with one row moved onto 11-17 still reads
+     `FETCH_FAILED`.
+   * The parametrised "rows ON the asked day" case now plants its row on the
+     asked day itself. Until today it planted it on day+1, encoding the
+     refuted premise.
+3. **Driven on live input, 2026-11-16 10:24 UTC:**
+   `reference_earliest(2026-11-17)` → `NO_SCHEDULED_FIXTURES`, with later
+   rows from 11-18 and the first covered row on 11-20. The live test, run
+   locally with the key, passes.
+4. **The gate moved 1854 → 1855**, verified by node id against `2d5c788`:
+   2 added, 1 removed (the renamed parameter). Non-gating is unchanged.
+
+**A second finding, outside this classification — the operator alert path
+is dead.** Every red Reminders, audit and paper-report run checked logged
+"alert NOT sent: TELEGRAM_BOT_TOKEN and/or TELEGRAM_OPERATOR_CHAT_ID is not
+set on this step". That is 27 runs, from 2026-11-05 10:20 UTC to 2026-11-16
+07:52 UTC. **`TELEGRAM_OPERATOR_CHAT_ID` is not among the repository's
+secrets** (`gh secret list`, 2026-11-16). The workflows switched to it on
+2026-11-04 (`b4e5433`). So no operator alert has been delivered since at
+least 2026-11-05. The client chat is unaffected: today's card and settlement
+were delivered. **Clearing action: the operator creates the secret.**
+Secrets are the operator's to create; nothing is changed here.
+
+### `FIRST SETTLEMENT` — the s5.23 picks of 2026-11-15, settled 2026-11-16
+
+Population: `saved_picks`, `model_version = …5bca73`, `pick_date
+2026-11-15`, n = 2, grain = pick. Read 2026-11-16 10:21 UTC from stored rows,
+graded by the deployed settlement. Unit: 1-unit flat stake.
+
+| fixture | pick | odds | blended p | score | result |
+|---|---|---|---|---|---|
+| Tenerife v Ceuta (LaLiga2) | Home Win | 1.75 | 0.5455 | 2–0 | **win** |
+| Eibar v Cádiz (LaLiga2) | Over 2.5 | 1.75 | 0.5412 | 1–1 | **loss** |
+
+* **Settlement line, rebuilt from the stored rows with
+  `settlement_summary_line`:** "Hit rate 1/2 (50%) · average odds 1.75 ·
+  return −12.5% per 1-unit pick". Predicted mean p 0.5434. The delivered
+  message's text is not in the log; its receipt is: settlement report
+  `sent=1 failed=none`.
+* **The shadow** (the standard rule, stored, never sent): 4 picks on 11-15,
+  graded on read with the same grader:
+  * Tenerife v Ceuta, Away Over 0.5 at 1.53 → loss;
+  * Granada v Las Palmas, BTTS Yes at 1.655 → loss;
+  * Eibar v Cádiz, Away Over 0.5 at 1.53 → win;
+  * Eldense v Sabadell, Away Over 0.5 at 1.55 → loss.
+
+  Hit rate 1/4 (25%) · average odds 1.57 · return −61.7%, predicted mean p
+  0.6604.
+* **Paired, on the 2 fixtures both rules picked:** live 1/2 at 1.75, return
+  −12.5%; shadow 1/2 at 1.53, return −23.5%.
+* `first_run_check --day 2026-11-15 --settlement 2026-11-16`: **10/10
+  PASS**.
+
+**Two picks are two picks.** No conclusion is drawn; every interval spans its
+whole range.
+
+**Today's card (2026-11-16, run 43823901573): `NO FIXTURE QUALIFIED`.**
+* The slate was 1 fixture, Albacete v Celta de Vigo II, evaluated with 0
+  errors. 14 legs were pickable, and 0 reached price ≥ 1.70 with p ≥ 0.54.
+* `pick_runs.NONE_QUALIFIED` was recorded, and the client's one line was
+  delivered (`report=no picks today sent=1 failed=none`).
+* The shadow stored 1 pick, Under 3.5 at 1.53, not sent.
+* `first_run_check --day 2026-11-16`: **10/10 PASS**. **This is the
+  zero-pick path, exercised live for the first time.**
+
+The prospective report (2026-11-16) shows 2 days recorded (1 PICKS_MADE, 1
+NONE_QUALIFIED) and 2 picks settled. Its separation dates project at the
+FIFA window's 1.0 picks a day, so they say nothing yet.
+
+*Recorded 2026-11-16.*

@@ -829,11 +829,25 @@ def _reference_schedule_fetch(date_from: _dt.date, date_to: _dt.date,
 
 
 def schedule_probe(day: _dt.date, api_key: str, schedule_fetch) -> dict:
-    """Does the provider hold a schedule beyond the asked days?
+    """Does the provider hold a schedule beyond the asked day?
 
-    Asked only after `date=day` returned NO ROWS. `date=day` is the window
-    `[day, day+1]` (see `reference_earliest`), so a row on either of those
-    days here means the provider's two answers disagree.
+    Asked only after `date=day` returned NO ROWS. ONLY `day` IS ASKED: a row
+    on `day` here means the provider's two answers disagree; a row on any
+    later day, `day+1` included, is the later schedule.
+
+    CORRECTED 2026-11-16. This used to treat `{day, day+1}` as asked, on the
+    premise that `date=day` is the window `[day, day+1]` inclusive. Live
+    input refuted it: asked at 10:15 UTC on 2026-11-16, `date=2026-11-17`
+    echoed `dateTo: 2026-11-18` and returned 0 rows, while the 10-day ask
+    held 4 rows on 2026-11-18 (BSA, 22:30-23:30 UTC); `date=2026-11-18`
+    returned those 4 and NOT 2026-11-19's 00:30 rows. So the echo's `dateTo`
+    is exclusive today, and the 2026-10-19 reading (`date=2027-04-02`
+    returned 39 rows dated 04-03) is the opposite. The window is not stable,
+    so the probe does not depend on it: the reference answers only about
+    `day` (`reference_earliest` drops every other day's row, counted), and
+    whichever window `date=day` covered, a row on `day+1` says nothing
+    about `day`. The old premise turned the FIFA window's empty 2026-11-17
+    into FETCH_FAILED and reddened Reminders on 2026-11-16.
     """
     from src.scrapers.footballdata_competitions import COMPETITION_MAP
 
@@ -862,7 +876,7 @@ def schedule_probe(day: _dt.date, api_key: str, schedule_fetch) -> dict:
     rows = payload.get("matches")
     rows = rows if isinstance(rows, list) else []
     out["n_rows"] = len(rows)
-    asked = {day, day + _dt.timedelta(days=1)}
+    asked = {day}
     on_asked, later, covered = 0, [], []
     for m in rows:
         ko = as_datetime((m or {}).get("utcDate") if isinstance(m, dict)
@@ -881,7 +895,7 @@ def schedule_probe(day: _dt.date, api_key: str, schedule_fetch) -> dict:
     if on_asked:
         out["state"] = PROBE_ROWS_ON_ASKED_DAYS
         out["why"] = (f"the schedule probe holds {on_asked} row(s) ON the "
-                      f"asked days, which `date={day}` returned empty: the "
+                      f"asked day, which `date={day}` returned empty: the "
                       f"provider's two answers disagree")
         return out
     if not later:
@@ -917,6 +931,13 @@ def reference_earliest(day: _dt.date, fetch=None, api_key: str = None,
     imprecise and its own echo disproves it: `date=X` expands to `[X, X+1]`
     INCLUSIVE, so those 39 rows are the honest second day of the window. The
     defect would be OURS -- attributing a two-day window's minimum to one day.
+
+    NOT STABLE -- `measured` 2026-11-16: `date=2026-11-17` echoed the same
+    `dateTo: 2026-11-18` and returned NOTHING, though 2026-11-18 held 4 rows,
+    and `date=2026-11-18` returned its own day's rows and not 2026-11-19's.
+    Today the echoed `dateTo` is exclusive. Nothing here depends on which:
+    rows are checked against their own `utcDate`, and `schedule_probe` treats
+    only `day` as asked.
 
     So the response is validated against the request TWICE: the echoed
     `filters.dateFrom` is compared against what was asked, and every row is

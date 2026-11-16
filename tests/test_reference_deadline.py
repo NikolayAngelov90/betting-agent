@@ -401,10 +401,12 @@ def test_KNOWN_WRONG_a_REAL_reach_is_CAUGHT_even_when_swallowed(
 
 
 #: The Stage 33 gate tests, each of which must take `no_network`. Their
-#: collected node count is 8 (one parametrised five ways).
+#: collected node count is 9 (one parametrised five ways). 8 -> 9 on
+#: 2026-11-16: the day+1 control replaying that morning's Reminders red.
 NETWORK_FREE_GATE_TESTS = {
     "test_KNOWN_WRONG_TODAYS_empty_response_in_the_FIFA_window_does_NOT_redden": 1,
     "test_KNOWN_WRONG_a_FAILED_or_DARK_provider_STILL_reddens": 5,
+    "test_KNOWN_WRONG_a_row_on_DAY_PLUS_ONE_is_the_LATER_schedule": 1,
     "test_an_INJECTED_fetch_never_reaches_the_network_for_the_probe": 1,
     "test_the_PROBE_is_asked_only_when_the_day_is_EMPTY": 1,
 }
@@ -412,7 +414,7 @@ NETWORK_FREE_GATE_TESTS = {
 
 def test_every_Stage_33_gate_test_RUNS_UNDER_the_blocker():
     """Executed, not read: each function's own marks are inspected, and the
-    parametrisation is counted, so the 8 is derived."""
+    parametrisation is counted, so the 9 is derived."""
     import sys
 
     mod = sys.modules[__name__]
@@ -426,7 +428,7 @@ def test_every_Stage_33_gate_test_RUNS_UNDER_the_blocker():
         n = len(params[0].args[1]) if params else 1
         assert n == expected, (name, n)
         nodes += n
-    assert nodes == 8, f"{nodes} gate nodes, the census recorded 8"
+    assert nodes == 9, f"{nodes} gate nodes, the census recorded 9"
 
 
 ASKED = dt.date(2026, 11, 15)
@@ -494,10 +496,13 @@ def test_KNOWN_WRONG_TODAYS_empty_response_in_the_FIFA_window_does_NOT_redden():
      EMPTY_ASK, {"filters": {"dateFrom": "2026-11-15",
                              "dateTo": "2026-11-24"}, "matches": []},
      "EMPTY_RESPONSE"),
-    ("the probe has rows ON the asked days",
+    # the asked DAY itself, 2026-11-15. Until 2026-11-16 this planted its
+    # row on 11-16 (day+1) and expected FETCH_FAILED -- the premise that
+    # live input refuted; see the control after this test.
+    ("the probe has rows ON the asked day",
      EMPTY_ASK, {"filters": {"dateFrom": "2026-11-15",
                              "dateTo": "2026-11-24"},
-                 "matches": [_row("PL", "2026-11-16T15:00:00Z")]},
+                 "matches": [_row("PL", "2026-11-15T15:00:00Z")]},
      "FETCH_FAILED"),
     ("the probe answers a different range",
      EMPTY_ASK, {"filters": {"dateFrom": "2026-11-16",
@@ -518,6 +523,46 @@ def test_KNOWN_WRONG_a_FAILED_or_DARK_provider_STILL_reddens(label, fetch,
     c = sd.combined_deadline(ASKED, ref)
     assert c["reference_answered"] is False
     assert "NOT ANSWERED" in sd.format_reference_deadline(c)
+
+
+#: 2026-11-16's live shape, recorded at 10:15 UTC: `date=2026-11-17` echoed
+#: `dateTo: 2026-11-18` and returned nothing; the 10-day ask held 4 BSA rows
+#: on 11-18 (22:30-23:30 UTC), BSA at 00:30 on 11-19, and the first covered
+#: rows on 11-20. One row per shape below.
+DAY_1117 = dt.date(2026, 11, 17)
+EMPTY_1117 = {"filters": {"dateFrom": "2026-11-17", "dateTo": "2026-11-18"},
+              "matches": []}
+SCHEDULE_1117 = {
+    "filters": {"dateFrom": "2026-11-17", "dateTo": "2026-11-26"},
+    "matches": [_row("BSA", "2026-11-18T22:30:00Z"),
+                _row("BSA", "2026-11-18T23:30:00Z"),
+                _row("BSA", "2026-11-19T00:30:00Z"),
+                _row("BL1", "2026-11-20T19:30:00Z"),
+                _row("PD", "2026-11-20T20:00:00Z")]}
+
+
+@pytest.mark.usefixtures("no_network")
+def test_KNOWN_WRONG_a_row_on_DAY_PLUS_ONE_is_the_LATER_schedule():
+    """The 2026-11-16 Reminders red, replayed. The probe read 11-18's rows
+    as ON the asked days of `date=2026-11-17` and called the provider's two
+    answers a disagreement -- FETCH_FAILED -- though the provider answered
+    correctly: nothing on 11-17, a schedule from 11-18. Only the asked DAY
+    is asked."""
+    sched = _schedule(SCHEDULE_1117)
+    ref = sd.reference_earliest(DAY_1117, fetch=_fetch(EMPTY_1117),
+                                schedule_fetch=sched)
+    assert ref["state"] == sd.REF_NO_SCHEDULED, ref.get("reason")
+    assert _answered(ref), "the empty FIFA-window day still reddens"
+    assert ref["schedule_probe"]["next_scheduled"] == "2026-11-18"
+    assert ref["schedule_probe"]["next_covered"] == "2026-11-20"
+    assert sched.calls == [(DAY_1117, dt.date(2026, 11, 26))]
+    # and the same schedule with ONE row moved onto the asked day is still
+    # the disagreement it always was
+    on_day = dict(SCHEDULE_1117, matches=SCHEDULE_1117["matches"]
+                  + [_row("PL", "2026-11-17T20:00:00Z")])
+    bad = sd.reference_earliest(DAY_1117, fetch=_fetch(EMPTY_1117),
+                                schedule_fetch=_schedule(on_day))
+    assert bad["state"] == sd.REF_FETCH_FAILED and not _answered(bad)
 
 
 @pytest.mark.usefixtures("no_network")
