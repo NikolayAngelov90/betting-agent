@@ -660,3 +660,12 @@ def must_match(pattern, haystack: str, what: str = "the haystack"):
             f"stripped ANSI key both passed. Prove the pattern against a "
             f"known-positive example, or re-point it.")
     return hits
+
+
+# ── WHICH KIND OF SELECTED TEST FAILED. 2026-11-16. ─────────────────────────
+#
+# The hook lives in `tests/reminder_kinds.py` (stdlib only) and is re-exported
+# here, which is how pytest registers it. See that module for why it is not
+# defined in this file.
+from tests.reminder_kinds import (  # noqa: E402,F401
+    REMINDER_KINDS_ENV, pytest_runtest_logreport, reminder_kind)

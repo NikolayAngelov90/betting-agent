@@ -39794,3 +39794,161 @@ NONE_QUALIFIED) and 2 picks settled. Its separation dates project at the
 FIFA window's 1.0 picks a day, so they say nothing yet.
 
 *Recorded 2026-11-16.*
+
+---
+
+## 2026-11-16 (II) — `OPERATOR DECISION RECORDED`, `LABELS FIXED`, `HMAC PLAN CURRENT`
+
+Nothing here changes selection: `s5.23 / 5bca73`, re-read after the
+change.
+
+### `OPERATOR DECISION RECORDED` — and a correction of the entry above
+
+**The operator's decision, 2026-11-07: there is no second chat. GitHub's own
+notifications are the carrier for everything operator-facing.**
+`TELEGRAM_OPERATOR_CHAT_ID` is unset ON PURPOSE. The design was already in
+place:
+
+* the 2026-11-04 CLIENT CHANNEL entry: "when that is unset `deliver_alert`
+  writes an `::error::` annotation";
+* the 2026-11-05 drives 1–4;
+* the tests, since `35d6ac2` (2026-11-04), in
+  `tests/test_client_chat_is_sealed.py` §B, "the operator channel is unset
+  BY DECISION".
+
+**No ledger entry dated 2026-11-07 stated the decision; this one records
+it.**
+
+> **CORRECTION of 2026-11-16 (I).** Its "second finding — the operator alert
+> path is dead" is WITHDRAWN. The 27 "alert NOT sent" lines were the designed
+> outcome. They were worded as a misconfiguration ("is not set on this step.
+> The step needs both in its `env:` block"), and I read the wording instead
+> of searching for the decision. The recommendation to create the secret is
+> withdrawn with it.
+
+**The line, changed.**
+* With the operator id unset, `deliver_alert` now writes **the finding
+  itself** as `::error title=OPERATOR FINDING::...` (escaped onto one line,
+  and in full in the step summary).
+* It then prints "operator channel unset BY DECISION (operator, 2026-11-07):
+  this finding is surfaced as the GitHub annotation above ... Nothing was
+  sent to Telegram, by design -- this is not a delivery failure."
+* The result carries `by_decision=True`, and its two consumers no longer log
+  it as a failure: the notifier logs at INFO, and model-freshness prints the
+  detail.
+* **A missing TOKEN with an operator id set is still a fault, and still
+  says so.**
+
+**Controls:**
+* `test_UNSET_BY_DECISION_reads_as_the_decision_not_as_a_failure`, driven on
+  the real stdout and summary: the decision line, the annotation carrying
+  the finding (`%0A`, `%25` escaped), and no "alert NOT sent". Nothing was
+  POSTED, so the client chat received nothing.
+* `test_KNOWN_WRONG_a_MISSING_TOKEN_with_an_operator_id_STILL_reads_as_a_fault`.
+* Mutation: put the old wording back and both §B tests fail.
+
+### `LABELS FIXED`
+
+**A — the operator line**, above.
+
+**B — Reminders: three reds, one label each.**
+
+| failed test carries | label | marker |
+|---|---|---|
+| `calendar` (a dated guard reached its date) | REMINDER DUE | `##[error]REMINDER DUE`, the registered VERDICT |
+| `live` (a live test failed on live input) | **LIVE CHECK FAILED** | not registered, so `ci-audit` classifies the red FAILURE and alarms |
+| neither | **FAILURE** | not registered |
+
+* **How each failure gets its kind:** pytest is the only place that knows a
+  failing test's markers. A hook writes one line per call-phase failure,
+  `calendar|live|other <nodeid>`, to `$REMINDER_KINDS_FILE`. The workflow
+  counts the three and hands them to the classifier.
+* **When the kinds don't add up:** a failure whose kind does not add up is
+  NOT EVALUATED, never labelled.
+* **One label per red.** The audit subtracts one exit per registered
+  annotation, so the precedence is other, then live, then calendar, and only
+  a red made of dated guards alone is a VERDICT. A due guard in a mixed red
+  is named in text, so a VERDICT marker can never hide a live failure from
+  the audit.
+
+**The hook is in `tests/reminder_kinds.py`, NOT in `conftest.py`.** Its first
+placement was conftest, and the test that imports it then moved **all 44
+nodes** of `test_reminders_are_evaluated.py` into the gate (conftest imports
+`src.data.odds_quota`). That is the third time this session the import graph
+caught a test I placed. `conftest.py` re-exports the hook, which is how pytest
+registers it.
+
+**Controls:**
+* **Known-wrong:**
+  `test_KNOWN_WRONG_the_11_16_reference_failure_prints_LIVE_CHECK_FAILED`,
+  on that run's real counts (10 selected, 10 ran, 1 FAILED live, 1 skipped,
+  5 collection errors). It prints LIVE CHECK FAILED, no REMINDER DUE, no
+  VERDICT, exactly one `::error::`.
+* **Mutation:** classify every failure as a dated guard (the old behaviour)
+  and it fails, as does the mixed-red control. Restored byte-identical.
+* **Other cases covered:** a dated guard alone is still the VERDICT; a
+  failure of neither kind is FAILURE; three kind-mismatch shapes are NOT
+  EVALUATED.
+* **The hook, end to end through pytest:** a temporary probe file with a
+  failing live test, a failing calendar test and a passing live test wrote
+  exactly the `live` and `calendar` lines. The probe was deleted.
+
+**C — the false `!!` on quiet audits.**
+
+* **Cause, my own from Stage 33 Part C:** the SCHEDULE MARGIN mark was gated
+  on the DATE-keyed acknowledgement alone (whose table is empty), and printed
+  before the MECHANISM acknowledgement was read. So all six audits on
+  11-15/16 printed a marked line beside the note saying it was acknowledged.
+  It is the second instance of the class `test_the_MARK_FOLLOWS_THE_ALARM`
+  recorded on 2026-10-21.
+* **Fix:** the decision moved into `schedule_margin_report(binding, mech,
+  pb)`, called only after both acknowledgements are read. ACKNOWLEDGED gives
+  a note and keys nothing; every other state gives exactly one marked line
+  and keys `margin.schedule`.
+* **Controls, on the real mechanism:**
+  * 11-15's reading, +12.3225m at n=1: **0 marks**, nothing keyed;
+  * +12.29m, 0.02 past the conservatism: **exactly 1 mark**, keyed once.
+* **Driven:** the real audit run locally on 2026-11-16 (`--run`, live state)
+  printed **0 marked lines**, exit 0, and "schedule margin +28.6m < 30m is
+  ACKNOWLEDGED ON ITS MECHANISM".
+* **The censuses:** the two alarm-surface censuses count the keyed-append
+  literal. The function's accumulator keeps the module's `_keyed` name, so
+  the moved site is counted where it now lives.
+
+### `HMAC PLAN CURRENT` — `docs/hmac-key-switch-plan.md`, checked, not touched
+
+**The sequence and the cost table hold.** The module-level `RuntimeError`
+when neither `MODEL_HMAC_KEY` nor the opt-in is set is still at
+`ml_models.py:44`, so **step 3 before step 1 still costs a card per run**.
+These all hold as written:
+
+* a signature mismatch raises `IntegrityError` inside `_safe_load`;
+* both `except IntegrityError` handlers log and return;
+* `ensemble.py:174` gates ML on `is_fitted`;
+* a missing `.sig` still warns (`SIGNATURE_MISSING_MARKER`) and loads, so
+  step 4 is not yet taken;
+* the cache is `betting-models-<run#>` with `restore-keys: betting-models-`;
+* the retrain step's `timeout-minutes` is 50;
+* the `MODEL INTEGRITY FAILURE` / `SIGNATURE MISSING` markers exist.
+
+`MODEL_HMAC_KEY` is not a repository secret: step 1 has not been taken.
+**Drift, recorded not edited:**
+
+| plan says | tree on 2026-11-16 |
+|---|---|
+| key passed at `daily-picks.yml:180` | line 283 |
+| opt-in at `daily-picks.yml:181` "and the other four workflows" | **6 workflows, 11 YAML sites**: daily-picks 284, 637 · closing-lines 161, 182 · h1-collect 323, 337, 408, 448 · paper-trading-report 103, 116 · fixture-horizon-probe 221 · reminders 198. **Step 3 must remove all 11, and must NOT remove `tests/conftest.py`'s `setdefault`**, which the test suite needs |
+| handlers `ml_models.py:591`, `:915` | `:645`, `:971` |
+| 8 cached pairs | 6 `betting-models-*` entries |
+| "all six workflows trigger on `schedule` and `workflow_dispatch` only" | eight workflows; `ci-audit`, `reminders` and `non-gating-tests` also trigger on `workflow_run`, which runs on the default branch. **Still no `push`, `pull_request` or `pull_request_target`**, so the cache-write bound is unchanged |
+
+### Census
+
+The gate is identical at 1855 by node id against `9df0dd5`. Non-gating moves
+1248 → 1261, +13 by node id, 0 removed:
+* 9 in the reminders file;
+* 2 for the operator decision;
+* 2 for the marker.
+
+*Recorded 2026-11-16. Then, as scheduled: 2026-11-21 the first normal slate,
+11-22 its settlement, then Stage 33 Part B.*

@@ -2309,6 +2309,47 @@ def audit_margin_shortfall_is_acknowledged(binding: float,
                           regime_n)
 
 
+def schedule_margin_report(binding: float, mech: dict, pb: dict):
+    """`(lines, keyed)` for a schedule margin below `MARGIN_ALARM_MIN` that
+    no DATE-keyed acknowledgement covers.
+
+    THE MARK FOLLOWS THE ALARM -- second instance, 2026-11-16. The first
+    (2026-10-21) printed the finding marker before the date-keyed
+    acknowledgement was read. Stage 33 Part C added a SECOND acknowledgement,
+    on the mechanism, and the marked line was left gated on the first one
+    only. So every quiet audit on 2026-11-15/16 -- six of six -- printed a
+    marked line beside the note saying it was acknowledged. The mark is
+    decided HERE, after the mechanism is read: ACKNOWLEDGED prints a note and
+    keys nothing; every other state prints exactly one marked line and keys
+    the finding.
+    """
+    # `_keyed`: the module's name for a keyed finding, which the alarm-surface
+    # censuses count (tests/test_alarm_surface.py, test_silent_surfaces_can_fire.py).
+    lines, _keyed = [], []
+    if mech["state"] == "ACKNOWLEDGED":
+        lines.append(f"note: schedule margin {binding:+.1f}m < "
+                     f"{MARGIN_ALARM_MIN}m is ACKNOWLEDGED ON ITS MECHANISM "
+                     f"-- {mech['why']}")
+    else:
+        lines.append(f"!! SCHEDULE MARGIN {binding:+.0f} min is below the "
+                     f"{MARGIN_ALARM_MIN}-minute threshold. Remedy on file: "
+                     f"{MARGIN_REMEDY}")
+        _keyed.append(("margin.schedule", binding,
+            f"schedule margin {binding:+.1f}m "
+            f"< {MARGIN_ALARM_MIN}m - mechanism acknowledgement "
+            f"{mech['state']}: {mech['why']}. The duration term is "
+            f"FULL_CARD_PICKS_3SD={FULL_CARD_PICKS_3SD}m (parallel "
+            f"regime, skipped steps counted); measured conservatism "
+            f"{AUDIT_DURATION_CONSERVATISM['conservatism_min']}m. The "
+            f"no-review series is at n={pb.get('n')}/"
+            f"{MIN_N_TO_REDERIVE_PICKS_BOUND}"
+            + (f", about {pb['to_ten_date']}"
+               if pb.get("to_ten_date") not in (None, "reached",
+                                                "UNEVALUATED")
+               else "")))
+    return lines, _keyed
+
+
 def format_picks_bound_status(s: dict) -> str:
     """One block, every run, so the clock is visible rather than remembered."""
     if s.get("state") == "UNEVALUATED":
@@ -4878,9 +4919,17 @@ def main() -> int:
         _ack = margin_breach_is_acknowledged(
             _margins.get("worse") or "", _margin.get("binding") or 0.0)
         if not _ack:
-            print(f"!! SCHEDULE MARGIN {_margin['binding']:+.0f} min is below "
-                  f"the {MARGIN_ALARM_MIN}-minute threshold. Remedy on file: "
-                  f"{MARGIN_REMEDY}")
+            # BOTH acknowledgements are read before anything is marked: the
+            # date-keyed one above, the mechanism one inside
+            # `schedule_margin_report` (2026-11-16).
+            _pb = removal_regime_picks_series()
+            _mech = audit_margin_shortfall_is_acknowledged(
+                _margin["binding"], _pb.get("n"))
+            _sm_lines, _sm_keyed = schedule_margin_report(
+                _margin["binding"], _mech, _pb)
+            for _sm_line in _sm_lines:
+                print(_sm_line)
+            _keyed.extend(_sm_keyed)
         else:
             print(f"note: schedule margin {_margin['binding']:+.0f} min is "
                   f"below the {MARGIN_ALARM_MIN}-minute threshold and is "
@@ -4915,34 +4964,9 @@ def main() -> int:
                      if _pb_ack["to_ten_date"] not in ("reached",
                                                        "UNEVALUATED")
                      else f" ({_pb_ack['to_ten_date']})"))
-        else:
-            # RULE 3: a margin computed from a RETIRED REGIME'S constant is
-            # labelled wherever it appears, the alert included.
-            # Stage 33 Part C: THE MECHANISM, before any red. It covers the
-            # measured conservatism of the duration term and nothing more,
-            # with no date; `ACKNOWLEDGED` prints, every other state reddens
-            # and says which it is.
-            _pb = removal_regime_picks_series()
-            _mech = audit_margin_shortfall_is_acknowledged(
-                _margin["binding"], _pb.get("n"))
-            if _mech["state"] == "ACKNOWLEDGED":
-                print(f"note: schedule margin {_margin['binding']:+.1f}m < "
-                      f"{MARGIN_ALARM_MIN}m is ACKNOWLEDGED ON ITS MECHANISM "
-                      f"-- {_mech['why']}")
-            else:
-                _keyed.append(("margin.schedule", _margin["binding"],
-                    f"schedule margin {_margin['binding']:+.1f}m "
-                    f"< {MARGIN_ALARM_MIN}m - mechanism acknowledgement "
-                    f"{_mech['state']}: {_mech['why']}. The duration term is "
-                    f"FULL_CARD_PICKS_3SD={FULL_CARD_PICKS_3SD}m (parallel "
-                    f"regime, skipped steps counted); measured conservatism "
-                    f"{AUDIT_DURATION_CONSERVATISM['conservatism_min']}m. The "
-                    f"no-review series is at n={_pb.get('n')}/"
-                    f"{MIN_N_TO_REDERIVE_PICKS_BOUND}"
-                    + (f", about {_pb['to_ten_date']}"
-                       if _pb.get("to_ten_date") not in (None, "reached",
-                                                         "UNEVALUATED")
-                       else "")))
+        # (The non-acknowledged path -- RULE 3's label, Stage 33 Part C's
+        # mechanism -- is `schedule_margin_report`, called above BEFORE
+        # anything is printed, so the mark follows the alarm.)
 
     if listing_warning:
         # Printed AGAIN under the table: the number a reader carries away is

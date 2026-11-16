@@ -293,8 +293,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             from src.reporting.alert_delivery import deliver_alert
             result = deliver_alert(body)
-            print(f"model-freshness alert delivered={result.ok} "
-                  f"attempts={result.attempts}")
+            if result.by_decision:
+                print(f"model-freshness finding: {result.detail}")
+            else:
+                print(f"model-freshness alert delivered={result.ok} "
+                      f"attempts={result.attempts}")
         except Exception as exc:                           # noqa: BLE001
             # A delivery failure must not hide the finding.
             print(f"model-freshness alert NOT delivered ({type(exc).__name__})")

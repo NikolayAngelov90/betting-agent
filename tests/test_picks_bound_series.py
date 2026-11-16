@@ -346,9 +346,13 @@ def test_the_2026_11_14_reading_is_ACKNOWLEDGED_and_one_second_more_is_NOT():
 
 
 def test_the_AUDIT_reddens_on_every_state_but_ACKNOWLEDGED():
-    """From the AST of `main`: the `margin.schedule` finding is keyed --
-    and so can redden -- only in the `else` of `if _mech["state"] ==
-    "ACKNOWLEDGED"`. ANCHORED: the finding key is found exactly once."""
+    """From the AST: the `margin.schedule` finding is keyed -- and so can
+    redden -- only in the `else` of `if mech["state"] == "ACKNOWLEDGED"`.
+    ANCHORED: the finding key is found exactly once.
+
+    Since 2026-11-16 that branch lives in `schedule_margin_report`, which
+    also decides the marker (the second mark-follows-the-alarm instance);
+    `main` calls it and extends `_keyed` with what it returns."""
     import ast
     import pathlib
     src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
@@ -361,7 +365,9 @@ def test_the_AUDIT_reddens_on_every_state_but_ACKNOWLEDGED():
     assert len(keyed) == 1
     guards = [n for n in ast.walk(tree) if isinstance(n, ast.If)
               and (ast.get_source_segment(src, n.test) or "")
-              == '_mech["state"] == "ACKNOWLEDGED"']
+              == 'mech["state"] == "ACKNOWLEDGED"']
     assert len(guards) == 1
     in_else = {id(c) for stmt in guards[0].orelse for c in ast.walk(stmt)}
     assert id(keyed[0]) in in_else
+    # and what it keys reaches the audit's findings
+    assert "_keyed.extend(_sm_keyed)" in src

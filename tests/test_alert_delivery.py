@@ -127,16 +127,22 @@ def test_the_outcome_is_returned_not_only_logged():
     r = ad.deliver_alert("x", token="", chat_id="", sleep=lambda _: None)
     assert isinstance(r, ad.DeliveryResult)
     assert not r.ok and not r
-    assert r.detail == "not configured"
+    # no operator id: unset BY DECISION, a correct outcome (2026-11-16)
+    assert r.by_decision is True and r.surfaced is True
 
 
 def test_missing_config_surfaces_without_leaking_values(monkeypatch, capsys):
+    # a missing TOKEN with an operator id set is the misconfiguration case;
+    # an unset operator id alone is the decision, tested in
+    # test_client_chat_is_sealed.py
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setenv("TELEGRAM_OPERATOR_CHAT_ID", "operator-placeholder")
     r = ad.deliver_alert("x", sleep=lambda _: None)
     out = capsys.readouterr().out
-    assert not r.ok and r.surfaced
+    assert not r.ok and r.surfaced and not r.by_decision
     assert "TELEGRAM_BOT_TOKEN" in out and "::error::" in out
+    assert "operator-placeholder" not in out, "a value was printed"
 
 
 def test_step_summary_is_written_when_github_provides_one(monkeypatch, tmp_path):

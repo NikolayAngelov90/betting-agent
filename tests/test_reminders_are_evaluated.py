@@ -209,17 +209,27 @@ class _FakeSubprocess:
 
 
 def _drive(rc, ran, up="success", event="workflow_run", sel=None,
-           skipped=0, errored=0, failed=0, collect_errors=0):
-    """`(exit_code, stdout, [telegram bodies])`."""
+           skipped=0, errored=0, failed=0, collect_errors=0,
+           cal="auto", live=0, other=0):
+    """`(exit_code, stdout, [telegram bodies])`.
+
+    `cal`, `live`, `other`: how many of the FAILED tests carried each kind
+    (2026-11-16). By default every failure is a dated guard -- what every
+    test written before that day meant by a failure."""
     import io
     import os
     import sys
     from contextlib import redirect_stdout
 
+    if cal == "auto":
+        cal = failed if isinstance(failed, int) else 0
     fake = _FakeSubprocess()
     env = {"RC": str(rc), "RAN": str(ran), "UP_CONCL": up, "EVENT": event,
            "SEL": str(ran if sel is None else sel),
            "SKIPPED": str(skipped), "ERRORED": str(errored),
+           "CAL_FAILED": "" if cal is None else str(cal),
+           "LIVE_FAILED": "" if live is None else str(live),
+           "OTHER_FAILED": "" if other is None else str(other),
            "FAILED": "" if failed is None else str(failed),
            "COLLECT_ERRORS": ("" if collect_errors is None
                               else str(collect_errors)),
@@ -306,6 +316,100 @@ def test_rc1_IS_the_verdict_and_DOES_send():
     assert "its conclusion on this trigger: success" in bodies[0], (
         "the upstream state is no longer printed, so a reader cannot tell "
         "this from a capture failure")
+
+
+# ── THREE REDS, ONE LABEL EACH. 2026-11-16. ──────────────────────────────
+
+def test_KNOWN_WRONG_the_11_16_reference_failure_prints_LIVE_CHECK_FAILED():
+    """Run 43826813999's real state: 10 selected, 10 ran, 1 FAILED (the live
+    reference check), 1 skipped, 5 collection errors. It printed "REMINDER
+    DUE ... a VERDICT"; it must print LIVE CHECK FAILED and nothing else."""
+    code, out, bodies = _drive(rc=1, ran=10, sel=10, failed=1, skipped=1,
+                               collect_errors=5, cal=0, live=1, other=0)
+    assert code == 1, "a failed live check must still redden"
+    assert "::error::LIVE CHECK FAILED" in out
+    assert "REMINDER DUE" not in out and "VERDICT" not in out, (
+        "the live failure is still labelled a reminder coming due")
+    assert out.count("::error::") == 1, "one red, one label"
+    assert len(bodies) == 1 and "A LIVE CHECK FAILED" in bodies[0]
+    assert "A DECISION IS DUE" not in bodies[0]
+
+
+def test_a_DATED_GUARD_alone_is_still_the_VERDICT():
+    code, out, bodies = _drive(rc=1, ran=10, failed=1, cal=1, live=0)
+    assert code == 1 and "::error::REMINDER DUE" in out
+    assert "LIVE CHECK FAILED" not in out and out.count("::error::") == 1
+    assert "A DECISION IS DUE" in bodies[0]
+
+
+def test_a_MIXED_red_is_NOT_a_verdict_and_still_names_the_due_guard():
+    """A VERDICT marker on a red that also holds a live failure would keep
+    `ci-audit` quiet about the live failure."""
+    code, out, bodies = _drive(rc=1, ran=10, failed=2, cal=1, live=1)
+    assert "::error::LIVE CHECK FAILED" in out and "REMINDER DUE" not in out
+    assert out.count("::error::") == 1
+    assert "Also 1 dated guard(s) reached their date" in bodies[0]
+
+
+def test_a_failure_of_NEITHER_kind_is_a_FAILURE():
+    code, out, bodies = _drive(rc=1, ran=10, failed=1, cal=0, live=0, other=1)
+    assert code == 1 and "::error::REMINDERS FAILURE" in out
+    assert "REMINDER DUE" not in out and "LIVE CHECK FAILED" not in out
+
+
+@pytest.mark.parametrize("cal, live, other", [
+    (None, 0, 0),        # the kind file was never counted
+    (0, 0, 0),           # counted, but the hook recorded nothing
+    (1, 1, 0),           # more kinds than failures
+])
+def test_a_failure_whose_KIND_does_not_add_up_is_NOT_EVALUATED(cal, live,
+                                                                other):
+    code, out, bodies = _drive(rc=1, ran=10, failed=1, cal=cal, live=live,
+                               other=other)
+    assert code == 1 and "NOT EVALUATED" in out
+    assert "REMINDER DUE" not in out and "LIVE CHECK FAILED" not in out
+    assert bodies == []
+
+
+def test_the_HOOK_records_the_KIND_pytest_knows(tmp_path, monkeypatch):
+    """`tests/conftest.py` is the only place a failing test's markers are
+    known; drive its hook on reports shaped like pytest's."""
+    import types
+
+    from tests import reminder_kinds as cf
+
+    path = tmp_path / "kinds.txt"
+    monkeypatch.setenv(cf.REMINDER_KINDS_ENV, str(path))
+
+    def rep(nodeid, kws, when="call", failed=True):
+        return types.SimpleNamespace(nodeid=nodeid, keywords=kws, when=when,
+                                     failed=failed)
+    cf.pytest_runtest_logreport(rep("t::live_one", {"live": 1, "t": 1}))
+    cf.pytest_runtest_logreport(rep("t::guard", {"calendar": 1}))
+    cf.pytest_runtest_logreport(rep("t::plain", {"t": 1}))
+    cf.pytest_runtest_logreport(rep("t::passed", {"live": 1}, failed=False))
+    cf.pytest_runtest_logreport(rep("t::setup_err", {"live": 1},
+                                    when="setup"))
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        "live t::live_one", "calendar t::guard", "other t::plain"]
+    # and inert without the variable
+    monkeypatch.delenv(cf.REMINDER_KINDS_ENV)
+    cf.pytest_runtest_logreport(rep("t::x", {"live": 1}))
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_the_WORKFLOW_counts_each_KIND_and_hands_it_to_the_classifier():
+    import yaml
+
+    wf = yaml.safe_load(SRC)
+    steps = list(wf["jobs"].values())[0]["steps"]
+    run = [s for s in steps if s.get("id") == "reminders"][0]
+    say = [s for s in steps if s.get("name") == "Say what it means"][0]
+    assert run["env"]["REMINDER_KINDS_FILE"] == "logs/reminder_kinds.txt"
+    for kind, var in (("calendar", "CAL"), ("live", "LIVE"),
+                      ("other", "OTHER")):
+        assert f'grep -c "^{kind} " logs/reminder_kinds.txt' in run["run"]
+        assert var + "_FAILED" in say["env"]
 
 
 def test_rc1_from_COLLECTION_ERRORS_only_is_warning_and_GREEN():

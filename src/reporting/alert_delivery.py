@@ -76,12 +76,16 @@ class DeliveryResult:
     attempts: int
     detail: str = ""
     surfaced: bool = False
+    #: True when nothing was sent because the operator channel is unset BY
+    #: DECISION -- a correct outcome, carried by the GitHub annotation. A
+    #: caller must not report it as a delivery failure.
+    by_decision: bool = False
 
     def __bool__(self) -> bool:
         return self.ok
 
 
-def _annotate(msg: str) -> bool:
+def _annotate(msg: str, summary_label: str = "ALERT NOT DELIVERED") -> bool:
     """GitHub Actions annotation + step summary. Visible without the log.
 
     Returns whether a Telegram-independent surface was actually written.
@@ -92,11 +96,55 @@ def _annotate(msg: str) -> bool:
     if path:
         try:
             with open(path, "a", encoding="utf-8") as fh:
-                fh.write(f"\n> **ALERT NOT DELIVERED** — {msg}\n")
+                fh.write(f"\n> **{summary_label}** — {msg}\n")
         except Exception:
             # The annotation already printed; a summary failure is not fatal.
             pass
     return surfaced
+
+
+# ── THE OPERATOR CHANNEL IS UNSET BY DECISION. ───────────────────────────────
+#
+# The operator decided (2026-11-07; the design is in the 2026-11-04 ledger
+# entry, CLIENT CHANNEL) that there is no second chat: GitHub's own
+# notifications carry everything operator-facing. `TELEGRAM_OPERATOR_CHAT_ID`
+# is therefore unset on purpose, and an alert with no operator id is a
+# CORRECT outcome, not a failed delivery. It used to print "alert NOT sent
+# ... is not set on this step. The step needs both in its `env:` block" --
+# the wording of a misconfiguration -- and that line was read as a dead
+# channel on 2026-11-16. The finding itself is now the annotation, and the
+# line says why nothing went to Telegram.
+
+#: Printed, not annotated: it explains the annotation above it.
+UNSET_BY_DECISION = (
+    "operator channel unset BY DECISION (operator, 2026-11-07): this finding "
+    "is surfaced as the GitHub annotation above, which GitHub's own "
+    "notifications carry. Nothing was sent to Telegram, by design -- this is "
+    "not a delivery failure.")
+#: GitHub's annotation message is one line; these are its escapes.
+_ANNOTATION_ESCAPES = (("%", "%25"), ("\r", "%0D"), ("\n", "%0A"))
+#: Keep the annotation readable; the summary holds the full text.
+ANNOTATION_MAX = 3000
+
+
+def _surface_finding(text: str) -> bool:
+    """The finding itself as an `::error::` annotation, and in full in the
+    step summary. The carrier when the operator channel is unset."""
+    body = text if len(text) <= ANNOTATION_MAX else (
+        text[:ANNOTATION_MAX] + " … (full text in the step summary)")
+    for raw, esc in _ANNOTATION_ESCAPES:
+        body = body.replace(raw, esc)
+    print(f"::error title=OPERATOR FINDING::{body}")
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path:
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write("\n> **OPERATOR FINDING** (operator channel unset by "
+                         "decision; this annotation is the carrier)\n\n"
+                         f"```\n{text}\n```\n")
+        except Exception:
+            pass
+    return True
 
 
 def _post(token: str, chat_id: str, text: str):
@@ -159,14 +207,21 @@ def deliver_alert(
     chat_id = (chat_id if chat_id is not None
                else os.environ.get("TELEGRAM_OPERATOR_CHAT_ID", "")).strip()
 
-    if not token or not chat_id:
-        # Never print which is missing beyond the name — no values.
+    if not chat_id:
+        # BY DECISION, not a fault: see `UNSET_BY_DECISION`. The client chat
+        # is never a fallback -- it is not read here at all.
+        surfaced = _surface_finding(text)
+        print(UNSET_BY_DECISION)
+        return DeliveryResult(False, 0, "operator channel unset by decision; "
+                              "surfaced as a GitHub annotation", surfaced,
+                              by_decision=True)
+    if not token:
+        # A destination with no token IS a misconfiguration, and says so.
+        # Never print a value -- only the name.
         surfaced = _annotate(
-            "alert NOT sent: TELEGRAM_BOT_TOKEN and/or "
-            "TELEGRAM_OPERATOR_CHAT_ID is not set on this step. The step "
-            "needs both in its `env:` block. NOTE: the OPERATOR id, not "
-            "TELEGRAM_CHAT_ID -- that one is the client chat and is "
-            "deliberately unreachable from here.")
+            "alert NOT sent: TELEGRAM_BOT_TOKEN is not set on this step, "
+            "though an operator chat id is. The step needs the token in its "
+            "`env:` block.")
         return DeliveryResult(False, 0, "not configured", surfaced)
 
     detail: dict = {}

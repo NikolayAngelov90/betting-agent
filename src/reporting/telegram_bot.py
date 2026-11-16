@@ -928,7 +928,12 @@ class TelegramNotifier:
         result = await asyncio.to_thread(
             deliver_alert, text, token=self.bot_token,
             chat_id=self.operator_chat_id)
-        if not result.ok:
+        if result.by_decision:
+            # A correct outcome: the operator channel is unset BY DECISION
+            # and the finding is the GitHub annotation. Not an error line.
+            logger.info(f"operator finding surfaced as a GitHub annotation "
+                        f"({result.detail})")
+        elif not result.ok:
             logger.error(
                 f"ALERT NOT DELIVERED after {result.attempts} attempt(s): "
                 f"{result.detail} — surfaced to CI: {result.surfaced}")

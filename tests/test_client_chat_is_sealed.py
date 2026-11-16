@@ -462,17 +462,63 @@ def test_AN_UNSET_OPERATOR_ID_ANNOTATES_AND_NEVER_REACHES_THE_CLIENT(monkeypatch
     monkeypatch.setattr(ad, "_post", lambda *a, **k: posted.append(a),
                         raising=False)
     annotated = []
-    monkeypatch.setattr(ad, "_annotate",
+    # 2026-11-16: the carrier is `_surface_finding` -- the FINDING is the
+    # annotation, not a line saying it was not sent.
+    monkeypatch.setattr(ad, "_surface_finding",
                         lambda m: (annotated.append(m), True)[1])
     res = ad.deliver_alert("a model-freshness finding")
     assert posted == [], (
         "an alert was POSTED with no operator id configured; the only "
         "destination available was the client chat")
-    assert annotated, "nothing was annotated, so the finding has NO carrier"
-    assert res.ok is False and "not configured" in res.detail
+    assert annotated == ["a model-freshness finding"], (
+        "the finding itself was not annotated, so it has NO carrier")
+    assert res.ok is False and res.by_decision is True
     assert res.surfaced is True, (
         "the annotation path did not report that it surfaced the "
         "message, so nothing proves it has a carrier")
+
+
+def test_UNSET_BY_DECISION_reads_as_the_decision_not_as_a_failure(
+        monkeypatch, capsys, tmp_path):
+    """2026-11-16: the line "alert NOT sent ... is not set on this step"
+    was read as a dead channel, though the id is unset BY DECISION. Driven
+    through the REAL `_surface_finding`, on the real stdout and summary."""
+    import src.reporting.alert_delivery as ad
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", CLIENT)
+    monkeypatch.delenv("TELEGRAM_OPERATOR_CHAT_ID", raising=False)
+    posted = []
+    monkeypatch.setattr(ad, "_post", lambda *a, **k: posted.append(a))
+    res = ad.deliver_alert("FINDING: margin red\nsecond line, 100% true")
+    out = capsys.readouterr().out
+    # the line states the decision ...
+    assert "unset BY DECISION" in out and "not a delivery failure" in out
+    assert "alert NOT sent" not in out and "is not set on this step" not in out
+    # ... the annotation IS the finding, escaped onto one line ...
+    assert ("::error title=OPERATOR FINDING::FINDING: margin red%0Asecond "
+            "line, 100%25 true") in out
+    text = summary.read_text(encoding="utf-8")
+    assert "OPERATOR FINDING" in text and "second line, 100% true" in text
+    assert "ALERT NOT DELIVERED" not in text
+    # ... and the client chat receives nothing
+    assert posted == [], "something was POSTED; the client chat is reachable"
+    assert res.by_decision and res.surfaced and not res.ok
+
+
+def test_KNOWN_WRONG_a_MISSING_TOKEN_with_an_operator_id_STILL_reads_as_a_fault(
+        monkeypatch, capsys):
+    """The decision covers the operator id only. A destination with no
+    token is a misconfiguration and must keep saying so."""
+    import src.reporting.alert_delivery as ad
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("TELEGRAM_OPERATOR_CHAT_ID", "operator-placeholder")
+    res = ad.deliver_alert("x", sleep=lambda _: None)
+    out = capsys.readouterr().out
+    assert "alert NOT sent: TELEGRAM_BOT_TOKEN is not set" in out
+    assert "BY DECISION" not in out
+    assert res.by_decision is False and res.detail == "not configured"
 
 
 def test_KNOWN_WRONG_a_REINTRODUCED_CLIENT_FALLBACK_IS_CAUGHT(monkeypatch):

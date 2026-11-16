@@ -219,19 +219,60 @@ def test_the_MARK_FOLLOWS_THE_ALARM_not_the_CONDITION():
     alarm -- still wore the finding marker. The acknowledgement was injected,
     the margin stopped alarming, and the mark stayed.
     """
-    i = SRC.index("SCHEDULE MARGIN")
-    head = SRC[max(0, i - 900):i]
-    # the acknowledgement must be consulted BEFORE the mark is printed
+    # SECOND INSTANCE, 2026-11-16: Stage 33 Part C added a MECHANISM
+    # acknowledgement and left the mark gated on the date-keyed one alone,
+    # so six quiet audits printed it. The mark now lives in ONE place,
+    # `schedule_margin_report`, which is called only after BOTH are read.
+    assert SRC.count("!! SCHEDULE MARGIN") == 1, (
+        "the schedule-margin mark is printed from more than one site")
+    i = SRC.index("!! SCHEDULE MARGIN")
+    fn = SRC.index("def schedule_margin_report(")
+    nxt = SRC.index("\ndef ", fn + 1)
+    assert fn < i < nxt, "the mark is printed outside schedule_margin_report"
+    call = SRC.index("schedule_margin_report(", nxt)
+    head = SRC[max(0, call - 900):call]
+    # both acknowledgements are consulted BEFORE the report is built
     assert "margin_breach_is_acknowledged" in head, (
-        "the mark is printed before the acknowledgement is consulted, so an "
-        "acknowledged breach still wears it")
+        "the date-keyed acknowledgement is not consulted before the mark")
     assert "if not _ack:" in head, (
         "the mark is not gated on the absence of an acknowledgement")
+    assert "audit_margin_shortfall_is_acknowledged" in head, (
+        "the mechanism acknowledgement is not read before the mark")
     # and the acknowledged path still REPORTS, as a note
-    tail = SRC[i:i + 900]
+    tail = SRC[call:call + 900]
     assert "note: schedule margin" in tail, (
         "the acknowledged breach stopped being reported at all; it must "
         "report without the marker, not go silent")
+
+
+# ── THE SIX QUIET AUDITS OF 2026-11-15/16, REPLAYED. ───────────────────────
+
+PB_N1 = {"n": 1, "to_ten_date": "UNEVALUATED"}
+
+
+def test_a_QUIET_margin_ACKNOWLEDGED_on_its_mechanism_prints_ZERO_marks():
+    """11-15's reading: +12.3225m, shortfall 17.6775 <= 17.6935, n=1. The
+    real mechanism, the real report -- every one of the six printed `!!`."""
+    mech = ci.audit_margin_shortfall_is_acknowledged(12.3225, 1)
+    assert mech["state"] == "ACKNOWLEDGED", mech
+    lines, keyed = ci.schedule_margin_report(12.3225, mech, PB_N1)
+    assert _marks(chr(10).join(lines)) == [], lines
+    assert keyed == [], "an acknowledged margin was keyed as a finding"
+    assert "ACKNOWLEDGED ON ITS MECHANISM" in lines[0], (
+        "the quiet state stopped REPORTING the margin")
+
+
+def test_KNOWN_WRONG_a_REAL_margin_finding_prints_EXACTLY_ONE_mark():
+    """0.02m past the conservatism the mechanism no longer acknowledges, and
+    the same report must mark it once and key it once."""
+    mech = ci.audit_margin_shortfall_is_acknowledged(12.29, 1)
+    assert mech["state"] != "ACKNOWLEDGED", mech
+    lines, keyed = ci.schedule_margin_report(12.29, mech, PB_N1)
+    marks = _marks(chr(10).join(lines))
+    assert len(marks) == 1, f"{len(marks)} marked lines, expected 1: {marks}"
+    assert "SCHEDULE MARGIN" in marks[0]
+    assert [k[0] for k in keyed] == ["margin.schedule"]
+    assert mech["state"] in keyed[0][2], "the key does not say which state"
 
 
 def test_the_ACKNOWLEDGEMENT_compares_the_REAL_figure_not_the_DISPLAY():

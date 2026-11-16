@@ -198,7 +198,11 @@ jobs:
           BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
           TABLES_CREATED: '1'
           PYTHONIOENCODING: utf-8
+          # WHICH KIND FAILED, said by pytest itself (tests/conftest.py):
+          # `calendar`, `live` or `other`, one line per failed test.
+          REMINDER_KINDS_FILE: logs/reminder_kinds.txt
         run: |
+          : > logs/reminder_kinds.txt
           # ── THE EXIT CODE, NOT THE STEP OUTCOME. 2026-10-22. ─────────────
           #
           # `continue-on-error` turns every non-zero exit into the single word
@@ -287,6 +291,17 @@ jobs:
           echo "reminders_skipped=$skipped" >> "$GITHUB_OUTPUT"
           echo "reminders_errored=$errors" >> "$GITHUB_OUTPUT"
           echo "reminders_failed=$failed" >> "$GITHUB_OUTPUT"
+          # A failed dated guard, a failed live check and anything else are
+          # three different reds (2026-11-16: a live check was printed as a
+          # reminder coming due). The classifier refuses to label a failure
+          # whose kind is missing.
+          cal_failed=$(grep -c "^calendar " logs/reminder_kinds.txt || true)
+          live_failed=$(grep -c "^live " logs/reminder_kinds.txt || true)
+          other_failed=$(grep -c "^other " logs/reminder_kinds.txt || true)
+          echo "reminders_cal_failed=$cal_failed" >> "$GITHUB_OUTPUT"
+          echo "reminders_live_failed=$live_failed" >> "$GITHUB_OUTPUT"
+          echo "reminders_other_failed=$other_failed" >> "$GITHUB_OUTPUT"
+          echo "failed by kind: calendar=$cal_failed live=$live_failed other=$other_failed"
           echo "pytest exit=$rc, SELECTED=$sel RAN=$ran (FAILED=$failed, SKIPPED=$skipped, ERRORED=$errors)"
           exit 0        # the classification below decides, not this step
 
@@ -312,6 +327,9 @@ jobs:
           SKIPPED: ${{ steps.reminders.outputs.reminders_skipped }}
           ERRORED: ${{ steps.reminders.outputs.reminders_errored }}
           FAILED: ${{ steps.reminders.outputs.reminders_failed }}
+          CAL_FAILED: ${{ steps.reminders.outputs.reminders_cal_failed }}
+          LIVE_FAILED: ${{ steps.reminders.outputs.reminders_live_failed }}
+          OTHER_FAILED: ${{ steps.reminders.outputs.reminders_other_failed }}
           COLLECT_ERRORS: ${{ steps.reminders.outputs.collect_errors }}
           UP_CONCL: ${{ github.event.workflow_run.conclusion }}
           EVENT: ${{ github.event_name }}
@@ -335,6 +353,8 @@ jobs:
           skipped_raw = os.environ.get("SKIPPED", "")
           errored_raw = os.environ.get("ERRORED", "")
           failed_raw = os.environ.get("FAILED", "")
+          kind_raw = {k: os.environ.get(f"{k.upper()}_FAILED", "")
+                      for k in ("cal", "live", "other")}
           collect_errors_raw = os.environ.get("COLLECT_ERRORS", "")
           up = os.environ.get("UP_CONCL") or "UNEVALUATED"
           event = os.environ.get("EVENT", "")
@@ -350,6 +370,7 @@ jobs:
           sel = _int(sel_raw)
           skipped, errored = _int(skipped_raw), _int(errored_raw)
           failed = _int(failed_raw)
+          kinds = {k: _int(v) for k, v in kind_raw.items()}
           collect_errors = _int(collect_errors_raw)
 
           # ── NOT EVALUATED IS ITS OWN STATE, AND IT IS NOT A VERDICT ───────
@@ -412,6 +433,17 @@ jobs:
               unevaluated = (
                   "pytest exited 1, but neither a selected reminder failure "
                   "nor a collection error was reported")
+          # WHICH KIND FAILED, OR NO LABEL. 2026-11-16. A failure whose kind
+          # did not arrive cannot be called a reminder coming due -- that is
+          # the mislabel this replaces.
+          elif failed > 0 and (None in kinds.values()
+                               or sum(kinds.values()) != failed):
+              unevaluated = (
+                  f"{failed} selected test(s) FAILED but their KIND did not "
+                  f"add up (calendar={kind_raw['cal']!r} "
+                  f"live={kind_raw['live']!r} other={kind_raw['other']!r}), "
+                  f"so whether a dated guard is due or a live check failed "
+                  f"cannot be said")
 
           if unevaluated:
               print("::error::REMINDERS NOT EVALUATED - this red is a "
@@ -439,16 +471,57 @@ jobs:
               # It is emitted IMMEDIATELY BEFORE the exit it explains, because
               # the audit's partition subtracts one exit per registered
               # annotation and a marker without its exit loses headroom.
-              print("::error::REMINDER DUE - a self-expiring guard reached "
-                    "its date. This red is a VERDICT, not a failure.")
-              body = (
-                  "\U0001f4c5 REMINDERS — A DECISION IS DUE.\n"
-                  "A self-expiring guard has reached its date. Delete it or "
-                  "take the decision it was holding; do NOT extend it.\n"
-                  "THIS IS NOT A PIPELINE FAILURE. Price capture lives in "
-                  "`daily-picks`, which reports its own state separately "
-                  f"(its conclusion on this trigger: {up}).\n"
-                  f"trigger: {event}\n{url}")
+              #
+              # ── THREE REDS, ONE LABEL EACH. 2026-11-16. ──────────────────
+              #
+              #   calendar  a dated guard reached its date  -> REMINDER DUE
+              #   live      a live test failed on live input -> LIVE CHECK FAILED
+              #   other     anything else                    -> FAILURE
+              #
+              # On 2026-11-16 a live check (the reference answering for D+1)
+              # failed and was printed as "REMINDER DUE ... a VERDICT". It was
+              # neither a reminder nor due, and the VERDICT marker would have
+              # kept `ci-audit` quiet about it. ONE annotation per red, as
+              # above, so the precedence is: anything unexplained first, then
+              # a live failure, and only a red made of dated guards alone is a
+              # VERDICT. A due guard in a mixed red is still named in text.
+              cal, live, other = kinds["cal"], kinds["live"], kinds["other"]
+              due_too = (f"\nAlso {cal} dated guard(s) reached their date "
+                         f"in this run." if cal and (live or other) else "")
+              if other:
+                  print("::error::REMINDERS FAILURE - a selected test that is "
+                        "neither a dated guard nor a live check failed.")
+                  body = (
+                      "❌ REMINDERS — A TEST FAILED.\n"
+                      f"{other} selected test(s) carrying neither the "
+                      "`calendar` nor the `live` marker failed. Not a "
+                      "reminder, not a live check: read the failure."
+                      f"{due_too}\n"
+                      f"trigger: {event}\n{url}")
+              elif live:
+                  print("::error::LIVE CHECK FAILED - a live test failed on "
+                        "live input. It is not a reminder and nothing is due.")
+                  body = (
+                      "\U0001f50e REMINDERS — A LIVE CHECK FAILED.\n"
+                      f"{live} live test(s) failed on live input. Nothing "
+                      "reached its date: read the failing test's message, "
+                      "then fix the code or record what changed outside it."
+                      f"{due_too}\n"
+                      "Price capture lives in `daily-picks`, which reports "
+                      f"its own state separately (its conclusion on this "
+                      f"trigger: {up}).\n"
+                      f"trigger: {event}\n{url}")
+              else:
+                  print("::error::REMINDER DUE - a self-expiring guard reached "
+                        "its date. This red is a VERDICT, not a failure.")
+                  body = (
+                      "\U0001f4c5 REMINDERS — A DECISION IS DUE.\n"
+                      "A self-expiring guard has reached its date. Delete it or "
+                      "take the decision it was holding; do NOT extend it.\n"
+                      "THIS IS NOT A PIPELINE FAILURE. Price capture lives in "
+                      "`daily-picks`, which reports its own state separately "
+                      f"(its conclusion on this trigger: {up}).\n"
+                      f"trigger: {event}\n{url}")
               print(body)
               subprocess.run([sys.executable, "-m", "scripts.ci_alert", body],
                              check=False)

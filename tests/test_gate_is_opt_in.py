@@ -709,8 +709,16 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #   2026-11-15, items 1 and 5 withheld too: +5, every one a
     #   known-wrong control in the same file (node-id diff against
     #   bdc34da: 5 added, 0 removed; the gate identical at 1854).
-    assert len(nong) == 1248, (
-        f"the non-gating selection is {len(nong)}, recorded 1248")
+    #   2026-11-16, three labels: +13 by node id against 9df0dd5, 0
+    #   removed -- 9 in test_reminders_are_evaluated.py (REMINDER DUE /
+    #   LIVE CHECK FAILED / FAILURE, the kind hook, the workflow
+    #   wiring), 2 in test_client_chat_is_sealed.py (the operator
+    #   channel unset BY DECISION), 2 in test_marker_is_reserved.py (the
+    #   mark follows the mechanism). The hook lives in
+    #   tests/reminder_kinds.py, NOT conftest: importing it from conftest
+    #   moved all 44 nodes of the reminders file into the gate.
+    assert len(nong) == 1261, (
+        f"the non-gating selection is {len(nong)}, recorded 1261")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 
