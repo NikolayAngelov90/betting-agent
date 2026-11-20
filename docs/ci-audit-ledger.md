@@ -39952,3 +39952,135 @@ The gate is identical at 1855 by node id against `9df0dd5`. Non-gating moves
 
 *Recorded 2026-11-16. Then, as scheduled: 2026-11-21 the first normal slate,
 11-22 its settlement, then Stage 33 Part B.*
+
+---
+
+## 2026-11-20 — `AUDIT RED CLASSIFIED`: one finding, a VERDICT; `OPERATOR DECISION NEEDED`; `TODAY'S CARD`
+
+Nothing changed. `s5.23 / 5bca73`.
+
+### Scope
+
+**22 ci-audit runs since the last green one** (2026-11-17 03:48 UTC). All are
+on `37d785f`, 2026-11-17 09:18 → 2026-11-20 19:05 UTC; 19 were triggered by
+`workflow_run` and 3 by `schedule`. Every one is red, and **every one carries
+the same single finding**, `margin.schedule`, mechanism acknowledgement
+**EXCEEDS**:
+
+| readings after the picks run of | runs | margin | shortfall vs 30m | conservatism covered | uncovered | no-review n |
+|---|---|---|---|---|---|---|
+| 11-17 | 6 | −7.1m | 37.09m | 17.69m | 19.399m | 3/10 |
+| 11-18 | 6 | −11.5m | 41.54m | 17.69m | 23.848m | 4/10 |
+| 11-19 | 6 | −16.3m | 46.34m | 17.69m | 28.647m | 5/10 |
+| 11-20 | 4 | −17.2m | 47.18m | 17.69m | 29.491m | 6/10 |
+
+Each row runs from one morning's picks run to the next, so the overnight
+audits (02:17–02:53 UTC) belong to the previous day's row.
+
+**Partition, identical in all 22:**
+* exit code 1, with 2 exits (the audit step and the final step);
+* 2 self-emitted annotations, one explaining each exit
+  (`audit alarm — …`, `CI audit alarmed - see the audit step…`);
+* 0 unexplained non-zero exits;
+* 0 tracebacks;
+* **1 "foreign" annotation**, `##[error](!) CI audit alarmed: …`. It is our
+  own: the operator finding written by the by-decision path (2026-11-16 (II)).
+  Its rendered text varies with the finding, so it is not in
+  `SELF_EMITTED_ANNOTATIONS`. It is not a fault.
+
+**Verdict, not machinery.**
+
+### The two predicted candidates
+
+1. **EXCEEDS on a slower start: CONFIRMED.** On 11-16 the margin read +28.6m,
+   with the weekend binding and a shortfall of 1.35m, ACKNOWLEDGED. On
+   2026-11-17 (Tue) the scheduled picks run started **7h38m (458.8 min)**
+   after its `0 1` nominal, a new weekday maximum against the previous 6h51m.
+   * The weekday lateness series then stopped splitting: on 11-16 it read
+     "slow n=14 / fast n=3, slow GOVERNS"; from 11-17 all 18 runs are one
+     cluster.
+   * Its mean+3sd rose from 7h34m (slow cluster alone) to 8h32m. The weekday
+     binding moved from +51m to −7m and took the whole margin below the
+     acknowledgement.
+   * **The duration term never moved** (64.59m).
+2. **LAPSED at n=10: RULED OUT.** The no-review series is at **n=6/10** on
+   2026-11-20, projected to reach n=10 about **2026-11-26** (~5 scheduled
+   weekday runs a week). The acknowledgement EXCEEDED before it could lapse.
+
+### `OPERATOR DECISION NEEDED` — EXCEEDS on lateness
+
+**The lateness series under the current weekday cron `0 1 * * 1-5`**,
+`measured` 2026-11-20 from the scheduled `daily-picks` runs.
+* **Population and figures:** 2026-10-23 → 11-20, n=21, grain = run, unit =
+  minutes after the nominal start. Mean 371.0m (6h11m), sample sd 50.5m, min
+  272.3m (4h32m), **max 458.8m (7h38m, 11-17)**, mean+3sd 522.6m (8h42m, the
+  audit's figure).
+* **Not two clusters — and not stable either: it DRIFTS.** First week (5
+  runs) mean 299m; last week (5 runs) mean 421m. Least-squares slope **+5.28
+  min/day** over the 21 runs.
+* **The weekend `30 0 * * 6,0` drifts the same way:** n=8, mean 336.6m, 4h20m
+  → 6h23m.
+* **The retired `0 0 * * *`** (2026-10-02 → 10-10, n=9): mean 270.9m, max
+  304.9m. That is close to the first `0 1` week. So the rise follows the
+  calendar, and **these data cannot separate a scheduled-hour effect from the
+  drift.**
+
+**What an earlier weekday cron would buy**, assuming lateness does not
+depend on the scheduled hour — the assumption the paragraph above cannot
+test:
+
+| cron | minutes earlier | margin at today's series | vs 30m |
+|---|---|---|---|
+| `0 1` (now) | 0 | −17.2m | short 47.2m |
+| `15 0` | 45 | ≈ +27.8m | short 2.2m |
+| `12 0` | 48 | ≈ +30.8m | clears by 0.8m |
+| `0 0` | 60 | ≈ +42.8m | clears by 12.8m |
+
+* **A one-off gain against a moving figure.** The weekday mean+3sd rose 30
+  minutes between 11-16 and 11-20 (8h12m → 8h42m). At the fitted drift, 12.8
+  minutes of headroom is a matter of days.
+* **It reverses the s5.19 trade** ("spends 60 min of margin for +1h of
+  start").
+* **It needs a revision bump with invariant-6b authorisation**, as s5.19 did.
+* **The duration side is not a lever yet.** The no-review preview (n=6, below
+  the n≥10 rule, not adoptable) reads mean 22.7m, sd 4.2, mean+3sd 35.5m,
+  max 30.8m. Re-derived at those figures, the duration term would fall
+  64.59m → 35.5m and lift the margin by about 29.1m, to about +11.9m: **still
+  short of 30m**. Most of those six were FIFA-window slates of 1–4 fixtures,
+  so the preview is likely optimistic.
+
+**Stopped here, as instructed. The cron is the operator's decision.** No
+re-acknowledgement without a re-measured figure, nothing absorbed.
+
+**Next to break, for the record:**
+* The weekend margin is +29m (3sd), a shortfall of about 1.4m, inside the
+  mechanism's 17.69m and ACKNOWLEDGED.
+* The Reminders weekday-margin test acknowledgement reads +25.5m vs 60m,
+  shortfall 34.48m against a 35.20m conservatism: 0.72m of cover left.
+  Expected to flip to a REMINDER DUE verdict on the next slower weekday.
+
+### `TODAY'S CARD` — 2026-11-20, first slate with covered leagues back
+
+Run 44698126657 on `37d785f`: scheduled `0 1`, started 07:52 UTC (+6h52m),
+success. `first_run_check --day 2026-11-20`: **10/10 PASS**.
+* **Slate:** 23 fixtures, 23 evaluated, 0 errors; `PICKS_MADE`.
+* **Picks:** 8, one per fixture (8 fixtures), in 8 leagues. The card was
+  delivered (`sent=1 failed=none`).
+
+| fixture | pick | odds | blended p |
+|---|---|---|---|
+| Nancy v Dijon (Ligue 2) | Over 2.5 | 1.70 | 0.5603 |
+| Verona v Cesena (Serie B) | Home Win | 1.70 | 0.5470 |
+| Pogoń Szczecin v Śląsk Wrocław (Ekstraklasa) | Home Over 1.5 | 1.70 | 0.5624 |
+| Barnsley v Sheffield Wed (League One) | Away Over 1.5 | 1.71 | 0.5538 |
+| Farul Constanța v U Cluj (Liga 1) | Over 2.5 | 1.71 | 0.5588 |
+| Arminia Bielefeld v Magdeburg (2. Bundesliga) | Over 2.5 | 1.73 | 0.5417 |
+| Bayern v Köln (Bundesliga) | Away Over 0.5 | 1.77 | 0.5451 |
+| Aarhus v Lyngby (Superliga) | Home Win | 1.775 | 0.5400 |
+
+Average taken odds 1.724; mean blended p 0.5511; p × odds − 1 averages
+−5.0% per pick, by the rule's own probability. Taken odds range 1.70–1.775,
+p range 0.5400–0.5624. **Shadow:** 23 rows, one per fixture, odds 1.50–2.05.
+On 1 fixture the two rules chose the same selection. Settlement tomorrow.
+
+*Recorded 2026-11-20. Report, not interpretation.*
