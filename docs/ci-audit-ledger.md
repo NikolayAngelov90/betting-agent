@@ -40084,3 +40084,240 @@ p range 0.5400–0.5624. **Shadow:** 23 rows, one per fixture, odds 1.50–2.05.
 On 1 fixture the two rules chose the same selection. Settlement tomorrow.
 
 *Recorded 2026-11-20. Report, not interpretation.*
+
+---
+
+## 2026-11-21 — STAGE 34: `TODAY'S RUNS`, `IDEMPOTENT`, `FALLBACK SET`, `MARGIN ON DISPATCH`, `SAFE TO ENABLE`
+
+**THE OPERATOR'S DECISION:** the card is published by an external
+`workflow_dispatch` at **10:30 Europe/Sofia every day**, weekdays and
+weekends alike. The dispatch job runs in the Europe/Sofia timezone, so DST is
+handled there. The workflow's cron becomes a late fallback for a missed
+dispatch. No token is in the repository, the logs or this entry.
+
+Nothing changes selection: `s5.23 / 5bca73`, re-read after every edit.
+
+### `TODAY'S RUNS` — since the last report, 2026-11-20 19:20 UTC
+
+| created (UTC) | workflow | trigger | run | sha | result | nominal → actual |
+|---|---|---|---|---|---|---|
+| 11-20 19:51 | CI Audit | schedule | 44806073944 | `ab8eb99` | **failure** | 12:00 → 19:51 (+7h51) |
+| 11-20 20:58 | Reminders | schedule | 44816108877 | `ab8eb99` | success | 13:00 → 20:58 (+7h58) |
+| 11-21 00:47 | Closing Line Capture | schedule | 44846091437 | `ab8eb99` | success | slot not identifiable |
+| 11-21 00:47 | CI Audit | workflow_run | 44846157443 | `ab8eb99` | **failure** | — |
+| 11-21 07:30 | Daily Betting Picks | schedule | 44880525561 | `ab8eb99` | success | 00:30 → 07:30 (+7h00) |
+| 11-21 08:47 | Non-Gating Tests | workflow_run | 44886502081 | `ab8eb99` | success | — |
+| 11-21 08:47 | CI Audit | workflow_run | 44886502090 | `ab8eb99` | **failure** | — |
+| 11-21 08:47 | Reminders | workflow_run | 44886502151 | `ab8eb99` | success | — |
+
+**The three audit reds are VERDICTS.** In all three the partition is 2 exits
+(each explained by its own registered annotation), 1 "foreign" annotation
+(our own by-decision operator finding), 0 tracebacks and 0 unexplained exits.
+* 19:51 carries **one** finding: `margin.schedule` −17.2m, EXCEEDS.
+* 00:47 and 08:47 carry **two**:
+  * `margin.schedule` −9.6m, EXCEEDS. It improved because the 28-day window
+    rolled: weekday n=21 → 20, mean+3sd 8h42m → 8h35m.
+  * **New: "actionable margin +41m, then +16m, for 2026-11-22 < 60m".**
+    football-data.org gives Sunday a real deadline after the window: 11:15
+    UTC, the Eredivisie. Today's 7h00m Saturday start pushed the weekend
+    mean+3sd to 8h21m.
+
+**Reminders: the weekday-margin test did NOT go red.** It passed in both
+runs, and its cover rose from 0.72 to 8.18 min when the window rolled (+33.0m
+vs 60m, shortfall 27.02 ≤ 35.20). **But that figure was 60 minutes high**
+(see `MARGIN ON DISPATCH`): the true readings under `0 1` were 11-16 −4.0m,
+11-20 −34.5m and 11-21 −27.0m. Each is a shortfall beyond the 35.20 the
+mechanism covers, so **the reminder was falsely green**.
+
+**Today's card, run 44880525561. `first_run_check --day 2026-11-21`: 10/10
+PASS.**
+* **Slate:** 118 fixtures, the first normal slate after the window; 104
+  evaluated, 0 errors; `PICKS_MADE`.
+* **Picks:** 25, one per fixture, delivered in 3 chunks (`sent=3
+  failed=none`).
+* **Odds:** taken 1.70–1.80, mean 1.741, median 1.730.
+* **Probability:** blended p 0.5402–0.5764, mean 0.5533.
+* **Shadow:** 104 rows, one per evaluated fixture. On 5 fixtures the two
+  rules chose the same selection.
+
+**The 2026-11-20 card, settled on 11-21.** Population: `saved_picks`
+`…5bca73`, pick_date 2026-11-20, grain = pick, 1-unit flat stake, graded by
+the deployed settlement.
+
+| | n | hit rate | avg odds | return | predicted |
+|---|---|---|---|---|---|
+| s5.23 | 8 | 5/8 (62%) | 1.72 | **+8.7%** | 0.5511 |
+| shadow (standard rule, never sent) | 21 of 23 graded | 14/21 (67%) | 1.59 | +7.5% | 0.6294 |
+| paired, 8 fixtures | live | 5/8 (62%) | 1.72 | +8.7% | — |
+| | shadow | 6/8 (75%) | 1.65 | +26.1% | — |
+
+**A day's figures are a day's figures; nothing is concluded.**
+
+### `IDEMPOTENT` — one card per day, however many starts
+
+* **The outcomes:** `pick_runs` gains `ALREADY_RAN_TODAY`, a record of a RUN,
+  never an answer about the DAY. `COMPLETED = PICKS_MADE, NONE_QUALIFIED,
+  NO_FIXTURES`: the day's client message was produced. INCOMPLETE,
+  NO_PRICED_FIXTURES and a missing row leave the day open.
+* **The `once` job:** a new job in `daily-picks.yml`, defined after the main
+  job so that job stays first, runs `scripts/once_per_day.py`. On a
+  completed day it records `ALREADY_RAN_TODAY` and the whole main job is
+  SKIPPED. Nothing is fetched, settled, evaluated or sent, which covers the
+  settlement and Sunday report messages too. `!cancelled()` makes a FAILED
+  gate fail open.
+* **A run waiting behind the concurrency group** starts only after the first
+  has finished (workflow-level group, never cancelled). Its gate therefore
+  reads the first run's outcome.
+* **The second line, in the run:** `--picks` re-reads `pick_runs` before
+  evaluating. `--force` does not override it; `--resend` re-sends the same
+  card.
+* **No reader mistakes a no-op run for the day:** the three readers that
+  take the latest row per day skip `ALREADY_RAN_TODAY` (the loss alert, the
+  first-run check, the prospective report).
+* **The odds guard** now also stands down on a completed day. A zero-pick
+  day saves no pick and used to keep it declining all afternoon.
+
+**THE FOUR CONTROLS, driven** through the real gate, the real `--picks` CLI
+path and `pick_runs` on SQLite. A stand-in agent supplies picks; the
+production code decides what to send.
+* dispatch then schedule → **one card**;
+* schedule only → **one card**;
+* two dispatches, and a third start → **one card**;
+* a failed first run, crashed or INCOMPLETE → **the second run sends the
+  card**.
+
+Also driven:
+* a zero-pick day sends its one line once;
+* a gate that fails open is caught by the in-run guard;
+* yesterday's completion does not close today;
+* an unreadable database fails open **and says so**. It used to print "no
+  completed run" about a table nobody read. Caught by the test, and fixed
+  with a `strict` read for the gate.
+
+**Mutation:** remove `PICKS_MADE` from `COMPLETED` and three controls see a
+second card. Restored byte-identical.
+
+**STATED LIMIT:** the outcome row is written BEFORE the send. A first run
+that recorded its picks and then failed to DELIVER leaves the day completed.
+`--resend` is the remedy for that; a second, different card is what this
+prevents.
+
+### `FALLBACK SET` — `0 11 * * *`
+
+* **When it can start:** 11:00 UTC = **13:00 Sofia in winter (EET, UTC+2)**
+  and **14:00 in summer (EEST, UTC+3, from the last Sunday of March)**.
+* **Why that is late enough:** the dispatch is 08:30 UTC in winter and 07:30
+  in summer. A full run took at most 77.0 min (n=38 since 2026-10-22, median
+  37.5, p90 64.8, measured 2026-11-21). So the fallback's earliest start is
+  150 and 210 minutes after the dispatch, about twice the longest run, on
+  both day types.
+* **If they ever overlap:** the fallback would queue and then stop at the
+  gate.
+* **On a day it fires, the card is late.** GitHub lands this workflow 6–7 h
+  after its nominal time, so picks come out around 17:00–18:00 UTC, well
+  after 10:30. **A midday kickoff will be missed.** The safety net's further
+  costs, stated in the tests:
+  * the Friday cutoff reaches into Saturday;
+  * the settlement boundary falls inside a match window;
+  * the morning capture windows find nothing to capture.
+* **Date risk, monitored:** the card's date is the run's UTC date. The
+  largest lateness seen (7h38m) lands 18:38 UTC.
+* **The odds credit guard follows the fallback:** its window opens at the
+  fallback cron, 11:00 → 24:00 UTC. The dispatched run is done before the
+  first capture slot (10:47), which now always proceeds.
+
+**NO COHORT BUMP — the argument, for the operator.** The precedent (s5.15,
+s5.17, s5.19) bumped `CODE_REVISION` on a cron move, because the cron decided
+when prices were taken. The operator's condition was "bump if the cron is a
+tracked key", and it is not: `TRACKED_KEYS` is config only. Measured: weekday
+scheduled starts under `0 1` ran 05:32–08:38 UTC (n=21) and are all pooled in
+`5bca73`. The dispatched start, 08:30 UTC in winter and 07:30 in summer, lies
+INSIDE that envelope, and a bump would split the prospective measurement
+counted on `5bca73` while the selection rule is unchanged. **The fingerprint
+did not move.** If you want the bump anyway, it is one commit with 6b and the
+pins.
+
+### `MARGIN ON DISPATCH`
+
+* **The new inputs:** the margin is now measured from the DISPATCHED run's
+  actual start. Each run's delay after that day's 10:30 local is the series,
+  and the dispatch minute is the start.
+  * Both day types read one pooled series: one scheduler, one time.
+  * A dispatch outside 180 min after 10:30 is a manual run, excluded and
+    counted.
+  * The deadlines are the same local anchors (weekday 12:30, weekend 12:00),
+    and the registered minimum is 60.
+* **The fallback's lateness** is printed for information only.
+* **The old lateness acknowledgement is RETIRED, not re-pinned.** Until a
+  dispatched run exists the audit says "schedule margin UNEVALUATED - no
+  dispatched run measured yet" and alarms. It clears only by measurement.
+  The two states (none yet, and listing unreadable) are one alarm surface,
+  13 in all.
+* **The reader** decides "unreadable" by `gh`'s RETURNCODE, not by empty
+  output. A failed listing never reads as "no dispatch yet".
+
+**What it will read** (driven with an injected 2-minute delay; the delay is
+measured on the first runs):
+* **schedule margin:** weekday +53.4m, which clears; weekend +23.4m, whose
+  6.6m shortfall to 30 is within the 17.69 the mechanism covers;
+* **actionable margin for a weekend with a 13:15 kickoff:** acknowledged
+  against exposure (below).
+
+**THE WEEKEND COST, the OPERATOR'S DECISION, acknowledged against its
+EXPOSURE (a kickoff before picks are ready), never against the margin.**
+Measured 2026-11-21 over all 30 configured leagues, 2024-01-01..2026-11-20,
+local Europe/Sofia, phantom stamps dropped, grain = day: 257 weekend and 529
+weekday days with fixtures. The earliest kickoff ever was 12:00 on a weekend
+and 12:30 on a weekday.
+
+| picks ready (local) | duration term | weekend days exposed | weekday days exposed |
+|---|---|---|---|
+| 11:02 | no-review n=6 max 30.8 (preview, not adoptable) | 0 / 257 | 0 / 529 |
+| 11:36 | `FULL_CARD_PICKS_3SD` 64.59 | **0 / 257** | **0 / 529** |
+| 12:49 | review-era weekend durations, mean+3sd 137.8 | 37 / 257 | 4 / 529 |
+
+(+2.0 min delay in each row.)
+* **ACKNOWLEDGED** while picks are ready before 12:00 local AND before
+  tomorrow's earliest known kickoff.
+* **EXPOSED**, which alarms, from either. That is the cost event.
+* **The weekday must clear on its own.**
+* The 12:49 row is the review-era duration list, which the review's removal
+  retired. It is re-derived from the no-review series at n≥10, about
+  2026-11-26.
+
+**A LATENT DEFECT, FOUND ON THE WAY.** `serial_term_weekday_margin`, shared
+by the weekday-margin reminder and the audit, subtracted lag and duration
+but **not the start minute**.
+* That cost nothing under `0 0`, whose start minute was 0. Under `0 1`, from
+  2026-10-22, it read **60 minutes high**: +56.0 was −4.0. The test and the
+  audit agreed because they shared the omission.
+* Pointed at the dispatch, it would have read about +550m.
+* It now takes the start minute, with a known-wrong control.
+
+**WHY THE CRON-MOVE QUESTION IS CLOSED.** GitHub's lateness under one
+unchanged cron DRIFTS: weekday `0 1`, n=21, 4h32m → 7h38m, least-squares
++5.28 min/day. The retired `0 0` read 4h31m mean in early October. No nominal
+hour fixes a delay that moves, and a dispatch starts in minutes. The
+second-step live reminder (move later if the fast cluster became a regime;
+NOT MET on all three on 2026-11-06) is retired into a non-live record of the
+closure.
+
+### `SAFE TO ENABLE`
+
+**Part B's four controls pass and Part C is pushed: the cron-job.org POST job
+can be enabled.** On the first three dispatched days the report will give:
+* the dispatched time;
+* the measured delay to the first job;
+* whether the fallback stayed silent (`ALREADY_RAN_TODAY`, nothing sent);
+* one card per day.
+
+### Census
+
+Files 161 → 163; capture_critical 84, not_critical 79.
+* **Gate 1855 → 1870**, by node id against `ab8eb99`: 22 added, 7 removed.
+* **Non-gating 1261 → 1277:** 23 added, 7 removed.
+
+Suite: 3155 passed, 2 skipped. One skip is the dispatch reminder's explicit
+UNEVALUATED within its grace to 2026-11-24.
+
+*Recorded 2026-11-21.*
