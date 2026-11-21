@@ -218,7 +218,8 @@ on:
     # runs fire under these crons. That is the honest state and it does not
     # alarm; the conservative reading until then is the slow cluster above.
     # ══════════════════════════════════════════════════════════════════════
-    - cron: '30 0 * * 6,0'  # Sat/Sun 00:30 UTC = 03:30 Sofia summer, 02:30 winter
+    # RETIRED 2026-11-21: `30 0 * * 6,0` (weekend) and `0 1 * * 1-5`
+    # (weekday). Their history stays below, for the record.
     # REVERTED TO 00:00 on 2026-10-18. MEASURED over the weekday series'
     # own n=5 under `0 4`: delays 283/288/316/443/458 min, mean 357.5,
     # sd 85.6, max 458 (7h38m). Against the 12:00 weekday deadline that
@@ -242,7 +243,39 @@ on:
     # attribution stays exercised, and either day type can be moved
     # again without touching the other. The two series are separate
     # populations because they are keyed by DAY TYPE, not by cron.
-    - cron: '0 1 * * 1-5'   # Mon-Fri 01:00 UTC = 04:00 Sofia summer, 03:00 winter
+    # ══════════════════════════════════════════════════════════════════════
+    # STAGE 34, 2026-11-21. THE CARD IS PUBLISHED BY AN EXTERNAL DISPATCH.
+    #
+    # THE OPERATOR'S DECISION: one `workflow_dispatch` at 10:30
+    # Europe/Sofia every day, weekdays and weekends alike, from an external
+    # scheduler whose job timezone is Europe/Sofia (DST handled there). No
+    # cron hour fixes GitHub's lateness because it DRIFTS: weekday `0 1`,
+    # n=21 (2026-10-23..11-20), first-week mean 299 min, last-week 421,
+    # least-squares +5.28 min/day. A dispatch starts in minutes.
+    #
+    # THIS CRON IS A LATE FALLBACK FOR A MISSED DISPATCH, AND NOTHING ELSE.
+    # Its EARLIEST possible start is its nominal time, 11:00 UTC = 13:00
+    # Sofia in winter (EET, UTC+2) and 14:00 in summer (EEST, UTC+3, from
+    # the last Sunday of March). That is AFTER the 10:30 dispatched run has
+    # finished on both day types: the dispatch starts 08:30 UTC (winter) /
+    # 07:30 UTC (summer) and a full daily-picks run took at most 77.0 min
+    # (n=38 runs since 2026-10-22, median 37.5, p90 64.8, `measured`
+    # 2026-11-21), so 150 / 210 minutes is about twice the longest run. If a
+    # dispatched run were still going, this run would queue behind it (the
+    # concurrency group never cancels) and the `once` job would stop it.
+    #
+    # ON A DAY IT FIRES, THE CARD IS LATE. GitHub has been starting this
+    # workflow 6-7 hours after its nominal time, so a fallback card lands
+    # around 17:00-18:00 UTC -- well after 10:30, and a midday kickoff WILL
+    # be missed. It is a safety net against NO card, not a second schedule.
+    # On a day the dispatch ran it stops at the `once` gate and sends nothing.
+    #
+    # DATE RISK, monitored: the card's date is the run's UTC date, so a
+    # fallback landing after 00:00 UTC would serve the NEXT day. At 11:00
+    # plus the largest lateness seen (7h38m) it lands 18:38 UTC; at the
+    # measured drift that leaves weeks, and the audit prints this cron's
+    # lateness every run.
+    - cron: '0 11 * * *'   # every day 11:00 UTC = 13:00 Sofia winter, 14:00 summer
   workflow_dispatch: # Allow manual trigger
 
 # Serialize runs so a manual dispatch can never write to the DB at the same
@@ -253,6 +286,22 @@ concurrency:
 
 jobs:
   daily-picks:
+    # ── ONE RUN PER DAY. Stage 34, 2026-11-21. ────────────────────────────
+    #
+    # The card is published by an external dispatch at 10:30 Europe/Sofia,
+    # with the cron below as a late fallback. The `once` job (defined after
+    # this one, so this stays the workflow's first job) reads `pick_runs`: if
+    # today's card -- or its zero-pick line -- was already produced, this
+    # whole job is SKIPPED, so nothing is fetched, settled, evaluated or sent.
+    #
+    # `!cancelled()`, not the default: a `once` job that FAILED leaves
+    # `already_ran` empty and this job still runs. Fail open -- a lost card
+    # is the larger harm, and `--picks` checks the same table again before
+    # it evaluates anything. Runs never overlap: the concurrency group above
+    # is workflow-level and never cancels, so a second run starts only after
+    # the first has finished and recorded its outcome.
+    needs: once
+    if: ${{ !cancelled() && needs.once.outputs.already_ran != 'true' }}
     runs-on: ubuntu-latest
     # Worst case: 65+15+50+150+60+15 = 355 min. Keep this at or above that sum —
     # GitHub CANCELS the job at the cap rather than failing a step, which loses
@@ -825,3 +874,40 @@ jobs:
       # MEASURED over 2026-09-22..10-22: it fired 11 times in 36 runs
       # (0.37/day), against 1 firing of the loss alert. Eleven status messages
       # bought one report of an actual loss.
+
+  # ── THE ONCE-PER-DAY GATE. Stage 34, 2026-11-21. ──────────────────────────
+  #
+  # Reads `pick_runs` for today's (UTC) date. A COMPLETED day -- PICKS_MADE,
+  # NONE_QUALIFIED or NO_FIXTURES -- writes `already_ran=true`, records
+  # ALREADY_RAN_TODAY and skips the job above. A failed run (INCOMPLETE,
+  # NO_PRICED_FIXTURES, no row) leaves the day open. Minimal install: this
+  # job reads one table and never fetches, trains or sends.
+  once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      already_ran: ${{ steps.once.outputs.already_ran }}
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      BETTING_AGENT_ALLOW_DEFAULT_HMAC: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        # Same bound as the other minimal workflows: SQLAlchemy 2.1 resolves a
+        # bare `postgresql://` URL to psycopg v3, which is not installed.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -c constraints.txt "sqlalchemy>=2.0.0,<2.1" psycopg2-binary pyyaml python-dotenv loguru
+      - name: Create config from example
+        run: |
+          mkdir -p data/models logs
+          cp config/config.example.yaml config/config.yaml
+      - name: Has today's card already been produced?
+        id: once
+        run: python -m scripts.once_per_day

@@ -5064,6 +5064,36 @@ async def main():
                 print("--shard and --collect are mutually exclusive")
                 return
 
+            # ── ONE RUN PER DAY, CHECKED IN THE RUN TOO. Stage 34. ─────────
+            #
+            # The workflow's `once` job stops a second run before it starts.
+            # This is the second line: any `--picks` that reaches here on a
+            # day already COMPLETED -- a manual run, a gate that failed open
+            # -- records ALREADY_RAN_TODAY and sends nothing. `--force` does
+            # NOT override it: `--force` regenerates over saved picks, it is
+            # not licence for a second card. Re-sending the SAME card is
+            # `--resend`. Shards are exempt: they never send.
+            if not _shard:
+                from src.data import pick_runs as _pr_once
+                _done = _pr_once.completed_today(agent.db, date.today())
+                if _done:
+                    try:
+                        from src.models.model_version import \
+                            model_version as _mv_once
+                        _v_once = _mv_once(agent.config)
+                    except Exception:                 # noqa: BLE001
+                        _v_once = ""
+                    _pr_once.record_already_ran(
+                        agent.db, pick_date=date.today(),
+                        selection_mode=str(agent.config.get(
+                            "betting.selection_mode", None) or "standard"),
+                        done=_done, model_version=_v_once)
+                    print(f"ALREADY RAN TODAY: {date.today()} was completed "
+                          f"by an earlier run ({_done['outcome']}, recorded "
+                          f"{_done['recorded_at']}). This run evaluates "
+                          f"nothing and sends nothing.")
+                    return
+
             if _collect_dir:
                 from src.betting import candidate_io
                 files = candidate_io.discover(_collect_dir)

@@ -259,14 +259,19 @@ def test_the_FULL_alarm_surface_is_enumerated_here():
         f"{sum(1 for l in appends if '_keyed.append((' in l)} keyed alarm "
         f"sites, expected 1 (the schedule margin). A new keyed finding needs "
         f"a row in KNOWN_FINDINGS and a line here.")
-    assert len(appends) == 12, (
+    # 12 -> 13 on 2026-11-21 (Stage 34): the schedule margin is measured from
+    # the DISPATCHED run's start, and with no dispatched run measured -- or
+    # the runs unreadable -- it is UNEVALUATED and alarms, one site for both
+    # states. It clears only by measurement.
+    assert len(appends) == 13, (
         f"the alarm surface changed: {len(appends)} append sites, expected "
-        f"12 (pattern self-test, workflow state, red UNCLASSIFIABLE, run "
+        f"13 (pattern self-test, workflow state, red UNCLASSIFIABLE, run "
         f"verdict, model "
         f"integrity failure, model signature missing, scheduled run never "
         f"existed, UNTRIAGED DIAGNOSED FINDING, unparseable workflow on "
         f"main, actionable margin for tomorrow, structural margin "
-        f"deterioration, schedule margin). Sites: " + repr(appends))
+        f"deterioration, schedule margin, dispatch margin UNEVALUATED). "
+        f"Sites: " + repr(appends))
 
 
 def test_the_NINTH_surface_is_an_UNTRIAGED_finding_NOT_the_backlog_count():

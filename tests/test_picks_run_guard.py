@@ -59,24 +59,26 @@ DAY = datetime(2026, 9, 17)
 
 
 def _seed(mgr, *, leagues_with_unpicked=(), leagues_all_picked=(), picks_today=0):
+    # Kickoff 23:45: still in the FUTURE at every capture slot in the
+    # Stage 34 window [11:00, 24:00] (it was 20:00, past by 21:17).
     with mgr.get_session() as s:
         s.add_all([Team(id=1, name="A"), Team(id=2, name="B")])
         s.commit()
         mid = 100
         for lg in leagues_with_unpicked:
             s.add(Match(id=mid, league=lg, home_team_id=1, away_team_id=2,
-                        match_date=DAY + timedelta(hours=20)))
+                        match_date=DAY + timedelta(hours=23, minutes=45)))
             mid += 1
         for lg in leagues_all_picked:
             s.add(Match(id=mid, league=lg, home_team_id=1, away_team_id=2,
-                        match_date=DAY + timedelta(hours=20)))
+                        match_date=DAY + timedelta(hours=23, minutes=45)))
             s.flush()
             s.add(SavedPick(match_id=mid,
                             pick_date=(DAY - timedelta(days=3)).date()))
             mid += 1
         for i in range(picks_today):
             s.add(Match(id=900 + i, league="other/x", home_team_id=1, away_team_id=2,
-                        match_date=DAY + timedelta(hours=20)))
+                        match_date=DAY + timedelta(hours=23, minutes=45)))
             s.flush()
             s.add(SavedPick(match_id=900 + i, pick_date=DAY.date()))
         s.commit()
@@ -92,10 +94,15 @@ def _seed(mgr, *, leagues_with_unpicked=(), leagues_all_picked=(), picks_today=0
 CAPTURE_SLOTS = [(10, 47), (11, 17), (13, 17), (15, 17),
                  (17, 17), (19, 17), (21, 17), (23, 17)]
 
-#: The slots INSIDE the window under the new crons (weekend `30 0`, weekday
-#: `0 1` -> window [00:30, 13:30]), and those outside it.
-SLOTS_EXPOSED = [(10, 47), (11, 17), (13, 17)]
-SLOTS_PROTECTED = [(15, 17), (17, 17), (19, 17), (21, 17), (23, 17)]
+#: The slots INSIDE the window and those outside it. STAGE 34 (2026-11-21):
+#: the card is published by a 10:30 Europe/Sofia dispatch (07:30/08:30 UTC)
+#: that is DONE before 10:47, and the window now opens at the FALLBACK cron,
+#: 11:00 UTC, for 13 hours. Inside it the guard can decline only on a day
+#: whose run has NOT completed -- a missed dispatch, when no pick exists to
+#: capture yet; a completed day (zero-pick included) stands it down.
+SLOTS_EXPOSED = [(11, 17), (13, 17), (15, 17), (17, 17), (19, 17), (21, 17),
+                 (23, 17)]
+SLOTS_PROTECTED = [(10, 47)]
 
 
 def test_the_SLOT_ENUMERATION_matches_the_closing_lines_crons():
@@ -127,10 +134,11 @@ def test_CONTROL_a_slot_OUTSIDE_the_window_NEVER_declines(tmp_path, hour, minute
     The time bound is checked FIRST, so no database state can reproduce it.
 
     RE-POINTED 2026-10-22: the slots were `[21, 23, 1, 2]` at :17, and 01:17
-    and 02:17 are hours at which no capture runs. Under the new crons the
-    window is [00:30, 13:30], so the protected set is the five slots from
-    15:17 -- one MORE than under the stale [03:00, 16:00] window, which left
-    15:17 exposed.
+    and 02:17 are hours at which no capture runs.
+
+    RE-POINTED 2026-11-21 (Stage 34): the window is [11:00, 24:00], so the
+    one slot outside it is 10:47 -- after the dispatched run has finished and
+    before the fallback can start.
     """
     mgr = _mgr(tmp_path)
     _seed(mgr, leagues_with_unpicked=("england/premier-league",))
@@ -156,17 +164,19 @@ def test_CONTROL_a_slot_INSIDE_the_window_DOES_decline(tmp_path, hour, minute):
         f"an unpicked fixture, and the guard stood down")
 
 
-def test_the_MOVE_PROTECTS_MORE_SLOTS_THAN_IT_EXPOSES():
-    """The cost of the cron move, measured rather than feared.
+def test_the_STAGE_34_MOVE_widens_the_window_and_a_COMPLETED_day_closes_it():
+    """The cost of the move, measured rather than feared.
 
-    `measured` 2026-10-22: 4 of the 8 slots could decline under the stale
-    [03:00, 16:00] window and 3 can under [00:30, 13:30]. The early edge
-    gains nothing because the FIRST capture slot is 10:47 -- there is no slot
-    between 00:30 and 03:00 to expose -- and the late edge loses 15:17.
+    The window moves [00:30, 13:30] -> [11:00, 24:00]: 3 slots could decline
+    before, 7 can now -- BUT ONLY ON A DAY WHOSE RUN HAS NOT COMPLETED. The
+    dispatched run completes before 10:47, so on a normal day the guard
+    stands down before the first slot; it bites only on a missed-dispatch
+    day, when no pick exists to capture yet. The old 2026-09 failure was a
+    guard that declined on a COMPLETED day; that is what is refused here.
     """
     import src.scrapers.theodds_scraper as ts
     width = ts._PICKS_EXPOSURE_WINDOW_MINUTES
-    old_start, new_start = 3 * 60, ts._PICKS_CRON_MINUTE_OF_DAY
+    old_start, new_start = 30, ts._PICKS_CRON_MINUTE_OF_DAY
 
     def inside(start, hm):
         m = hm[0] * 60 + hm[1]
@@ -174,14 +184,28 @@ def test_the_MOVE_PROTECTS_MORE_SLOTS_THAN_IT_EXPOSES():
 
     old = [s for s in CAPTURE_SLOTS if inside(old_start, s)]
     new = [s for s in CAPTURE_SLOTS if inside(new_start, s)]
-    assert len(old) == 4 and len(new) == 3, (old, new)
-    newly_exposed = [s for s in new if s not in old]
-    newly_protected = [s for s in old if s not in new]
-    assert newly_exposed == [], (
-        f"the move exposed {newly_exposed}; over-declining is the failure "
-        f"that took captures to zero in 2026-09")
-    assert newly_protected == [(15, 17)], newly_protected
+    assert len(old) == 3 and len(new) == 7, (old, new)
     assert sorted(new) == sorted(SLOTS_EXPOSED)
+
+
+@pytest.mark.parametrize("outcome", ["PICKS_MADE", "NONE_QUALIFIED"])
+def test_a_COMPLETED_day_declines_NO_slot_zero_pick_day_included(tmp_path,
+                                                                outcome):
+    """THE IMPROVEMENT. A zero-pick day saves no pick, so the old guard read
+    it as "run still pending" all afternoon. `pick_runs` says the day is
+    completed; every slot proceeds."""
+    from src.data import pick_runs as pr
+    mgr = _mgr(tmp_path)
+    _seed(mgr, leagues_with_unpicked=("england/premier-league",))
+    pr.record(mgr, pick_date=DAY.date(), selection_mode="confident_value",
+              outcome=outcome, fixtures_on_slate=5, fixtures_evaluated=5,
+              analysis_errors=0, picks_saved=0)
+    for hour, minute in CAPTURE_SLOTS:
+        got = _scraper(mgr)._leagues_a_pending_run_could_price(
+            ["england/premier-league"], DAY.replace(hour=hour, minute=minute))
+        assert got == {}, (
+            f"declined at {hour:02d}:{minute:02d} on a day already COMPLETED "
+            f"({outcome}) -- the 2026-09 failure shape")
 
 
 def test_the_WINDOW_START_is_TIED_to_the_CRON_and_cannot_diverge():
@@ -200,17 +224,19 @@ def test_the_WINDOW_START_is_TIED_to_the_CRON_and_cannot_diverge():
         f"opens AFTER the cron leaves the run unprotected at the start of "
         f"its own schedule.")
     # and the width must still cover the latest a run can be pending:
-    # cron + max observed delay + p90 duration
-    assert ts._PICKS_EXPOSURE_WINDOW_MINUTES >= 342.3 + 106, (
+    # the fallback cron + its largest observed lateness + the longest
+    # full run. Stage 34, `measured` 2026-11-21: lateness max 458.8 min
+    # (weekday 0 1, 11-17), full run max 77.0 min (n=38).
+    assert ts._PICKS_EXPOSURE_WINDOW_MINUTES >= 458.8 + 77.0, (
         "the window no longer reaches the latest a picks run can be pending "
-        "(max observed delay 342.3 + p90 duration 106)")
+        "(max observed lateness 458.8 + longest run 77.0)")
 
 
 def test_inside_the_window_with_a_pending_run_it_DOES_decline(tmp_path):
     mgr = _mgr(tmp_path)
     _seed(mgr, leagues_with_unpicked=("england/premier-league",))
     got = _scraper(mgr)._leagues_a_pending_run_could_price(
-        ["england/premier-league"], DAY.replace(hour=10, minute=47))
+        ["england/premier-league"], DAY.replace(hour=11, minute=17))
     assert set(got) == {"england/premier-league"}
     assert "unpicked" in got["england/premier-league"]
 
@@ -226,7 +252,7 @@ def test_once_the_run_has_written_a_pick_nothing_declines(tmp_path):
     mgr = _mgr(tmp_path)
     _seed(mgr, leagues_with_unpicked=("england/premier-league",), picks_today=1)
     got = _scraper(mgr)._leagues_a_pending_run_could_price(
-        ["england/premier-league"], DAY.replace(hour=10, minute=47))
+        ["england/premier-league"], DAY.replace(hour=11, minute=17))
     assert got == {}, (
         "declined after today's run had already written picks — the exposure "
         "is to a PENDING run, and this one has produced output")
@@ -246,7 +272,7 @@ def test_a_league_whose_fixtures_are_all_PICKED_is_not_declined(tmp_path):
           leagues_all_picked=("spain/laliga",))
     got = _scraper(mgr)._leagues_a_pending_run_could_price(
         ["england/premier-league", "spain/laliga"],
-        DAY.replace(hour=10, minute=47))
+        DAY.replace(hour=11, minute=17))
     assert set(got) == {"england/premier-league"}, (
         f"expected only the league with unpicked fixtures to decline, got "
         f"{sorted(got)} — this is the per-league half of the redesign")

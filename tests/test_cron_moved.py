@@ -69,9 +69,14 @@ def local(m, day):
 
 # ── the cron itself ───────────────────────────────────────────────────────
 
-def test_the_CRONS_ARE_WHAT_WAS_DERIVED():
-    crons = ci.current_crons_by_daytype()
-    assert crons == EXPECTED_CRON, crons
+def test_the_S519_CRONS_are_RETIRED_and_the_live_cron_is_the_FALLBACK():
+    """`EXPECTED_CRON` is the s5.19 DERIVATION, kept as the record the tests
+    below re-derive. RETIRED 2026-11-21 (Stage 34): the card is published
+    by an external dispatch at 10:30 Europe/Sofia and the workflow's cron
+    is one late fallback, `0 11 * * *`, on every day."""
+    assert EXPECTED_CRON == {"weekday": 60, "weekend": 30}
+    assert ci.current_crons_by_daytype() == {"weekday": 660,
+                                             "weekend": 660}
 
 
 def test_the_CRON_is_the_LATEST_that_clears_60_on_BOTH_pairings():
@@ -330,71 +335,23 @@ SECOND_STEP_WAS = dt.date(2026, 11, 4)
 SECOND_STEP_NOW = dt.date(2026, 11, 6)
 
 
-@pytest.mark.live
-def test_the_SERIES_RESET_is_recorded_as_a_COST_with_the_new_date():
-    """A series reset is a cost of the change that caused it. The second step
-    slips two days, and it is attributed here rather than discovered later."""
+def test_the_SECOND_STEP_question_is_CLOSED_by_the_DISPATCH():
+    """WAS A LIVE REMINDER (`test_the_SERIES_RESET_is_recorded_as_a_COST_
+    with_the_new_date`), RETIRED 2026-11-21, Stage 34.
+
+    It held the "second step": could the cron move later if the fast
+    cluster became a regime. Evaluated 2026-11-06 -- NOT MET on all three
+    criteria (n=11 weekday lags under `0 1`: max 389.75 against 200,
+    gap ratio 91.76 against 8, mean+3sd 463.77 against 156.2). Since
+    then the lateness DRIFTED further (n=21 to 2026-11-20, +5.28
+    min/day), and the operator replaced the question: the card is
+    published by an external dispatch at 10:30 Europe/Sofia, so no cron
+    hour decides the publication time any more. Closed, not deferred."""
     assert SECOND_STEP_NOW > SECOND_STEP_WAS
     assert (SECOND_STEP_NOW - SECOND_STEP_WAS).days == 2
-    # the delay series IS empty under the new cron, which is the reset
-    by_type, crons = ci.collect_lag_series_by_daytype()
-    assert crons == EXPECTED_CRON
-    # ── IT FIRES WHEN THE CONDITION BECOMES EVALUABLE, NOT TOMORROW. ──────
-    #
-    # The first draft asserted the series was still EMPTY, which would have
-    # failed on the first scheduled run under the new cron -- i.e. a reminder
-    # on 2026-10-23, reporting something already known and recorded. This is
-    # a `live` test in the reminders selection, so its failure IS a due
-    # decision; the decision is due when n reaches the 10 the second-step
-    # condition needs, which is the projected 2026-11-06.
-    # ── THE CONDITION WAS EVALUATED ON 2026-11-06 AND IT FAILED. ──────────
-    #
-    # The reminder above fired as designed when n reached 10, and it offered
-    # two clearing actions: take the second step, or RECORD THAT THE SLOW
-    # CLUSTER STILL GOVERNS. The second one is a measurement, so it was
-    # taken rather than deferred.
-    #
-    # `measured` 2026-11-06, grain=RUN, n=11 weekday lags under `0 1`:
-    #   272.3 272.9 287.3 325.5 336.0 336.4 357.4 363.8 381.8 388.8 389.8
-    #
-    #   criterion              required    measured   verdict
-    #   no point above            200.0      389.75   NOT MET  (by 189.75)
-    #   gap ratio below             8.0       91.76   NOT MET  (11x over)
-    #   mean+3sd at most          156.2      463.77   NOT MET  (3.0x over)
-    #
-    # FAILED ON ALL THREE, and not marginally. The slow cluster governs and
-    # the second step is NOT taken. That is recorded here rather than in a
-    # comment elsewhere, because the assertion below is what stops the
-    # reminder firing again every day for a decision already taken.
-    #
-    # WHAT WOULD RE-OPEN IT: the series becoming fast enough to meet the
-    # condition. The assertion is therefore on the CONDITION, not on n -- so
-    # it fires again if the lateness genuinely improves, which is the only
-    # event that should re-open the question.
-    SECOND_STEP_EVALUATED = {
-        "on": "2026-11-06", "n": 11, "verdict": "NOT MET on all three",
-        "max": 389.75, "gap_ratio": 91.76, "mean_plus_3sd": 463.77,
-    }
-    import statistics
-    lag = [l for _d, l in (by_type.get("weekday") or [])]
-    n = len(lag)
-    assert n >= SECOND_STEP_CONDITION["n_min"], (
-        f"the weekday series fell to n={n}, below the "
-        f"{SECOND_STEP_CONDITION['n_min']} the condition needs. A series that "
-        f"SHRANK is a different event from one that never filled -- say which")
-    worst = max(lag)
-    m3 = statistics.mean(lag) + 3 * statistics.pstdev(lag)
-    assert (worst > SECOND_STEP_CONDITION["no_point_above"]
-            or m3 > SECOND_STEP_CONDITION["mean_plus_3sd_at_most"]), (
-        f"the second-step condition now PASSES on the level criteria "
-        f"(max {worst:.2f} vs {SECOND_STEP_CONDITION['no_point_above']}, "
-        f"mean+3sd {m3:.2f} vs "
-        f"{SECOND_STEP_CONDITION['mean_plus_3sd_at_most']}). The lateness "
-        f"has genuinely improved since it was evaluated at "
-        f"{SECOND_STEP_EVALUATED['on']} "
-        f"(max {SECOND_STEP_EVALUATED['max']}, mean+3sd "
-        f"{SECOND_STEP_EVALUATED['mean_plus_3sd']}): RE-EVALUATE the second "
-        f"step, which is now a live option rather than a closed one.")
+    from scripts.schedule_deadline import DISPATCH_LOCAL_MIN, DISPATCH_SINCE
+    assert DISPATCH_LOCAL_MIN == 10 * 60 + 30
+    assert str(DISPATCH_SINCE) == "2026-11-21"
 
 
 def test_BOTH_SERIES_are_RETAINED_and_LABELLED_BY_CRON_never_pooled():

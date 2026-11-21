@@ -76,10 +76,19 @@ def test_the_cron_is_SPLIT_BY_DAY_OF_WEEK():
     # were re-derived, against localised per-day floors and per-CLUSTER
     # spreads. The weekend moved too, which the previous entry had left
     # untouched -- localising the anchors inverted which floor is earlier.
-    assert _crons(_wf()) == ["30 0 * * 6,0", "0 1 * * 1-5"], (
-        "the daily-picks crons moved. That changes when prices are taken, "
-        "which is selection-affecting by the s5.2 precedent - bump "
-        "CODE_REVISION and re-derive BOTH margins before changing this")
+    # STAGE 34 (2026-11-21): ONE FALLBACK CRON, AND NO BUMP -- STATED.
+    # The card is published by an external dispatch at 10:30 Europe/Sofia;
+    # this cron is a late fallback for a missed dispatch. The s5.2/s5.15
+    # precedent bumped on a cron move because the cron decided when prices
+    # were taken. Here the operator's condition was "bump if the cron is a
+    # tracked key" -- it is not -- and the dispatched start (08:30 UTC in
+    # winter, 07:30 in summer) lies INSIDE the start envelope cohort
+    # 5bca73 already pooled under `0 1` (05:32-08:38 UTC, n=21). Recorded
+    # in the ledger for the operator; the margins are re-derived on the
+    # dispatched start in scripts/ci_audit.py.
+    assert _crons(_wf()) == ["0 11 * * *"], (
+        "the daily-picks cron moved. It is the FALLBACK; re-check that its "
+        "earliest start is still after the 10:30 dispatched run")
 
 
 def test_the_cron_clears_the_measured_deadline_on_BOTH_worst_cases():

@@ -650,7 +650,9 @@ def test_the_PROBE_RUNS_BEFORE_the_producer_of_its_verification_data():
                 out.append((int(parts[1]) * 60 + int(parts[0]), parts[4]))
         return [m for m, dow in out if pick(dow)]
 
-    weekday_min = _mins(picks_wf, lambda d: d == "1-5")
+    # Stage 34 (2026-11-21): one fallback cron on every day (`*`), which
+    # covers the weekdays too.
+    weekday_min = _mins(picks_wf, lambda d: d in ("1-5", "*"))
     assert weekday_min, (
         "the weekday scrape lost its cron, so the ordering is unmeasurable "
         "rather than fine -- the third state, again")

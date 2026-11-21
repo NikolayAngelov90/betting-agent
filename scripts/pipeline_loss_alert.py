@@ -103,6 +103,11 @@ STATES = (STATE_PICKS_MADE, STATE_NONE_QUALIFIED, STATE_PIPELINE_FAILED)
 #: nothing". Kept equal to `src.data.pick_runs.EVALUATED_EMPTY` by a test;
 #: literal here so this script imports nothing from `src` at load.
 EVALUATED_EMPTY = ("NONE_QUALIFIED", "NO_FIXTURES")
+#: Rows that describe a RUN, not the DAY (Stage 34: a run that found the day
+#: already done and stopped). Kept equal to
+#: `src.data.pick_runs.NOT_A_DAY_OUTCOME` by a test; skipped when the latest
+#: row per day is taken as the day's outcome.
+NOT_A_DAY_OUTCOME = ("ALREADY_RAN_TODAY",)
 
 
 def day_state(r: DayLoss) -> str:
@@ -353,6 +358,8 @@ def _read_days(s, days: int, today: _dt.date
                     "FROM pick_runs WHERE pick_date >= :a "
                     "ORDER BY recorded_at"),
                     {"a": (today - _dt.timedelta(days=days)).isoformat()}):
+                if oc in NOT_A_DAY_OUTCOME:
+                    continue
                 key = d_ if isinstance(d_, _dt.date) else \
                     _dt.date.fromisoformat(str(d_)[:10])
                 outcomes[key] = (oc, fe)

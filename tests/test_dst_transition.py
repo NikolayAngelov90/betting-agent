@@ -183,7 +183,11 @@ def test_the_IN_TZ_helpers_were_ALREADY_DERIVING_and_still_are(module):
 
 #: `measured` 2026-10-22 from `.github/workflows/daily-picks.yml`, AFTER the
 #: `s5.19` move. They were both 0 when this test was written that morning.
-CRONS_UTC = {"weekend": 30, "weekday": 60}
+#: STAGE 34 (2026-11-21): one fallback cron on every day, 11:00 UTC
+#: (13:00 Sofia in winter, 14:00 in summer). The PUBLICATION is the
+#: 10:30 LOCAL dispatch, whose job runs in Europe/Sofia, so it does NOT
+#: shift with DST -- its UTC minute does instead.
+CRONS_UTC = {"weekend": 660, "weekday": 660}
 
 
 def test_the_CRONS_DO_NOT_MOVE_but_their_LOCAL_MEANING_SHIFTS_an_hour():
@@ -199,8 +203,13 @@ def test_the_CRONS_DO_NOT_MOVE_but_their_LOCAL_MEANING_SHIFTS_an_hour():
     found = {}
     for minute, hour, dow in re.findall(
             r"- cron: '(\d+) (\d+) \* \* ([^']+)'", wf):
-        key = "weekend" if ("6" in dow or "0" in dow.split(",")) else "weekday"
-        found[key] = int(hour) * 60 + int(minute)
+        if dow.strip() == "*":
+            keys = ("weekend", "weekday")      # one cron, every day
+        else:
+            keys = (("weekend",) if ("6" in dow or "0" in dow.split(","))
+                    else ("weekday",))
+        for key in keys:
+            found[key] = int(hour) * 60 + int(minute)
     assert found == CRONS_UTC, (
         f"the crons are {found}; re-derive the local meanings below before "
         f"trusting them")

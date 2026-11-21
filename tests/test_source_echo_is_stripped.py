@@ -346,13 +346,14 @@ def test_the_CRON_PARSE_is_anchored_so_a_COMMENTED_cron_cannot_match():
     assert "`0 2`" in wf, (
         "the rejected cron is no longer documented there, so this control "
         "no longer exercises the risk it was written for")
-    poisoned = wf.replace("    - cron: '0 1 * * 1-5'",
+    # Stage 34 (2026-11-21): the live cron is the 11:00 UTC fallback.
+    poisoned = wf.replace("    - cron: '0 11 * * *'",
                           "    # - cron: '0 2 * * 1-5'\n"
-                          "    - cron: '0 1 * * 1-5'")
+                          "    - cron: '0 11 * * *'")
     found = re.findall(r"^\s*- cron:\s*'([^']+)'", poisoned, re.M)
     assert "0 2 * * 1-5" not in found, (
         f"a commented-out cron parsed as live: {found}")
-    assert "0 1 * * 1-5" in found and "30 0 * * 6,0" in found, found
+    assert found == ["0 11 * * *"], found
 
 
 @pytest.mark.live

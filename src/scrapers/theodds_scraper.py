@@ -191,8 +191,23 @@ def _persist_credits(remaining: int) -> None:
 #: workflow YAML at runtime -- but `test_picks_run_guard` now asserts it
 #: equals the EARLIER of the two `daily-picks` crons, so it cannot diverge
 #: again without a test failing.
-_PICKS_CRON_MINUTE_OF_DAY = 30                    # 00:30 UTC, the earlier cron
-_PICKS_EXPOSURE_WINDOW_MINUTES = 13 * 60          # 00:30 -> 13:30 UTC
+#:
+#: ── STAGE 34 (2026-11-21): THE CARD IS DISPATCHED; THE CRON IS A FALLBACK. ──
+#:
+#: The card is now published by an external dispatch at 10:30 Europe/Sofia
+#: (07:30 UTC summer, 08:30 UTC winter); a full run took at most 77.0 min
+#: (n=38, `measured` 2026-11-21), so the dispatched run is DONE before the
+#: first capture slot at 10:47 and no capture competes with it. The run this
+#: window must protect is the FALLBACK, whose earliest start is its nominal
+#: 11:00 UTC and which GitHub has been landing 6-7 hours late. So the window
+#: opens at the fallback cron and its 13 hours cover 11:00 -> 24:00 UTC.
+#:   * On a dispatch day picks exist by ~10:00 and the guard stands down the
+#:     moment any pick exists -- no capture is declined.
+#:   * On a missed-dispatch day no picks exist until the late fallback card,
+#:     so a declined capture costs nothing: there is no pick to capture yet.
+#:   * The 10:47 slot is now outside the window and always proceeds.
+_PICKS_CRON_MINUTE_OF_DAY = 660                   # 11:00 UTC, the fallback cron
+_PICKS_EXPOSURE_WINDOW_MINUTES = 13 * 60          # 11:00 -> 24:00 UTC
 
 
 def _picks_run_may_be_pending(now) -> bool:
@@ -1525,6 +1540,14 @@ class TheOddsScraper:
                     SavedPick.pick_date == now.date()).scalar() or 0
                 if produced:
                     return {}
+            # STAGE 34: the day's run RECORDED its conclusion -- including a
+            # zero-pick day, which saves no pick and used to keep this guard
+            # declining all afternoon. No run is pending once the day is
+            # completed, whichever run (dispatch or fallback) completed it.
+            from src.data import pick_runs as _pr
+            if _pr.completed_today(self.db, now.date()):
+                return {}
+            with self.db.get_session() as session:
                 # 3. PER LEAGUE: does it still hold a fixture this run would
                 #    price — future kickoff, no pick on it yet?
                 rows = session.query(Match.league, func.count(Match.id)).filter(

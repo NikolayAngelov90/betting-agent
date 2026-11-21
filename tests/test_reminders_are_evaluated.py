@@ -61,8 +61,11 @@ REMINDERS = {
     "tests/test_calendar_separation.py": [
         "test_the_H1_RESERVATION_WINDOW_EXPIRES",
         "test_the_H1_RESERVATION_SUCCESSOR_CONTRACT_HOLDS"],
+    # RE-POINTED 2026-11-21 (Stage 34): the weekday margin is read from the
+    # DISPATCHED runs, and the reminder now also fails if the external
+    # dispatch stops dispatching (after a dated grace).
     "tests/test_cron_split_by_daytype.py": [
-        "test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED"],
+        "test_the_DISPATCH_is_RUNNING_and_the_weekday_margin_CLEARS_or_is_ACKNOWLEDGED"],
     "tests/test_empty_card_suppression.py": [
         "test_the_suppression_has_EXPIRED"],
     "tests/test_fixture_horizon_probe.py": [
@@ -85,8 +88,11 @@ REMINDERS = {
         # the serial one. Both this entry and the marker scan FAILED on
         # the rename before being updated, which is how a name-keyed
         # registry is shown not to be vacuous.
-        "test_the_PARALLEL_bound_WAS_RE_DERIVED_and_the_RECORD_WAS_NOT",
-        "test_the_SERIES_RESET_is_recorded_as_a_COST_with_the_new_date"],
+        "test_the_PARALLEL_bound_WAS_RE_DERIVED_and_the_RECORD_WAS_NOT"],
+        # `test_the_SERIES_RESET_is_recorded_as_a_COST_with_the_new_date`
+        # RETIRED 2026-11-21 (Stage 34): the cron-move second step it held
+        # is CLOSED -- the card is dispatched at 10:30 local -- and its
+        # successor is a non-live record of that closure.
     # ── 9 -> 10 ON 2026-10-23, THE SECOND TIME IN TWO DAYS. ──────────────
     #
     # Adding a `live` test without raising the floor re-opens the masking

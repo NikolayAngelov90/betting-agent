@@ -133,6 +133,131 @@ def observed_earliest_min(day_type: str, day) -> int:
     return OBSERVED_EARLIEST_LOCAL_MIN[day_type] - operator_offset_min(day)
 
 
+# ── THE PUBLICATION TIME IS AN EXTERNAL DISPATCH. Stage 34, 2026-11-21. ──────
+#
+# THE OPERATOR'S DECISION: one `workflow_dispatch` at 10:30 Europe/Sofia every
+# day, weekdays and weekends alike, sent by an external scheduler whose job
+# timezone is Europe/Sofia (so DST is handled there, not here). The cron in
+# `daily-picks.yml` is now a LATE FALLBACK for a missed dispatch only.
+#
+# WHY NOT ANOTHER CRON HOUR. GitHub's scheduler lateness under the cron
+# DRIFTS: weekday `0 1`, n=21 (2026-10-23..11-20), first-week mean 299 min,
+# last-week 421, least-squares +5.28 min/day. No nominal hour fixes a delay
+# that moves; a dispatch starts in minutes. The cron-move question is closed.
+#
+# THE MARGIN IS MEASURED FROM THE DISPATCHED RUN'S ACTUAL START: the delay of
+# each dispatched run after 10:30 local is the series, exactly as the cron's
+# lateness was, and the deadlines are the same local anchors.
+DISPATCH_LOCAL_MIN = 10 * 60 + 30
+DISPATCH_SINCE = _dt.date(2026, 11, 21)
+#: A `workflow_dispatch` created within this many minutes AFTER 10:30 local
+#: is THE dispatch; any other is a manual run, excluded and counted.
+DISPATCH_WINDOW_MIN = 180
+
+
+#: THE WEEKEND COST OF 10:30, MEASURED, AND WHAT IT IS ACKNOWLEDGED AGAINST.
+#:
+#: At 10:30 the weekend margin to the 12:00 local anchor is below the
+#: registered 60 minutes (90 minutes, less the duration term and the
+#: dispatch delay). That is THE OPERATOR'S DECISION -- one dispatch time for
+#: every day -- and its COST is not the margin: it is the days on which a
+#: kickoff falls BEFORE PICKS ARE READY. `measured` 2026-11-21, population =
+#: every fixture in the 30 configured leagues, 2024-01-01..2026-11-20, local
+#: Europe/Sofia, phantom ingestion stamps and pre-06:00 placeholders dropped,
+#: grain = day, earliest kickoff per day:
+#:
+#:   picks ready (local)  duration term                    weekend   weekday
+#:   11:02                no-review n=6 max 30.8 (PREVIEW)  0 / 257   0 / 529
+#:   11:36                FULL_CARD_PICKS_3SD 64.59         0 / 257   0 / 529
+#:   12:49                review-era weekend runs 137.8      37 / 257  4 / 529
+#:
+#: (+2.0 min delay in each row.) The earliest weekend kickoff ever seen is
+#: 12:00, so while picks are ready before 12:00 the exposure is ZERO BY
+#: CONSTRUCTION, whatever the margin reads. The 12:49 row is the review-era
+#: duration list, which the review's removal retired; it is re-derived from
+#: the no-review series at n>=10.
+DISPATCH_EXPOSURE_MEASURED = {
+    "measured": "2026-11-21",
+    "population": "30 configured leagues, 2024-01-01..2026-11-20, "
+                  "local Europe/Sofia, phantom stamps dropped, grain=day",
+    "days": {"weekend": 257, "weekday": 529},
+    "earliest_local": {"weekend": "12:00", "weekday": "12:30"},
+    "exposed_at_audit_term": {"weekend": 0, "weekday": 0},
+    "exposed_at_review_era_weekend_term": {"ready_local": "12:49",
+                                           "weekend": 37, "weekday": 4},
+}
+
+
+def dispatch_exposure_ack(day, delay_max: Optional[float],
+                          duration_min: float,
+                          ref_min_utc: Optional[int] = None) -> dict:
+    """The weekend's below-60 margin under the 10:30 dispatch, acknowledged
+    against its EXPOSURE, never against the margin. Pure.
+
+    ACKNOWLEDGED  a weekend day, a measured dispatch delay, and picks ready
+                  (10:30 + delay + duration term) BEFORE both the earliest
+                  weekend kickoff ever observed (12:00 local) and, when the
+                  reference supplied one, tomorrow's earliest known kickoff:
+                  no kickoff falls before picks are ready.
+    EXPOSED       picks ready at or after either: a kickoff can fall before
+                  picks are ready. This is the cost event, and it alarms.
+    NOT_APPLICABLE a weekday (it must clear on its own), or no measured delay.
+    """
+    if day_type(day) != "weekend":
+        return {"state": "NOT_APPLICABLE",
+                "why": "a weekday: the 10:30 margin must clear on its own"}
+    if delay_max is None:
+        return {"state": "NOT_APPLICABLE",
+                "why": "no dispatched run measured yet: the margin itself is "
+                       "UNEVALUATED"}
+    ready = DISPATCH_LOCAL_MIN + float(delay_max) + float(duration_min)
+    floor = OBSERVED_EARLIEST_LOCAL_MIN["weekend"]
+    ref_local = (None if ref_min_utc is None
+                 else int(ref_min_utc) + operator_offset_min(day))
+    hm = lambda m: f"{int(m) // 60:02d}:{int(m) % 60:02d}"
+    m = DISPATCH_EXPOSURE_MEASURED
+    if ready >= floor or (ref_local is not None and ready >= ref_local):
+        return {"state": "EXPOSED", "ready_local": ready,
+                "why": (f"picks ready {hm(ready)} local (10:30 + delay "
+                        f"{delay_max:.1f} + duration {duration_min:.2f}) is "
+                        f"not before the earliest kickoff "
+                        f"({hm(floor)} ever, "
+                        + (hm(ref_local) if ref_local is not None else "n/a")
+                        + " tomorrow): a kickoff can fall before picks are "
+                        "ready")}
+    return {"state": "ACKNOWLEDGED", "ready_local": ready,
+            "why": (f"picks ready {hm(ready)} local, before the earliest "
+                    f"weekend kickoff ever observed ({hm(floor)}) and before "
+                    f"tomorrow's earliest known kickoff ("
+                    + (hm(ref_local) if ref_local is not None else "none known")
+                    + f"). Exposure {m['exposed_at_audit_term']['weekend']} of "
+                    f"{m['days']['weekend']} weekend days at this term "
+                    f"(measured {m['measured']}). The shortfall to 60 minutes "
+                    f"is the operator's decision of 2026-11-21 -- one dispatch "
+                    f"at 10:30 local on weekends too -- not a finding")}
+
+
+def dispatch_utc_min(day) -> int:
+    """10:30 Europe/Sofia as a UTC minute on `day` (08:30 in EET, 07:30 in
+    EEST)."""
+    return DISPATCH_LOCAL_MIN - operator_offset_min(day)
+
+
+def dispatch_delay_min(started_utc) -> Optional[float]:
+    """Minutes after that local day's 10:30 dispatch, or None when the run
+    was not the dispatch (before 10:30, or later than the window)."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(OPERATOR_TZ)
+    local = started_utc.astimezone(tz)
+    nominal = _dt.datetime.combine(
+        local.date(), _dt.time(DISPATCH_LOCAL_MIN // 60, DISPATCH_LOCAL_MIN % 60),
+        tzinfo=tz)
+    delay = (started_utc - nominal).total_seconds() / 60.0
+    if 0.0 <= delay <= DISPATCH_WINDOW_MIN:
+        return delay
+    return None
+
+
 
 
 #: RETIRED 2026-10-22, KEPT FOR THE RECORD. The stored UTC pair, both of them

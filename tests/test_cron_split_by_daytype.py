@@ -55,113 +55,38 @@ def _crons():
     return [c["cron"] for c in on["schedule"]]
 
 
-def test_there_are_exactly_two_crons_and_they_PARTITION_the_week():
-    """Every day must be covered exactly once. A gap loses a card silently and
-    an overlap runs the pipeline twice against one database."""
+def test_the_FALLBACK_is_ONE_cron_covering_EVERY_day():
+    """STAGE 34, 2026-11-21. Was: two crons partitioning the week.
+
+    The card is published by ONE external dispatch at 10:30 Europe/Sofia on
+    every day, so the cron is a single late fallback for a missed dispatch,
+    covering all seven days. Two runs on one day are no longer an overlap
+    risk: the workflow's `once` gate stops the second before it starts."""
     crons = _crons()
-    assert len(crons) == 2, crons
-    covered = {}
-    for expr in crons:
-        parts = expr.split()
-        dow = parts[4]
-        days = set()
-        for piece in dow.split(","):
-            if "-" in piece:
-                a, b = piece.split("-")
-                days |= set(range(int(a), int(b) + 1))
-            else:
-                days.add(int(piece) % 7)
-        for d in days:
-            assert d not in covered, (
-                f"day {d} is covered by BOTH {covered.get(d)} and {expr} — the "
-                f"pipeline would run twice against one database")
-            covered[d] = expr
-    assert set(covered) == set(range(7)), (
-        f"the week is not fully covered: {sorted(set(range(7)) - set(covered))} "
-        f"have no cron, so those days produce no card at all")
+    assert crons == ["0 11 * * *"], crons
+    assert crons[0].split()[4] == "*", "the fallback must cover every day"
 
 
-def test_BOTH_crons_are_the_LATEST_that_CLEAR_the_registered_60():
-    """MOVED 2026-10-22, and the weekend moved too.
+def test_the_FALLBACK_starts_only_AFTER_the_dispatched_run_has_FINISHED():
+    """STAGE 34. Was: each cron the latest that cleared 60 minutes against a
+    lateness series. That sizing is retired with the cron's role: no cron
+    hour fixes a delay that DRIFTS (weekday `0 1`, n=21, +5.28 min/day).
 
-    It used to assert the weekend cron was UNCHANGED at 00:00, on the
-    reasoning that the weekend carries the bigger card and the earlier
-    deadline so it had least to gain. That reasoning was right while the two
-    deadlines were stored UTC constants. Localising them inverted which floor
-    is earlier -- the weekend's is 12:00 local against the weekday's 12:30 --
-    and once each day type is sized against its OWN floor and its OWN spread,
-    the weekend has 30 minutes to give and the weekday 60.
-
-    THE DERIVATION, and it is re-run here rather than quoted: each cron is the
-    latest that clears `MIN_ACCEPTABLE_MARGIN_MIN` on BOTH pairings the margin
-    takes the worse of, at the SUMMER floor (which binds, because one UTC cron
-    serves both seasons and summer's floor is the earlier one).
-    """
+    The fallback's EARLIEST possible start is its nominal minute. It must be
+    after the 10:30 dispatched run has finished on BOTH seasons -- the
+    dispatch is 08:30 UTC in winter, 07:30 UTC in summer -- or a fallback
+    could take the card before the dispatch. Longest full run, `measured`
+    2026-11-21: 77.0 min (n=38 since 2026-10-22)."""
     import datetime as _d
-    import math
-
-    import scripts.ci_audit as _ci
-    from scripts.schedule_deadline import (HEADROOM_NOT_SPENT,
-                                           MIN_ACCEPTABLE_MARGIN_MIN,
-                                           observed_earliest_min)
-
-    #: The SLOW cluster per day type, `measured` 2026-10-22 under the retired
-    #: `0 0` cron. Recorded here because moving the cron empties the live
-    #: series: membership keys on the run's own headSha carrying the cron in
-    #: force, so this derivation cannot be re-run from live data until the new
-    #: crons have fired.
-    SLOW = {"weekday": {"max": 304.9, "p3sd": 332.6},
-            "weekend": {"max": 293.7, "p3sd": 342.3}}
-    summer = _d.date(2026, 10, 24)
-
-    crons = current_crons_by_daytype()
-    for dtype, expect in (("weekday", 60), ("weekend", 30)):
-        floor = observed_earliest_min(dtype, summer)
-        cap = min(
-            floor - MIN_ACCEPTABLE_MARGIN_MIN - SLOW[dtype]["max"]
-            - _ci.FULL_CARD_PICKS_MAX,
-            floor - MIN_ACCEPTABLE_MARGIN_MIN - SLOW[dtype]["p3sd"]
-            - _ci.FULL_CARD_PICKS_3SD)
-        latest15 = int(math.floor(cap / 15) * 15)
-        assert crons[dtype] == expect, (
-            f"the {dtype} cron is {crons[dtype]}, expected {expect}")
-
-        # ── IT IS NO LONGER THE LATEST, AND THAT IS HEADROOM. 2026-11-06. ──
-        #
-        # This asserted equality with `latest15`. The picks bound was
-        # substituted forward (88.1 -> 40.35, parallel regime, n=12), which
-        # moved the latest clearing boundary 60 -> 105 weekday and 30 -> 60
-        # weekend. The deployed crons did NOT move.
-        #
-        #     the cron is now EARLIER than the latest that clears,
-        #     which is the SAFE direction, and the difference is UNSPENT.
-        #
-        # IT IS NOT SPENT BECAUSE THE STRUCTURAL FLOOR IS STILL BREACHED --
-        # deficits of -39.306530 (weekday) and -59.407508 (weekend), which the
-        # substitution did not move at all. Headroom measured against a
-        # different floor is not a surplus to give away. The n at which
-        # spending it becomes a measured decision, and its projected date,
-        # are in `HEADROOM_NOT_SPENT` -- which this is the consumer of.
-        assert crons[dtype] <= latest15, (
-            f"the {dtype} cron {crons[dtype]} is LATER than the latest "
-            f"15-minute boundary that clears {MIN_ACCEPTABLE_MARGIN_MIN}m "
-            f"(cap {cap:.1f} -> {latest15}). That is a BREACH, not spare "
-            f"headroom: re-derive before trusting it.")
-        rec = HEADROOM_NOT_SPENT[dtype]
-        assert rec["deployed_cron"] == crons[dtype], (
-            f"{dtype}: the deployed cron moved to {crons[dtype]}; if that was "
-            f"the authorised trade, restate HEADROOM_NOT_SPENT with it")
-        assert rec["latest_clearing"] == latest15, (
-            f"{dtype}: the latest clearing boundary is now {latest15}, "
-            f"recorded {rec['latest_clearing']}. Re-measure and restate "
-            f"rather than leaving a stale figure beside a live decision.")
-        assert rec["headroom"] == latest15 - crons[dtype]
-
-        # and it must actually clear, not merely be no later than the latest
-        for delay, picks in ((SLOW[dtype]["max"], _ci.FULL_CARD_PICKS_MAX),
-                             (SLOW[dtype]["p3sd"], _ci.FULL_CARD_PICKS_3SD)):
-            assert floor - (crons[dtype] + delay + picks) >= \
-                MIN_ACCEPTABLE_MARGIN_MIN, (dtype, delay, picks)
+    from scripts.schedule_deadline import dispatch_utc_min
+    fallback = current_crons_by_daytype()["weekday"]
+    assert fallback == current_crons_by_daytype()["weekend"] == 660
+    RUN_MAX = 77.0
+    for day in (_d.date(2026, 12, 15), _d.date(2027, 6, 15)):  # EET, EEST
+        clearance = fallback - (dispatch_utc_min(day) + RUN_MAX)
+        assert clearance >= 60, (
+            f"{day}: the fallback starts only {clearance:.0f} min after the "
+            f"dispatched run's longest observed end")
 
 
 def test_the_HEADROOM_IS_RECORDED_AS_UNSPENT_with_its_n_and_its_DATE():
@@ -210,279 +135,83 @@ def test_the_HEADROOM_IS_RECORDED_AS_UNSPENT_with_its_n_and_its_DATE():
         f"guess: {prov!r}")
 
 
-def test_the_WEEKEND_cron_is_EARLIER_than_the_weekday_one():
-    """Because its floor is earlier. The relation, not the values, is what
-    carries the reason -- and it is the inverse of what the retired UTC
-    constants implied."""
-    crons = current_crons_by_daytype()
-    assert crons["weekend"] < crons["weekday"], (
-        f"weekend {crons['weekend']} is no longer earlier than weekday "
-        f"{crons['weekday']}; the weekend floor is the earlier one (12:00 "
-        f"local against 12:30), so its cron must be too")
+def test_ONE_dispatch_time_serves_BOTH_day_types_and_the_weekend_cost_is_RECORDED():
+    """STAGE 34. Was: the weekend cron earlier than the weekday one.
+
+    THE OPERATOR'S DECISION: one dispatch at 10:30 local every day. The
+    weekend's earliest kickoff (12:00 local) is 30 minutes earlier than the
+    weekday's, so at 10:30 its margin is below the registered 60 minutes.
+    That cost is acknowledged against its EXPOSURE -- a kickoff before picks
+    are ready -- never against the margin: ACKNOWLEDGED while picks are ready
+    before 12:00, EXPOSED from 12:00."""
+    import datetime as _d
+    from scripts.schedule_deadline import (DISPATCH_EXPOSURE_MEASURED,
+                                           dispatch_exposure_ack)
+    import scripts.ci_audit as _ci
+    sunday = _d.date(2026, 11, 22)
+    ok = dispatch_exposure_ack(sunday, 2.0, _ci.FULL_CARD_PICKS_3SD, None)
+    assert ok["state"] == "ACKNOWLEDGED", ok
+    # known-wrong control: a duration that puts picks at 12:00 local is EXPOSED
+    bad = dispatch_exposure_ack(sunday, 0.0, 90.0, None)
+    assert bad["state"] == "EXPOSED", bad
+    # and the measured exposure that the acknowledgement quotes
+    assert DISPATCH_EXPOSURE_MEASURED["exposed_at_audit_term"] == {
+        "weekend": 0, "weekday": 0}
+    assert dispatch_exposure_ack(_d.date(2026, 11, 23), 2.0, 64.59,
+                                 None)["state"] == "NOT_APPLICABLE"
 
 
 @pytest.mark.live
-def test_the_weekday_cron_CLEARS_the_stated_margin_and_LATEST_IS_RETIRED():
-    # ── `live` ADDED 2026-10-21, AFTER THIS TEST KILLED A CARD ──────────────
-    #
-    # It calls `collect_lag_series_by_daytype()`, which queries the GitHub
-    # API. That is the `live` marker's definition verbatim: "a test that
-    # queries LIVE EXTERNAL STATE ... its outcome changes with no code
-    # change". The test step runs `-m "not calendar and not live"` and gets no
-    # GH credentials, so the series came back EMPTY and the n>=8 guard fired:
-    #
-    #     run 39532208006, 2026-10-21 02:17Z, headSha b8d91c1
-    #     "the weekday series shrank to n=0; the +40m figure was measured at n=8"
-    #
-    # It passes locally (n=8, `gh` is authed) and fails in CI. First CI
-    # exposure was today; the assertion was added yesterday in 269aea9.
-    #
-    # THE GUARD ITSELF WAS RIGHT -- n=0 is not a measurement, and refusing to
-    # compute a margin from an empty series is the correct behaviour. What was
-    # wrong is WHERE it ran: `daily-picks.yml` carries a comment four lines
-    # above its pytest command recording that calendar assertions were moved
-    # out of this gate on 2026-10-18 "at a cost of SIX CARDS", and a live test
-    # went straight back into it four days later. Mine.
-    """REWRITTEN 2026-10-18. Was: "`0 4` is the LATEST that clears".
+def test_the_DISPATCH_is_RUNNING_and_the_weekday_margin_CLEARS_or_is_ACKNOWLEDGED():
+    """STAGE 34, 2026-11-21. Was: the weekday CRON clears the margin against
+    the series it produces. The cron no longer publishes the card; the 10:30
+    dispatch does, so the margin is read from the DISPATCHED runs' delays.
 
-    THAT RULE IS RETIRED, AND ITS FAILURE IS THE REASON. `0 4` was chosen by
-    maximising lateness against the margin computed from `DELAY_MEAN/SD/MAX` —
-    constants measured under the `0 0` regime, n=9, sd 18.2 minutes. The `0 4`
-    regime's own distribution then turned out to be **4.5x wider**:
-
-        weekday `0 0`   n=6  mean 276.3  sd 18.8  max 305  (measured 2026-10-18)
-        weekday `0 4`   n=5  mean 357.5  sd 85.6  max 458  (measured 2026-10-18)
-
-    so the shipped cron's real binding margin was **-241m**, not the +75m the
-    selection had computed.
-
-        A cron chosen as "the latest that clears" using ANOTHER cron's spread
-        is an extrapolation presented as a bound.
-
-    What replaces it is not a different optimum. It is the requirement that the
-    shipped cron clear the margin against the series **it actually produces**,
-    which can only be checked after it runs — so the selection stops being an
-    optimisation and becomes a measurement with a revert path.
+    A LIVE CHECK: it reads `gh run list --event workflow_dispatch`.
+      * no dispatched run measured past the grace date -> FAILS: the
+        external dispatch job is not dispatching, and the card is being left
+        to the late fallback. That is the failure this exists to catch.
+      * measured -> the weekday margin (dispatch minute + delays + the SERIAL
+        duration term, the audit's own definition) clears 60, or the
+        mechanism acknowledges it while the no-review series is below n=10.
     """
-    # ── MOVED AGAIN 2026-10-22 (`s5.19`), AND THIS TEST'S OWN MESSAGE SAID
-    #    WHAT TO DO: "the series for the NEW cron must be measured before this
-    #    number is trusted". It cannot be yet.
-    #
-    # Membership keys on the run's own headSha carrying the cron in force, so
-    # the move EMPTIED the series. That is the reset recorded as a cost of the
-    # move in `test_cron_moved.py`, and the requirement this test exists to
-    # enforce -- that the shipped cron clears the margin against the series IT
-    # ACTUALLY PRODUCES -- is therefore UNEVALUATED until the new cron runs.
-    #
-    # So the assertion becomes: the cron is where the derivation put it, and
-    # the series is EMPTY, which is a state and not a pass. Once runs
-    # accumulate this branch stops being taken and the margin below is checked
-    # against real data -- the same shape as the `0 4` revert's requirement,
-    # applied to its successor.
-    crons = current_crons_by_daytype()
-    assert crons["weekday"] == 60, (
-        f"the weekday cron is at {crons['weekday']} minutes, expected 60 "
-        f"(`0 1`, derived 2026-10-22 from the SLOW cluster against the "
-        f"localised floor). If it has moved again, the series for the NEW "
-        f"cron must be measured before any margin is trusted.")
-
-    deadline = DEADLINE_MIN_BY_DAYTYPE["weekday"]
-
-    def margins(cron_min):
-        ready_max = cron_min + DELAY_MAX + DUR_MAX
-        ready_3sd = cron_min + DELAY_MEAN + 3 * DELAY_SD + DUR_MEAN + 3 * DUR_SD
-        return deadline - ready_max, deadline - ready_3sd
-
-    m_max, m_3sd = margins(crons["weekday"])
-    # THE PRE-SPLIT CONSTANTS still clear, and that is now a WARNING rather
-    # than a reassurance: they are the figures the `0 4` selection used, and
-    # the live series does NOT clear (asserted below). A check that passes on
-    # stale constants while the measurement fails is how `0 4` shipped.
-    assert min(m_max, m_3sd) >= MIN_ACCEPTABLE_MARGIN, (
-        f"even the pre-split constants no longer clear: {m_max:+.0f}/"
-        f"{m_3sd:+.0f} against {MIN_ACCEPTABLE_MARGIN}")
-
-    # AND THE OLD ASSERTION IS DELIBERATELY NOT INVERTED. "One hour later
-    # would also clear, so ship the later one" is precisely the reasoning that
-    # produced `0 4`, and it used these same pre-split constants. The margin
-    # bought by an earlier cron is not spent just because the arithmetic says
-    # it could be: the 2026-10-18 series shows the spread is a function of the
-    # regime, so headroom under one cron is not headroom under another.
-    #
-    # What IS asserted is that the measured weekday series - whatever cron it
-    # carries - clears the bar, which is the only form of the claim that
-    # survived contact with the data.
-    import statistics
-
-    # ── THE MEASURED SERIES NO LONGER CLEARS 60, AND THAT IS THE FINDING ───
-    #
-    # RE-POINTED 2026-10-20. This asserted `>= MIN_ACCEPTABLE_MARGIN` against
-    # the live series and passed while the deadline was SELF-ANCHORED at
-    # `ceil_15(ready + 60)` -- which made the claim a tautology. With the
-    # deadline anchored to the OBSERVED EARLIEST KICKOFF (weekday 09:30) the
-    # same arithmetic reports the truth:
-    #
-    #     measured 2026-10-20, weekday n=8:  binding +40m against a stated 60
-    #
-    # So the assertion is INVERTED and the breach is recorded with its number
-    # and its clearing action, rather than a passing check standing where a
-    # failing measurement belongs. If it ever clears again, this test fails and
-    # says to re-state the finding -- which is the right direction for a
-    # breach to surprise someone in.
-    from scripts.ci_audit import collect_lag_series_by_daytype
-
-    by_type, _crons2 = collect_lag_series_by_daytype()
-    lag = [l for _d, l in (by_type.get("weekday") or [])]
-
-    # ── "COULD NOT LOOK" IS NOT "THE SERIES SHRANK". 2026-10-21, second fix.
-    #
-    # Marking this `live` took it out of the capture gate, and capture then
-    # succeeded -- but the test still FAILED in the non-gating step, because
-    # that step has no GH credentials either, so the series came back empty
-    # there too (run 39569612160). An empty series with no way to ask is
-    # UNEVALUATED; my assertion called it a shrinkage and reported a finding
-    # about football from the absence of a credential. That is the same
-    # third-state defect this project keeps paying for, in a test I wrote to
-    # guard against defects.
-    #
-    # A daily red that no action clears is also an alarm that always fires.
-    # So: refuse to measure, and SAY which it is.
-    if not lag:
-        import os
-        token = bool(os.environ.get("GH_TOKEN")
-                     or os.environ.get("GITHUB_TOKEN"))
-        # ── THE TWO EMPTIES ARE NOT THE SAME EMPTY. 2026-11-05. ──────────
-        #
-        # This was ONE `pytest.skip` for both, and a skip is indistinguishable
-        # from a pass in a green run -- so "nobody gave this job a token"
-        # looked exactly like "the series is refilling as planned".
-        #
-        #   no token      -> COULD NOT LOOK. Reported, because an action
-        #                    clears it: give the job a credential.
-        #   token, empty  -> LOOKED, NOTHING THERE YET. Still a skip: the
-        #                    cron move of 2026-10-22 emptied this series by
-        #                    design and no action clears it, and a daily red
-        #                    that no action clears is an alarm that always
-        #                    fires.
-        #
-        # RESIDUAL, NAMED RATHER THAN PAPERED OVER: a token that is PRESENT
-        # AND DEAD still reaches the skip below, because `lag` is built
-        # through `ci_audit._sh`, which returns `stdout or ""` and so turns a
-        # 401 into an empty series. The two callers that route through
-        # `tests.conftest.gh_json_or_unevaluated` DO catch that; this one
-        # cannot until `_sh` reports its own returncode.
-        if not token:
-            raise AssertionError(
-                "UNEVALUATED, not clear: the weekday lag series is empty and "
-                "NO TOKEN IS SET (GH_TOKEN and GITHUB_TOKEN both absent), so "
-                "the series could not be read at all. n=0 here is 'could not "
-                "look', NOT a fact about the schedule -- which is precisely "
-                "the reading that reported a football finding from a missing "
-                "credential on 2026-10-21. CLEARING ACTION: give this job a "
-                "live token, and `actions: read` if this repository is ever "
-                "made private.")
+    import datetime as _d
+    import scripts.ci_audit as _ci
+    from scripts.schedule_deadline import DISPATCH_SINCE, dispatch_utc_min
+    disp = _ci.collect_dispatch_series()
+    assert not disp["unreadable"], (
+        "UNEVALUATED, not clear: `gh run list` FAILED (no auth, or a dead "
+        "GH_TOKEN), so the dispatched runs could not be listed -- 'could not "
+        "look', not a fact about the dispatch. CLEARING ACTION: give this job "
+        "a live token")
+    GRACE = DISPATCH_SINCE + _d.timedelta(days=3)
+    if not disp["series"]:
+        # THE TWO EMPTIES ARE NOT THE SAME EMPTY (the 2026-11-05 lesson). A
+        # `gh` with no auth or a dead GH_TOKEN now makes the reader return
+        # `unreadable` -- its RETURNCODE decides, closing the residual the
+        # previous version of this reminder named -- so reaching here means
+        # the runs WERE listed and none is a dispatch yet.
+        assert _d.date.today() <= GRACE, (
+            f"no dispatched run measured since {DISPATCH_SINCE} and the grace "
+            f"ended {GRACE}: the external 10:30 dispatch job is NOT "
+            f"dispatching, so every card is the late fallback. CLEARING "
+            f"ACTION: check the job is enabled and its token valid")
         pytest.skip(
-            "UNEVALUATED, not clear: the weekday lag series is empty WITH a "
-            "token set, so this is a series that is refilling rather than one "
-            "that could not be read. n=0 is not a measurement, and no action "
-            "clears it.")
-    # ── A SERIES TOO THIN TO MEASURE IS UNEVALUATED, NOT FAILED. ─────────
-    #
-    # The cron move of 2026-10-22 emptied this series by design, and it is
-    # refilling: n=1 as of 2026-10-23. `len(lag) >= 8` turned "the series is
-    # refilling exactly as the entry said it would" into a red — a cost that
-    # was recorded and then asserted against.
-    #
-    # The same third state the margin itself now reports: below
-    # `LAG_CLUSTER_MIN_N` the series cannot be separated into clusters and
-    # mean+3sd is not a bound. It SAYS SO rather than passing or failing.
-    from scripts.ci_audit import LAG_CLUSTER_MIN_N, cluster_state
-    if len(lag) < LAG_CLUSTER_MIN_N:
-        pytest.skip(
-            f"UNEVALUATED, not clear: n={len(lag)} is below "
-            f"{LAG_CLUSTER_MIN_N}, so the series cannot be separated and "
-            f"mean+3sd is not a bound. The cron moved on 2026-10-22 and the "
-            f"series is refilling; the conservative reading until then is the "
-            f"retired cron's SLOW cluster (mean+3sd 332.6).")
-    if len(lag) < 8:
-        pytest.skip(
-            f"UNEVALUATED: n={len(lag)} is separable ("
-            f"{cluster_state(lag)}) but below the n=8 the +40m figure was "
-            f"measured at, so the comparison below has no standing yet.")
-    lm, lsd = statistics.mean(lag), statistics.pstdev(lag)
-    from scripts.ci_audit import MARGIN_RUN_DURATIONS_BY_DAYTYPE as _DUR
-    du = _DUR["weekday"]
-    dm, dsd = statistics.mean(du), statistics.pstdev(du)
-    ready = max(max(lag) + max(du), (lm + 3 * lsd) + (dm + 3 * dsd))
-    binding = deadline - ready
-    # ── RESTATED 2026-11-05: THE MARGIN CLEARS, AND THIS NOW SAYS SO. ──────
-    #
-    #   measured 2026-10-20  n=8   weekday margin  +40m   BREACH of 60m
-    #   measured 2026-11-05  n=10  weekday margin  +90m   CLEARS 60m
-    #
-    # The assertion here was `binding < MIN_ACCEPTABLE_MARGIN`: it asserted
-    # the BREACH, so it went red on the day the breach ended and its message
-    # asked to be restated. That is the right direction for a breach to
-    # surprise someone in, and the wrong state to leave a test in once the
-    # surprise has happened -- a red that means "the news is good" is a red
-    # nobody can triage.
-    #
-    # WHAT MOVED, and it is not the deadline. Both are derived, not chosen:
-    #
-    #   lag series      n=8  -> n=10, mean 332.3  sd 40.7  max 389.75  UNIMODAL
-    #   run durations   n=79       mean  29.7  sd 18.6  max  76.7
-    #   weekday deadline                   630 (derived floor, unchanged)
-    #   ready = max(max+max, mean+3sd)  540.08  ->  margin +89.92
-    #
-    # The cron moved to `0 1` on 2026-10-22, which is what bought the
-    # headroom; the duration term's instrumentation error was corrected on
-    # 2026-10-21, which is what stopped it being overstated.
-    # ── ACKNOWLEDGED ON ITS MECHANISM, WITH NO DATE. Stage 32 Part D. ────
-    #
-    #   measured 2026-11-13   weekday margin +56m   below 60 by 4m
-    #
-    # WHAT MOVED is the LAG series (mean 337.4 -> 353.1, sd 42.1 -> 46.7,
-    # max 389.75 -> 411.62). The duration term in this test is the SERIAL-
-    # review series (mean+3sd 85.54), and the regime it describes is gone
-    # twice over: the review went parallel, then went altogether. On the runs
-    # that reached picks the parallel regime reads mean+3sd 50.34 -- so this
-    # term overstates by at least 35.2 minutes, against a 4-minute shortfall.
-    #
-    # The acknowledgement holds while BOTH hold: the no-review series is
-    # below n=10, and the shortfall is smaller than that measured
-    # conservatism. It LAPSES by itself at n=10 (re-derive, then read) and
-    # REDDENS if the lag series worsens past what the conservatism covers.
-    # The cron is NOT moved.
-    from scripts.ci_audit import (removal_regime_picks_series,
-                                  serial_term_weekday_margin,
-                                  weekday_margin_shortfall_is_acknowledged)
-    assert serial_term_weekday_margin(lag) == pytest.approx(binding), (
-        "the daily audit prints the acknowledgement on a DIFFERENT figure "
-        "from the one this test computes")
-    regime_n = (removal_regime_picks_series().get("n")
+            f"UNEVALUATED, not clear: the runs were listed and no dispatched run "
+            f"exists yet, within the grace to {GRACE} while the operator "
+            f"enables the external job")
+    delays = [d for _day, d, _r in disp["series"]]
+    if len(delays) < 2:
+        delays = delays * 2          # n=1: max and mean coincide; stated
+    tomorrow = _d.date.today() + _d.timedelta(days=1)
+    binding = _ci.serial_term_weekday_margin(delays, dispatch_utc_min(tomorrow))
+    regime_n = (_ci.removal_regime_picks_series().get("n")
                 if binding < MIN_ACCEPTABLE_MARGIN else 0)
-    ack = weekday_margin_shortfall_is_acknowledged(binding, regime_n)
+    ack = _ci.weekday_margin_shortfall_is_acknowledged(binding, regime_n)
     assert ack["state"] in ("CLEAR", "ACKNOWLEDGED"), (
-        f"the weekday margin is {binding:+.0f}m against the "
-        f"{MIN_ACCEPTABLE_MARGIN}-minute minimum and the acknowledgement is "
-        f"{ack['state']}: {ack['why']}. A DETERIORATION is a finding: say "
-        f"which term moved -- the lag series, the duration series or the "
-        f"derived deadline.")
-    # The UPPER edge of the band: the 2026-11-05 measurement plus one lag sd
-    # (89.92 + 40.7), rounded to 130 -- a jump past that is a regime change,
-    # not drift. The lower edge is now the acknowledgement above.
-    assert binding <= 130, (
-        f"the weekday margin moved to {binding:+.0f}m, outside the "
-        f"{MIN_ACCEPTABLE_MARGIN}..130m band this finding was measured over "
-        f"on 2026-11-05 (+89.92m, lag n=10 sd 40.7). Re-measure before "
-        f"quoting either figure.")
-    # THE CLEARING ACTION IS NOT A DEADLINE CHOICE
-    from scripts.ci_audit import MARGIN_REMEDY
-
-    assert "earlier cron" in MARGIN_REMEDY and "faster run" in MARGIN_REMEDY, (
-        "the remedy no longer names the only two levers")
-    assert "14:30" not in MARGIN_REMEDY, (
-        "the remedy cites the retired 14:30 percentile again")
+        f"the weekday margin on the dispatched start is {binding:+.0f}m "
+        f"against {MIN_ACCEPTABLE_MARGIN} and the acknowledgement is "
+        f"{ack['state']}: {ack['why']}")
 
 
 def test_the_two_deadlines_are_distinct_and_the_WORSE_is_the_single_value():
@@ -607,29 +336,27 @@ def test_schedule_margin_defaults_to_the_CONSERVATIVE_deadline():
 
 # ───────────────── the six date-derived sites, re-enumerated ────────────────
 
-def test_the_FRIDAY_to_SATURDAY_cutoff_is_the_binding_site():
-    """`max_days_ahead` is `now + 1 day`, one-sided, so a later weekday run
-    reaches further into D+1.
+def test_the_FRIDAY_to_SATURDAY_cutoff_on_the_DISPATCHED_run():
+    """`max_days_ahead` is `now + 1 day`, so a Friday run's cutoff reaches
+    into Saturday. STAGE 34: the Friday card is dispatched at 10:30 local --
+    08:30 UTC in winter -- and Saturday's earliest kickoff is 12:00 local
+    (10:00 UTC in winter). The run's cutoff, a few minutes in, clears it.
 
-    Mon-Thu runs have a D+1 weekday whose earliest kickoff is 15:00-16:45 UTC,
-    which is never close. The binding case is a FRIDAY run, whose D+1 is a
-    SATURDAY with an earliest kickoff of 10:30 UTC. This is the one site where
-    moving the weekday cron later could change the discovered-fixture
-    population, so it carries a number rather than a verdict.
-    """
-    cron = current_crons_by_daytype()["weekday"]
-    # the cutoff is set a few minutes into the run, not at completion
-    cutoff_max = cron + DELAY_MAX + 5
-    saturday_earliest = 10 * 60 + 30
-    margin = saturday_earliest - cutoff_max
-    assert margin > 0, (
-        f"a Friday run's cutoff ({cutoff_max // 60:02d}:{cutoff_max % 60:02d}) "
-        f"now reaches past Saturday's earliest kickoff 10:30 — the Friday card "
-        f"would start admitting Saturday fixtures, which moves the "
-        f"discovered-fixture population and is a cohort event")
-    assert margin >= 60, (
-        f"only {margin} minutes of margin on the Friday->Saturday cutoff; "
-        f"below an hour this needs Friday excluded from the weekday cron")
+    THE FALLBACK'S COST, STATED: on a missed-dispatch Friday the run starts
+    11:00 UTC plus GitHub's lateness (up to 7h38m seen), so its cutoff
+    reaches Saturday ~18:43 UTC and admits Saturday fixtures. That is a
+    fallback-day cost, and it is why the fallback is a safety net only."""
+    import datetime as _d
+    from scripts.schedule_deadline import (dispatch_utc_min,
+                                           observed_earliest_min)
+    friday = _d.date(2026, 11, 27)
+    cutoff = dispatch_utc_min(friday) + 5
+    saturday_earliest = observed_earliest_min("weekend",
+                                              friday + _d.timedelta(days=1))
+    assert saturday_earliest - cutoff >= 60, (saturday_earliest, cutoff)
+    fallback_cutoff = 660 + 458.8 + 5
+    assert fallback_cutoff > saturday_earliest, (
+        "the stated fallback cost no longer holds -- re-derive it")
 
 
 def test_the_settlement_ordering_clears_the_previous_days_last_match():
@@ -648,20 +375,23 @@ def test_the_settlement_ordering_clears_the_previous_days_last_match():
         f"matches")
 
 
-def test_the_settlement_staleness_band_contains_ZERO_kickoffs():
-    """The `now - 24h` boundary lands on D-1 07:58-09:04 under `0 4`.
+def test_the_settlement_staleness_band_on_the_DISPATCHED_run():
+    """The `now - 24h` boundary lands on D-1 at the run's start. STAGE 34:
+    the dispatched run starts 08:30 UTC (winter) / 07:30 (summer) plus
+    minutes, before the earliest kickoff of either day type (10:00 UTC
+    winter weekend), so the band holds no kickoff.
 
-    The earliest kickoff of ANY day type is 10:15 UTC, so the band is empty —
-    the same reason the 00:00 move was safe, re-checked at the new band rather
-    than assumed to carry over.
-    """
-    cron = current_crons_by_daytype()["weekday"]
-    band_lo, band_hi = cron + DELAY_MIN, cron + DELAY_MAX
-    earliest_any = min(DEADLINE_MIN_BY_DAYTYPE.values())
-    assert band_hi < earliest_any, (
-        f"the staleness band {band_lo}-{band_hi} now reaches the earliest "
-        f"kickoff {earliest_any} — settlement's 24h boundary would fall inside "
-        f"a match window")
+    THE FALLBACK'S COST, STATED: a fallback run starts ~15:00-18:40 UTC, a
+    band that DOES contain kickoffs; on a missed-dispatch day the settlement
+    boundary falls inside a match window. Safety net only."""
+    import datetime as _d
+    from scripts.schedule_deadline import (DISPATCH_WINDOW_MIN,
+                                           dispatch_utc_min,
+                                           observed_earliest_min)
+    for day in (_d.date(2026, 12, 12), _d.date(2027, 6, 12)):   # Saturdays
+        band_hi = dispatch_utc_min(day) + 30      # realistic dispatch delay
+        assert band_hi < observed_earliest_min("weekend", day), day
+    assert DISPATCH_WINDOW_MIN == 180
 
 
 def test_the_alarm_threshold_is_unchanged_and_below_the_stated_minimum():
@@ -771,59 +501,17 @@ def test_the_1430_figure_is_a_PERCENTILE_not_a_minimum():
         "localized deadline; the full-record minimum is 09:30")
 
 
-def test_the_weekday_cron_CLEARS_a_holiday_weekday_since_the_revert():
-    """RESOLVED 2026-10-18 BY THE CRON REVERT. Was: BREACHES.
-
-    Under `0 4`, ready(3sd) was 10:42 UTC and Easter Monday 2026-04-06 — 95
-    fixtures, earliest 10:15 — would have had picks delivered **27 minutes
-    AFTER the first kickoff**. Under `0 0` the same arithmetic clears it by
-    **+211 min**, and the 09:59 observed minimum clears too.
-
-    The exposure below is kept as HISTORY because it is why the revert
-    happened, and it changed no schedule at the time: the next weekday holiday with an early card is **Easter 2027
-    (Friday 2027-04-02 and Monday 2027-04-05)**. 2026-12-26 (Boxing Day) falls
-    on a SATURDAY and so uses the unchanged weekend cron; 2027-01-01 is a Friday
-    but the festive programme's earliest is ~12:30, which clears.
-
-    THE PRINCIPLED REMEDY IS THAT THE DEADLINE IS DATA, NOT A CONSTANT. All
-    three figures — 10:15, 12:00, 14:30 — are samples of a quantity that varies
-    by date, and the margin should be computed against the DISCOVERED earliest
-    kickoff for the upcoming day. That is a design change and it goes to Niki.
-    """
-    cron = current_crons_by_daytype()["weekday"]
-    ready_3sd = cron + DELAY_MEAN + 3 * DELAY_SD + DUR_MEAN + 3 * DUR_SD
-    ready_max = cron + DELAY_MAX + DUR_MAX
-
-    # ── THE EXPOSURE IS RESOLVED, 2026-10-18, and this test did exactly what
-    # it asked to do: its own message said "if the cron moved earlier, update
-    # this test and the ledger rather than leaving a stale exposure on file".
-    # The cron moved to `0 0` and the holiday breach became a CLEARANCE:
-    #
-    #     Easter Monday 10:15 vs ready(3sd)   -27 min  ->  +211 min
-    #
-    # So the assertion INVERTS rather than being deleted: the holiday that
-    # breached must now clear, and if it ever breaches again the cron has moved
-    # back or the distribution has widened, either of which is a finding.
-    margin_full_card = WEEKDAY_EARLIEST_ON_A_FULL_CARD - ready_3sd
-    assert margin_full_card > 0, (
-        f"Easter Monday's 10:15 kickoff BREACHES ready(3sd) again by "
-        f"{margin_full_card:+.0f} min. Under `0 0` it cleared by +211. Either "
-        f"the weekday cron moved later or the delay distribution widened — "
-        f"re-measure the series before changing this number.")
-    assert margin_full_card >= 60, (
-        f"only {margin_full_card:+.0f} min of holiday clearance; below an hour "
-        f"the 1.4% of weekday holidays stop being comfortably covered")
-    # 2026-06-18's 09:59 is the harder case and carried ONE fixture; recorded
-    # here so the thin end of the distribution is not forgotten.
-    assert WEEKDAY_EARLIEST_OBSERVED - ready_3sd > 0, (
-        f"the observed weekday minimum 09:59 breaches ready(3sd) by "
-        f"{WEEKDAY_EARLIEST_OBSERVED - ready_3sd:+.0f} min")
-
-    # And the ordinary-weekday margin is genuinely comfortable - the exposure is
-    # the TAIL, not the typical day.
-    assert DEADLINE_MIN_BY_DAYTYPE["weekday"] - ready_max >= MIN_ACCEPTABLE_MARGIN
-    assert WEEKDAY_DAYS_BREACHING_READY_3SD / WEEKDAY_DAYS_MEASURED < 0.02, (
-        "more than 2% of weekdays now breach — this is no longer a tail")
+def test_the_DISPATCH_clears_a_holiday_weekday_EASTER_2027():
+    """STAGE 34. Easter Monday 2027-04-05 (EEST): an early holiday card,
+    earliest kickoff 10:15 UTC. The dispatch is 07:30 UTC; with a few
+    minutes' delay and the audit's duration term (64.59) picks are ready
+    ~08:37 UTC, ninety-odd minutes before the first kickoff."""
+    import datetime as _d
+    import scripts.ci_audit as _ci
+    from scripts.schedule_deadline import dispatch_utc_min
+    easter_monday = _d.date(2027, 4, 5)
+    ready = dispatch_utc_min(easter_monday) + 2.0 + _ci.FULL_CARD_PICKS_3SD
+    assert (10 * 60 + 15) - ready >= MIN_ACCEPTABLE_MARGIN, ready
 
 
 def test_the_phantom_signature_is_what_made_the_raw_count_misleading():

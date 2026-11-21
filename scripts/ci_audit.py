@@ -78,7 +78,9 @@ from scripts.schedule_deadline import (
     format_reference_deadline,
     prospective_margin,
     two_margins,
-    reference_earliest, EXPOSURE_ACK, exposure_is_acknowledged, MIN_ACCEPTABLE_MARGIN_MIN)
+    reference_earliest, EXPOSURE_ACK, exposure_is_acknowledged, MIN_ACCEPTABLE_MARGIN_MIN,
+    DISPATCH_LOCAL_MIN, DISPATCH_SINCE, DISPATCH_WINDOW_MIN, dispatch_delay_min,
+    dispatch_utc_min, dispatch_exposure_ack)
 
 LEDGER = pathlib.Path("docs/ci-audit-ledger.md")
 LOGS = pathlib.Path("ci_logs")
@@ -2170,12 +2172,19 @@ DURATION_TERM_CONSERVATISM = {
 }
 
 
-def serial_term_weekday_margin(lag) -> Optional[float]:
-    """The weekday margin as `test_the_weekday_cron_CLEARS_the_stated_margin`
-    computes it: the derived weekday deadline less the worse of max+max and
-    mean+3sd+mean+3sd, with the SERIAL duration series as its duration term.
-    One definition, so the test and the daily audit cannot disagree about
-    the figure the acknowledgement below is granted on. None below n=2."""
+def serial_term_weekday_margin(lag, start_min: int) -> Optional[float]:
+    """The weekday margin: the derived weekday deadline less the START
+    MINUTE and the worse of max+max and mean+3sd+mean+3sd, with the
+    SERIAL duration series as its duration term. One definition, so the
+    live test and the daily audit cannot disagree. None below n=2.
+
+    THE START MINUTE WAS MISSING, 2026-10-22 -> 2026-11-21. `lag` is
+    measured from the start (the cron, now the dispatch), and the
+    deadline is a UTC minute. Under `0 0` the start minute was 0, so
+    leaving it out cost nothing; under `0 1` it overstated this figure by
+    60 minutes, and the test and the audit agreed because they shared
+    the omission (+56.0m on 2026-11-16 was -4.0m). Found re-pointing it
+    at the dispatch (Stage 34), where leaving it out reads ~+550m."""
     import statistics
     lag = [] if lag is None else list(lag)
     if len(lag) < 2:
@@ -2183,7 +2192,8 @@ def serial_term_weekday_margin(lag) -> Optional[float]:
     du = MARGIN_RUN_DURATIONS_BY_DAYTYPE["weekday"]
     lm, lsd = statistics.mean(lag), statistics.pstdev(lag)
     dm, dsd = statistics.mean(du), statistics.pstdev(du)
-    ready = max(max(lag) + max(du), (lm + 3 * lsd) + (dm + 3 * dsd))
+    ready = start_min + max(max(lag) + max(du),
+                            (lm + 3 * lsd) + (dm + 3 * dsd))
     return DEADLINE_MIN_BY_DAYTYPE["weekday"] - ready
 
 
@@ -2973,6 +2983,110 @@ def format_series_census(series_by_type: dict, crons: dict) -> str:
         lines.append("  every scheduled run in the window had a READABLE sha "
                      "- no run was excluded for an unknown cron")
     return chr(10).join(lines)
+
+
+def collect_dispatch_series(raw: str = None, since: _dt.date = None,
+                            limit: int = 60) -> dict:
+    """The dispatched runs' delays after 10:30 Europe/Sofia. Stage 34.
+
+    `{"series": [(local_date, delay_min, run_id), ...], "excluded": [...],
+    "unreadable": bool}`. One external scheduler and one time serve BOTH day
+    types, so the series is POOLED: a weekday/weekend split would halve n for
+    a delay that does not depend on the day. A `workflow_dispatch` outside
+    `DISPATCH_WINDOW_MIN` after 10:30 local is a manual run -- excluded and
+    COUNTED, never silently dropped. The delay is measured from the run's own
+    START (`startedAt`), the moment the card's clock begins.
+
+    `raw` is the seam: the `gh run list` JSON, injected by tests so this never
+    reads GitHub inside the gate.
+    """
+    since = since or DISPATCH_SINCE
+    out = {"series": [], "excluded": [], "unreadable": False}
+    if raw is None:
+        # NOT `_sh`: it returns `stdout or ""`, so a FAILED `gh` -- no auth,
+        # a dead token -- would read as an empty listing, i.e. "no dispatch
+        # yet". The returncode decides: a failed listing is UNREADABLE.
+        r = subprocess.run(
+            ["gh", "run", "list", "--workflow", "daily-picks.yml",
+             "--event", "workflow_dispatch", "--limit", str(limit),
+             "--json", "databaseId,createdAt,startedAt,event"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace")
+        if r.returncode != 0:
+            out["unreadable"] = True
+            return out
+        raw = r.stdout
+    try:
+        runs = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        out["unreadable"] = True
+        return out
+    if not isinstance(runs, list):
+        out["unreadable"] = True
+        return out
+    for r in runs:
+        if r.get("event", "workflow_dispatch") != "workflow_dispatch":
+            continue
+        stamp = r.get("startedAt") or r.get("createdAt")
+        try:
+            t = _dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except (AttributeError, ValueError):
+            continue
+        if t.date() < since:
+            continue
+        delay = dispatch_delay_min(t)
+        if delay is None:
+            out["excluded"].append((t.isoformat(), r.get("databaseId")))
+            continue
+        from zoneinfo import ZoneInfo
+        local_day = t.astimezone(ZoneInfo("Europe/Sofia")).date()
+        out["series"].append((local_day, delay, r.get("databaseId")))
+    out["series"].sort()
+    return out
+
+
+def format_dispatch_regime(dispatch: dict, fallback_by_type: dict,
+                           day) -> str:
+    """The publication regime, every run: the dispatch, its measured delays,
+    and the fallback's lateness labelled as information only."""
+    hm = lambda m: f"{int(m) // 60:02d}:{int(m) % 60:02d}"
+    s = dispatch.get("series") or []
+    head = (f"schedule_regime[DISPATCH 10:30 Europe/Sofia = "
+            f"{hm(dispatch_utc_min(day))} UTC on {day}; since "
+            f"{DISPATCH_SINCE}; window {DISPATCH_WINDOW_MIN} min]")
+    if dispatch.get("unreadable"):
+        body = "  dispatched runs: UNREADABLE - the margin is UNEVALUATED"
+    elif not s:
+        body = ("  dispatched runs: n=0 - the margin is UNEVALUATED until the "
+                "first dispatched run is measured")
+    else:
+        delays = [d for _day, d, _rid in s]
+        body = (f"  dispatched runs: n={len(delays)} delay min="
+                f"{min(delays):.1f} max={max(delays):.1f} mean="
+                f"{sum(delays) / len(delays):.1f} min after 10:30 local "
+                f"(last: {s[-1][0]} {s[-1][1]:.1f} min, run {s[-1][2]})")
+    excl = dispatch.get("excluded") or []
+    tail = [f"  manual dispatches outside the window, excluded: {len(excl)}"]
+    fb = [l for _d, l in (fallback_by_type.get("weekday") or [])] +          [l for _d, l in (fallback_by_type.get("weekend") or [])]
+    tail.append(f"  fallback cron lateness (INFORMATION ONLY, not the margin): "
+                f"n={len(fb)}" + (f" max={max(fb):.0f} min" if fb else ""))
+    return chr(10).join([head, body] + tail)
+
+
+def schedule_inputs_under_dispatch(dispatch: dict, day) -> tuple:
+    """`(by_type, crons)` for the margin, under the dispatch regime.
+
+    The SAME shape the cron regime fed the margin -- a delay series per day
+    type and a start minute per day type -- so `schedule_margin` and
+    `two_margins` compute exactly as before, from the dispatched runs' actual
+    starts instead of a cron's lateness. Both day types read the one pooled
+    series and the one dispatch minute, converted on `day` so it is right
+    across DST.
+    """
+    series = [(d, delay) for d, delay, _rid in dispatch.get("series") or []]
+    start = dispatch_utc_min(day)
+    return ({"weekday": list(series), "weekend": list(series)},
+            {"weekday": start, "weekend": start})
 
 
 def collect_lag_series_by_daytype(today: _dt.date = None, limit: int = 120):
@@ -4657,6 +4771,19 @@ def main() -> int:
     # day -- it is hoisted so the margin and the alarm cannot disagree about
     # which day they are talking about across a DST transition.
     _tomorrow = _dt.date.today() + _dt.timedelta(days=1)
+    # ── STAGE 34: THE MARGIN IS MEASURED FROM THE DISPATCHED START. ───
+    #
+    # The card is published by an external dispatch at 10:30
+    # Europe/Sofia; the cron is a late fallback. So the margin's inputs
+    # are the DISPATCHED runs' delays and the dispatch minute, not the
+    # cron's lateness. The fallback's lateness is still collected and
+    # printed, labelled, for information: it does not decide the margin.
+    # The old lateness acknowledgement is RETIRED, not re-pinned -- until
+    # a dispatched run exists the margin is UNEVALUATED and says so, and
+    # it clears only by measurement.
+    _fallback_by_type, _fallback_crons = _by_type, _crons
+    _dispatch = collect_dispatch_series()
+    _by_type, _crons = schedule_inputs_under_dispatch(_dispatch, _tomorrow)
     _margins = schedule_margins_by_daytype(_by_type, _crons, day=_tomorrow)
     print()
     # PNC-1, FOUND 2026-10-11. `format_series_census` carried the attribution
@@ -4666,16 +4793,34 @@ def main() -> int:
     # accreted count; the tally audit of 2026-10-12 enumerated the
     # register and found 11 verified of 14 claimed - see
     # docs/rule-tallies.md. Cite the register, not a running number.
-    print(format_series_census(_by_type, _crons))
+    print(format_series_census(_fallback_by_type, _fallback_crons))
     print()
     print(format_schedule_margins(_margins))
+    print()
+    print(format_dispatch_regime(_dispatch, _fallback_by_type, _tomorrow))
+    # ONE surface, two states: unreadable, or nothing measured yet. Either
+    # way the margin has no start to measure from and it is UNEVALUATED.
+    if _dispatch.get("unreadable") or not _dispatch.get("series"):
+        alarmed.append(
+            "schedule margin UNEVALUATED - "
+            + ("the dispatched runs could not be read (`gh run list "
+               "--event workflow_dispatch`). CLEARING ACTION: restore "
+               "`gh` auth (GH_TOKEN) in the audit job"
+               if _dispatch.get("unreadable") else
+               f"no dispatched run measured yet (dispatch at 10:30 "
+               f"Europe/Sofia since {DISPATCH_SINCE}). The margin is "
+               "measured from the dispatched run's actual start and "
+               "clears only by measurement. CLEARING ACTION: enable the "
+               "external dispatch job; the first dispatched run measures "
+               "it"))
     # Stage 32 Part D: the WEEKDAY-MARGIN TEST's acknowledgement, printed
     # every day with its mechanism and its state, so it is read rather than
     # remembered. It covers the TEST's figure (serial duration term); the
     # audit's own `margin.schedule` finding above is classified separately
     # and is NOT acknowledged by it.
     _wm = serial_term_weekday_margin(
-        [l for _d, l in (_by_type.get("weekday") or [])])
+        [l for _d, l in (_by_type.get("weekday") or [])],
+        _crons.get("weekday") or 0)
     if _wm is None:
         print("weekday-margin test acknowledgement[UNEVALUATED] the weekday "
               "lag series is too short to compute the test's margin")
@@ -4754,7 +4899,10 @@ def main() -> int:
             + ", ".join(str(r["workflowName"]) for r in _unp_main)
             + " - GitHub refused the file, so that workflow is NOT scheduled.")
     _margin = _margins.get(_margins.get("worse")) or {}
-    _cron = _crons.get(_margins.get("worse"))
+    # With no margin computed (n=0) there is no "worse" day type; tomorrow's
+    # is the one being served, and a missing key must not read as a
+    # missing cron (Stage 34: it printed "NO CRON ... (unknown)").
+    _cron = _crons.get(_margins.get("worse") or day_type(_tomorrow))
 
     # ── THE PROSPECTIVE MARGIN COMES BACK, FROM THE REFERENCE — 2026-10-19 ─
     #
@@ -4813,7 +4961,21 @@ def main() -> int:
         MARGIN_RUN_DURATIONS_BY_DAYTYPE[day_type(_tomorrow)])
     print(format_two_margins(_m2))
     _act, _struct = _m2["actionable"], _m2["structural"]
-    if _act.get("verdict") == "ALARM":
+    # STAGE 34: under the 10:30 dispatch a WEEKEND margin below 60 is the
+    # operator's decision, acknowledged against its EXPOSURE (a kickoff
+    # before picks are ready), never against the margin itself.
+    _dexp = dispatch_exposure_ack(
+        _tomorrow,
+        max((d for _d, d, _r in _dispatch.get("series") or []),
+            default=None),
+        FULL_CARD_PICKS_3SD, _ref.get("min"))
+    if _act.get("verdict") == "ALARM" and _dexp["state"] == "ACKNOWLEDGED":
+        print(f"note: actionable margin {_act['binding']:+.0f}m for "
+              f"{_tomorrow} < {_act['min_margin']}m is ACKNOWLEDGED "
+              f"AGAINST ITS EXPOSURE -- {_dexp['why']}")
+    elif _act.get("verdict") == "ALARM":
+        if _dexp["state"] == "EXPOSED":
+            print(f"note: dispatch exposure EXPOSED -- {_dexp['why']}")
         print(f"!! ACTIONABLE MARGIN {_act['binding']:+.0f} min for "
               f"{_tomorrow} is below {_act['min_margin']} min. "
               f"CLEARING ACTION: {CLEARING_ACTION}")

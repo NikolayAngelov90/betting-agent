@@ -41,8 +41,14 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 #: Functions that read PER-RUN history — `gh run list` plus a per-run
 #: `git show <sha>:...` to decide which cron regime the run belongs to. A
 #: caller of one of these needs the full history to answer correctly.
+#: `collect_dispatch_series` added 2026-11-21 (Stage 34): it reads
+#: `gh run list --event workflow_dispatch` only, with no per-run `git show`,
+#: but it is LIVE run history all the same -- and it replaced two reminders'
+#: calls to `collect_lag_series_by_daytype` when the cron stopped publishing
+#: the card -- so it must never be called unstubbed inside the capture gate.
 PER_RUN_READERS = {"collect_lag_series_by_daytype",
-                   "parallel_regime_picks_series"}
+                   "parallel_regime_picks_series",
+                   "collect_dispatch_series"}
 
 #: The three selections, and which workflow runs each.
 SELECTION_WORKFLOW = {
@@ -91,6 +97,15 @@ def _unstubbed_callers():
                 continue
             if "setattr" in body and "_sh" in body:
                 continue                      # stubbed: not a live reader
+            # Stage 34: `collect_dispatch_series(raw=...)` is the reader's
+            # own seam -- the recorded `gh run list` JSON is injected and
+            # nothing live is read.
+            if any(isinstance(x, ast.Call)
+                   and (getattr(x.func, "attr", "") == "collect_dispatch_series"
+                        or getattr(x.func, "id", "") == "collect_dispatch_series")
+                   and any(k.arg == "raw" for k in x.keywords)
+                   for x in ast.walk(fn)):
+                continue
             marks = {d.attr for d in fn.decorator_list
                      if isinstance(d, ast.Attribute)}
             if marks & {"live", "calendar"}:

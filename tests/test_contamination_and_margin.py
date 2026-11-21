@@ -392,30 +392,29 @@ def test_a_run_under_a_DIFFERENT_cron_is_excluded_not_rescaled():
     assert "NOT comparable" in body
 
 
-def test_current_cron_minutes_refuses_a_MULTI_cron_workflow():
-    """Two crons mean nearest-preceding attribution, which CENSORS the delay —
-    the `closing-lines` defect. Refuse rather than pick one."""
-    assert ci.current_cron_minutes() is None, (
+def test_current_cron_minutes_refuses_a_MULTI_cron_workflow(monkeypatch):
+    """Two crons mean nearest-preceding attribution, which CENSORS the delay
+    -- the `closing-lines` defect. Refuse rather than pick one.
+
+    STAGE 34 (2026-11-21): the live workflow now carries ONE cron, the
+    11:00 UTC fallback, so the reader resolves it. The refusal is driven
+    on the split shape the workflow carried until today, through the
+    reader's own `sha` seam, so it stays exercised."""
+    split = ("on:\n  schedule:\n    - cron: '30 0 * * 6,0'\n"
+             "    - cron: '0 1 * * 1-5'\n")
+    monkeypatch.setattr(ci, "_sh", lambda *a, **k: split)
+    assert ci.current_cron_minutes(sha="split-shape") is None, (
         "the single-cron reader resolved a value for a SPLIT workflow - "
         "that is nearest-preceding attribution, which censors the delay")
-    # The refusal is now EXERCISED BY PRODUCTION rather than hypothetical,
-    # and refusing is no longer sufficient: a day type is exactly the axis
-    # on which the two crons do NOT compete, because the week is
-    # partitioned and no run can have both as its nearest predecessor.
-    by_type = ci.current_crons_by_daytype()
-    # THEY DIVERGE AGAIN FROM 2026-10-22 (`s5.19`): weekend 00:30, weekday
-    # 01:00. They were both 0 from 2026-10-18 after `0 4` measured a -241m
-    # binding margin, and the split survived as two entries even while the
-    # minutes were equal -- because the series are keyed by DAY TYPE, not by
-    # cron minute, so equal minutes never pooled them. Now each is the latest
-    # 15-minute boundary clearing the registered 60 against its OWN localised
-    # floor and its OWN slow-cluster spread, and the weekend's is the earlier
-    # one because its floor is (12:00 local against 12:30).
-    assert by_type == {"weekend": 30, "weekday": 60}, by_type
-    assert ci.current_cron_minutes() is None, (
-        "the single-cron reader resolved a value even though BOTH crons sit "
-        "at minute 0 - equal minutes are still two crons, and the reader must "
-        "refuse a multi-cron file on its shape, not on its values")
+    equal = split.replace("30 0 * * 6,0", "0 0 * * 6,0").replace(
+        "0 1 * * 1-5", "0 0 * * 1-5")
+    monkeypatch.setattr(ci, "_sh", lambda *a, **k: equal)
+    assert ci.current_cron_minutes(sha="equal-minutes") is None, (
+        "equal minutes are still two crons; refuse on shape, not values")
+    monkeypatch.undo()
+    assert ci.current_cron_minutes() == 660
+    assert ci.current_crons_by_daytype() == {"weekend": 660,
+                                             "weekday": 660}
     assert ci.MARGIN_TRAILING_DAYS == 28
 
 

@@ -1304,6 +1304,10 @@ def prospective(cohort: Optional[str] = None,
                                 "odds": float(o), "p": p}
     latest = {}
     for d, oc, ps, fe in runs:
+        # Stage 34: ALREADY_RAN_TODAY records a run that stopped, not an
+        # answer about the day -- it must not overwrite the day's row.
+        if oc == "ALREADY_RAN_TODAY":
+            continue
         latest[d] = (oc, ps, fe)
     by_outcome = Counter(oc for oc, _ps, _fe in latest.values())
     counts = [ps for oc, ps, _fe in latest.values()

@@ -36,13 +36,84 @@ NONE_QUALIFIED = "NONE_QUALIFIED"
 NO_FIXTURES = "NO_FIXTURES"
 NO_PRICED_FIXTURES = "NO_PRICED_FIXTURES"
 INCOMPLETE = "INCOMPLETE"
+#: Stage 34 (2026-11-21): a run that found the day already done and stopped
+#: without evaluating or sending anything. A RECORD OF A RUN, NOT AN ANSWER
+#: ABOUT THE DAY -- see `NOT_A_DAY_OUTCOME`.
+ALREADY_RAN_TODAY = "ALREADY_RAN_TODAY"
 OUTCOMES = (PICKS_MADE, NONE_QUALIFIED, NO_FIXTURES, NO_PRICED_FIXTURES,
-            INCOMPLETE)
+            INCOMPLETE, ALREADY_RAN_TODAY)
 
 #: The outcomes that are a valid answer with no pick: the day was looked at,
 #: completely, and the answer was "nothing". Everything else is either a pick
 #: or a reason the alert should look.
 EVALUATED_EMPTY = (NONE_QUALIFIED, NO_FIXTURES)
+
+# ── ONE RUN PER DAY. Stage 34, 2026-11-21. ───────────────────────────────────
+#
+# The card is published by an external dispatch at 10:30 Europe/Sofia, with
+# a late fallback cron as a safety net. Either can start a run, and GitHub
+# may queue two. The client must never receive a second card, so a run that
+# finds the day COMPLETED stops before it fetches, settles, evaluates or
+# sends anything, and records `ALREADY_RAN_TODAY`.
+#
+#: The outcomes that mean the day's client message was PRODUCED: the card, or
+#: the one plain zero-pick line. NO_PRICED_FIXTURES and INCOMPLETE are not in
+#: it -- a run that failed leaves the day open, so the next run still runs.
+COMPLETED = (PICKS_MADE,) + EVALUATED_EMPTY
+#: Rows that describe a RUN, not the DAY. Every reader that takes "the latest
+#: row per day" as the day's outcome must skip these, or a later no-op run
+#: would overwrite the day's real answer.
+NOT_A_DAY_OUTCOME = (ALREADY_RAN_TODAY,)
+
+
+def completed_today(db, pick_date, strict: bool = False) -> Optional[dict]:
+    """The row that completed `pick_date`, or None. Never raises.
+
+    STATED LIMIT: the row is written BEFORE the card is sent, so a first run
+    that recorded its outcome and then failed to DELIVER leaves the day
+    "completed" and a second run will not resend it. That case is what
+    `--resend` exists for; a second, different card is what this prevents.
+    On a database error this returns None -- FAIL OPEN, because a lost card
+    is the larger harm and the in-run guard reads the same table again.
+    `strict=True` RAISES instead, for a caller that must SAY it could not
+    read: returning None there would print "no completed run" about a
+    table nobody read -- an unreadable answer reported as an empty one.
+    """
+    try:
+        from src.data.models import PickRun
+        with db.get_session() as s:
+            row = (s.query(PickRun)
+                   .filter(PickRun.pick_date == pick_date,
+                           PickRun.outcome.in_(COMPLETED))
+                   .order_by(PickRun.recorded_at)
+                   .first())
+            # The OUTCOME decides, not the row's existence: anything that is
+            # not literally a completed outcome -- including a stand-in
+            # object -- is not proof the day is done.
+            if row is None or getattr(row, "outcome", None) not in COMPLETED:
+                return None
+            return {"outcome": row.outcome,
+                    "recorded_at": str(row.recorded_at),
+                    "picks_saved": row.picks_saved,
+                    "model_version": row.model_version}
+    except Exception as exc:                          # noqa: BLE001
+        if strict:
+            raise
+        try:
+            from src.utils.logger import get_logger
+            get_logger().warning(f"completed_today not readable: {exc}")
+        except Exception:                             # pragma: no cover
+            pass
+        return None
+
+
+def record_already_ran(db, *, pick_date, selection_mode: str, done: dict,
+                       model_version: str = "") -> bool:
+    """Record that this run found the day done and stopped. NEVER raises."""
+    return record(db, pick_date=pick_date, selection_mode=selection_mode,
+                  outcome=ALREADY_RAN_TODAY, fixtures_on_slate=None,
+                  fixtures_evaluated=None, analysis_errors=0, picks_saved=0,
+                  model_version=model_version)
 
 #: The stages `get_daily_picks` reports on `agent.last_pick_run`.
 STAGE_ALREADY_GENERATED = "ALREADY_GENERATED"

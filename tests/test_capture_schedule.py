@@ -74,14 +74,19 @@ def test_the_schedule_still_covers_the_evening_peak():
 
 
 def test_daily_picks_still_runs_before_the_first_capture_window():
-    """The ordering the early window depends on. If daily-picks moves later,
-    10:47 silently becomes the 09:17 case this test was written to prevent."""
-    picks = pathlib.Path(".github/workflows/daily-picks.yml").read_text(encoding="utf-8")
-    m = re.search(r"cron:\s*'(\d+)\s+(\d+)\s", picks)
-    assert m, "could not read the daily-picks cron"
-    picks_at = int(m.group(2)) * 60 + int(m.group(1))
+    """The ordering the early window depends on. STAGE 34 (2026-11-21):
+    the card is published by an external dispatch at 10:30 Europe/Sofia
+    -- 08:30 UTC in winter, 07:30 in summer -- and a full run took at
+    most 77.0 min (n=38, `measured` 2026-11-21), so picks exist before
+    the 10:47 window in both seasons. The workflow cron (11:00 UTC) is a
+    late FALLBACK: on a missed-dispatch day the windows before its card
+    find nothing to capture -- a stated cost of the safety net."""
+    import datetime as _d
+    from scripts.schedule_deadline import dispatch_utc_min
     earliest = min(h * 60 + mi for h, mi in _hours())
-    assert picks_at < earliest, (
-        f"daily-picks now fires at {picks_at // 60:02d}:{picks_at % 60:02d} but "
-        f"the first capture window is {earliest // 60:02d}:{earliest % 60:02d} — "
-        "capture would run before any pick exists")
+    for day in (_d.date(2026, 12, 15), _d.date(2027, 6, 15)):
+        done_by = dispatch_utc_min(day) + 77.0
+        assert done_by < earliest, (
+            f"{day}: the dispatched run can still be running at "
+            f"{int(done_by) // 60:02d}:{int(done_by) % 60:02d}, after the first "
+            f"capture window {earliest // 60:02d}:{earliest % 60:02d}")

@@ -247,6 +247,12 @@ def check(day: _dt.date, settlement: Optional[_dt.date] = None) -> dict:
                 "model_version, recorded_at "
                 "FROM pick_runs WHERE pick_date = :d ORDER BY recorded_at"),
                 {"d": day})]
+        # Stage 34: a run that found the day done and stopped records
+        # ALREADY_RAN_TODAY -- a record of the RUN, not the day. It is
+        # counted, and kept out of the rows the day's outcome is read from.
+        already_ran = [r for r in runs
+                       if r["outcome"] in _pr.NOT_A_DAY_OUTCOME]
+        runs = [r for r in runs if r["outcome"] not in _pr.NOT_A_DAY_OUTCOME]
         shadow = [] if "shadow_picks" not in present else [
             {"match_id": r[0], "rule": r[1], "selection": r[2], "odds": r[3],
              "p": r[4]}
@@ -260,6 +266,8 @@ def check(day: _dt.date, settlement: Optional[_dt.date] = None) -> dict:
                                           "headSha", "conclusion")}
                 if run else "UNEVALUATED: no scheduled run started that day"),
         "tables_present": sorted({"pick_runs", "shadow_picks"} & present),
+        # Stage 34: later runs that found the day done and sent nothing.
+        "already_ran_today": [str(r.get("recorded_at")) for r in already_ran],
         "picks": {"n": len(picks),
                   "odds": sorted(p["odds"] for p in picks if p["odds"]),
                   "p": sorted(p["p"] for p in picks if p["p"] is not None),

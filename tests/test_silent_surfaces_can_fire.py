@@ -194,6 +194,11 @@ SURFACE_CENSUS = {
     # self-test did not exist in the window -- and its positive control is the
     # 2026-10-12 model-integrity registration, which FAILS it.
     "12 pattern self-test":              (0, 0, 0),
+    # ADDED 2026-11-21 (Stage 34) with the surface itself: the schedule margin
+    # is measured from the dispatched run's start, and with no dispatched run
+    # measured (or the runs unreadable) it is UNEVALUATED and alarms. Zero
+    # firings in the window because it did not exist.
+    "13 dispatch margin UNEVALUATED":    (0, 0, 0),
 }
 
 
@@ -204,7 +209,8 @@ def test_the_CENSUS_is_recorded_with_its_window_and_arithmetic():
     assert firings == 163
     assert findings == 6
     assert changes == 5
-    assert len(SURFACE_CENSUS) == 12, (
+    # 12 -> 13 on 2026-11-21: the dispatch-margin UNEVALUATED surface.
+    assert len(SURFACE_CENSUS) == 13, (
         f"{len(SURFACE_CENSUS)} surfaces recorded; the audit has "
         f"{len(SURFACE_CENSUS)} append sites and the two must agree")
     # the ratio is the finding: 163 firings bought 5 changes

@@ -202,7 +202,11 @@ from scripts.capture_critical import (
 #: own reading (critical=False, via=[]) and that is the right side: it
 #: compares README.md with config.example.yaml, and a stale README must
 #: never be able to stop a picks run.
-CENSUS = {"files": 161, "capture_critical": 83, "not_critical": 78}
+#: RE-MEASURED 2026-11-21, Stage 34: files 161 -> 163, capture_critical
+#: 83 -> 84 (`test_once_per_day.py`, via src.data.database/models -- it
+#: guards the one-card-per-day rule, hermetic on SQLite), not_critical
+#: 78 -> 79 (`test_dispatch_margin.py`, critical=False, via=[]).
+CENSUS = {"files": 163, "capture_critical": 84, "not_critical": 79}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -523,8 +527,13 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       parametrised case renamed "asked days" -> "asked day", which now
     #       plants its row on the asked day itself. Hermetic, under
     #       `no_network`.
-    assert len(gate) == 1855, (
-        f"the gating selection is {len(gate)}, recorded 1855 — say what moved")
+    #   +15 2026-11-21, Stage 34, by node id against ab8eb99: 22 added, 7
+    #       removed -- 13 in test_once_per_day.py (one card per day, the
+    #       four controls driven), 9 added / 7 removed in
+    #       test_picks_run_guard.py (the window re-pointed at the 11:00
+    #       fallback, and a COMPLETED day standing the guard down).
+    assert len(gate) == 1870, (
+        f"the gating selection is {len(gate)}, recorded 1870 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the
@@ -717,8 +726,13 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #   mark follows the mechanism). The hook lives in
     #   tests/reminder_kinds.py, NOT conftest: importing it from conftest
     #   moved all 44 nodes of the reminders file into the gate.
-    assert len(nong) == 1261, (
-        f"the non-gating selection is {len(nong)}, recorded 1261")
+    #   2026-11-21, Stage 34: +16 by node id against ab8eb99 (23 added, 7
+    #   removed) -- 15 in test_dispatch_margin.py; test_cron_split_by_
+    #   daytype.py 6 replaced by 6 (the cron sizing retired, the dispatch
+    #   regime asserted); test_cron_moved.py +2 / -1 (a live reminder
+    #   closed into a non-live record).
+    assert len(nong) == 1277, (
+        f"the non-gating selection is {len(nong)}, recorded 1277")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 
