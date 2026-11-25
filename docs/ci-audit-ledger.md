@@ -40321,3 +40321,267 @@ Suite: 3155 passed, 2 skipped. One skip is the dispatch reminder's explicit
 UNEVALUATED within its grace to 2026-11-24.
 
 *Recorded 2026-11-21.*
+
+---
+
+## 2026-11-25 — STAGE 35: `FIRST DISPATCH VERIFIED`, `FALLBACK`, `ALL WORKFLOWS`, `SETTLEMENTS`
+
+Directive dated 2026-11-22; resumed 2026-11-25 after an interruption, so this
+entry covers four dispatched days (11-22..11-25), not one. Fingerprint
+`s5.23 / 5bca73`, re-read after every edit; config untouched.
+
+### `FIRST DISPATCH VERIFIED` — four of four
+
+Source: `gh run view --json jobs`. Delay = first job's start minus 10:30
+Europe/Sofia (EET, UTC+2); time-to-picks = the picks step's completion minus
+the run's creation. n=4, grain = dispatched run.
+
+| day | created (UTC / Sofia) | first job delay | picks ready (Sofia) | time-to-picks | slate / evaluated / errors | picks |
+|---|---|---|---|---|---|---|
+| Sun 11-22 | 08:30:39 / 10:30:39 | 0.70 min | 11:09:36 | 38.95 min | 69 / 64 / 0 | 13 |
+| Mon 11-23 | 08:30:43 / 10:30:43 | 0.77 min | 10:58:42 | 27.98 min | 14 / 12 / 0 | 2 |
+| Tue 11-24 | 08:30:42 / 10:30:42 | 0.75 min | 11:11:00 | 40.30 min | 31 / 26 / 0 | 13 |
+| Wed 11-25 | 08:30:39 / 10:30:39 | 0.72 min | 11:00:00 | 29.35 min | 18 / 17 / 0 | 7 |
+
+* **The gate let each through.** The `once` job printed "FIRST RUN TODAY: no
+  completed run for <day>; the run proceeds."
+* **The record:** `pick_runs` holds exactly one `PICKS_MADE` per day.
+* **`first_run_check`: 10 of 10 PASS on all four days.** It checks cohort,
+  price floor 1.70, p floor 0.54, one pick per fixture, `pick_runs`, client
+  delivery receipt, no review call, no forced pick, shadow stored, and shadow
+  not a pick.
+  * Delivery receipts: `report=daily picks ... sent=N failed=none` and
+    `report=settlement report ... sent=1 failed=none`, every day.
+  * Taken odds, mean: 1.730 / 1.725 / 1.746 / 1.730 (range 1.70–1.80).
+  * Blended p, mean: 0.5580 / 0.5563 / 0.5564 / 0.5557.
+  * Shadow rows, one per evaluated fixture: 64 / 12 / 26 / 17.
+* **The margin on the dispatched start**, from the audit of 11-25 (n=4
+  dispatches, delay 0.7 min each; deadlines are local anchors, so the
+  weekday is 12:30 local = 10:30 UTC and the weekend 12:00 local = 10:00
+  UTC):
+  * Weekday: **+55 min**, against the audit's 30. Clears.
+  * Weekend: **+24.6 min**, below 30. Acknowledged on its mechanism
+    (shortfall 5.37 ≤ 17.69) while the duration term is the superseded
+    64.59.
+  * This is the operator's accepted weekend cost.
+* **Exposure on the dispatched Sunday (11-22):** picks were ready at 11:09:36
+  local, and the earliest kickoff ever configured on a weekend is 12:00 local.
+  **0 kickoffs before picks were ready.**
+* **The pre-dispatch UNEVALUATED red cleared by measurement:** the first
+  audit after the first dispatch (11-22 09:12) was green with n=1.
+
+### `FALLBACK` — it fired three times, and three times it published nothing
+
+| day | fallback created (UTC) | lateness after `0 11` | `once` | picks job | `pick_runs` |
+|---|---|---|---|---|---|
+| 11-21 | — | did not fire | — | — | — |
+| 11-22 | 18:11:29 | 7h11 (431 min) | success | **skipped** | `ALREADY_RAN_TODAY` 18:11:40 |
+| 11-23 | 22:24:23 | 11h24 (684 min) | success | **skipped** | `ALREADY_RAN_TODAY` 22:24:37 |
+| 11-24 | 20:58:07 | 9h58 (598 min) | success | **skipped** | `ALREADY_RAN_TODAY` 20:58:20 |
+
+* **Each fallback run lasted about 15 seconds.** Nothing was fetched, settled
+  or sent.
+* **The client received one card per day,** each with one delivery receipt.
+* **11-21:** the cron was pushed at 11:15 UTC, after that day's 11:00 slot,
+  so no slot existed.
+* **11-25:** not landed when this was written; the 11-25 audit read it
+  PENDING.
+
+**THE DATE RISK IS NO LONGER REMOTE, AND IT IS NOW GUARDED.** The fallback's
+lateness went 431 → 684 → 598 min. Two sibling workflows' 11-23 slots landed
+700 min late, and Reminders' landed at 00:40 on 11-24. Midnight is 780 min
+after 11:00.
+* **What would happen unguarded:** a fallback landing after midnight reads
+  the NEW date as open. It would publish that day's card at about 01:00 UTC,
+  on prices eight hours older than the dispatch's, and the 10:30 dispatch
+  would then find the day done.
+* **The guard, `pick_runs.late_fallback`:** a `schedule` run that starts
+  before 11:00 UTC on its own date is yesterday's slot. GitHub never starts a
+  scheduled run early.
+  * It stands down in the `once` gate.
+  * It stands down again in `--picks` if the gate failed open.
+  * It is not recorded, because the new day has not run.
+* **Driven through both layers:**
+  * the 00:40 run sends nothing and leaves the day open, and the 08:30
+    dispatch then publishes it;
+  * the known-wrong reproduces the harm: the 00:40 card goes out and the
+    dispatch is stopped;
+  * four runs that must still publish do: the fallback at 20:58, the
+    fallback at exactly 11:00, the dispatch at 08:30, and a manual dispatch
+    at 02:00.
+* **The cost, stated:** on a day the dispatch fails AND the fallback lands
+  after midnight, that day gets no card. A card for a day that has passed is
+  not a card.
+
+### `ALL WORKFLOWS` — 2026-11-22 09:15 UTC to 2026-11-25 09:50 UTC
+
+All runs are on `00f16bb`.
+
+| workflow | trigger | runs | green | red | late against nominal (UTC) |
+|---|---|---|---|---|---|
+| Daily Betting Picks | dispatch | 4 | 4 | 0 | dispatch +0.65..0.72 min |
+| Daily Betting Picks | schedule (`0 11`) | 3 | 3 | 0 | 431 / 684 / 598 min |
+| CI Audit | schedule (`0 12`) | 3 | 3 | 0 | 439 / 700 / 612 min |
+| CI Audit | workflow_run | 18 | 14 | **4** | — |
+| Reminders | schedule (`0 13`) | 3 | 1 | **2** | 433 / 700 (landed 11-24 00:40) / 597 min |
+| Reminders | workflow_run | 6 | 3 | **3** | — |
+| Non-Gating Tests | workflow_run | 6 | 6 | 0 | — |
+| Paper Trading Report | schedule (`23 10`) | 3 | 3 | 0 | 450 / 702 / 618 min |
+| Closing Line Capture | schedule | 9 | 9 | 0 | slots not identifiable |
+
+**Closing Line Capture:** 2–3 runs a day against 9 nominal slots. GitHub
+appears to have dropped the rest; this is recorded as an observation, not
+classified.
+
+**THE FOUR CI AUDIT REDS — MACHINERY, ONE FINDING, FALSE.** All four
+(11-23 22:06 and 22:15; 11-24 20:42 and 20:53) read "1 scheduled daily-picks
+run NEVER EXISTED: <day> - not late, ABSENT".
+* **What actually happened:** each audit ran before that day's fallback
+  landed (22:24 and 20:58), and each next audit was green.
+* **The cause:** `missing_scheduled_runs` judged PENDING against the measured
+  `OBSERVED_LATENESS_MAX_MIN = 458` (2026-10-12), and 684 overtook it.
+* **The clearing action:** the PENDING bound is now **structural**. A slot is
+  MISSING only when a LATER slot has run (the scheduler skipped it), or 24 h
+  after its nominal time, when the next slot is due. No lateness figure
+  remains in the decision.
+  * Runs are attributed to the slot they belong to: a run before the nominal
+    minute is yesterday's.
+  * That attribution is bounded to the current cron's regime. The live read
+    caught the unbounded version calling 11-21 MISSING, because the 07:30 run
+    of the old `30 0` cron was attributed to 11-20.
+  * 458 is kept as the record, with what overtook it.
+
+**THE FIVE REMINDERS REDS (11-24 00:40 onwards) — VERDICT, ONE FINDING:
+OPERATOR DECISION NEEDED.**
+* `test_the_H1_RESERVATION_WINDOW_EXPIRES`: "H1 has been DORMANT since
+  2026-11-11 and its review anchor 2026-11-24 has passed".
+* The other 8 selected reminders passed or skipped (`pytest exit=1,
+  SELECTED=9 RAN=9, FAILED=1`; kind: calendar=1).
+* **The record offers two choices:** report the two review mechanisms and
+  size a window, or re-anchor to the next UEFA cluster with the reason.
+  Deletion is excluded.
+* **The state of the mechanisms:** neither has reported. The coverage
+  ceiling was to be re-measured on s5.21, the cohort is now s5.23, and no
+  venue with measurable depth has appeared.
+* **The decision is Niki's; nothing was changed.**
+
+**THE REMINDERS RUNS' FIVE COLLECTION ERRORS — MACHINERY, PRE-EXISTING, ONE
+FINDING THE 11-16 ENTRY MISCLASSIFIED.**
+* **Not new:** they appear on every Reminders run back to 2026-10-29, the
+  oldest listed.
+* **The cause:** `selenium` (×4) and `sklearn` are not in the Reminders
+  install.
+* **One of the five was not "unrelated".** `test_empty_card_suppression.py`
+  holds the REGISTERED reminder `test_the_suppression_has_EXPIRED`. It ran in
+  NO workflow: the gate and non-gating exclude `calendar`, and here it could
+  not be imported. It passes locally, so nothing was due and nothing was
+  lost.
+* **Why the check missed it:** SELECTED and RAN agreed, because a module
+  that cannot be imported contributes to neither.
+* **Cleared:** the `flashscore_scraper` import moved into the one helper that
+  uses it. The module imports without `selenium`, and its gate membership is
+  unchanged because the import graph walks the whole module.
+* **Guarded:** every registry module must import with every package
+  `requirements.txt` lists that `reminders.yml` does not install made
+  unimportable.
+  * That set is derived from the two files.
+  * A new unmapped package fails the test.
+  * A canary that needs `selenium` must fail to import, or the check
+    verifies nothing.
+* **The other four errors** are non-reminder modules, still uncollectable in
+  that workflow, and harmless there.
+
+**THREE READERS STILL KEYED TO THE RETIRED TRIGGER — MACHINERY, MINE, FROM
+STAGE 34.**
+* **`first_run_check.find_run`** kept `event == "schedule"` only. On 11-22 it
+  found no run, and the three log checks read UNEVALUATED on a good card.
+  * It now takes the run that MADE the card: the earliest dispatch or
+    schedule run whose picks step succeeded, else the latest.
+  * On the three fallback days it chose the dispatch.
+* **`_regime_picks_series`** admitted scheduled runs only. The no-review
+  duration series stood at **n=6** across four dispatched days, and its
+  "about" date slid 11-26 → 11-28 → 12-01. It could never have reached n=10.
+  * From `DISPATCH_SINCE`, a dispatch is a publishing run; earlier dispatches
+    stay out as reruns.
+  * Live read: **n=9**, mean 25.99, sd 6.60, mean+3sd 45.80, max 40.30 min.
+* **`collect_dispatch_series`** kept every dispatch inside the 180-minute
+  window. A rerun after a failure, which `pipeline_loss_alert` itself
+  advises, would have entered as a 90-minute delay.
+  * It now takes one dispatch per local day, the first. Later ones are
+    excluded and counted.
+
+**Mutation, seven controls:** the six fixes above, plus the attribution's
+regime bound, each reverted in turn. **7 of 7 caught**, each restored
+byte-identical (sha256).
+
+**WHAT EACH WORKFLOW WILL REDDEN ON TOMORROW, 2026-11-26 — green is a
+prediction:**
+* **CI Audit and Reminders: RED by design, if the 11-26 dispatch
+  succeeds.**
+  * The no-review series reaches n=10.
+  * Both acknowledgements that hold "while n < 10" go **LAPSED**: the audit's
+    weekend +24.6 vs 30, and the weekday-margin reminder's +33.7 vs 60.
+  * The clearing action is registered: re-derive the duration term from the
+    no-review series.
+  * The last substitution (2026-11-06) was authorised and made FORWARD ONLY,
+    so this one waits for Niki.
+  * At today's n=9 figure (45.80) the AUDIT's margins would read weekday
+    +73.5 and weekend +43.5, so both would clear 30. The reminder's own
+    term is a different one, and its reading after the substitution is not
+    projected here.
+* **Reminders also stays RED on H1** until the decision.
+* **CI Audit should no longer redden in the evening** on a fallback that has
+  not landed. If it does, the new rule is wrong.
+* **Daily Betting Picks, Non-Gating, Paper Trading Report and Closing Line
+  Capture:** expected green.
+* **The fallback** should stand down on 11-25 and 11-26 with
+  `ALREADY_RAN_TODAY`. If it ever lands before 11:00 UTC, it should print
+  "LATE FALLBACK".
+
+### `SETTLEMENTS` — `s5.23 / 5bca73`
+
+**Population:** `saved_picks`, `disposition IS NULL AND evidence_status IS
+NULL`. The shadow is `shadow_picks` rule `standard`, graded on read by the
+deployed `_grade_selection`.
+
+**Method:** grain = pick, one per fixture; 1-unit flat stake; CIs are fixture
+bootstrap, percentile. Measured 2026-11-25.
+
+| card | settled | hit rate | avg odds | return | predicted |
+|---|---|---|---|---|---|
+| **11-21** live | 25/25 | 11/25 (44.0%) | 1.741 | **−23.6%** | 55.3% |
+| 11-21 shadow | 101/104 | 57.4% | 1.637 | −5.3% | 60.5% |
+| 11-21 paired, 24 fixtures | live | 41.7% | 1.740 | −27.8% | 55.3% |
+| | shadow | 41.7% | 1.606 | −31.8% | 64.2% |
+| 11-22 live | 13/13 | 61.5% | 1.730 | +6.5% | 55.8% |
+| 11-23 live | 2/2 | 50.0% | 1.725 | −12.5% | 55.6% |
+| 11-24 live | 13/13 | 53.8% | 1.746 | −4.8% | 55.6% |
+| 11-25 live | 0/7 | not settled | | | |
+
+**RUNNING TOTALS since `PROSPECTIVE_START` 2026-11-15.** Days with a card:
+11-15, 11-20..11-24.
+
+| | n | hit rate | avg odds | return | predicted |
+|---|---|---|---|---|---|
+| live | 63 | 52.4% (CI 39.7–65.1) | 1.737 | −8.7% (CI −30.6..+13.3) | 55.4% |
+| shadow | 226 | 55.8% (CI 49.5–61.9) | 1.657 | −8.1% (CI −18.8..+2.5) | 61.7% |
+| paired live, 58 fixtures | 58 | 51.7% | 1.739 | −9.8% | 55.4% |
+| paired shadow, same 58 | 58 | 53.4% | 1.634 | −12.4% | 64.4% |
+| live minus shadow | 58 | −1.7pp (CI −19.0..+15.5) | | +2.6pp (CI −26.4..+32.1) | |
+
+**n against the registered sizes:** 63 of the 865 the 53.7% ceiling needs at
+50% power. At the observed 5.7 picks/day that is reached about 2027-04-16;
+the 80%-power size of 1,785 about 2027-09-23. **Nothing is concluded.**
+
+### Census
+
+Files 163 (unchanged).
+* **Gate 1870 → 1878**, by node id against `00f16bb`: +8, −0, all late-fallback
+  controls.
+* **Non-gating 1277 → 1293:** +17, −1.
+
+Suite: 3179 passed, 1 skipped, 1 failed. The failure is
+`test_the_H1_RESERVATION_WINDOW_EXPIRES`, the H1 verdict above, which
+fails by date from 2026-11-24 on any commit.
+
+*Recorded 2026-11-25.*
