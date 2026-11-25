@@ -654,3 +654,102 @@ def test_there_is_NO_DATE_DRIVEN_RED_PENDING_and_that_is_MEASURED():
         f"the scan found {len(found)} dates but none shaped like a guard, so "
         f"it may be looking in the wrong place")
 
+
+
+# ── EVERY REMINDER MODULE IMPORTS WITH THE REMINDERS INSTALL. Stage 35. ──────
+#
+# `test_the_suppression_has_EXPIRED` is registered above, and its module
+# imported `flashscore_scraper` at module level, which imports `selenium`,
+# which this workflow does not install. The module failed to collect on every
+# `reminders` run back to 2026-10-29 (the oldest listed), so the reminder ran
+# in NO workflow -- the gate and non-gating both exclude `calendar` -- while
+# SELECTED and RAN agreed, because a module that cannot be imported
+# contributes to neither. The 2026-11-16 ledger called the five collection
+# errors "the known unrelated imports"; one of the five was not unrelated.
+#
+# The registry check above reads markers from source, so it cannot see this.
+# This one imports each registered module with every package the workflow
+# does not install made unimportable, derived from the two files.
+
+#: Distribution -> import name, for each package `requirements.txt` lists and
+#: `reminders.yml` does not install. A distribution missing from this table
+#: FAILS the test below, so the table cannot drift silently.
+_IMPORT_NAME = {
+    "alembic": "alembic", "anthropic": "anthropic",
+    "apscheduler": "apscheduler", "camoufox": "camoufox",
+    "lightgbm": "lightgbm", "lxml": "lxml", "nltk": "nltk",
+    "playwright": "playwright", "pyarrow": "pyarrow",
+    "pytest-asyncio": "pytest_asyncio", "python-telegram-bot": "telegram",
+    "requests": "requests", "scikit-learn": "sklearn",
+    "selenium": "selenium", "statsmodels": "statsmodels",
+    "transformers": "transformers",
+    "undetected-chromedriver": "undetected_chromedriver",
+    "vadersentiment": "vaderSentiment", "xgboost": "xgboost",
+}
+
+#: A module that DOES need `selenium` at import: the canary that proves the
+#: blocking works, so an empty failure list is a finding and not an absence.
+_CANARY = "tests.test_forced_picks"
+
+
+def _dist(token: str) -> str:
+    return re.split(r"[<>=!~;\[ ]", token.strip().strip("\"'"), maxsplit=1)[0].lower()
+
+
+def _not_installed_by_reminders():
+    req = {_dist(l) for l in pathlib.Path("requirements.txt").read_text(
+        encoding="utf-8").splitlines()
+        if l.strip() and not l.lstrip().startswith("#")}
+    lines = SRC.splitlines()
+    start = next(i for i, l in enumerate(lines)
+                 if "pip install -c constraints.txt" in l)
+    block = []
+    for l in lines[start:]:
+        block.append(l.split("constraints.txt", 1)[-1])
+        if not l.rstrip().endswith("\\"):
+            break
+    installed = {_dist(t) for t in " ".join(block).replace("\\", " ").split()
+                 if t.strip()}
+    return sorted(req - installed), sorted(installed)
+
+
+def test_every_REMINDER_module_IMPORTS_with_the_REMINDERS_install_only():
+    import ast as _ast
+    import os
+    import subprocess
+    import sys
+
+    absent, installed = _not_installed_by_reminders()
+    assert "selenium" in absent and "scikit-learn" in absent, (
+        f"the derivation no longer finds the two packages the 2026-10-29.. "
+        f"collection errors named; installed parsed as {installed}")
+    assert "sqlalchemy" in installed and "pandas" in installed, installed
+    unmapped = [d for d in absent if d not in _IMPORT_NAME]
+    assert unmapped == [], (
+        f"requirements.txt gained {unmapped}, which reminders.yml does not "
+        f"install; add the import name to _IMPORT_NAME")
+
+    blocked = [_IMPORT_NAME[d] for d in absent]
+    mods = [f[:-3].replace("/", ".") for f in REMINDERS] + [_CANARY]
+    code = (
+        "import importlib, sys\n"
+        f"for m in {blocked!r}:\n    sys.modules[m] = None\n"
+        "bad = []\n"
+        f"for mod in {mods!r}:\n"
+        "    try:\n        importlib.import_module(mod)\n"
+        "    except ImportError as e:\n        bad.append((mod, str(e)))\n"
+        "print(repr(bad))\n")
+    env = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
+    env.update(BETTING_AGENT_ALLOW_SQLITE="1", PYTHONIOENCODING="utf-8")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       text=True, encoding="utf-8", env=env, timeout=600)
+    assert r.returncode == 0, r.stderr[-3000:]
+    bad = dict(_ast.literal_eval(r.stdout.strip().splitlines()[-1]))
+    assert _CANARY in bad, (
+        f"the canary {_CANARY} imported with selenium blocked, so the "
+        f"blocking verifies nothing: {bad}")
+    hidden = {m: e for m, e in bad.items() if m != _CANARY}
+    assert hidden == {}, (
+        f"registered reminder module(s) cannot be imported with the "
+        f"`reminders` install, so their reminders run in NO workflow: "
+        f"{hidden}")

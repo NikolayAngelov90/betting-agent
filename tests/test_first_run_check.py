@@ -175,3 +175,72 @@ def test_NO_SHADOW_rows_pass_only_when_NOTHING_was_evaluated():
     assert none_evaluated["shadow_stored"]["state"] == frc.PASS
     six_evaluated = frc.evaluate([], _zero(), [], ZERO)
     assert six_evaluated["shadow_stored"]["state"] == frc.FAIL
+
+
+# ── WHICH RUN MADE THE CARD. Stage 35, 2026-11-22. ───────────────────────────
+#
+# The selector read `event == "schedule"` alone. On the first dispatched day
+# it found no run, and the three checks that read the run log came back
+# UNEVALUATED on a card that was fine. A day can now hold a dispatch, the
+# fallback the once-per-day gate stopped, and a rerun after a failure.
+
+import datetime as _dt
+import json as _json
+
+from scripts.ci_audit import PICKS_STEP_NAME as _PICKS
+
+_DAY = _dt.date(2026, 11, 22)
+
+
+def _listing(*runs):
+    return _json.dumps([{"databaseId": rid, "startedAt": at, "event": ev,
+                         "headSha": "00f16bb", "conclusion": "success",
+                         "status": "completed"} for rid, at, ev in runs])
+
+
+def _jobs(**picks):
+    """`run_id -> jobs`: a picks step with the given conclusion, or the
+    gate-stopped shape -- a skipped job with no steps -- when absent."""
+    def jobs_of(rid):
+        c = picks.get(f"r{rid}")
+        if c is None:
+            return [{"name": "once", "steps": []},
+                    {"name": "daily-picks", "conclusion": "skipped",
+                     "steps": []}]
+        return [{"name": "daily-picks",
+                 "steps": [{"name": _PICKS, "conclusion": c}]}]
+    return jobs_of
+
+
+def test_the_DISPATCHED_run_is_found_and_the_STOPPED_fallback_is_not():
+    raw = _listing((2, "2026-11-22T18:11:29Z", "schedule"),
+                   (1, "2026-11-22T08:30:39Z", "workflow_dispatch"))
+    run = frc.find_run(_DAY, raw=raw, jobs_of=_jobs(r1="success"))
+    assert run["databaseId"] == 1, run
+
+
+def test_KNOWN_WRONG_the_SCHEDULE_ONLY_rule_finds_nothing_on_a_dispatched_day():
+    """The 2026-11-22 defect, reproduced on the same listing."""
+    raw = _listing((1, "2026-11-22T08:30:39Z", "workflow_dispatch"))
+    old = [r for r in _json.loads(raw) if r["event"] == "schedule"]
+    assert old == [], "the reproduction does not reproduce"
+    assert frc.find_run(_DAY, raw=raw, jobs_of=_jobs(r1="success")) \
+        is not None, "a dispatched day still has no run"
+
+
+def test_a_FAILED_dispatch_then_a_FALLBACK_that_made_the_card():
+    raw = _listing((1, "2026-11-22T08:30:39Z", "workflow_dispatch"),
+                   (2, "2026-11-22T18:11:29Z", "schedule"))
+    run = frc.find_run(_DAY, raw=raw,
+                       jobs_of=_jobs(r1="failure", r2="success"))
+    assert run["databaseId"] == 2, run
+
+
+def test_NO_run_made_the_card_returns_the_LATEST_so_its_failure_is_read():
+    raw = _listing((1, "2026-11-22T08:30:39Z", "workflow_dispatch"),
+                   (2, "2026-11-22T18:11:29Z", "schedule"))
+    run = frc.find_run(_DAY, raw=raw,
+                       jobs_of=_jobs(r1="failure", r2="failure"))
+    assert run["databaseId"] == 2, run
+    assert frc.find_run(_dt.date(2026, 11, 23), raw=raw,
+                        jobs_of=_jobs()) is None, "another day's runs"

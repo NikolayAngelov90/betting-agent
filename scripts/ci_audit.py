@@ -1999,7 +1999,7 @@ def removal_regime_picks_series(limit: int = 120):
 def _regime_picks_series(since: str, until, regime: str, limit: int = 120):
     """`{'n','mean','sd','mean_plus_3sd','max','to_ten','members'}`.
 
-    Time-to-picks for every scheduled weekday `daily-picks` run whose commit
+    Time-to-picks for every PUBLISHING weekday `daily-picks` run whose commit
     CONTAINS `since` and, when `until` is given, does NOT contain `until` --
     one regime, bounded at both ends. Membership is decided from the commit
     graph, so a run on a branch that predates the change cannot sneak in on a
@@ -2056,7 +2056,7 @@ def _regime_picks_series(since: str, until, regime: str, limit: int = 120):
         c[:7] for c in _sh("git", "rev-list", f"{until}..HEAD").split()})
     vals, members = [], []
     for r in rows:
-        if r.get("event") != "schedule":
+        if not _publishes_the_card(r):
             continue
         sha = r.get("headSha") or ""
         if not sha:
@@ -2094,6 +2094,28 @@ def _regime_picks_series(since: str, until, regime: str, limit: int = 120):
         .isoformat() if missing else "reached")
     _PICKS_SERIES_CACHE[_cache_key] = out
     return out
+
+
+def _publishes_the_card(r) -> bool:
+    """A run that PUBLISHES the card, and so belongs in a time-to-picks series.
+
+    Stage 35, 2026-11-22. Until Stage 34 that was `event == "schedule"`, and a
+    `workflow_dispatch` was a manual RERUN, kept out. From `DISPATCH_SINCE`
+    the card is published BY a dispatch, and the scheduled run is the
+    fallback -- usually stopped by the once-per-day gate, with no picks step
+    to time. Left as it was, the rule admitted only the runs that no longer
+    publish: the no-review series stood at n=6 on 2026-11-22 and could never
+    have reached the n=10 its re-derivation is registered at.
+
+    A dispatch from before `DISPATCH_SINCE` stays out: it was a rerun.
+    """
+    ev = r.get("event")
+    if ev == "schedule":
+        return True
+    if ev != "workflow_dispatch":
+        return False
+    t = _as_datetime(r.get("createdAt"))
+    return t is not None and t.date() >= DISPATCH_SINCE
 
 
 def _time_to_picks(run_id: str, started):
@@ -2384,7 +2406,7 @@ def format_picks_bound_status(s: dict) -> str:
         f"                   {s['regime']}",
         f"  needed         : n>={s['needed']} "
         + (f"-> ~{s['to_ten_weeks']} weeks, about {s['to_ten_date']} "
-           f"(simulated from ~5 scheduled weekday runs/week)"
+           f"(simulated from ~5 publishing weekday runs/week)"
            if s["to_ten_date"] != "reached" else "-> REACHED, re-derive now"),
         # CORRECTED 2026-11-13: this line printed PICKS_BOUND_OLD_POPULATION
         # (the SERIAL full-card n=4 description) beside 40.35, which is the
@@ -3024,6 +3046,7 @@ def collect_dispatch_series(raw: str = None, since: _dt.date = None,
     if not isinstance(runs, list):
         out["unreadable"] = True
         return out
+    _in_window = []
     for r in runs:
         if r.get("event", "workflow_dispatch") != "workflow_dispatch":
             continue
@@ -3040,7 +3063,21 @@ def collect_dispatch_series(raw: str = None, since: _dt.date = None,
             continue
         from zoneinfo import ZoneInfo
         local_day = t.astimezone(ZoneInfo("Europe/Sofia")).date()
-        out["series"].append((local_day, delay, r.get("databaseId")))
+        _in_window.append((local_day, t, delay, r.get("databaseId")))
+    # ONE DISPATCH PER DAY: THE DAY'S FIRST. Stage 35, 2026-11-22. The first
+    # version kept EVERY in-window dispatch, so a re-dispatch -- a rerun
+    # after a failed run, which `pipeline_loss_alert` itself advises with
+    # `gh workflow run daily-picks.yml` -- entered the series as a delay of
+    # however long after 10:30 it was typed, and the margin read it as the
+    # scheduler's. The scheduler dispatches once; its delay is the first
+    # dispatch's. A later one the same local day is excluded and COUNTED.
+    _seen = set()
+    for local_day, t, delay, rid in sorted(_in_window, key=lambda x: x[:2]):
+        if local_day in _seen:
+            out["excluded"].append((t.isoformat(), rid))
+            continue
+        _seen.add(local_day)
+        out["series"].append((local_day, delay, rid))
     out["series"].sort()
     return out
 
@@ -3066,7 +3103,7 @@ def format_dispatch_regime(dispatch: dict, fallback_by_type: dict,
                 f"{sum(delays) / len(delays):.1f} min after 10:30 local "
                 f"(last: {s[-1][0]} {s[-1][1]:.1f} min, run {s[-1][2]})")
     excl = dispatch.get("excluded") or []
-    tail = [f"  manual dispatches outside the window, excluded: {len(excl)}"]
+    tail = [f"  manual dispatches (outside the window, or a repeat the same day), excluded: {len(excl)}"]
     fb = [l for _d, l in (fallback_by_type.get("weekday") or [])] +          [l for _d, l in (fallback_by_type.get("weekend") or [])]
     tail.append(f"  fallback cron lateness (INFORMATION ONLY, not the margin): "
                 f"n={len(fb)}" + (f" max={max(fb):.0f} min" if fb else ""))
@@ -3282,7 +3319,51 @@ def format_schedule_margin(m) -> str:
 #: maximum of 304 (n=9, under the retired `0 0`/`37 9` regimes). A bound that a
 #: single observation has already doubled is not a distribution — it is used
 #: here as a floor for PENDING and for nothing else.
+#:
+#: RETIRED AS THE PENDING BOUND 2026-11-25 (Stage 35), KEPT AS THE RECORD. It
+#: was overtaken: the `0 11` fallback's slot of 2026-11-23 landed 684 min late,
+#: and two sibling workflows' slots landed 700 min late the same day. The
+#: detector called the run ABSENT at 666 min, four audits went red on two
+#: evenings, and each cleared when the run landed. A measured lateness bound
+#: is overtaken by the next observation; see `PENDING_BOUND_MIN`.
 OBSERVED_LATENESS_MAX_MIN = 458
+
+#: THE PENDING BOUND SINCE STAGE 35: STRUCTURAL, NOT MEASURED. A daily slot
+#: still missing a day after its nominal time would land on the next slot, so
+#: it is not coming. Before that, a slot is MISSING only when a LATER slot has
+#: run -- the scheduler fired after it and skipped it -- which needs no
+#: lateness figure at all.
+PENDING_BOUND_MIN = 24 * 60
+
+#: What overtook the measured bound, per workflow, minutes past nominal, for
+#: the slot of 2026-11-23 (`gh run list`, measured 2026-11-25).
+LATENESS_THAT_RETIRED_THE_BOUND = {
+    "daily-picks `0 11`": 684, "ci-audit `0 12`": 700, "reminders `0 13`": 700}
+
+
+def _nominal_day(t: _dt.datetime, crons: dict) -> _dt.date:
+    """The day a SCHEDULED run belongs to. Stage 35, 2026-11-25.
+
+    GitHub never starts a scheduled run early, so a run that starts before its
+    cron's nominal minute on its own UTC date is the PREVIOUS day's slot,
+    landed after midnight -- lateness has reached 700 min on a 13:00 slot.
+    Keyed on the start date alone, that run would make its own day look
+    missing and the next day look already run.
+    """
+    d = t.date()
+    # ONLY UNDER THE CRON IT READS. `crons` is today's, and the detector
+    # applies it to the whole window; a run from an earlier regime started
+    # before 11:00 because ITS cron was at 00:30 or 01:00, not because it
+    # landed late. The fallback cron was pushed 2026-11-21 at 11:15 UTC,
+    # after that day's slot, so its first slot is the day after
+    # `DISPATCH_SINCE`. Caught by the live read: without this line the
+    # 11-21 07:30 run was attributed to 11-20 and 11-21 was called MISSING.
+    if d <= DISPATCH_SINCE:
+        return d
+    cron = crons.get("weekend" if d.weekday() >= 5 else "weekday")
+    if cron is not None and t.hour * 60 + t.minute < cron:
+        return d - _dt.timedelta(days=1)
+    return d
 
 
 def is_unparseable_run(r: dict) -> bool:
@@ -3353,7 +3434,8 @@ def format_unparseable(runs: List[dict], default_branch: str = "main") -> str:
 
 def missing_scheduled_runs(workflow: str = "daily-picks.yml",
                            days: int = 14,
-                           today: _dt.date = None) -> dict:
+                           today: _dt.date = None,
+                           now: _dt.datetime = None) -> dict:
     """Days whose scheduled run NEVER EXISTED, and today's PENDING state.
 
     THREE STATES, because two would lie. A past day with no scheduled run is
@@ -3404,11 +3486,20 @@ def missing_scheduled_runs(workflow: str = "daily-picks.yml",
         if r.get("event") != "schedule":
             continue
         try:
-            seen.add(_dt.datetime.fromisoformat(
-                r["createdAt"].replace("Z", "+00:00")).date())
-        except (KeyError, ValueError):
+            seen.add(_nominal_day(_dt.datetime.fromisoformat(
+                r["createdAt"].replace("Z", "+00:00")), crons))
+        except (KeyError, ValueError, AttributeError):
             continue
 
+    # ── A SLOT IS MISSING WHEN A LATER ONE RAN, OR A DAY HAS PASSED. ───────
+    # Stage 35, 2026-11-25. This compared TODAY's elapsed time with the
+    # measured `OBSERVED_LATENESS_MAX_MIN` (458) and called every earlier day
+    # missing outright. The fallback's 11-23 slot landed 684 min late, so the
+    # evening audits called it ABSENT before it arrived -- and a slot that
+    # lands after midnight is yesterday's, still pending on the next date.
+    # Neither question needs a lateness figure.
+    now = (now or _dt.datetime.now(_dt.timezone.utc)).replace(tzinfo=None)
+    latest = max(seen) if seen else None
     missing, pending = [], None
     for back in range(days, -1, -1):
         day = today - _dt.timedelta(days=back)
@@ -3418,17 +3509,15 @@ def missing_scheduled_runs(workflow: str = "daily-picks.yml",
             continue                      # no cron governs that day type
         if day in seen:
             continue
-        if day == today:
-            now = _dt.datetime.now(_dt.timezone.utc).replace(
-                tzinfo=None)
-            elapsed = (now - _dt.datetime.combine(
-                day, _dt.time(cron // 60, cron % 60))).total_seconds() / 60
-            if elapsed > OBSERVED_LATENESS_MAX_MIN:
-                missing.append(day)
-            elif elapsed > 0:
-                pending = (day, int(elapsed))
-        else:
+        elapsed = (now - _dt.datetime.combine(
+            day, _dt.time(cron // 60, cron % 60))).total_seconds() / 60
+        if elapsed <= 0:
+            continue                      # the slot has not come yet
+        if (latest is not None and latest > day) \
+                or elapsed > PENDING_BOUND_MIN:
             missing.append(day)
+        else:
+            pending = (day, int(elapsed))
     return {"state": "CHECKED", "missing": missing, "pending": pending,
             "window_days": days, "crons": crons}
 
@@ -3453,11 +3542,12 @@ def format_missing_runs(m: dict) -> str:
     if m["pending"]:
         day, elapsed = m["pending"]
         lines.append(
-            f"  today ({day}) has no scheduled run yet: {elapsed} min past "
-            f"nominal, against a measured maximum of "
-            f"{OBSERVED_LATENESS_MAX_MIN} min. PENDING, not missing - a run "
-            f"458 min late has already been observed, so this is not yet "
-            f"evidence of absence.")
+            f"  the slot of {day} has no scheduled run yet: {elapsed} min "
+            f"past nominal. PENDING, not missing - a slot is MISSING only "
+            f"when a later slot has run, or {PENDING_BOUND_MIN} min after "
+            f"its nominal time, when the next slot is due. Lateness has "
+            f"reached {max(LATENESS_THAT_RETIRED_THE_BOUND.values())} min "
+            f"(2026-11-23), so this is not yet evidence of absence.")
     return chr(10).join(lines)
 
 

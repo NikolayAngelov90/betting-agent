@@ -65,6 +65,41 @@ COMPLETED = (PICKS_MADE,) + EVALUATED_EMPTY
 #: would overwrite the day's real answer.
 NOT_A_DAY_OUTCOME = (ALREADY_RAN_TODAY,)
 
+#: The fallback cron's nominal minute, UTC: `0 11 * * *` in `daily-picks.yml`
+#: since Stage 34. Pinned to the workflow by `tests/test_once_per_day.py`.
+FALLBACK_CRON_UTC_MIN = 11 * 60
+
+
+def _utcnow():
+    """The wall clock, UTC. The ONE clock read of `late_fallback`, here so a
+    test sets it instead of inheriting the machine's."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc)
+
+
+def late_fallback(event: Optional[str] = None, now=None) -> bool:
+    """Is this run YESTERDAY's fallback slot, landed after midnight?
+
+    Stage 35, 2026-11-25. GitHub never starts a scheduled run early, so a
+    `schedule` run that starts before the fallback's nominal minute on its own
+    UTC date is the PREVIOUS day's slot. Left alone it reads the NEW date as
+    open -- the 10:30 dispatch has not happened yet -- and publishes that day's
+    card at one in the morning, on prices eight hours older than the
+    dispatch's, after which the dispatch finds the day done and stops. The
+    fallback's lateness reached 684 min on 2026-11-23 (22:24 UTC) and two
+    sibling workflows' 700 min; midnight is 780 min after 11:00.
+
+    A dispatch is never late in this sense -- someone or something chose its
+    time -- so only `schedule` is tested. `event` defaults to the
+    `GITHUB_EVENT_NAME` GitHub sets on every step; `now` to `_utcnow()`.
+    """
+    import os
+    event = os.environ.get("GITHUB_EVENT_NAME", "") if event is None else event
+    if event != "schedule":
+        return False
+    now = now or _utcnow()
+    return now.hour * 60 + now.minute < FALLBACK_CRON_UTC_MIN
+
 
 def completed_today(db, pick_date, strict: bool = False) -> Optional[dict]:
     """The row that completed `pick_date`, or None. Never raises.

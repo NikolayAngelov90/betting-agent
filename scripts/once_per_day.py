@@ -29,6 +29,7 @@ import sys
 
 MARK_ALREADY = "ALREADY RAN TODAY"
 MARK_FIRST = "FIRST RUN TODAY"
+MARK_LATE = "LATE FALLBACK"
 
 
 def decide(done) -> bool:
@@ -43,10 +44,25 @@ def _write_output(already: bool) -> None:
             fh.write(f"already_ran={'true' if already else 'false'}\n")
 
 
-def main(argv=None, *, db=None, today=None) -> int:
+def main(argv=None, *, db=None, today=None, event=None, now=None) -> int:
     today = today or _dt.date.today()
     try:
         from src.data import pick_runs as pr
+        # Stage 35: yesterday's fallback slot, landed after midnight, must not
+        # publish today's card ahead of the 10:30 dispatch. Decided before the
+        # database is read -- it needs none -- and NOT recorded in
+        # `pick_runs`: it is a statement about yesterday's slot, and today
+        # has not run.
+        if pr.late_fallback(event, now):
+            print(f"{MARK_LATE}: this scheduled run started before the "
+                  f"fallback's {pr.FALLBACK_CRON_UTC_MIN // 60:02d}:00 UTC "
+                  f"slot on {today}, so it is "
+                  f"{today - _dt.timedelta(days=1)}'s slot landed after "
+                  f"midnight. It does not publish {today}'s card: that is "
+                  f"the 10:30 dispatch's. This run fetches, settles, "
+                  f"evaluates and sends NOTHING.")
+            _write_output(True)
+            return 0
         if db is None:
             from src.data.database import get_db
             db = get_db()

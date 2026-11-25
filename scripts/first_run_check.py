@@ -205,18 +205,58 @@ def evaluate(picks: List[dict], runs: List[dict], shadow: List[dict],
     return out
 
 
-def find_run(day: _dt.date) -> Optional[dict]:
+#: The triggers that can PUBLISH the card. Stage 34 moved publication to an
+#: external `workflow_dispatch` at 10:30 Europe/Sofia; the cron is the
+#: fallback. Until Stage 35 this read `event == "schedule"` alone, so on the
+#: first dispatched day (2026-11-22) it found NO run and the three checks
+#: that read the run log came back UNEVALUATED.
+CARD_TRIGGERS = ("workflow_dispatch", "schedule")
+
+
+def _picks_step_succeeded(jobs) -> bool:
+    from scripts.ci_audit import PICKS_STEP_COUNTED, PICKS_STEP_NAME
+    return any(st.get("name") == PICKS_STEP_NAME
+               and st.get("conclusion") == PICKS_STEP_COUNTED
+               for j in jobs or [] for st in j.get("steps") or [])
+
+
+def find_run(day: _dt.date, *, raw: str = None,
+             jobs_of=None) -> Optional[dict]:
+    """The run that MADE `day`'s card, or None.
+
+    A day can hold several runs: the dispatch, the fallback the once-per-day
+    gate stopped, a rerun after a failure. The card's run is the EARLIEST
+    whose picks step succeeded; a gate-stopped run has no picks step at all.
+    If none succeeded, the LATEST run is returned, so its failure is what the
+    checks read. `raw` and `jobs_of` are the seams; by default both read
+    GitHub.
+    """
     from scripts.ci_audit import _sh
-    raw = _sh("gh", "run", "list", "--workflow", "daily-picks.yml",
-              "--limit", "30", "--json",
-              "databaseId,startedAt,event,headSha,conclusion,status")
+    if raw is None:
+        raw = _sh("gh", "run", "list", "--workflow", "daily-picks.yml",
+                  "--limit", "30", "--json",
+                  "databaseId,startedAt,event,headSha,conclusion,status")
     try:
         rows = json.loads(raw or "")
     except json.JSONDecodeError:
         return None
-    hits = [r for r in rows if r.get("event") == "schedule"
-            and (r.get("startedAt") or "")[:10] == day.isoformat()]
-    return hits[0] if hits else None
+    hits = sorted((r for r in rows if r.get("event") in CARD_TRIGGERS
+                   and (r.get("startedAt") or "")[:10] == day.isoformat()),
+                  key=lambda r: r.get("startedAt") or "")
+    if not hits:
+        return None
+    if jobs_of is None:
+        def jobs_of(run_id):
+            try:
+                return json.loads(_sh("gh", "run", "view", str(run_id),
+                                      "--json", "jobs") or "{}"
+                                  ).get("jobs") or []
+            except json.JSONDecodeError:
+                return []
+    for r in hits:
+        if _picks_step_succeeded(jobs_of(r["databaseId"])):
+            return r
+    return hits[-1]
 
 
 def check(day: _dt.date, settlement: Optional[_dt.date] = None) -> dict:
@@ -264,7 +304,8 @@ def check(day: _dt.date, settlement: Optional[_dt.date] = None) -> dict:
         "day": str(day),
         "run": ({k: run.get(k) for k in ("databaseId", "startedAt",
                                           "headSha", "conclusion")}
-                if run else "UNEVALUATED: no scheduled run started that day"),
+                if run else "UNEVALUATED: no dispatched or scheduled run "
+                            "started that day"),
         "tables_present": sorted({"pick_runs", "shadow_picks"} & present),
         # Stage 34: later runs that found the day done and sent nothing.
         "already_ran_today": [str(r.get("recorded_at")) for r in already_ran],

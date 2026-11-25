@@ -371,3 +371,51 @@ def test_the_AUDIT_reddens_on_every_state_but_ACKNOWLEDGED():
     assert id(keyed[0]) in in_else
     # and what it keys reaches the audit's findings
     assert "_keyed.extend(_sm_keyed)" in src
+
+
+# ── A DISPATCHED RUN PUBLISHES THE CARD FROM `DISPATCH_SINCE`. Stage 35. ────
+#
+# The series admitted `event == "schedule"` alone. From 2026-11-21 the card is
+# published by a dispatch and the scheduled run is the fallback the gate
+# stops, with no picks step to time -- so the no-review series stood at n=6
+# while four dispatched days passed, its "about" date slid 11-26 -> 11-28 ->
+# 12-01, and it could never reach the n=10 its re-derivation waits for.
+
+def _removal_run(rid, iso, event):
+    return {"databaseId": rid, "createdAt": iso, "event": event,
+            "headSha": "deadbeef"}
+
+
+def test_a_DISPATCHED_weekday_run_after_DISPATCH_SINCE_is_COUNTED(monkeypatch):
+    """2026-11-23 is a Monday: the dispatch at 08:30:43, picks 08:58:42."""
+    runs = [_removal_run(1, "2026-11-23T08:30:43Z", "workflow_dispatch")]
+    monkeypatch.setattr(ci, "_sh", _fake_sh(
+        runs, {"1": "2026-11-23T08:58:42Z"},
+        removal_descendants=("deadbee",)))
+    s = ci.removal_regime_picks_series()
+    assert s["n"] == 1 and s["members"] == [1], s
+    assert s["max"] == pytest.approx(27.98, abs=0.01)
+
+
+def test_KNOWN_WRONG_the_same_dispatch_BEFORE_DISPATCH_SINCE_is_a_RERUN(
+        monkeypatch):
+    """The pair: identical but for its date, and it must stay out."""
+    runs = [_removal_run(1, "2026-11-17T08:30:43Z", "workflow_dispatch")]
+    monkeypatch.setattr(ci, "_sh", _fake_sh(
+        runs, {"1": "2026-11-17T08:58:42Z"},
+        removal_descendants=("deadbee",)))
+    assert ci.removal_regime_picks_series()["n"] == 0
+    assert ci._publishes_the_card(
+        {"event": "workflow_dispatch",
+         "createdAt": ci.DISPATCH_SINCE.isoformat() + "T08:30:00Z"}) is True
+    assert ci._publishes_the_card(
+        {"event": "push", "createdAt": "2026-11-23T08:30:00Z"}) is False
+
+
+def test_the_FALLBACK_the_GATE_STOPPED_has_no_time_to_picks(monkeypatch):
+    """A scheduled run whose picks job was skipped carries no picks step;
+    it is admitted by the rule and contributes nothing."""
+    runs = [_removal_run(2, "2026-11-23T22:24:23Z", "schedule")]
+    monkeypatch.setattr(ci, "_sh", _fake_sh(
+        runs, {}, removal_descendants=("deadbee",)))
+    assert ci.removal_regime_picks_series()["n"] == 0

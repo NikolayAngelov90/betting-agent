@@ -304,13 +304,22 @@ def test_the_extractor_finds_the_zero_leagues_in_a_real_log_shape():
 # own evidence: a covered league's zero is suppressed, an uncovered league's zero
 # alarms, and a mixed day is partially explained.
 
-import src.scrapers.flashscore_scraper as _fs
+# IMPORTED INSIDE `_fs_line`, NOT HERE. Stage 35, 2026-11-25. This line was
+# a module-level import, `flashscore_scraper` imports `selenium`, and the
+# `reminders` workflow does not install it -- so this whole module failed to
+# import there, and `test_the_suppression_has_EXPIRED`, a REGISTERED reminder,
+# ran in no workflow at all (the gate and non-gating exclude `calendar`).
+# Seen on every `reminders` run back to 2026-10-29, the oldest listed; the
+# 2026-11-16 ledger called the five collection errors 'unrelated imports'.
+# The import graph still sees it here (`capture_critical` walks the whole
+# module), so the file's gate membership does not move.
 
 CUT = dt.datetime(2026, 9, 28, 8, 52)
 FAR = dt.datetime(2026, 10, 10, 14, 0)
 
 
 def _fs_line(league, rows=100, earliest=FAR, kept=0, off=False):
+    import src.scrapers.flashscore_scraper as _fs
     return _fs.discovery_outcome(league=league, rows=rows, earliest=earliest,
                                  cutoff=CUT, kept=kept, off_season=off)[1]
 

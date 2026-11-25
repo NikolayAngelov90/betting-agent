@@ -5075,6 +5075,15 @@ async def main():
             # `--resend`. Shards are exempt: they never send.
             if not _shard:
                 from src.data import pick_runs as _pr_once
+                # Stage 35: the second line for a late fallback, in case the
+                # `once` gate failed open. Not recorded -- today has not run.
+                if _pr_once.late_fallback():
+                    print(f"LATE FALLBACK: yesterday's scheduled slot landed "
+                          f"after midnight; it does not publish "
+                          f"{date.today()}'s card, which is the 10:30 "
+                          f"dispatch's. This run evaluates nothing and sends "
+                          f"nothing.")
+                    return
                 _done = _pr_once.completed_today(agent.db, date.today())
                 if _done:
                     try:

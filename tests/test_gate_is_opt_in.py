@@ -532,8 +532,13 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       four controls driven), 9 added / 7 removed in
     #       test_picks_run_guard.py (the window re-pointed at the 11:00
     #       fallback, and a COMPLETED day standing the guard down).
-    assert len(gate) == 1870, (
-        f"the gating selection is {len(gate)}, recorded 1870 — say what moved")
+    #   +8  2026-11-25, Stage 35, by node id against 00f16bb: 8 added, 0
+    #       removed, all in test_once_per_day.py -- the late fallback
+    #       (yesterday's slot after midnight) publishes nothing, driven
+    #       through both layers, with its known-wrong and four controls
+    #       that still publish. Gating because they guard publication.
+    assert len(gate) == 1878, (
+        f"the gating selection is {len(gate)}, recorded 1878 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the
@@ -731,8 +736,16 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #   daytype.py 6 replaced by 6 (the cron sizing retired, the dispatch
     #   regime asserted); test_cron_moved.py +2 / -1 (a live reminder
     #   closed into a non-live record).
-    assert len(nong) == 1277, (
-        f"the non-gating selection is {len(nong)}, recorded 1277")
+    #   2026-11-25, Stage 35: +16 by node id against 00f16bb (17 added, 1
+    #   removed) -- 7 added / 1 renamed-out in test_absent_run_and_
+    #   unparseable.py (the PENDING bound structural, runs attributed to
+    #   their own slot), 4 in test_first_run_check.py (the run that MADE
+    #   the card), 3 in test_picks_bound_series.py and 2 in test_dispatch_
+    #   margin.py (dispatched runs in the duration series; one dispatch a
+    #   day), 1 in test_reminders_are_evaluated.py (every reminder module
+    #   imports with the reminders install).
+    assert len(nong) == 1293, (
+        f"the non-gating selection is {len(nong)}, recorded 1293")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

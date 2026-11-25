@@ -33,6 +33,7 @@ the one input GitHub demonstrably refused rather than claiming equivalence.
 """
 
 import datetime as dt
+import json
 import pathlib
 
 import pytest
@@ -165,20 +166,78 @@ def test_TODAY_with_no_run_yet_is_PENDING_and_does_NOT_alarm():
     assert "::error::" not in text, text
     assert "PENDING, not missing" in text
     assert "147 min past nominal" in text
-    assert str(ci.OBSERVED_LATENESS_MAX_MIN) in text, (
+    assert str(ci.PENDING_BOUND_MIN) in text, (
         "the bound the PENDING state is measured against is not stated")
 
 
-def test_the_LATENESS_bound_is_the_MEASURED_maximum_and_says_so():
-    """458, not 304. A single observation replaced the previous maximum, and
-    the constant's comment must say that rather than presenting it as a
-    distribution."""
+def test_the_MEASURED_bound_is_RETIRED_and_the_PENDING_bound_is_STRUCTURAL():
+    """458 replaced 304 on one observation (2026-10-12), and 684 overtook 458
+    on 2026-11-23: the detector called the fallback ABSENT at 666 min and
+    four audits went red before it landed. The measured figure is KEPT as the
+    record; the PENDING bound is one day, the next slot, which no lateness
+    reading can overtake."""
     assert ci.OBSERVED_LATENESS_MAX_MIN == 458
+    assert ci.PENDING_BOUND_MIN == 24 * 60
+    assert max(ci.LATENESS_THAT_RETIRED_THE_BOUND.values()) >         ci.OBSERVED_LATENESS_MAX_MIN, "the record no longer shows the overtaking"
     src = pathlib.Path("scripts/ci_audit.py").read_text(encoding="utf-8")
-    block = src.split("OBSERVED_LATENESS_MAX_MIN", 1)[0][-900:]
-    assert "458" in block and "304" in block, (
-        "the bound does not record the figure it replaced")
-    assert "is not a distribution" in block or "not a distribution" in block
+    block = src.split("PENDING_BOUND_MIN = ", 1)[0][-2400:]
+    for figure in ("458", "304", "684", "700"):
+        assert figure in block, f"the bound's record lost {figure}"
+    assert "not a distribution" in block
+
+
+# ── THE DETECTOR, DRIVEN ON THE 2026-11-23 EVENING. Stage 35. ───────────────
+
+_FALLBACK = {"weekday": 660, "weekend": 660}
+
+
+def _detector(monkeypatch, created, today, now, days=3):
+    monkeypatch.setattr(ci, "current_crons_by_daytype",
+                        lambda *_a, **_k: dict(_FALLBACK))
+    listing = json.dumps([{"createdAt": c, "event": "schedule"}
+                          for c in created])
+    monkeypatch.setattr(ci, "_sh", lambda *_a, **_k: listing)
+    return ci.missing_scheduled_runs(days=days, today=today, now=now)
+
+
+def test_a_slot_666_min_late_is_PENDING_not_ABSENT(monkeypatch):
+    """The audit of 2026-11-23 22:06 UTC; the run landed at 22:24."""
+    m = _detector(monkeypatch, ["2026-11-22T18:11:29Z"],
+                  dt.date(2026, 11, 23), dt.datetime(2026, 11, 23, 22, 6),
+                  days=1)
+    assert m["missing"] == [], m
+    assert m["pending"] == (dt.date(2026, 11, 23), 666), m
+
+
+def test_KNOWN_WRONG_the_retired_bound_called_it_ABSENT():
+    assert 666 > ci.OBSERVED_LATENESS_MAX_MIN, (
+        "the reproduction does not reproduce: 666 min was within the bound")
+
+
+def test_a_run_landing_AFTER_MIDNIGHT_belongs_to_YESTERDAY(monkeypatch):
+    """Created 00:40 on 11-24, before the 11:00 nominal: the 11-23 slot."""
+    m = _detector(monkeypatch, ["2026-11-22T18:11:29Z", "2026-11-24T00:40:00Z"],
+                  dt.date(2026, 11, 24), dt.datetime(2026, 11, 24, 2, 0),
+                  days=1)
+    assert m["missing"] == [] and m["pending"] is None, m
+    assert ci._nominal_day(dt.datetime(2026, 11, 24, 0, 40), _FALLBACK) ==         dt.date(2026, 11, 23)
+    assert ci._nominal_day(dt.datetime(2026, 11, 24, 20, 58), _FALLBACK) ==         dt.date(2026, 11, 24)
+
+
+def test_a_slot_SKIPPED_while_a_LATER_one_ran_is_MISSING_at_once(monkeypatch):
+    m = _detector(monkeypatch, ["2026-11-22T18:11:29Z", "2026-11-24T20:58:07Z"],
+                  dt.date(2026, 11, 24), dt.datetime(2026, 11, 24, 21, 30),
+                  days=2)
+    assert m["missing"] == [dt.date(2026, 11, 23)], m
+
+
+def test_a_slot_a_DAY_past_nominal_with_nothing_after_it_is_MISSING(
+        monkeypatch):
+    """The cron that stopped altogether: no later slot ever runs."""
+    m = _detector(monkeypatch, ["2026-11-21T18:00:00Z"],
+                  dt.date(2026, 11, 24), dt.datetime(2026, 11, 24, 21, 30))
+    assert m["missing"] == [dt.date(2026, 11, 22), dt.date(2026, 11, 23)], m
+    assert m["pending"] == (dt.date(2026, 11, 24), 630), m
 
 
 def test_an_UNEVALUATED_check_says_so_rather_than_passing():
@@ -229,8 +288,10 @@ def test_the_detector_does_not_call_a_day_with_a_RUN_missing():
         ["run", "list", "--workflow", "daily-picks.yml", "--limit", "120",
          "--json", "createdAt,event"],
         what="daily-picks' run list")
-    have = {dt.datetime.fromisoformat(
-        r["createdAt"].replace("Z", "+00:00")).date()
+    # Stage 35: attributed to the day each run BELONGS to, as the detector
+    # does -- a slot that lands after midnight is yesterday's.
+    have = {ci._nominal_day(dt.datetime.fromisoformat(
+        r["createdAt"].replace("Z", "+00:00")), m["crons"])
         for r in runs if r.get("event") == "schedule"}
     overlap = have & set(m["missing"])
     assert not overlap, (
@@ -317,3 +378,13 @@ def test_a_RESOLVED_cron_of_ZERO_is_not_confused_with_an_ABSENT_one():
     for d in ({"weekday": 0, "weekend": 0}, {"weekday": 0, "weekend": None}):
         assert not all(v is None for v in d.values()), (
             f"{d} reads as 'nothing resolved' and it holds a midnight cron")
+
+
+def test_KNOWN_WRONG_a_run_from_the_EARLIER_regime_is_NOT_shifted():
+    """2026-11-21 07:30 UTC: the old weekend cron `30 0`, not a late `0 11`.
+    The live read called 11-21 MISSING until the shift was bounded to the
+    current cron's regime."""
+    assert ci._nominal_day(dt.datetime(2026, 11, 21, 7, 30), _FALLBACK) == \
+        dt.date(2026, 11, 21)
+    assert ci._nominal_day(dt.datetime(2026, 11, 22, 7, 30), _FALLBACK) == \
+        dt.date(2026, 11, 21), "the bound must not switch the shift off"

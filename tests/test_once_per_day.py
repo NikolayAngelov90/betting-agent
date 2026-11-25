@@ -89,20 +89,29 @@ def _picks_path(agent):
         asyncio.run(main())
 
 
-def _workflow_run(db, client, today, capsys=None, **agent_kw):
+def _workflow_run(db, client, today, capsys=None, event="workflow_dispatch",
+                  now=None, **agent_kw):
     """One whole `daily-picks` run: the `once` gate, then -- only if the gate
-    let it through -- the picks path. Returns whether the gate stopped it."""
+    let it through -- the picks path. Returns whether the gate stopped it.
+
+    THE EVENT AND THE CLOCK ARE PINNED, NEVER INHERITED (Stage 35). Both
+    layers read `GITHUB_EVENT_NAME` and the UTC clock to recognise a late
+    fallback; this file gates the card, and inside a real Actions run those
+    are the run's own. Unpinned, a test here would read live state."""
+    now = now or dt.datetime.combine(today, dt.time(18, 0),
+                                     tzinfo=dt.timezone.utc)
     out_file = pathlib.Path(db.config.database["sqlite_path"]).with_suffix(
         ".out")
     out_file.write_text("", encoding="utf-8")
-    with patch.dict("os.environ", {"GITHUB_OUTPUT": str(out_file)}):
-        once_per_day.main(db=db, today=today)
-    already = "already_ran=true" in out_file.read_text(encoding="utf-8")
-    if not already:
-        try:
-            _picks_path(_agent(db, client, **agent_kw))
-        except RuntimeError:
-            pass                     # the planted crash: the run failed
+    with patch.dict("os.environ", {"GITHUB_OUTPUT": str(out_file),
+                                   "GITHUB_EVENT_NAME": event}),             patch.object(pr, "_utcnow", lambda: now):
+        once_per_day.main(db=db, today=today, event=event, now=now)
+        already = "already_ran=true" in out_file.read_text(encoding="utf-8")
+        if not already:
+            try:
+                _picks_path(_agent(db, client, **agent_kw))
+            except RuntimeError:
+                pass                 # the planted crash: the run failed
     return already
 
 
@@ -239,3 +248,71 @@ def test_the_WORKFLOW_skips_the_whole_job_on_ALREADY_RAN_and_fails_open():
     # runs never overlap: workflow-level group, never cancelled
     assert wf["concurrency"] == {"group": "daily-picks",
                                  "cancel-in-progress": False}
+
+
+# ── THE LATE FALLBACK: YESTERDAY'S SLOT AFTER MIDNIGHT. Stage 35. ────────────
+#
+# The fallback's lateness reached 684 min on 2026-11-23 (11:00 -> 22:24 UTC);
+# midnight is 780 min after 11:00. A slot that lands after it reads the NEW
+# date as open and, unguarded, publishes that day's card at one in the morning
+# -- after which the 10:30 dispatch finds the day done and stops.
+
+def _at(hh, mm):
+    return dt.datetime.combine(TODAY, dt.time(hh, mm), tzinfo=dt.timezone.utc)
+
+
+def test_a_LATE_FALLBACK_after_midnight_publishes_NOTHING(db):
+    client = _Client()
+    assert _workflow_run(db, client, TODAY, event="schedule",
+                         now=_at(0, 40)) is True
+    assert client.messages == [], client.messages
+    assert _outcomes(db, TODAY) == [], (
+        "a late fallback is about yesterday's slot; it must not write a row "
+        "for a day that has not run")
+    # and the day is still open for the dispatch, which publishes it
+    assert _workflow_run(db, client, TODAY, now=_at(8, 30)) is False
+    assert client.messages == [("card", 1)], client.messages
+
+
+def test_KNOWN_WRONG_without_the_rule_the_late_fallback_PUBLISHES(db,
+                                                                 monkeypatch):
+    """The harm, reproduced: the 00:40 run sends the card and the dispatch
+    is stopped."""
+    monkeypatch.setattr(pr, "late_fallback", lambda *a, **k: False)
+    client = _Client()
+    assert _workflow_run(db, client, TODAY, event="schedule",
+                         now=_at(0, 40)) is False
+    assert _workflow_run(db, client, TODAY, now=_at(8, 30)) is True
+    assert client.messages == [("card", 1)]
+    assert _outcomes(db, TODAY) == [pr.PICKS_MADE, pr.ALREADY_RAN_TODAY]
+
+
+def test_the_IN_RUN_guard_stops_a_late_fallback_when_the_gate_FAILED_OPEN(db):
+    client = _Client()
+    with patch.dict("os.environ", {"GITHUB_EVENT_NAME": "schedule"}),             patch.object(pr, "_utcnow", lambda: _at(0, 40)):
+        _picks_path(_agent(db, client))
+    assert client.messages == [] and _outcomes(db, TODAY) == []
+
+
+@pytest.mark.parametrize("event, hh, mm, why", [
+    ("schedule", 20, 58, "the fallback on its own day, after 11:00"),
+    ("schedule", 11, 0, "the fallback exactly on its nominal minute"),
+    ("workflow_dispatch", 8, 30, "the 10:30 dispatch, before 11:00 UTC"),
+    ("workflow_dispatch", 2, 0, "a manual dispatch: someone chose the time"),
+])
+def test_a_run_that_is_NOT_a_late_fallback_still_PUBLISHES(db, event, hh, mm,
+                                                          why):
+    client = _Client()
+    assert _workflow_run(db, client, TODAY, event=event,
+                         now=_at(hh, mm)) is False, why
+    assert client.messages == [("card", 1)], why
+
+
+def test_the_FALLBACK_minute_is_the_WORKFLOW_cron():
+    wf = yaml.safe_load(pathlib.Path(".github/workflows/daily-picks.yml")
+                        .read_text(encoding="utf-8"))
+    crons = [c["cron"] for c in wf[True]["schedule"]]
+    assert crons == ["0 11 * * *"], crons
+    minute, hour = crons[0].split()[:2]
+    assert int(hour) * 60 + int(minute) == pr.FALLBACK_CRON_UTC_MIN
+

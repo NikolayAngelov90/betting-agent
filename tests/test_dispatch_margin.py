@@ -131,3 +131,26 @@ def test_the_MEASURED_exposure_is_recorded_with_its_population():
     assert m["days"] == {"weekend": 257, "weekday": 529}
     assert m["earliest_local"] == {"weekend": "12:00", "weekday": "12:30"}
     assert m["exposed_at_review_era_weekend_term"]["weekend"] == 37
+
+
+# ── ONE DISPATCH PER DAY: THE DAY'S FIRST. Stage 35, 2026-11-22. ─────────────
+
+def test_a_REPEAT_dispatch_the_same_day_is_EXCLUDED_and_COUNTED():
+    """A rerun at 12:00 local after a failure -- what `pipeline_loss_alert`
+    advises -- is inside the 180-minute window. It is not the scheduler's
+    delay and must not enter the series as 90 minutes."""
+    raw = json.dumps([
+        _run(7, "2026-11-23T10:00:00Z"),        # 12:00 local, the rerun
+        _run(6, "2026-11-23T08:30:43Z"),        # the dispatch
+    ])
+    out = ci.collect_dispatch_series(raw=raw)
+    assert [(str(d), round(x, 2), r) for d, x, r in out["series"]] == [
+        ("2026-11-23", 0.72, 6)], out
+    assert [r for _t, r in out["excluded"]] == [7]
+
+
+def test_KNOWN_WRONG_without_the_rule_the_rerun_reads_as_a_90_minute_delay():
+    t = dt.datetime(2026, 11, 23, 10, 0, tzinfo=UTC)
+    assert sd.dispatch_delay_min(t) == pytest.approx(90.0), (
+        "the rerun is inside the window, so only the per-day rule keeps it "
+        "out of the series")
