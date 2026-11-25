@@ -144,11 +144,14 @@ def test_the_COUNTS_and_the_MEDIAN_with_its_caveat():
     # pickles exist in CI only because a cache restored them.
     _ENV_DEPENDENT = {13}
     stable_live = {r["id"] for r in live} - _ENV_DEPENDENT
-    assert stable_live == {4, 6, 7, 8, 10, 11, 12}, (
+    # MOVED 2026-11-25 (Stage 36): 10 left the live set BY DELETION --
+    # `match_briefing.py` was removed whole, with the prompt the two
+    # statistics fed. Recorded as FIXED in the register, with the reason.
+    assert stable_live == {4, 6, 7, 8, 11, 12}, (
         f"the source-only live set is {sorted(stable_live)}, expected "
-        f"[4, 6, 7, 8, 10, 11, 12]. If one was fixed, move it and say so; if "
+        f"[4, 6, 7, 8, 11, 12]. If one was fixed, move it and say so; if "
         f"one regressed, that is the finding.")
-    assert len(stable_live) == 7
+    assert len(stable_live) == 6
 
     f13 = next(r for r in rows if r["id"] == 13)
     assert f13["is_live"] in (True, False), "finding 13 lost its third state"

@@ -227,12 +227,16 @@ FINDINGS = [
             "src/reporting/match_briefing.py")
             and "self._recent_review_stats()" in _txt(
                 "src/reporting/match_briefing.py")),
-        "outcome": DECLARE,
-        "why": "Both are still called into the prompt. Removing them changes "
-               "what Claude sees and therefore the KEEP/CHANGE decisions -- "
-               "value-affecting, so it is a cohort event rather than a "
-               "bounded fix.",
-        "retriage": "2026-11-23",
+        # RESOLVED BY DELETION, Stage 36 (2026-11-25): the module, its
+        # prompt and both statistics are gone, and `_txt` reads a missing
+        # file as "", so the predicate above is False by construction.
+        "outcome": FIXED,
+        "why": "Resolved by DELETION in Stage 36 (2026-11-25): "
+               "`match_briefing.py` was removed whole, so no statistic "
+               "reaches any decision prompt. The review it fed was off "
+               "since s5.22 and its call site gone since s5.23. Was "
+               "DECLARE (re-triage 2026-11-23): removing the statistics "
+               "alone would have changed what Claude saw.",
     },
     {
         "id": 11, "line": 655,

@@ -103,8 +103,7 @@ apscheduler==3.11.3
 # Notifications
 python-telegram-bot==22.8
 
-# LLM briefings
-anthropic==1.8.0
+# (`anthropic==1.8.0` REMOVED in Stage 36, 2026-11-25, with the requirement.)
 
 # Utilities
 pyyaml==6.0.3

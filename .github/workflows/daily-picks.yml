@@ -321,12 +321,10 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-      # UNUSED since the Claude pick review was removed (off at s5.22, call
-      # site deleted at s5.23, 2026-11-13). Listed, not deleted: removing the
-      # two repository secrets -- and then these two lines -- is the
-      # OPERATOR'S action. Nothing on the picks path reads either now.
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      # ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN were REMOVED here in
+      # Stage 36 (2026-11-25), with `match_briefing.py`: Claude no longer
+      # participates in the system. Both secrets were already absent from the
+      # repository (names listed 2026-11-15) and resolved empty in every job.
       # Use the secret when configured; otherwise fall back to the explicit
       # dev opt-in so existing CI runs don't break before the secret is added.
       MODEL_HMAC_KEY: ${{ secrets.MODEL_HMAC_KEY }}

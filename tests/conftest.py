@@ -172,7 +172,6 @@ PRODUCTION_STATE_PATHS = (
     ("src.models.ml_models", "MODELS_DIR", "dir"),
     ("src.models.bayesian_weights", "WEIGHTS_PATH", "file"),
     ("src.models.probability_calibration", "DEFAULT_PATH", "file"),
-    ("src.reporting.match_briefing", "_SENT_PATH", "file"),
     ("src.reporting.telegram_bot", "_PICKS_SENT_STATE", "file"),
     ("src.reporting.telegram_bot", "_COLD_STREAK_STATE", "file"),
     # Stage 32: the date the client's zero-pick line was last sent.

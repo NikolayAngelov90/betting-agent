@@ -70,8 +70,9 @@ LEARNERS_AND_MEASURERS = {
     "rolling_backtest",
     "get_claude_added_value",
     "fit_from_db",
-    "_recent_selection_stats",
-    "_recent_review_stats",
+    # `_recent_selection_stats` and `_recent_review_stats` LEFT this list
+    # in Stage 36 (2026-11-25): deleted with `match_briefing.py`, the only
+    # module that had them. They were gated when they went.
 }
 
 
@@ -181,10 +182,9 @@ def test_the_predicates_live_in_one_place():
 
     `match_briefing` wrote its own because the predicates lived inside
     `betting_agent`. They now live in `src/data/pick_filters.py`, so the next
-    module that needs them imports rather than reinvents.
+    module that needs them imports rather than reinvents. (Stage 36: the
+    module that first needed them was deleted on 2026-11-25; the predicates
+    stay where every remaining reader imports them.)
     """
     mod = pathlib.Path("src/data/pick_filters.py").read_text(encoding="utf-8")
     assert "def live_only()" in mod and "def valid_evidence()" in mod
-    briefing = pathlib.Path(
-        "src/reporting/match_briefing.py").read_text(encoding="utf-8")
-    assert "from src.data.pick_filters import" in briefing

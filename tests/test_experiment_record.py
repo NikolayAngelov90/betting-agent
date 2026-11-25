@@ -63,17 +63,21 @@ def test_experiment_record_does_not_touch_live_only():
 
 
 def test_the_exp1_paths_are_still_gated():
-    """Paper outcomes must not reach the Claude review prompt.
+    """HELD BY DELETION since Stage 36 (2026-11-25).
 
-    EXP-1 was exactly this: paper results leaking into the prompt through
-    _recent_selection_stats / _recent_review_stats. Nothing in the reporting
-    change may re-open it.
+    EXP-1 was paper results leaking into the Claude review prompt through
+    `_recent_selection_stats` / `_recent_review_stats`. Both were deleted with
+    `match_briefing.py`; there is no prompt for paper outcomes to reach. A
+    module that brings a prompt back must bring its `live_only()` /
+    `valid_evidence()` gate, and this test, back with it.
     """
-    from src.reporting.match_briefing import MatchBriefingService
-    for name in ("_recent_selection_stats", "_recent_review_stats"):
-        src = inspect.getsource(getattr(MatchBriefingService, name))
-        assert "live_only()" in src, f"{name} lost its live_only() gate"
-        assert "valid_evidence()" in src, f"{name} lost its valid_evidence() gate"
+    import importlib.util
+    assert importlib.util.find_spec("src.reporting.match_briefing") is None, (
+        "the review module exists again: re-assert its live_only() and "
+        "valid_evidence() gates")
+    from src.data.pick_filters import live_only, valid_evidence
+    assert callable(live_only) and callable(valid_evidence), (
+        "anchor: the gates any future prompt must import still exist")
 
 
 # ── the block itself ────────────────────────────────────────────────────────

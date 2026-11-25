@@ -113,7 +113,8 @@ def _write_pick_observations(session, pick_id: int, *, market: str,
     Stage 10, sections 5-7. Called from `_save_picks` at the moment of insert,
     which is BEFORE the Claude KEEP/CHANGE review can touch anything. Both rows
     start identical because at that instant the model's pick IS the final pick;
-    `_update_final_observation` moves the 'final' row if the review changes it.
+    The 'final' row equals the 'model' row: the review that could move it
+    was deleted with `match_briefing.py` in Stage 36.
 
     **Raises on failure, by design (Stage 10.3).** It previously wrapped the
     inserts in a SAVEPOINT and swallowed errors so a bookkeeping problem could
@@ -2096,8 +2097,8 @@ class FootballBettingAgent:
                        max_picks_per_match: int = 1):
         """Apply the portfolio-level phase and persist the result.
 
-        Ranking, the per-match cap, correlation filtering, the briefing-final
-        freeze and the daily exposure cap are all properties of the DAY, not
+        Ranking, the per-match cap, correlation filtering and the daily
+        exposure cap are all properties of the DAY, not
         of any one fixture. Running them per shard would give each shard its
         own `betting.max_total_kelly_pct`, so four shards would stake 4x the
         configured daily exposure. This runs exactly once, over every
@@ -2250,37 +2251,10 @@ class FootballBettingAgent:
         # over-concentrating risk on correlated outcomes.
         all_recommendations = self._filter_correlated_picks(all_recommendations)
 
-        # Matches the AI briefing already ruled on today are FROZEN: a later
-        # pipeline run must not resurrect a vetoed bet (it once came back under
-        # a different selection, dodging the (match, selection) dedup) or add
-        # picks behind the final decision. Markers are written by the briefing
-        # service ("final:<match_id>" in data/briefings_sent.json, cached
-        # across CI runs).
-        try:
-            import json as _json
-            _bs_path = Path("data/briefings_sent.json")
-            if _bs_path.exists():
-                _today_keys = _json.loads(_bs_path.read_text()).get(
-                    date.today().isoformat(), []
-                )
-                _final_ids = {
-                    int(k.split(":", 1)[1])
-                    for k in _today_keys
-                    if k.startswith("final:")
-                }
-                if _final_ids:
-                    _before = len(all_recommendations)
-                    all_recommendations = [
-                        r for r in all_recommendations if r.match_id not in _final_ids
-                    ]
-                    if len(all_recommendations) < _before:
-                        logger.info(
-                            f"Skipped {_before - len(all_recommendations)} pick(s) on "
-                            f"{len(_final_ids)} match(es) already finalized by the AI "
-                            f"briefing today (decisions are binding for the day)"
-                        )
-        except Exception as _fe:
-            logger.warning(f"Briefing-final filter skipped: {_fe}")
+        # (The briefing-final FREEZE that stood here was DELETED in Stage 36,
+        # 2026-11-25, with `match_briefing.py`, the only writer of the
+        # `data/briefings_sent.json` it read. Its CI cache restore went at
+        # s5.23, so in production it found no file and filtered nothing.)
 
         # Daily exposure limit: cap total Kelly stake across all picks to
         # prevent over-betting even when many value picks are found.
@@ -2300,9 +2274,20 @@ class FootballBettingAgent:
                     f"cap={max_daily_exposure:.0f}%)"
                 )
 
+        # Stage 36: the criteria the DEPLOYED mode used. This read "(EV
+        # threshold: 5.0%)" under `confident_value` too, whose picks carry
+        # negative EV by design and are chosen on price and probability.
+        if (self.config.get("betting.selection_mode", None)
+                or "standard") == "confident_value":
+            _criteria = (
+                f"confident_value: price floor "
+                f"{float(self.config.get('betting.confident_value.min_price', 0)):.2f}, "
+                f"p_min "
+                f"{float(self.config.get('betting.confident_value.p_min', 0)):.2f}")
+        else:
+            _criteria = f"EV threshold: {self.value_calculator.min_ev:.1%}"
         logger.info(
-            f"Found {len(all_recommendations)} high-confidence picks for {target} "
-            f"(EV threshold: {self.value_calculator.min_ev:.1%})"
+            f"Found {len(all_recommendations)} picks for {target} ({_criteria})"
         )
 
         # Save picks; get back only the ones new this run (for Telegram deduplication)
@@ -4954,8 +4939,6 @@ async def main():
         print("  --analyze <id>      Analyze a specific match")
         print("  --backfill-history  Fetch historical data for low-coverage teams")
         print("  --backfill-wc       Backfill FIFA World Cup 2018/2022/2026 match history")
-        print("  --briefing          Post AI preview briefings for today's WC matches (no lineups)")
-        print("  --prematch-briefing [min] Post lineup-aware AI briefings for WC matches ~min before KO (default 45)")
         print("  --backfill-stats [N] Backfill xG/shots/venue/halftime for historical matches (default budget: 80 requests)")
         print("  --telegram-setup    Setup Telegram bot notifications")
         print("  --telegram-test     Send a test Telegram message")
@@ -5664,26 +5647,6 @@ async def main():
         elif command == "--backtest-rolling":
             print("Rolling backtest — per-month performance over all settled picks")
             agent.rolling_backtest()
-
-        elif command in ("--briefing", "--prematch-briefing"):
-            from src.reporting.match_briefing import MatchBriefingService
-            agent.predictor.fit()
-            agent.feature_engineer.elo_ratings = agent.predictor.elo.ratings
-            service = MatchBriefingService(agent)
-            if command == "--briefing":
-                print("Generating WC preview briefings...")
-                n = await service.run_preview_briefings()
-            else:
-                # Optional T-window override: --prematch-briefing 45
-                window = 45
-                if len(sys.argv) > 2:
-                    try:
-                        window = int(sys.argv[2])
-                    except ValueError:
-                        pass
-                print(f"Generating WC pre-match (T-{window}) briefings...")
-                n = await service.run_prematch_briefings(window_min=window)
-            print(f"Briefings sent: {n}")
 
         elif command == "--backfill-wc":
             # National-team history backfill via API-Football. Coverage for the

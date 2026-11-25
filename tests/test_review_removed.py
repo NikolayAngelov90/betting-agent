@@ -22,7 +22,6 @@ import pathlib
 import pytest
 import yaml
 
-from src.reporting.match_briefing import MatchBriefingService
 from src.utils.config import Config
 
 EXAMPLE = "config/config.example.yaml"
@@ -63,31 +62,75 @@ class _Tripwire(Exception):
     pass
 
 
-class _Pick:
-    match_id = 123
 
 
-def _service(config) -> MatchBriefingService:
-    """The service with the deployed config and every route to Claude armed.
+#: Module names a Claude call would need. Blocked at import by the driver.
+_CLAUDE_MODULES = ("anthropic", "claude_code_sdk", "claude_agent_sdk")
 
-    Built without `__init__`, which takes a whole agent: the only state
-    `finalize_picks_with_claude` reads before its gate is `config`.
-    """
-    svc = object.__new__(MatchBriefingService)
-    svc.config = config
-    svc._claude_code_exhausted = False
-    svc._last_review_failures = []
 
-    async def _trap(*_a, **_k):
-        raise _Tripwire("a Claude review was attempted")
+def _armed(monkeypatch):
+    """Every route to Claude raises `_Tripwire`: the SDKs cannot be imported,
+    and any subprocess whose argv names `claude` cannot be started."""
+    import asyncio as _aio
+    import subprocess as _sp
+    import sys as _sys
 
-    def _trap_sync(*_a, **_k):
-        raise _Tripwire("a Claude backend was resolved")
+    class _Block:
+        def find_spec(self, name, *_a, **_k):
+            if name.split(".")[0] in _CLAUDE_MODULES:
+                raise _Tripwire(f"import of {name}")
+            return None
 
-    svc._briefing_for = _trap
-    svc._resolve_backend = _trap_sync
-    svc._sync_recs_from_db = lambda *_a, **_k: None
-    return svc
+    for m in list(_sys.modules):
+        if m.split(".")[0] in _CLAUDE_MODULES:
+            monkeypatch.delitem(_sys.modules, m)
+    monkeypatch.setattr(_sys, "meta_path", [_Block()] + _sys.meta_path)
+
+    def _guard(real):
+        def run(*args, **kw):
+            argv = args[0] if args else kw.get("args", "")
+            text = " ".join(map(str, argv)) if isinstance(
+                argv, (list, tuple)) else str(argv)
+            if "claude" in text.lower() or any(
+                    "claude" in str(a).lower() for a in args[1:]):
+                raise _Tripwire(f"subprocess {text[:80]}")
+            return real(*args, **kw)
+        return run
+
+    for mod, name in ((_sp, "run"), (_sp, "Popen"), (_sp, "check_output"),
+                      (_aio, "create_subprocess_exec"),
+                      (_aio, "create_subprocess_shell")):
+        monkeypatch.setattr(mod, name, _guard(getattr(mod, name)))
+
+
+def _drive_picks_path(tmp_path, monkeypatch, planted=None):
+    """The real `--picks` CLI path, as the workflow's picks step runs it, on a
+    scratch SQLite database -- the Stage 34 harness. `planted` runs inside
+    the day's pick generation, where a review used to sit."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from src.data.database import DatabaseManager
+    from tests.test_once_per_day import _Client, _agent, _picks_path
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    mgr = DatabaseManager(config=SimpleNamespace(
+        database={"sqlite_path": str(tmp_path / "noclaude.db")}))
+    mgr.create_tables()
+    client = _Client()
+    agent = _agent(mgr, client, picks=2)
+    if planted is not None:
+        made = agent.get_daily_picks
+
+        async def _with_plant(**kw):
+            planted()
+            return await made(**kw)
+        agent.get_daily_picks = _with_plant
+    _armed(monkeypatch)
+    with patch("builtins.print"):
+        _picks_path(agent)
+    return client
 
 
 #: The values the `briefings:` block held when it was DELETED at s5.23
@@ -105,63 +148,75 @@ def test_the_BRIEFINGS_BLOCK_IS_DELETED_from_the_DEPLOYED_config():
     assert set(cfg).isdisjoint({"briefings"}), sorted(cfg)
 
 
-def test_every_CODE_DEFAULT_equals_the_value_its_DELETED_KEY_held():
-    """Deleting the block must change nothing. From the AST of
-    `match_briefing.py`: every `config.get("briefings.X", default)` names a
-    key that was in the block, and its default is the value that key held --
-    so the review stays off, the fallback stays as it was, and nothing that
-    reads one of these keys behaves differently with the block gone. The
-    first two defaults were True; left that way, deleting the block would
-    have switched the review back ON."""
-    src = pathlib.Path("src/reporting/match_briefing.py").read_text(
-        encoding="utf-8")
-    reads = {}
-    for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") \
-                == "get" and node.args and isinstance(node.args[0],
-                                                      ast.Constant) \
-                and str(node.args[0].value).startswith("briefings."):
-            key = node.args[0].value.split(".", 1)[1]
-            assert len(node.args) == 2, f"briefings.{key} has no default"
-            reads[key] = ast.literal_eval(node.args[1])
-    assert set(reads) == set(BRIEFINGS_HELD), sorted(reads)
-    assert reads == BRIEFINGS_HELD
+def _briefings_reads(src: str):
+    return [n.args[0].value for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "get"
+            and n.args and isinstance(n.args[0], ast.Constant)
+            and str(n.args[0].value).startswith("briefings.")]
 
 
-def test_DRIVEN_no_Claude_call_is_made_under_the_deployed_config():
-    """Every route to Claude raises. The review must return 0 untouched."""
-    svc = _service(Config(EXAMPLE))
-    reviewed = asyncio.run(svc.finalize_picks_with_claude([_Pick()]))
-    assert reviewed == 0
+def test_NOTHING_reads_a_BRIEFINGS_KEY_any_more():
+    """Stage 36: the code defaults that replaced the deleted `briefings:`
+    block lived in `match_briefing.py`, which is gone. From the AST of every
+    module under src/ and scripts/: no `config.get("briefings.X", ...)`
+    remains, so no key of the deleted block can switch anything back on.
+    `BRIEFINGS_HELD` above stays as the record of the values it held."""
+    import importlib.util
+    assert importlib.util.find_spec("src.reporting.match_briefing") is None
+    found = {}
+    for p in sorted(pathlib.Path("src").rglob("*.py")) + sorted(
+            pathlib.Path("scripts").rglob("*.py")):
+        hits = _briefings_reads(p.read_text(encoding="utf-8"))
+        if hits:
+            found[str(p)] = hits
+    assert found == {}, found
+    # the matcher, on a planted line, so zero hits above is a finding
+    assert _briefings_reads(
+        'cfg.get("briefings.enabled", False)') == ["briefings.enabled"]
 
 
-def test_KNOWN_WRONG_the_same_driver_TRIPS_when_the_review_is_ON(tmp_path):
-    """The control for the control. With the review enabled the driver must
-    hit a tripwire -- otherwise the test above passes because the traps are
-    not on the path, not because the path is closed."""
-    cfg = yaml.safe_load(pathlib.Path(EXAMPLE).read_text(encoding="utf-8"))
-    cfg.setdefault("briefings", {})
-    cfg["briefings"]["enabled"] = True
-    cfg["briefings"]["finalize_picks"] = True
-    f = tmp_path / "on.yaml"
-    f.write_text(yaml.safe_dump(cfg), encoding="utf-8")
-    svc = _service(Config(str(f)))
-    with pytest.raises(_Tripwire):
-        asyncio.run(svc.finalize_picks_with_claude([_Pick()]))
+def test_DRIVEN_no_Claude_call_is_made_under_the_deployed_config(
+        tmp_path, monkeypatch):
+    """Stage 36: the real `--picks` CLI path, every route to Claude armed.
+    The card is sent, and nothing trips."""
+    client = _drive_picks_path(tmp_path, monkeypatch)
+    assert client.messages == [("card", 2)], client.messages
+
+
+def test_KNOWN_WRONG_the_same_driver_TRIPS_on_a_planted_Claude_call(
+        tmp_path, monkeypatch):
+    """The control for the control: the same driver with a Claude call
+    planted where the review used to sit must trip -- both routes -- or the
+    test above passes because the traps are off the path."""
+    import importlib
+    import subprocess
+
+    with pytest.raises(_Tripwire, match="import of anthropic"):
+        _drive_picks_path(tmp_path, monkeypatch,
+                          planted=lambda: importlib.import_module("anthropic"))
+    with pytest.raises(_Tripwire, match="subprocess"):
+        _drive_picks_path(tmp_path / "b", monkeypatch,
+                          planted=lambda: subprocess.run(["claude", "-p", "x"]))
 
 
 def test_the_PICKS_PATH_HAS_NO_REVIEW_CALL_SITE():
-    """s5.23: the call site is gone, not gated. From the AST of the agent:
-    no call to `finalize_picks_with_claude` anywhere -- ANCHORED by the
-    manual `--briefing` command, which still constructs the service, so a
-    scan that found nothing because it read the wrong file would fail
-    here."""
+    """s5.23 removed the call site; Stage 36 (2026-11-25) removed the module
+    and the manual `--briefing` / `--prematch-briefing` commands that still
+    constructed the service. From the AST of the agent: neither name is
+    called anywhere -- ANCHORED by `get_daily_picks`, so a scan that read the
+    wrong file fails here."""
+    import importlib.util
     src = pathlib.Path("src/agent/betting_agent.py").read_text(
         encoding="utf-8")
     calls = [getattr(c.func, "attr", None) or getattr(c.func, "id", "")
              for c in ast.walk(ast.parse(src)) if isinstance(c, ast.Call)]
-    assert "MatchBriefingService" in calls
+    assert "get_daily_picks" in calls
+    assert calls.count("MatchBriefingService") == 0
     assert calls.count("finalize_picks_with_claude") == 0
+    assert importlib.util.find_spec("src.reporting.match_briefing") is None
+    strings = {n.value for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    assert strings & {"--briefing", "--prematch-briefing"} == set()
 
 
 def test_the_REASON_IS_A_NUMBER_and_the_parts_add_up():
@@ -407,5 +462,11 @@ def test_PART_D_the_review_era_STEPS_are_GONE_and_the_SECRETS_are_LISTED():
             or "Claude Code" in n] == []
     assert [r for r in runs if "@anthropic-ai/claude-code" in r] == []
     env = {k for job in wf["jobs"].values() for k in (job.get("env") or {})}
-    assert {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} <= env, (
-        "the credentials are listed for the operator, not deleted by us")
+    # STAGE 36 (2026-11-25): THE OPERATOR'S DECISION, TAKEN. The two env
+    # lines were listed here for the operator from Stage 32 Part D; Stage 36
+    # removed them with `match_briefing.py`. Both secrets were already absent
+    # from the repository (names listed 2026-11-15).
+    assert "DATABASE_URL" in env, "anchor: the job env was read"
+    assert env & {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} == set(), (
+        "a Claude credential is back in the job env; Claude no longer "
+        "participates in the system")

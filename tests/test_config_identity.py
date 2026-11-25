@@ -218,5 +218,11 @@ def test_excluded_markets_actually_constrains_selection():
     from src.betting import value_calculator as vc
 
     src = inspect.getsource(vc)
-    assert src.count("in self.excluded_markets") >= 3, (
-        "excluded_markets is no longer enforced at every selection site")
+    # Stage 36 (2026-11-25): THREE sites became TWO. The third was
+    # `available_selections`, the menu the Claude review could switch to;
+    # it was deleted with the review's module. Asserted PER SITE now, so a
+    # count cannot be satisfied by the wrong functions.
+    for fn in ("find_value_bets", "find_best_bet"):
+        body = inspect.getsource(getattr(vc.ValueBettingCalculator, fn))
+        assert "in self.excluded_markets" in body, (
+            f"excluded_markets is no longer enforced in {fn}")

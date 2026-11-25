@@ -137,27 +137,30 @@ def test_invariant_2c_genuinely_different_markets_are_kept():
 
 
 def test_invariant_2d_claude_change_cannot_create_a_correlated_pair():
-    """The gap that produced every correlated pair in production.
+    """HELD BY DELETION since Stage 36 (2026-11-25).
 
-    _filter_correlated_picks runs inside get_daily_picks; the Claude review runs
-    after it and rewrites selections. Its only guard was exact equality, so a
-    switch onto a correlated selection was accepted — including onto pairs the
-    filter table already declared.
+    The gap this guarded: the Claude review ran after
+    `_filter_correlated_picks` and rewrote selections, so a CHANGE could land
+    on a correlated pair. The review's CHANGE path (`_apply_decision`) was
+    deleted with `match_briefing.py`; no code runs after the filter that can
+    rewrite a selection. This asserts the deletion, so a review that comes
+    back has to bring its correlation re-check -- and this invariant -- back
+    with it.
     """
-    import inspect
-
-    from src.reporting.match_briefing import MatchBriefingService
-
-    src = inspect.getsource(MatchBriefingService._apply_decision)
-    assert "selections_are_correlated" in src, (
-        "the CHANGE path does not re-check correlation")
-    # And it must reject the switch, not delete the model's other pick.
-    idx = src.index("selections_are_correlated")
-    after = src[idx:idx + 700]
-    assert 'review_action = "KEEP"' in after, (
-        "a correlated switch must fall back to KEEP, not drop the other pick")
-    assert "session.delete" not in after, (
-        "the correlation branch deletes a pick — it must only reject the switch")
+    import importlib.util
+    import pathlib as _p
+    assert importlib.util.find_spec("src.reporting.match_briefing") is None, (
+        "a review module exists again: invariant 2d must be re-argued against "
+        "its CHANGE path, not assumed")
+    src = _p.Path("src/agent/betting_agent.py").read_text(encoding="utf-8")
+    assert "_filter_correlated_picks(all_recommendations)" in src, (
+        "anchor: the filter the invariant protects is still on the picks path")
+    import ast as _ast
+    called = {getattr(c.func, "attr", None) or getattr(c.func, "id", "")
+              for c in _ast.walk(_ast.parse(src)) if isinstance(c, _ast.Call)}
+    assert "_filter_correlated_picks" in called, "anchor: the scan sees calls"
+    assert called & {"_apply_decision"} == set(), (
+        "something on the agent calls a CHANGE path again")
 
 
 # ═══════════ Invariant 3 — paper picks cannot influence fitting/calibration

@@ -149,17 +149,6 @@ def test_the_INJURY_loop_is_still_SEQUENTIAL_so_the_finding_stands():
         "was available, and the duration profile must be re-measured")
 
 
-def test_the_BRIEFING_loop_is_still_SEQUENTIAL():
-    import re
-
-    src = pathlib.Path("src/reporting/match_briefing.py").read_text(
-        encoding="utf-8")
-    assert re.search(r"for match_id in fixtures:\s*\n\s+.*\n?\s*.*await self\._briefing_for",
-                     src), (
-        "the briefing loop shape changed; the ~9 s/fixture figure was "
-        "measured against a sequential await")
-
-
 # ── PART B: weather reaches nothing — MEASURED, with a negative control ────
 
 def test_TRAINING_SKIPS_WEATHER_BY_CONSTRUCTION():
@@ -511,26 +500,25 @@ def test_the_CONFIG_KEY_went_with_the_producer():
 
 
 def test_INJURIES_are_NOT_deletable_because_they_HAVE_a_consumer():
-    """The distinction that makes one a deletion and the other an
-    optimisation.
+    """THE CONSUMER WAS DELETED in Stage 36 (2026-11-25), RECORDED, NOT ACTED ON.
 
-    `injury_*` FEATURES share weather's fate -- absent from the 111 fitted
-    names, dropped by alignment. But `analysis.injury_report` reaches
-    `match_briefing._build_dossier`, i.e. the Claude review prompt, and
-    `injury_impact` reaches a reasoning string in `value_calculator`. The
-    review issues KEEP/CHANGE on every pick, so injuries are
-    **value-affecting through the prompt** even though they are in no fit.
-    Weather reached neither.
+    `injury_*` FEATURES share weather's fate -- absent from the fitted names,
+    dropped by alignment. What made injuries value-affecting was
+    `analysis.injury_report` reaching `match_briefing._build_dossier`, the
+    Claude review prompt -- and that module is gone. What remains is
+    `injury_impact` in a reasoning string in `value_calculator`, which no
+    selection reads. So injuries now reach nothing value-affecting, and this
+    test's own message named that state: they "become deletable, which is a
+    different stage's decision". That deletion is REGISTERED as a later
+    stage; this test keeps the remaining consumer pinned until it is taken.
     """
-    brief = pathlib.Path("src/reporting/match_briefing.py").read_text(
-        encoding="utf-8")
-    assert "analysis.injury_report" in brief, (
-        "the injury summary no longer reaches the dossier -- then injuries "
-        "have no consumer either and become deletable, which is a different "
-        "stage's decision")
+    import importlib.util
+    assert importlib.util.find_spec("src.reporting.match_briefing") is None
     vc = pathlib.Path("src/betting/value_calculator.py").read_text(
         encoding="utf-8")
-    assert "injury_impact" in vc
+    assert "injury_impact" in vc, (
+        "the last consumer of injuries is gone too: register that with the "
+        "pending injury-producer deletion")
 
 
 def test_the_INJURY_CAP_is_RECONCILED_to_ONE_definition():

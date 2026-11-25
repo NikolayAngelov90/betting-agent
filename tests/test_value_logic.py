@@ -346,14 +346,6 @@ class TestForcedPickBlend:
         pick = calc.find_best_bet(predictions, odds_data=[{"x": 1}])
         assert pick.market_key == "over_2.5"
 
-    def test_available_selections_includes_implied_probability(self):
-        calc = self._calc_with_odds({"BTTS Yes": 2.00})
-        menu = calc.available_selections(
-            {"ensemble": {"btts_yes": 0.56}}, odds_data=[{"x": 1}])
-        assert len(menu) == 1
-        assert menu[0]["implied_probability"] == pytest.approx(0.5, abs=1e-4)
-
-
 class TestClubForcedPickGuards:
     """Club forced-pick guards, now declared in `gate_registry`.
 

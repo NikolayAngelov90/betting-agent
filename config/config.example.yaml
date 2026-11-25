@@ -365,7 +365,7 @@ betting:
   wc_pick_every_match: true
   # Club fixtures: when NO selection clears the value gates but the model has
   # decent data on both teams (coverage score >= this), still save one forced
-  # pick (market-blend best selection, Claude-reviewed) so well-known matchups
+  # pick (market-blend best selection) so well-known matchups
   # don't produce empty days. Minnows below the threshold stay no-bet.
   # 0 disables (value-only clubs). Added 2026-07-08 (7 fixtures, 0 picks day).
   club_pick_min_coverage: 0.75
@@ -438,8 +438,8 @@ notifications:
   send_live_alerts: false
   # Send the "Daily Value Picks" Telegram summary. Briefing ARTICLES are no
   # longer posted (see briefings.send_to_telegram: false) — the picks summary is
-  # the single Telegram output. Claude still reviews every pick before it is
-  # sent; the summary shows the finalized (possibly switched) selection.
+  # the single Telegram output. (The Claude review is gone: off at s5.22,
+  # its module deleted in Stage 36, 2026-11-25.) The summary shows the pick.
   suppress_picks_summary: false
 
 # briefings: DELETED at s5.23 (2026-11-13). The Claude pick review was

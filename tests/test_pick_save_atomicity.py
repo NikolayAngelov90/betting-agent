@@ -228,33 +228,6 @@ def test_D_success_writes_one_pick_and_two_observations(tmp_path):
     assert rows["model"].taken_at == rows["final"].taken_at
 
 
-def test_D2_change_still_yields_two_independent_observations(tmp_path):
-    """Stage 10 behaviour preserved: after a switch the two series carry
-    different markets, selections and prices, and taken_at does not move."""
-    from src.reporting.match_briefing import _update_final_observation
-
-    mgr = _mgr(tmp_path, "d2.db")
-    _agent(mgr)._save_picks(
-        [_pick(1, "Over 2.5", "Over 2.5 Goals", 1.85)], date(2026, 9, 1))
-    with mgr.get_session() as s:
-        taken_at = s.query(PickObservation).first().taken_at
-        p = s.query(SavedPick).one()
-        p.market, p.selection, p.odds = "1X2", "Home Win", 2.10
-        p.review_action = "CHANGE"
-        _update_final_observation(s, p.id, market="1X2",
-                                  selection="Home Win", taken_odds=2.10)
-        s.commit()
-
-    with mgr.get_session() as s:
-        rows = {o.attribution: o for o in s.query(PickObservation).all()}
-    assert (rows["model"].market, rows["model"].selection) == \
-        ("Over 2.5", "Over 2.5 Goals")
-    assert rows["model"].taken_odds == pytest.approx(1.85)
-    assert (rows["final"].market, rows["final"].selection) == ("1X2", "Home Win")
-    assert rows["final"].taken_odds == pytest.approx(2.10)
-    assert rows["model"].taken_at == rows["final"].taken_at == taken_at
-
-
 def test_D3_batch_of_several_picks_all_get_observations(tmp_path):
     mgr = _mgr(tmp_path, "d3.db", n_matches=3)
     _agent(mgr)._save_picks([_pick(1), _pick(2), _pick(3)], date(2026, 9, 1))

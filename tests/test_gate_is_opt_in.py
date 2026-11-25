@@ -206,7 +206,11 @@ from scripts.capture_critical import (
 #: 83 -> 84 (`test_once_per_day.py`, via src.data.database/models -- it
 #: guards the one-card-per-day rule, hermetic on SQLite), not_critical
 #: 78 -> 79 (`test_dispatch_margin.py`, critical=False, via=[]).
-CENSUS = {"files": 163, "capture_critical": 84, "not_critical": 79}
+#: RE-MEASURED 2026-11-25, Stage 36 Part C: files 163 -> 159, four test
+#: files deleted with match_briefing.py -- capture_critical 84 -> 82
+#: (test_pick_review.py, test_briefing_dedup.py), not_critical 79 -> 77
+#: (test_review_parallel_identity.py, test_review_prerequisite.py).
+CENSUS = {"files": 159, "capture_critical": 82, "not_critical": 77}
 
 #: `measured` 2026-10-28 by pytest collection, node ids enumerated.
 #: IMPORTED, NOT REBUILT. These were defined in `capture_critical.py` and
@@ -541,8 +545,16 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       0 removed, all in test_calendar_separation.py -- H1 RETIRED, the
     #       retirement driven both ways (no record -> red; a live
     #       reservation -> red) and the dormancy record left unrewritten.
-    assert len(gate) == 1881, (
-        f"the gating selection is {len(gate)}, recorded 1881 — say what moved")
+    #   -27 2026-11-25, Stage 36 Part C, by node id against 4bf88b7: 2 added,
+    #       29 removed -- match_briefing.py deleted whole. Removed: 14 in
+    #       test_pick_review.py and 2 in test_briefing_dedup.py (files
+    #       deleted), 4 briefing-timezone tests in test_dst_transition.py, 5
+    #       CHANGE-path tests in test_pick_observations.py, 1 each in
+    #       test_duration_profile_and_reach.py and test_pick_save_atomicity.py,
+    #       2 replaced in test_review_removed.py. Added there: the planted-
+    #       Claude-call known-wrong and the no-`briefings.*`-reader scan.
+    assert len(gate) == 1854, (
+        f"the gating selection is {len(gate)}, recorded 1854 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the
@@ -748,8 +760,13 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #   margin.py (dispatched runs in the duration series; one dispatch a
     #   day), 1 in test_reminders_are_evaluated.py (every reminder module
     #   imports with the reminders install).
-    assert len(nong) == 1293, (
-        f"the non-gating selection is {len(nong)}, recorded 1293")
+    #   2026-11-25, Stage 36 Part C: -20 by node id against 4bf88b7 (0
+    #   added, 20 removed) -- test_review_parallel_identity.py 8 and
+    #   test_review_prerequisite.py 9 (files deleted with the module), 2
+    #   learner cases in test_valid_evidence_gate.py (the module's two
+    #   statistics), 1 in test_value_logic.py (`available_selections`).
+    assert len(nong) == 1273, (
+        f"the non-gating selection is {len(nong)}, recorded 1273")
     # and the gate must never grow back to everything
     assert len(gate) < len(gate) + len(nong), "the inversion is undone"
 

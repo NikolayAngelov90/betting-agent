@@ -63,8 +63,8 @@ apscheduler>=3.10.0
 # Notifications
 python-telegram-bot>=20.0
 
-# LLM match briefings (Claude API with server-side web search)
-anthropic>=0.69.0
+# (`anthropic` REMOVED in Stage 36, 2026-11-25, with match_briefing.py:
+# no module imports it and Claude no longer participates in the system.)
 
 # Utilities
 pyyaml>=6.0.0

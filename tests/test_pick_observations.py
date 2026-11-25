@@ -291,93 +291,6 @@ def test_observation_failure_rolls_the_pick_back(tmp_path, monkeypatch):
 
 # ══════════════ §9/§18 — THE MANDATORY CHANGE ACCEPTANCE TEST
 
-def test_stage10_acceptance_change_preserves_both_taken_prices(tmp_path,
-                                                               monkeypatch):
-    """Stage 10 §18, end to end. This is the acceptance test.
-
-    Reproduces the exact Stage 9 blocker: the frozen model takes Over 2.5 @1.85,
-    Claude switches to Home Win @2.10, and the model's price must still be 1.85
-    afterwards even though `saved_picks.odds` now reads 2.10.
-    """
-    from src.reporting.match_briefing import _update_final_observation
-
-    mgr = _mgr(tmp_path, "acc.db")
-    now = datetime.utcnow()
-    kickoff = now + timedelta(minutes=45)
-    taken_at = now - timedelta(hours=3)
-
-    # 1-2. Frozen model produces the pick; both observations are written.
-    with mgr.get_session() as s:
-        s.add(Match(id=1, home_team_id=1, away_team_id=2, match_date=kickoff,
-                    league="x/y", is_fixture=True))
-        s.add(_pick_row(1, market="Over 2.5", selection="Over 2.5 Goals",
-                        odds=1.85, model_market="Over 2.5",
-                        model_selection="Over 2.5 Goals",
-                        pick_date=kickoff.date(), created_at=taken_at))
-        s.add(_obs(1, "model", "Over 2.5", "Over 2.5 Goals", 1.85, taken_at))
-        s.add(_obs(1, "final", "Over 2.5", "Over 2.5 Goals", 1.85, taken_at))
-        s.commit()
-
-    # 3-4. Claude CHANGEs to Home Win @2.10 — saved_picks.odds is overwritten
-    # and the FINAL observation moves with it.
-    with mgr.get_session() as s:
-        pick = s.get(SavedPick, 1)
-        pick.market, pick.selection, pick.odds = "1X2", "Home Win", 2.10
-        pick.review_action = "CHANGE"
-        _update_final_observation(s, 1, market="1X2", selection="Home Win",
-                                  taken_odds=2.10)
-        s.commit()
-
-    # 5-6. The prices.
-    with mgr.get_session() as s:
-        rows = {o.attribution: o for o in s.query(PickObservation).all()}
-        assert rows["model"].taken_odds == pytest.approx(1.85)
-        assert rows["model"].selection == "Over 2.5 Goals"
-        assert rows["model"].market == "Over 2.5"
-        assert rows["final"].taken_odds == pytest.approx(2.10)
-        assert rows["final"].selection == "Home Win"
-        assert rows["final"].market == "1X2"
-        # saved_picks carries the FINAL price; MODEL survives only here.
-        assert s.get(SavedPick, 1).odds == pytest.approx(2.10)
-        # taken_at is NOT moved — both series share one causal boundary.
-        assert rows["final"].taken_at == taken_at
-
-    # 7. Closing capture resolves the two selections independently, from odds
-    # observed after the pick was taken.
-    observed = now - timedelta(minutes=5)
-    with mgr.get_session() as s:
-        for sel, o in (("Home", 2.00), ("Draw", 3.50), ("Away", 4.20)):
-            s.add(Odds(match_id=1, bookmaker="Pinnacle", market_type="1X2",
-                       selection=sel, odds_value=o, timestamp=observed))
-        for sel, o in (("Over 2.5", 1.70), ("Under 2.5", 2.20)):
-            s.add(Odds(match_id=1, bookmaker="Pinnacle",
-                       market_type="over_under", selection=sel, odds_value=o,
-                       timestamp=observed))
-        s.commit()
-
-    from scripts import capture_closing_lines as cap
-    monkeypatch.setattr(cap, "get_db", lambda: mgr)
-    stats = cap.capture(within_minutes=90)
-
-    # 8-9. Each series uses its OWN taken price and its OWN close.
-    with mgr.get_session() as s:
-        rows = {o.attribution: o for o in s.query(PickObservation).all()}
-
-    m, f = rows["model"], rows["final"]
-    assert m.closing_status == "captured" and f.closing_status == "captured"
-    assert m.closing_odds == pytest.approx(1.70), "model close came from 1X2"
-    assert f.closing_odds == pytest.approx(2.00), "final close came from totals"
-    assert m.closing_odds != f.closing_odds, "one close served both series"
-
-    model_clv = m.taken_odds / m.closing_odds - 1
-    final_clv = f.taken_odds / f.closing_odds - 1
-    assert model_clv == pytest.approx(1.85 / 1.70 - 1)
-    assert final_clv == pytest.approx(2.10 / 2.00 - 1)
-
-    # 10. Two distinct selections → two resolutions. Not more.
-    assert stats["observations_considered"] == 2
-    assert stats["observations_resolved"] == 2
-
 
 def test_unchanged_pick_resolves_one_underlying_observation(tmp_path,
                                                             monkeypatch):
@@ -451,34 +364,6 @@ def test_observations_obey_the_same_snapshot_rule(tmp_path, monkeypatch,
     with mgr.get_session() as s:
         for o in s.query(PickObservation).all():
             assert o.closing_status == expect, f"{o.attribution}: {o.closing_status}"
-
-
-def test_a_change_invalidates_a_close_taken_on_the_old_selection(tmp_path):
-    """The old close priced a different bet. Keeping it would attribute one
-    selection's market movement to another."""
-    from src.reporting.match_briefing import _update_final_observation
-
-    mgr = _mgr(tmp_path, "inval.db")
-    with mgr.get_session() as s:
-        s.add(Match(id=1, home_team_id=1, away_team_id=2,
-                    match_date=datetime(2026, 9, 1, 18, 0), league="x/y"))
-        s.add(_pick_row(1))
-        o = _obs(1, "final")
-        o.closing_odds, o.closing_status, o.closing_book_count = 1.9, "captured", 5
-        s.add(o)
-        s.add(_obs(1, "model"))
-        s.commit()
-
-    with mgr.get_session() as s:
-        _update_final_observation(s, 1, market="Over 2.5",
-                                  selection="Over 2.5 Goals", taken_odds=1.7)
-        s.commit()
-
-    with mgr.get_session() as s:
-        rows = {x.attribution: x for x in s.query(PickObservation).all()}
-    assert rows["final"].closing_odds is None
-    assert rows["final"].closing_status == "pending"
-    assert rows["model"].taken_odds == pytest.approx(2.0), "MODEL was touched"
 
 
 # ═══════════════════════ §14/§16 — reporting reads the new table
@@ -582,66 +467,6 @@ def _model_obs_count(mgr):
     with mgr.get_session() as s:
         return s.query(PickObservation).filter(
             PickObservation.attribution == "model").count()
-
-
-def test_consolidation_never_reduces_model_observations(tmp_path):
-    """The invariant Step 1b exists to enforce.
-
-    Fixing the ORM cascade (Step 1) made `session.delete(primary)` in the
-    review's consolidation branch actually work — and with the cascade it would
-    have taken the primary's MODEL observation with it. That row is the frozen
-    model's only record of what it selected and at what price; the odds table
-    keeps one row per (match, bookmaker, market, selection) and overwrites it,
-    so nothing can rebuild it.
-
-    The branch must mark the pick superseded, never remove it.
-    """
-    from src.reporting.match_briefing import MatchBriefingService
-
-    mgr = _consolidation_env(tmp_path, "cons.db", "Home Win")
-    before = _model_obs_count(mgr)
-    assert before == 2
-
-    # Reproduce the branch's effect exactly as _apply_decision now performs it.
-    with mgr.get_session() as s:
-        primary = s.get(SavedPick, 1)
-        other = s.get(SavedPick, 2)
-        other.review_action = "CHANGE"
-        primary.disposition = "consolidated"
-        s.commit()
-
-    assert _model_obs_count(mgr) == before, (
-        "consolidation destroyed a MODEL observation — the frozen model's "
-        "record of its own selection")
-
-    with mgr.get_session() as s:
-        assert s.query(SavedPick).count() == 2, "a pick was deleted"
-        p = s.get(SavedPick, 1)
-        assert p.disposition == "consolidated"
-        assert p.result is None, "disposition must not be written to `result`"
-        assert p.review_action != "CONSOLIDATED", (
-            "disposition must not be overloaded onto review_action")
-
-
-def test_consolidation_branch_does_not_delete_in_source():
-    """Structural: the branch must not call session.delete at all.
-
-    Asserting behaviour is not enough here — a future edit could reintroduce
-    the delete on a path this test does not drive.
-    """
-    import inspect
-
-    from src.reporting.match_briefing import MatchBriefingService
-
-    src = inspect.getsource(MatchBriefingService._apply_decision)
-    # Scan CODE, not prose: the branch's comment legitimately quotes the call it
-    # replaced, to explain why it must never come back.
-    code = "\n".join(ln for ln in src.splitlines()
-                     if not ln.lstrip().startswith("#"))
-    assert "session.delete" not in code, (
-        "_apply_decision deletes a SavedPick again — that destroys its "
-        "pick_observations, including the MODEL row")
-    assert 'disposition = "consolidated"' in code
 
 
 def test_no_bulk_core_delete_of_a_parent_entity():
@@ -762,44 +587,6 @@ def test_disposition_is_write_once(tmp_path):
             p.disposition = "void_wrong_fixture"
         with pytest.raises(ValueError, match="write-once"):
             p.disposition = None                # nor back to "it was a bet"
-
-
-def test_a_superseded_pick_is_not_a_review_candidate(tmp_path):
-    """Step 1b kept the row alive; this stops the review from finding it again.
-
-    Reproduced before the fix: `--picks` runs more than once a day, and on the
-    second run the review query returned the superseded pick FIRST — its higher
-    EV is precisely why it had been the primary. The service wrote
-    review_action='KEEP' onto it and overwrote its supersession reason, so a
-    row excluded from the live record entered the report's KEEP bucket as a bet
-    that was never placed.
-    """
-    mgr = _mgr(tmp_path, "cand.db")
-    with mgr.get_session() as s:
-        s.add(Match(id=1, home_team_id=1, away_team_id=2,
-                    match_date=datetime(2026, 9, 1, 18, 0), league="x/y"))
-        # The superseded pick carries the HIGHER ev — the ordering the service
-        # uses would otherwise put it first.
-        # The service scopes the review to TODAY's picks.
-        s.add(_pick_row(1, match_id=1, expected_value=0.20,
-                        pick_date=date.today(), disposition="consolidated"))
-        s.add(_pick_row(2, match_id=1, expected_value=0.10,
-                        pick_date=date.today(), selection="Over 2.5"))
-        s.commit()
-
-    from src.reporting.match_briefing import MatchBriefingService
-    svc = MatchBriefingService.__new__(MatchBriefingService)
-    svc.db = mgr
-    assert svc._apply_decision(
-        1, {"action": "KEEP", "reason": "looks fine"}, None, None, "H", "A")
-
-    with mgr.get_session() as s:
-        superseded, survivor = s.get(SavedPick, 1), s.get(SavedPick, 2)
-        assert superseded.review_action is None, (
-            "the review wrote a verdict onto a pick that was never live")
-        assert superseded.disposition == "consolidated"
-        assert survivor.review_action == "KEEP", (
-            "KEEP landed on nothing — the live pick must receive it")
 
 
 def test_paired_clv_pairs_by_pick_not_by_fixture():
