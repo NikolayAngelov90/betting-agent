@@ -40585,3 +40585,176 @@ Suite: 3179 passed, 1 skipped, 1 failed. The failure is
 fails by date from 2026-11-24 on any commit.
 
 *Recorded 2026-11-25.*
+
+---
+
+## 2026-11-25 — STAGE 36 (I): `H1 RETIRED`, `MODULE DELETED` — three operator decisions, two taken today
+
+Directive received 2026-11-25 10:44 UTC. Fingerprint `s5.23 / 5bca73`,
+re-read after every edit. Part B, the duration term at n=10, waits for the
+2026-11-26 dispatched run, which is the tenth; see the end of this entry.
+
+### `H1 RETIRED` — Part A, commit `4bf88b7`
+
+**THE OPERATOR'S DECISION, 2026-11-25:** H1 is closed, not dormant. The
+reasons, recorded in `src/data/h1_window.RETIREMENT` in the operator's name
+and date:
+1. the project's objective is now hit rate at taken odds ≥ 1.70
+   (`confident_value`), which H1 does not serve;
+2. two windows failed on infrastructure, not method;
+3. the conditions it waited on, market coverage and a venue with measurable
+   depth, have not moved since 2026-11-11.
+
+* **The red it clears:** `test_the_H1_RESERVATION_WINDOW_EXPIRES`, a VERDICT,
+  reddened `reminders` on every run from 2026-11-24 00:40 UTC (five runs to
+  2026-11-25 09:12).
+* **What changed:**
+  * The dormancy record (`DORMANCY`, 2026-11-11) is **not edited**.
+    `RETIREMENT` supersedes it.
+  * The reminder reads the retirement as its clearing action. Its anchor
+    assertion is retired with the dormancy, because a closed experiment has
+    no review date.
+  * What it asserts against TODAY now is that the reservation stays inert,
+    so the `calendar` marker still has a clock-dependent assertion under it.
+    The marker scan passes.
+* **Driven:**
+  * Run as Reminders runs it (`-m "calendar or live"`), the reminder
+    **passes**.
+  * Known-wrong 1: with the retirement removed it is **red**, "no clearing
+    action".
+  * Known-wrong 2: with a live reservation it is **red**, "LIVE".
+* **MARKED, NOT DELETED.** These stay as the record, and H1 is RETIRED as
+  of 2026-11-25 above them all:
+  * this ledger's **FIRST TRAJECTORIES** (2026-11-04, n=12 of 39 on the day-5
+    rule);
+  * **`H1 WINDOW FAILED`** (2026-11-05);
+  * **`H1 DORMANT`** (2026-11-11).
+* **REGISTERED, NOT DONE:** the reservation machinery (274 refs / 61
+  assertions, sized 2026-11-06) is deletable now that no attempt is planned.
+  Its deletion is a separate later stage.
+* **Gate** 1878 → 1881 by node id: +3, −0, all in
+  `test_calendar_separation.py`. Tested on a clean worktree at `9bb2563`
+  with only Part A applied: 132 passed.
+
+### `MODULE DELETED` — Part C, commit `c93146b`
+
+**THE OPERATOR'S DECISION:** delete `src/reporting/match_briefing.py`
+entirely, World Cup briefings included. The tournament ended in July, no
+workflow runs the briefings, and Claude no longer participates in the
+system.
+
+**What went:**
+* **The module** (1,720 lines): the pick review, the World Cup briefing
+  service, and both Claude backends (API and Claude Code).
+* **Its CLI:** `--briefing` and `--prematch-briefing`, with their help
+  lines. There was no review-only flag.
+* **Its exclusive helpers.** The dead-code scan found them the moment the
+  module went, as producers that lost their only consumer:
+  * `ValueBettingCalculator.available_selections`, the review's switch menu;
+  * `ValueBettingCalculator.build_selection_pick`, the CHANGE builder;
+  * `APIFootballScraper.fetch_lineups`, the lineup-aware briefings.
+* **The dead reader of its output:** the briefing-final FREEZE in
+  `finalize_picks`. It read `data/briefings_sent.json`, which only the
+  module wrote. Its CI cache restore went at s5.23, so in production it
+  found no file and filtered nothing.
+* **The two workflow env lines** `ANTHROPIC_API_KEY` and
+  `CLAUDE_CODE_OAUTH_TOKEN`. Both secrets were already absent (names listed
+  2026-11-15).
+* **The `anthropic` requirement and its constraint pin:** nothing imports
+  it.
+* **Its tests:**
+  * four files deleted: `test_pick_review`, `test_briefing_dedup`,
+    `test_review_parallel_identity`, `test_review_prerequisite`;
+  * the unused `_review_new_features.py`;
+  * the module's tests removed from five other files;
+  * its state path dropped from the conftest sandbox.
+* **Its config defaults** lived in the module and went with it; nothing
+  reads a `briefings.*` key any more. Two stale config COMMENTS were
+  corrected; no tracked value moved.
+
+**The log line** read "Found N high-confidence picks for D (EV threshold:
+5.0%)" under `confident_value`, whose picks carry negative EV by design. It
+now reads "Found N picks for D (confident_value: price floor 1.70, p_min
+0.54)", with the values taken from the deployed config, and the EV wording
+under `standard`. Nothing parses it.
+
+**THE DRIVEN CONTROL:**
+* **Setup:** the real `--picks` CLI path, driven on scratch SQLite with the
+  Stage 34 harness. `anthropic`, `claude_code_sdk` and `claude_agent_sdk`
+  are made unimportable at the import system, and every subprocess whose
+  argv names `claude` raises.
+* **Result: the card is sent and nothing trips.**
+* **Known-wrong:** the same driver with a Claude call planted where the
+  review used to sit **trips on both routes**: an `anthropic` import, and a
+  `claude` subprocess.
+* **Static anchors, both with a matcher control on planted text:**
+  * no module under `src/` or `scripts/` reads a `briefings.*` key;
+  * the agent calls neither `MatchBriefingService` nor
+    `finalize_picks_with_claude`, and carries neither CLI flag.
+
+**HELD BY DELETION, NOT DROPPED.** Two guards watched code that no longer
+exists. Each now asserts that the module is gone, so a review that comes
+back has to bring its guard back:
+* **Invariant 2d:** a Claude CHANGE cannot create a correlated pair.
+* **EXP-1:** paper outcomes must not reach the review prompt.
+
+**No invariant failed.** The evidence for those two changed from "the
+CHANGE path re-checks" to "there is no CHANGE path". The diagnosed finding
+**[10]**, the review statistics in the decision prompt (DECLARE, re-triage
+2026-11-23), is **resolved by deletion**: the stable live set went from
+{4, 6, 7, 8, 10, 11, 12} to {4, 6, 7, 8, 11, 12}.
+
+**A CONSEQUENCE, RECORDED AND REGISTERED: injuries lose their
+value-affecting consumer.** `analysis.injury_report` reached the review
+prompt (`_build_dossier`), which was what made injuries "not deletable".
+What remains is `injury_impact` in a `value_calculator` reasoning string,
+which no selection reads. The test's own message named this state, "they
+become deletable, which is a different stage's decision". The
+injury-producer deletion is **REGISTERED** as a later stage.
+
+**THE DEAD-CODE SCAN** (`pnc_scan`, at `9bb2563` against the working tree):
+
+| bucket | before | after | what moved |
+|---|---|---|---|
+| no_consumer | 33 | 33 | +2 found when the module went (`build_selection_pick`, `fetch_lineups`), −2 deleted |
+| test_only | 35 | 36 | −`finalize_picks_with_claude`, −`available_selections`; +`RETIREMENT` (a record, like the dormancy); +`pick_filters.live_only` (no production reader now; the evidence tests keep it) |
+| orphan_cluster | 14 | 14 | `MatchReportGenerator._header` UNMASKED and DECLARED (see below) |
+| excluded | 486 | 481 | the module's 3 declarations removed with it; line shifts |
+
+**`MatchReportGenerator._header`** is called only inside a class that
+nothing imports, which the scan already counted as an orphan cluster. It had
+been missing from that cluster only because the deleted module's `_header`
+shared its name, and the scan is keyed by name. It is declared as UNMASKED,
+not added, and goes with that cluster. The ratchet (`no_consumer ≤ 33`,
+`orphan_cluster ≤ 14`) holds without raising either backlog.
+
+**README:** `test_readme_matches_config.py` passes. Its Claude rows are
+history, already labelled "removed 2026-11-12".
+
+**Census:** files 163 → 159; capture_critical 84 → 82, not_critical
+79 → 77.
+* **Gate 1881 → 1854** by node id: +2, −29.
+* **Non-gating 1293 → 1273:** −20.
+
+### PART B and PART D — tomorrow, 2026-11-26
+
+* **The duration series** (no-review regime, weekday runs that published the
+  card) is at **n=9**: mean 25.99, sd 6.60, mean+3sd 45.80, max 40.30 min,
+  measured 2026-11-25.
+* **The 11-26 dispatch is the tenth.**
+* **Classified in advance:** the first CI Audit and Reminders runs after it
+  will be red, LAPSED at n=10. That is a verdict by design, cleared by Part
+  B's substitution.
+* **Part B,** approved forward-only as on 2026-11-06:
+  * substitute the re-derived figure for 64.59;
+  * keep 64.59 with its date, regime (parallel review) and n=12 as
+    superseded, with a swap control;
+  * report both margins against their own deadlines;
+  * retire the two acknowledgements;
+  * stop if either day type fails to clear 30.
+* **Part D:** the 11-25 card settles in the 11-26 run.
+
+
+Suite on `c93146b`: 3136 passed, 1 skipped, 0 failed; the H1 reminder is green.
+
+*Recorded 2026-11-25.*
