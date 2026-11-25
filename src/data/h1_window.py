@@ -202,6 +202,41 @@ DORMANCY = {
 }
 
 
+#: ── H1 IS RETIRED. Stage 36, 2026-11-25. THE OPERATOR'S DECISION. ─────────
+#:
+#: The dormancy above reached its review anchor (2026-11-24) and its guard,
+#: `test_the_H1_RESERVATION_WINDOW_EXPIRES`, reddened `reminders` from
+#: 2026-11-24 00:40 UTC. It offered two choices -- size a window, or
+#: re-anchor -- and excluded deletion. The operator took a third that the
+#: guard did not list because it was not then available: H1 is CLOSED. The
+#: dormancy record is NOT edited: it is the 2026-11-11 decision and stays
+#: exactly as written, superseded by this one.
+RETIREMENT = {
+    "decided": "2026-11-25",
+    "decision": "RETIRED",
+    "authorised_by": "operator (Niki), 2026-11-25, Stage 36",
+    "supersedes": "DORMANCY (decided 2026-11-11, review anchor 2026-11-24)",
+    "reasons": (
+        "the project's objective is now hit rate at taken odds >= 1.70 "
+        "(confident_value), which H1 does not serve",
+        "two windows failed on infrastructure, not method",
+        "the conditions it waited on -- market coverage, and a venue with "
+        "measurable depth -- have not moved since 2026-11-11",
+    ),
+    "kept_in_the_ledger": (
+        "FIRST TRAJECTORIES (2026-11-04, n=12 of 39 on the day-5 rule)",
+        "H1 WINDOW FAILED (2026-11-05)",
+        "H1 DORMANT (2026-11-11)",
+    ),
+    #: Deletable now that no attempt is planned -- and NOT deleted here.
+    "machinery": "the reservation machinery, 274 refs / 61 assertions "
+                 "(sized 2026-11-06), is DELETABLE: no future attempt is "
+                 "planned, so the 51 assertions that protected a retry "
+                 "protect nothing",
+    "deletion": "REGISTERED as a separate later stage; not done in Stage 36",
+}
+
+
 #: Collection days, inclusive of FROM and exclusive of UNTIL.
 DAYS: int = (UNTIL - FROM).days
 

@@ -537,8 +537,12 @@ def test_THE_GATE_SHRANK_AND_THE_FIGURES_ARE_RECORDED():
     #       (yesterday's slot after midnight) publishes nothing, driven
     #       through both layers, with its known-wrong and four controls
     #       that still publish. Gating because they guard publication.
-    assert len(gate) == 1878, (
-        f"the gating selection is {len(gate)}, recorded 1878 — say what moved")
+    #   +3  2026-11-25, Stage 36 Part A, by node id against 9bb2563: 3 added,
+    #       0 removed, all in test_calendar_separation.py -- H1 RETIRED, the
+    #       retirement driven both ways (no record -> red; a live
+    #       reservation -> red) and the dormancy record left unrewritten.
+    assert len(gate) == 1881, (
+        f"the gating selection is {len(gate)}, recorded 1881 — say what moved")
     #   +7  test_client_channel.py: the sender census, the operator-channel
     #       routing pair, and the three known-wrong controls (failed run sends
     #       nothing / pick run sends the card / settlement sends the

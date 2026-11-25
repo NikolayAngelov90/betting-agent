@@ -238,20 +238,68 @@ def test_the_H1_RESERVATION_WINDOW_EXPIRES():
         "the H1 window expired and no decision is recorded. Record one in "
         "`h1_window.DORMANCY` -- dormancy with its reasons, or a new window "
         "with its own pre-registration. Deletion remains excluded.")
-    assert today < _w.DORMANCY["review_anchor"], (
-        f"H1 has been DORMANT since {_w.DORMANCY['decided']} and its review "
-        f"anchor {_w.DORMANCY['review_anchor']} has passed (today "
-        f"{today}). h1_reservation() returns {h1_reservation(today)} on "
-        f"every day. The anchor was the UEFA MD5 cluster of 24-25 November; "
-        f"the two mechanisms it waits on are "
-        f"{list(_w.DORMANCY['review_mechanisms'])}. EITHER report those and "
-        f"size a window, OR re-anchor to the next cluster WITH the reason. "
-        f"Deletion is still not one of the choices, and moving the anchor "
-        f"without recording why is the suppression this guard prevents.")
+    # ── RETIRED 2026-11-25 (Stage 36): THE CLEARING ACTION, RECORDED. ──────
+    #
+    # The anchor passed on 2026-11-24 and this guard reddened `reminders` on
+    # every run from 00:40 UTC that day, asking for one of two choices -- size
+    # a window, or re-anchor WITH the reason. The operator took a third: H1 is
+    # CLOSED, recorded in `h1_window.RETIREMENT` with three reasons. The
+    # dormancy record above is unchanged and still asserted; its anchor
+    # assertion -- `today < DORMANCY["review_anchor"]` -- is retired WITH it,
+    # because a retired experiment has no review date to sit past.
+    #
+    # WHAT IS ASSERTED AGAINST TODAY NOW is the inertness the retirement
+    # relies on, so this `calendar` test keeps its clock-dependent assertion
+    # and fires if the reservation ever comes back to life.
+    R = _w.RETIREMENT
+    assert R["decision"] == "RETIRED" and R["supersedes"].startswith(
+        "DORMANCY"), (
+        f"H1's dormancy anchor {_w.DORMANCY['review_anchor']} has passed and "
+        f"no clearing action is recorded: size a window, re-anchor WITH the "
+        f"reason, or record the retirement in `h1_window.RETIREMENT`.")
+    assert len(R["reasons"]) == 3 and "operator" in R["authorised_by"], (
+        "the retirement carries no reasons or no authority")
+    assert h1_reservation(today) == 0 and _alloc(today=today)[
+        "h1_ceiling"] == 0, (
+        f"H1 is RETIRED ({R['decided']}) but the reservation is LIVE on "
+        f"{today}: a closed experiment is drawing on the monthly credit pool")
     print(f"H1 RESERVATION: goes INERT on {_w.UNTIL} by the existing "
           f"calendar. Accepted cost: {S['accepted_cost'][:70]}. KEPT "
           f"{S['assertions_encoding_a_live_fact']} of "
           f"{S['sized_cost_now']['assertions']} assertions.")
+
+
+# ── THE RETIREMENT, DRIVEN BOTH WAYS. Stage 36, 2026-11-25. ─────────────────
+
+def test_KNOWN_WRONG_without_the_RETIREMENT_the_H1_reminder_stays_RED(
+        monkeypatch):
+    """The clearing action is the record. Remove it and the guard fails,
+    with the anchor passed -- the state it was in on 2026-11-24..25."""
+    from src.data import h1_window as _w
+    monkeypatch.setattr(_w, "RETIREMENT", dict(_w.RETIREMENT,
+                                               decision="DORMANT"))
+    with pytest.raises(AssertionError, match="no clearing action"):
+        test_the_H1_RESERVATION_WINDOW_EXPIRES()
+
+
+def test_KNOWN_WRONG_a_RETIRED_H1_with_a_LIVE_reservation_is_RED(monkeypatch):
+    """Retirement is asserted as inertness on today's date: a reservation
+    that came back to life must redden the reminder, retired or not."""
+    import src.data.odds_quota as _q
+    monkeypatch.setattr(_q, "h1_reservation", lambda *_a, **_k: 168)
+    with pytest.raises(AssertionError, match="LIVE"):
+        test_the_H1_RESERVATION_WINDOW_EXPIRES()
+
+
+def test_the_RETIREMENT_supersedes_the_DORMANCY_and_does_not_rewrite_it():
+    from src.data.h1_window import DORMANCY, RETIREMENT
+    assert DORMANCY["decision"] == "DORMANT" and         DORMANCY["decided"] == "2026-11-11", "the 11-11 record was rewritten"
+    assert RETIREMENT["decided"] == "2026-11-25"
+    assert any("1.70" in r for r in RETIREMENT["reasons"])
+    assert any("infrastructure" in r for r in RETIREMENT["reasons"])
+    assert len(RETIREMENT["kept_in_the_ledger"]) == 3
+    assert "REGISTERED" in RETIREMENT["deletion"] and         "not done" in RETIREMENT["deletion"], (
+        "the machinery's deletion is a separate stage, registered here")
 
 
 # ── BOTH DIRECTIONS OF THE SEPARATION ───────────────────────────────────────
